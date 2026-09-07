@@ -112,6 +112,12 @@ fun LibraryScreen(navController: NavController) {
                     title = stringResource(R.string.soft_studio_library_outputs_title)
                 )
                 LibraryActionRow(
+                    icon = Icons.Default.Collections,
+                    title = stringResource(R.string.soft_studio_library_open_all_media),
+                    supporting = stringResource(R.string.media_gallery_subtitle),
+                    onClick = { navController.navigate(Screen.AllMediaGallery.route) }
+                )
+                LibraryActionRow(
                     icon = Icons.Default.Image,
                     title = stringResource(R.string.soft_studio_library_open_images),
                     onClick = {

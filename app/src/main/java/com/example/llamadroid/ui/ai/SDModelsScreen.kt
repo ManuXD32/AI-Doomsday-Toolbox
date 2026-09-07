@@ -828,9 +828,7 @@ private fun InstalledSDModelsTab(
     val allModelRows by remember(context) { AppDatabase.getDatabase(context).modelDao().getAllModels() }
         .collectAsState(initial = emptyList())
     val additionalModels = remember(allModelRows) {
-        allModelRows.filter { it.type in setOf(ModelType.SD_AUDIO_VAE, ModelType.SD_EMBEDDINGS_CONNECTORS,
-            ModelType.SD_MOTION_MODULE, ModelType.SD_TEXTUAL_INVERSION) ||
-            (it.type in setOf(ModelType.LLM, ModelType.VISION_PROJECTOR, ModelType.MMPROJ) && !it.sdCompatProfiles.isNullOrBlank()) }
+        allModelRows.filter(::isAdditionalSdModel)
     }
 
     // The installed rows are emitted from separate Room flows, so keep one
@@ -3218,6 +3216,13 @@ private fun InstalledModelCard(
                         FormatUtils.formatFileSize(model.sizeBytes),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        stringResource(R.string.sd_models_model_path, model.path),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     model.sdFamily?.takeIf { it.isNotBlank() }?.let { family ->
                         Text(

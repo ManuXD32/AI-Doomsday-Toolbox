@@ -88,6 +88,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -118,6 +119,11 @@ import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.db.hasSdCapability
 import com.example.llamadroid.data.model.SdCuratedBundleCatalog
 import com.example.llamadroid.data.model.installedSdCuratedModel
+import com.example.llamadroid.service.resolveVideoReuseSources
+import com.example.llamadroid.service.VideoReuseDraftAdapter
+import com.example.llamadroid.service.VideoReusePayload
+import com.example.llamadroid.service.VideoReuseHandoffStore
+import com.example.llamadroid.service.VideoReuseTarget
 import com.example.llamadroid.service.GeneratedVideoMetadata
 import com.example.llamadroid.service.SamplingMethod
 import com.example.llamadroid.service.SdCacheMode
@@ -140,7 +146,9 @@ import com.example.llamadroid.sd.SdVideoComponentRole
 import com.example.llamadroid.sd.SdVideoFamily
 import com.example.llamadroid.sd.SdVideoFamilyProfiles
 import com.example.llamadroid.sd.SdVideoInputs
+import com.example.llamadroid.sd.SdVideoMainModelLayout
 import com.example.llamadroid.sd.SdVideoWorkflow
+import com.example.llamadroid.sd.pathFor
 import com.example.llamadroid.sd.isSdVideoMainModel
 import com.example.llamadroid.sd.matchesSdVideoFamily
 import com.example.llamadroid.sd.resolvedSdVideoFamily
@@ -167,6 +175,9 @@ import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.ui.navigation.Screen
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -184,6 +195,10 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
     val batteryGateState = rememberBatteryOptimizationGateState()
     val settingsRepo = remember { SettingsRepository(context) }
     val restoredDraft = remember { settingsRepo.videoGenerationDraft() }
+    val externalVideoInputPending = remember {
+        SharedFileHolder.pendingFile.value?.target == SharedFileTarget.VIDEO_GENERATION
+    }
+    var reuseBackendOverrides by remember { mutableStateOf(restoredDraft?.takeIf { it.has("reuseSdParamsBackendMode") }?.let { org.json.JSONObject(it.toString()) }) }
     val keepScreenAwakeDuringGeneration by settingsRepo.keepScreenAwakeDuringGeneration.collectAsState()
     val sdMaxCpuRamEnabled by settingsRepo.sdMaxCpuRamEnabled.collectAsState()
     val sdMaxCpuRamGiB by settingsRepo.sdMaxCpuRamGiB.collectAsState()
@@ -348,7 +363,9 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
     }
 
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
-    var selectedImagePath by remember { mutableStateOf(restoredDraft?.optString("input").orEmpty().takeIf { it.isNotBlank() && File(it).canRead() }) }
+    // Keep an unavailable saved path visible so the picker can explain or replace it; the
+    // generation gate below performs the asynchronous readability check.
+    var selectedImagePath by remember { mutableStateOf(restoredDraft?.optString("input").orEmpty().ifBlank { null }) }
     var imageResolution by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
     var videoFramesText by remember { mutableStateOf(restoredDraft?.optString("frames", "8") ?: "8") }
@@ -375,7 +392,7 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
     var diffusionPlacement by remember { mutableStateOf(restoredDraft?.optString("diffusionPlacement").orEmpty().ifBlank { acceleratorPlacement ?: "cpu" }) }
     var vaePlacement by remember { mutableStateOf(restoredDraft?.optString("vaePlacement").orEmpty().ifBlank { "cpu" }) }
     LaunchedEffect(acceleratorPlacement) {
-        if (acceleratorPlacement != null && diffusionPlacement !in listOf("vulkan0", "opencl0")) {
+        if (reuseBackendOverrides == null && acceleratorPlacement != null && diffusionPlacement !in listOf("vulkan0", "opencl0")) {
             diffusionPlacement = acceleratorPlacement
         }
     }
@@ -390,9 +407,7 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
     var scmPolicy by remember { mutableStateOf(SdCacheScmPolicy.fromStoredValue(restoredDraft?.optString("scmPolicy").orEmpty().ifBlank { null })) }
     var manualCommandFlags by remember { mutableStateOf(restoredDraft?.optString("flags").orEmpty()) }
 
-    DisposableEffect(Unit) {
-        onDispose {
-            settingsRepo.setVideoGenerationDraft(org.json.JSONObject().apply {
+    fun captureVideoDraft(): org.json.JSONObject = org.json.JSONObject().apply {
                 put("mode", selectedMode); put("model", selectedVideoModelPath); put("prompt", prompt); put("negativePrompt", negativePrompt)
                 put("useVae", useVae); put("vae", selectedVaePath); put("useT5", useT5xxl); put("t5", selectedT5xxlPath); put("input", selectedImagePath)
                 put("frames", videoFramesText); put("fps", fpsText); put("width", widthText); put("height", heightText); put("steps", stepsText); put("cfg", cfgScaleText); put("threads", threadsText); put("sampler", selectedSampler.name); put("scheduler", selectedScheduler?.cliName)
@@ -400,8 +415,28 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
                 put("loras", videoLoras.toJsonArray()); put("highNoiseLoras", videoHighNoiseLoras.toJsonArray()); put("loraApplyMode", videoLoraApplyMode?.cliName)
                 put("tePlacement", textEncoderPlacement); put("diffusionPlacement", diffusionPlacement); put("vaePlacement", vaePlacement)
                 put("videoAdvancedJson", videoRuntimeOptions.toJsonString())
-            })
-        }
+                reuseBackendOverrides?.let { overrides ->
+                    listOf("reuseSdParamsBackendMode", "reuseSdParamsBackendSpec", "reuseSdRuntimeBackendMode", "reuseMaxVramCpuGiB").forEach { key ->
+                        if (overrides.has(key)) put(key, overrides.optString(key))
+                    }
+                }
+            }
+
+    DisposableEffect(Unit) {
+        onDispose { settingsRepo.setVideoGenerationDraft(captureVideoDraft()) }
+    }
+
+    // Persist edits while the screen remains open, while retaining the disposal write as a
+    // final synchronous snapshot for navigation and process teardown.
+    LaunchedEffect(settingsRepo) {
+        snapshotFlow { captureVideoDraft().toString() }
+            .distinctUntilChanged()
+            .collectLatest { draftJson ->
+                delay(VIDEO_DRAFT_PERSIST_DEBOUNCE_MS)
+                withContext(Dispatchers.IO) {
+                    settingsRepo.setVideoGenerationDraft(org.json.JSONObject(draftJson))
+                }
+            }
     }
 
     val outputDir = remember {
@@ -491,8 +526,14 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
             SdVideoWorkflow.TEXT_TO_VIDEO
         },
         videoComponents = videoRuntimeOptions.videoComponents.copy(
-            diffusionModelPath = videoRuntimeOptions.videoComponents.diffusionModelPath ?: selectedVideoModelPath,
-            fullModelPath = videoRuntimeOptions.videoComponents.fullModelPath ?: selectedVideoModelPath,
+            diffusionModelPath = videoRuntimeOptions.videoComponents.diffusionModelPath
+                ?: selectedVideoModelPath.takeIf {
+                    videoRuntimeOptions.videoComponents.fullModelPath == null && selectedVideoModel?.type != ModelType.SD_CHECKPOINT
+                },
+            fullModelPath = videoRuntimeOptions.videoComponents.fullModelPath
+                ?: selectedVideoModelPath.takeIf {
+                    videoRuntimeOptions.videoComponents.diffusionModelPath == null && selectedVideoModel?.type == ModelType.SD_CHECKPOINT
+                },
             vaePath = videoRuntimeOptions.videoComponents.vaePath ?: selectedVaePath.takeIf { useVae },
             t5xxlPath = videoRuntimeOptions.videoComponents.t5xxlPath ?: selectedT5xxlPath.takeIf { useT5xxl }
         ),
@@ -501,6 +542,30 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
         )
     )
     val videoReadiness = videoGenerationReadiness(videoEditorOptions)
+    val effectiveVideoInputPath = videoEditorOptions.videoInputs.initImagePath
+    val videoPathReferences = remember(
+        videoEditorOptions,
+        selectedVideoModelPath,
+        videoLoras,
+        videoHighNoiseLoras
+    ) {
+        videoGenerationPathReferences(
+            options = videoEditorOptions,
+            selectedModelPath = selectedVideoModelPath,
+            loras = videoLoras,
+            highNoiseLoras = videoHighNoiseLoras
+        )
+    }
+    val videoPathsAvailable by produceState<Boolean?>(
+        initialValue = null,
+        videoPathReferences,
+        availableVideoModels
+    ) {
+        value = null
+        value = withContext(Dispatchers.IO) {
+            videoPathReferences.all(::videoPathReferenceAvailable)
+        }
+    }
 
     val generateVideo = generation@ fun() {
         val mode = if (selectedMode == 1) VideoGenerationMode.IMG2VID else VideoGenerationMode.TXT2VID
@@ -544,7 +609,11 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
                 }
                 return
             }
-            mode == VideoGenerationMode.IMG2VID && selectedImagePath == null -> {
+            videoPathsAvailable != true -> {
+                errorMessage = resources.getString(R.string.video_controls_unavailable_values_hint)
+                return
+            }
+            mode == VideoGenerationMode.IMG2VID && effectiveVideoInputPath == null -> {
                 errorMessage = resources.getString(R.string.video_gen_error_input_image_required)
                 return
             }
@@ -621,7 +690,7 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
             outputAviPath = File(modeDir, "$baseName.avi").absolutePath,
             outputMp4Path = File(modeDir, "$baseName.mp4").absolutePath,
             metadataPath = File(modeDir, "$baseName.json").absolutePath,
-            initImagePath = if (mode == VideoGenerationMode.IMG2VID) selectedImagePath else null,
+            initImagePath = if (mode == VideoGenerationMode.IMG2VID) effectiveVideoInputPath else null,
             useVae = useVae,
             vaePath = if (useVae) selectedVaePath else null,
             useT5xxl = useT5xxl,
@@ -649,12 +718,12 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
             loras = videoLoras,
             highNoiseLoras = videoHighNoiseLoras,
             loraApplyMode = videoLoraApplyMode,
-            sdParamsBackendSpec = selectedVideoModel?.sdParamsBackendSpec ?: "auto",
-            sdParamsBackendMode = selectedVideoModel?.sdParamsBackendMode ?: "auto",
-            sdRuntimeBackendMode = acceleratorPlacement?.let {
+            sdParamsBackendSpec = reuseBackendOverrides?.optString("reuseSdParamsBackendSpec") ?: selectedVideoModel?.sdParamsBackendSpec ?: "auto",
+            sdParamsBackendMode = reuseBackendOverrides?.optString("reuseSdParamsBackendMode") ?: selectedVideoModel?.sdParamsBackendMode ?: "auto",
+            sdRuntimeBackendMode = reuseBackendOverrides?.optString("reuseSdRuntimeBackendMode") ?: acceleratorPlacement?.let {
                 "te=$textEncoderPlacement,diffusion=$diffusionPlacement,vae=$vaePlacement"
             } ?: selectedVideoModel?.sdRuntimeBackendMode ?: "auto",
-            maxVramCpuGiB = if (sdMaxCpuRamEnabled) sdMaxCpuRamGiB else "",
+            maxVramCpuGiB = reuseBackendOverrides?.optString("reuseMaxVramCpuGiB") ?: if (sdMaxCpuRamEnabled) sdMaxCpuRamGiB else "",
             customFlags = manualCommandFlags,
             videoFamily = effectiveVideoOptions.videoFamily,
             videoVariant = effectiveVideoOptions.videoVariant,
@@ -721,77 +790,13 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
 
     BatteryOptimizationWarningDialog(state = batteryGateState)
 
-    fun shareVideo(metadata: GeneratedVideoMetadata) {
-        try {
-            val file = File(metadata.preferredArtifactPath)
-            if (!file.exists()) {
-                Toast.makeText(context, resources.getString(R.string.video_gen_share_failed_missing), Toast.LENGTH_SHORT).show()
-                return
-            }
-            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                type = videoMimeType(file)
-                putExtra(Intent.EXTRA_STREAM, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            context.startActivity(Intent.createChooser(shareIntent, resources.getString(R.string.video_gen_share_chooser)))
-        } catch (e: Exception) {
-            Toast.makeText(
-                context,
-                resources.getString(R.string.video_gen_share_failed, e.message ?: ""),
-                Toast.LENGTH_LONG
-            ).show()
-        }
-    }
-
-    fun copyGenerationInfo(metadata: GeneratedVideoMetadata) {
-        try {
-            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            val clip = ClipData.newPlainText(
-                resources.getString(R.string.video_gen_copy_info),
-                buildVideoGenerationInfoText(context, metadata)
-            )
-            clipboard.setPrimaryClip(clip)
-            Toast.makeText(context, resources.getString(R.string.video_gen_copy_info_success), Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(
-                context,
-                resources.getString(R.string.video_gen_copy_info_failed, e.message ?: ""),
-                Toast.LENGTH_LONG
-            ).show()
-        }
-    }
-
-    fun deleteVideo(metadata: GeneratedVideoMetadata) {
-        scope.launch(Dispatchers.IO) {
-            runCatching { metadata.exportedAviUri?.let { deleteDocumentUri(context, it) } }
-            runCatching { metadata.exportedMp4Uri?.let { deleteDocumentUri(context, it) } }
-            runCatching { metadata.exportedNativeUri?.let { deleteDocumentUri(context, it) } }
-            runCatching { metadata.exportedMetadataUri?.let { deleteDocumentUri(context, it) } }
-            runCatching { metadata.exportedAudioUri?.let { deleteDocumentUri(context, it) } }
-            metadata.audioSidecarPath?.let { File(it).delete() }
-            File(metadata.aviPath).delete()
-            File(metadata.mp4Path).delete()
-            metadata.nativeOutputPath
-                ?.takeIf { it != metadata.aviPath && it != metadata.mp4Path }
-                ?.let { File(it).delete() }
-            File(metadata.metadataPath).delete()
-            withContext(Dispatchers.Main) {
-                selectedGalleryVideo = null
-                reloadGallery()
-                VideoGenerationStateHolder.txt2vid.removeVideo(metadata)
-                VideoGenerationStateHolder.img2vid.removeVideo(metadata)
-                Toast.makeText(context, resources.getString(R.string.video_gen_delete_success), Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
     fun applyLingBotProfile() {
         val bundle = lingBotBundle ?: return
         val installedById = bundle.files.mapNotNull { file ->
             file.installedSdCuratedModel(bundle, lingBotInstalledModels)?.let { file.id to it.path }
         }.toMap()
         if (installedById.size != bundle.files.size) return
+        reuseBackendOverrides = null
         val components = com.example.llamadroid.sd.SdVideoComponentPaths(
             diffusionModelPath = installedById["lingbot-dense-13b"],
             llmPath = installedById["lingbot-qwen3-vl-4b-q4"],
@@ -843,6 +848,79 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
             seed = 42L,
             promptFormat = com.example.llamadroid.sd.SdVideoPromptFormat.LINGBOT_CAPTION_JSON
         )
+    }
+
+    fun applyVideoReuse(payload: VideoReusePayload, verifiedSources: Map<String, String> = emptyMap()) {
+        val draft = VideoReuseDraftAdapter.toLocalDraftJson(payload, verifiedSources = verifiedSources)
+        fun text(key: String): String = draft.optString(key).takeUnless { it == "null" }.orEmpty()
+        fun path(key: String): String? = text(key).takeIf(String::isNotBlank)
+        val nextMode = draft.optInt("mode", 0)
+        VideoGenerationStateHolder.getForModeIndex(nextMode).updatePrompt(text("prompt"))
+        selectedMode = nextMode
+        prompt = text("prompt")
+        negativePrompt = text("negativePrompt")
+        selectedVideoModelPath = path("model")
+        useVae = draft.optBoolean("useVae")
+        selectedVaePath = path("vae")
+        useT5xxl = draft.optBoolean("useT5")
+        selectedT5xxlPath = path("t5")
+        selectedImageUri = null
+        selectedImagePath = path("input")
+        imageResolution = null
+        videoFramesText = text("frames")
+        fpsText = text("fps")
+        widthText = text("width")
+        heightText = text("height")
+        stepsText = text("steps")
+        cfgScaleText = text("cfg")
+        threadsText = text("threads")
+        selectedSampler = SamplingMethod.entries.firstOrNull { it.name == text("sampler") } ?: SamplingMethod.EULER
+        selectedScheduler = SdScheduler.fromCliName(text("scheduler"))
+        flowShiftEnabled = draft.optBoolean("flowShiftEnabled")
+        flowShiftText = text("flowShift")
+        vaeTileSize = text("vaeTileSize")
+        vaeTiling = draft.optBoolean("vaeTiling")
+        diffusionFa = draft.optBoolean("diffusionFa")
+        diffusionConvDirect = draft.optBoolean("diffConv")
+        vaeConvDirect = draft.optBoolean("vaeConv")
+        mmap = draft.optBoolean("mmap")
+        cacheMode = SdCacheMode.fromStoredValue(path("cacheMode"))
+        cacheOption = text("cacheOption")
+        scmMask = text("scmMask")
+        scmPolicy = SdCacheScmPolicy.fromStoredValue(path("scmPolicy"))
+        manualCommandFlags = text("flags")
+        videoLoras = draft.optJSONArray("loras")?.toSdLoraSpecs().orEmpty()
+        videoHighNoiseLoras = draft.optJSONArray("highNoiseLoras")?.toSdLoraSpecs().orEmpty()
+        videoLoraApplyMode = SdLoraApplyMode.fromStoredValue(path("loraApplyMode"))
+        videoRuntimeOptions = parseVideoRuntimeOptions(text("videoAdvancedJson")) ?: VideoRuntimeOptions()
+        textEncoderPlacement = text("tePlacement")
+        diffusionPlacement = text("diffusionPlacement")
+        vaePlacement = text("vaePlacement")
+        reuseBackendOverrides = draft
+        mainTab = 0
+        errorMessage = null
+        warningMessage = resources.getString(R.string.video_detail_reuse_warning)
+        settingsRepo.setVideoGenerationDraft(captureVideoDraft())
+    }
+
+    LaunchedEffect(Unit) {
+        try {
+            val handoff = withContext(Dispatchers.IO) { VideoReuseHandoffStore.peek(context) }
+            if (handoff?.target == VideoReuseTarget.LOCAL && externalVideoInputPending) {
+                // A new share is a newer explicit intent than an undelivered gallery selection.
+                withContext(Dispatchers.IO) { VideoReuseHandoffStore.complete(context, handoff) }
+            } else if (handoff?.target == VideoReuseTarget.LOCAL) {
+                val result = withContext(Dispatchers.IO) { VideoReuseHandoffStore.readPayload(context, handoff) }
+                result?.payload?.let { payload ->
+                    applyVideoReuse(payload, resolveVideoReuseSources(context, payload))
+                    withContext(Dispatchers.IO) { VideoReuseHandoffStore.complete(context, handoff) }
+                } ?: run { errorMessage = resources.getString(R.string.video_detail_reuse_failed) }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            errorMessage = resources.getString(R.string.video_detail_reuse_failed)
+        }
     }
 
     val filteredGalleryVideos = remember(galleryVideos, galleryFilter) {
@@ -965,6 +1043,18 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
                         ) { Text(stringResource(R.string.video_gen_get_models)) }
                     }
 
+                    reuseBackendOverrides?.let { overrides ->
+                        item(key = "reused-device-settings") {
+                            VideoReuseBackendCard(overrides) { next ->
+                                reuseBackendOverrides = next
+                                if (next == null) {
+                                    textEncoderPlacement = "cpu"
+                                    diffusionPlacement = acceleratorPlacement ?: "cpu"
+                                    vaePlacement = "cpu"
+                                }
+                            }
+                        }
+                    }
                     item(key = "typed-video-options") {
                             Card(
                             modifier = Modifier.fillMaxWidth(),
@@ -977,7 +1067,7 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
                                     modifier = Modifier.walkthroughTarget("video.models"),
                                     onOptionsChange = { next ->
                                         videoRuntimeOptions = next
-                                        selectedVideoModelPath = next.videoComponents.diffusionModelPath ?: next.videoComponents.fullModelPath
+                                        selectedVideoModelPath = videoMainModelPathForSelection(next)
                                         selectedVaePath = next.videoComponents.vaePath
                                         useVae = selectedVaePath != null && !next.useTae
                                         selectedT5xxlPath = next.videoComponents.t5xxlPath
@@ -1439,8 +1529,9 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
                         enabled = selectedVideoModelPath != null &&
                             prompt.isNotBlank() &&
                             videoReadiness.isSatisfied &&
+                            videoPathsAvailable == true &&
                             videoBinaryReady &&
-                            (selectedMode == 0 || selectedImagePath != null)
+                            (selectedMode == 0 || effectiveVideoInputPath != null)
                     ) {
                         Icon(Icons.Default.PlayArrow, contentDescription = null)
                         Spacer(modifier = Modifier.width(12.dp))
@@ -1459,50 +1550,16 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
     }
 
     selectedGalleryVideo?.let { metadata ->
-        VideoDetailDialog(
-            metadata = metadata,
+        VideoGalleryDetail(metadata, navController,
             onDismiss = { selectedGalleryVideo = null },
-            onShare = { shareVideo(metadata) },
-            onInterpolate = {
-                SharedFileHolder.setPendingFile(
-                    Uri.fromFile(File(metadata.preferredArtifactPath)),
-                    videoMimeType(File(metadata.preferredArtifactPath)),
-                    SharedFileTarget.VIDEO_INTERPOLATION
-                )
-                selectedGalleryVideo = null
-                navController.navigate(Screen.VideoInterpolation.route)
+            onDeleted = { reloadGallery() },
+            onReuseLocal = { payload, sources ->
+                applyVideoReuse(payload, sources)
+                scope.launch(Dispatchers.IO) { VideoReuseHandoffStore.peek(context)?.let { handoff ->
+                    if (handoff.target == VideoReuseTarget.LOCAL && handoff.metadataPath == metadata.metadataPath) VideoReuseHandoffStore.complete(context, handoff)
+                } }
             },
-            onUpscale = {
-                SharedFileHolder.setPendingFile(
-                    Uri.fromFile(File(metadata.preferredArtifactPath)),
-                    videoMimeType(File(metadata.preferredArtifactPath)),
-                    SharedFileTarget.VIDEO_UPSCALER
-                )
-                selectedGalleryVideo = null
-                navController.navigate(Screen.VideoUpscaler.route)
-            },
-            onInterpolateAndUpscale = {
-                SharedFileHolder.setPendingFile(
-                    Uri.fromFile(File(metadata.preferredArtifactPath)),
-                    videoMimeType(File(metadata.preferredArtifactPath)),
-                    SharedFileTarget.VIDEO_INTERPOLATION,
-                    sourceTag = "interpolate_then_upscale"
-                )
-                selectedGalleryVideo = null
-                navController.navigate(Screen.Workflows.route)
-            },
-            onCopyInfo = { copyGenerationInfo(metadata) },
-            onRetryConversion = {
-                runCatching {
-                    androidx.core.content.ContextCompat.startForegroundService(context,
-                        VideoGenerationService.createRetryConversionIntent(context, metadata))
-                    selectedGalleryVideo = null
-                }.onFailure {
-                    Toast.makeText(context, resources.getString(R.string.video_output_retry_failed), Toast.LENGTH_LONG).show()
-                }
-            },
-            onDelete = { deleteVideo(metadata) }
-        )
+            localDraftEdited = VideoReuseDraftAdapter.hasMeaningfulLocalDraft(captureVideoDraft()))
     }
 
     if (showInfoDialog) {
@@ -2021,11 +2078,11 @@ fun VideoGalleryCard(
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Row(modifier = Modifier.padding(12.dp)) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Box(
                 modifier = Modifier
-                    .width(128.dp)
-                    .aspectRatio(1.2f)
+                    .fillMaxWidth()
+                    .aspectRatio((metadata.width.toFloat() / metadata.height.coerceAtLeast(1)).coerceIn(1.2f, 2.4f))
                     .clip(RoundedCornerShape(12.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
@@ -2047,7 +2104,7 @@ fun VideoGalleryCard(
                 }
             }
             Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 VideoModeBadge(metadata.modeEnum)
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
@@ -2063,7 +2120,7 @@ fun VideoGalleryCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    metadata.diffusionModelName,
+                    File(metadata.diffusionModelName).name,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -2076,7 +2133,7 @@ fun VideoGalleryCard(
 
 @Composable
 private fun VideoModeBadge(mode: VideoGenerationMode) {
-    val color = if (mode == VideoGenerationMode.TXT2VID) Color(0xFF1976D2) else Color(0xFF2E7D32)
+    val color = if (mode == VideoGenerationMode.TXT2VID) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
     Surface(
         shape = RoundedCornerShape(6.dp),
         color = color.copy(alpha = 0.12f)
@@ -2095,7 +2152,7 @@ private fun VideoModeBadge(mode: VideoGenerationMode) {
 }
 
 @Composable
-private fun VideoDetailDialog(
+internal fun VideoDetailDialog(
     metadata: GeneratedVideoMetadata,
     onDismiss: () -> Unit,
     onShare: () -> Unit,
@@ -2104,10 +2161,11 @@ private fun VideoDetailDialog(
     onInterpolateAndUpscale: () -> Unit,
     onCopyInfo: () -> Unit,
     onRetryConversion: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onReuse: () -> Unit
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
+    VideoDetailSurface(
+        onDismiss = onDismiss,
         title = {
             Column {
                 VideoModeBadge(metadata.modeEnum)
@@ -2119,8 +2177,7 @@ private fun VideoDetailDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 520.dp)
-                    .verticalScroll(rememberScrollState())
+
             ) {
                 if (File(metadata.preferredArtifactPath).extension.equals("webp", true)) {
                     NativeAnimatedVideoPreview(metadata.preferredArtifactPath)
@@ -2128,10 +2185,11 @@ private fun VideoDetailDialog(
                 AndroidView(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(220.dp)
+                        .aspectRatio((metadata.width.toFloat() / metadata.height.coerceAtLeast(1)).coerceIn(0.6f, 2.4f))
                         .clip(RoundedCornerShape(12.dp)),
                     factory = { ctx ->
                         VideoView(ctx).apply {
+                            tag = metadata.preferredArtifactPath
                             setVideoURI(Uri.fromFile(File(metadata.preferredArtifactPath)))
                             setOnPreparedListener { player ->
                                 player.isLooping = true
@@ -2139,27 +2197,37 @@ private fun VideoDetailDialog(
                             }
                         }
                     },
+                    onRelease = { view -> view.stopPlayback() },
                     update = { view ->
-                        view.setVideoURI(Uri.fromFile(File(metadata.preferredArtifactPath)))
+                        if (view.tag != metadata.preferredArtifactPath) {
+                            view.tag = metadata.preferredArtifactPath
+                            view.setVideoURI(Uri.fromFile(File(metadata.preferredArtifactPath)))
+                        }
                     }
                 )
                 }
                 Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    metadata.prompt,
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                VideoPromptBlock(stringResource(R.string.video_detail_positive_prompt), metadata.prompt)
                 if (metadata.negativePrompt.isNotBlank()) {
                     Spacer(modifier = Modifier.height(8.dp))
-                    ParameterLine(
-                        stringResource(R.string.video_gen_negative_prompt_label),
-                        metadata.negativePrompt
-                    )
+                    VideoPromptBlock(stringResource(R.string.video_gen_negative_prompt_label), metadata.negativePrompt)
                 }
                 Spacer(modifier = Modifier.height(12.dp))
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(12.dp))
-                ParameterLine(stringResource(R.string.video_gen_model_label), metadata.diffusionModelName)
+                AppAdvancedSection(title = stringResource(R.string.video_detail_parameters)) {
+                ParameterLine(stringResource(R.string.video_gen_model_label), File(metadata.diffusionModelName).name)
+                ParameterLine(stringResource(R.string.video_controls_seed), metadata.seed.toString())
+                SdVideoComponentRole.entries.filter { it != SdVideoComponentRole.LORA }.forEach { role ->
+                    metadata.videoComponents.pathFor(role)?.takeIf(String::isNotBlank)?.let { path ->
+                        ParameterLine(videoComponentLabel(role), File(path).name)
+                    }
+                }
+                (metadata.loras + metadata.highNoiseLoras).forEach { lora ->
+                    ParameterLine(lora.filename, stringResource(R.string.video_detail_lora_summary,
+                        lora.strength.toString(), stringResource(if (lora.enabled) R.string.video_gen_enabled else R.string.video_gen_disabled),
+                        stringResource(if (lora.highNoiseOnly || lora in metadata.highNoiseLoras) R.string.video_controls_lora_high_noise else R.string.video_controls_lora_regular)))
+                }
                 ParameterLine(stringResource(R.string.video_gen_frames_label), metadata.videoFrames.toString())
                 ParameterLine(stringResource(R.string.video_gen_fps_label), metadata.fps.toString())
                 ParameterLine(stringResource(R.string.video_gen_width_label), metadata.width.toString())
@@ -2214,11 +2282,15 @@ private fun VideoDetailDialog(
                 metadata.initImagePath?.let {
                     ParameterLine(stringResource(R.string.video_gen_input_image_title), File(it).name)
                 }
+                }
             }
         },
         confirmButton = {
-            Column(Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState()),
+            Column(Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onReuse, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.video_detail_reuse))
+                }
                 if (metadata.conversionRecoveredNative) {
                     OutlinedButton(onClick = onRetryConversion, modifier = Modifier.fillMaxWidth()) {
                         Text(stringResource(R.string.video_output_retry_conversion))
@@ -2305,7 +2377,7 @@ private fun createVideoThumbnail(path: String): ImageBitmap? {
     }
 }
 
-private fun deleteDocumentUri(context: Context, uriString: String) {
+internal fun deleteDocumentUri(context: Context, uriString: String) {
     val uri = Uri.parse(uriString)
     val document = DocumentFile.fromSingleUri(context, uri)
     if (document?.delete() != true) {
@@ -2315,14 +2387,14 @@ private fun deleteDocumentUri(context: Context, uriString: String) {
 
 private fun stringResourceSafe(context: Context, resId: Int): String = context.getString(resId)
 
-private fun videoMimeType(file: File): String = when (file.extension.lowercase(Locale.US)) {
+internal fun videoMimeType(file: File): String = when (file.extension.lowercase(Locale.US)) {
     "avi" -> "video/x-msvideo"
     "webm" -> "video/webm"
     "webp" -> "image/webp"
     else -> "video/mp4"
 }
 
-private fun buildVideoGenerationInfoText(context: Context, metadata: GeneratedVideoMetadata): String {
+internal fun buildVideoGenerationInfoText(context: Context, metadata: GeneratedVideoMetadata): String {
     val lines = mutableListOf(
         "${context.getString(R.string.video_gen_mode_label)}: ${formatVideoModeLabel(context, metadata.modeEnum)}",
         "${context.getString(R.string.video_gen_prompt_label)}: ${metadata.prompt}",
@@ -2396,6 +2468,108 @@ private fun formatGenerationDuration(durationMs: Long): String {
 
 private fun formatVideoGalleryDate(timestampMs: Long): String =
     SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(timestampMs))
+
+private const val VIDEO_DRAFT_PERSIST_DEBOUNCE_MS = 400L
+
+private data class VideoPathReference(
+    val path: String,
+    val directory: Boolean = false
+)
+
+/**
+ * Return the main model path in the same order used by the typed video command.
+ * Full-model families must keep their checkpoint path ahead of any legacy scalar.
+ */
+private fun videoMainModelPathForSelection(options: VideoRuntimeOptions): String? {
+    val profile = options.videoFamily?.let { family ->
+        runCatching { SdVideoFamilyProfiles.resolve(family, options.videoVariant) }.getOrNull()
+    }
+    return when (profile?.mainModelLayout ?: SdVideoMainModelLayout.STANDALONE_DIFFUSION) {
+        SdVideoMainModelLayout.FULL_MODEL -> options.videoComponents.fullModelPath
+            ?: options.videoComponents.diffusionModelPath
+        SdVideoMainModelLayout.STANDALONE_DIFFUSION -> options.videoComponents.diffusionModelPath
+            ?: options.videoComponents.fullModelPath
+    }
+}
+
+/** Match the paths emitted by VideoCommandBuilder before starting generation. */
+private fun videoGenerationPathReferences(
+    options: VideoRuntimeOptions,
+    selectedModelPath: String?,
+    loras: List<SdLoraSpec>,
+    highNoiseLoras: List<SdLoraSpec>
+): List<VideoPathReference> {
+    val profile = options.videoFamily?.let { family ->
+        runCatching { SdVideoFamilyProfiles.resolve(family, options.videoVariant) }.getOrNull()
+    }
+    val components = options.videoComponents
+    val inputs = options.videoInputs
+
+    return buildList {
+        fun addFile(path: String?) {
+            path?.takeIf(String::isNotBlank)?.let { add(VideoPathReference(it)) }
+        }
+
+        fun addDirectory(path: String?) {
+            path?.takeIf(String::isNotBlank)?.let { add(VideoPathReference(it, directory = true)) }
+        }
+
+        val mainModelPath = when (profile?.mainModelLayout ?: SdVideoMainModelLayout.STANDALONE_DIFFUSION) {
+            SdVideoMainModelLayout.FULL_MODEL -> components.fullModelPath
+                ?: components.diffusionModelPath
+                ?: selectedModelPath
+            SdVideoMainModelLayout.STANDALONE_DIFFUSION -> components.diffusionModelPath
+                ?: selectedModelPath
+        }
+        addFile(mainModelPath)
+        addFile(components.highNoiseDiffusionModelPath)
+        addFile(components.uncondDiffusionModelPath)
+
+        // The command emits one decoder. Check only the selected branch so an old,
+        // unused alternate path cannot block a valid run.
+        val decoderTae = components.taePath?.takeIf {
+            options.useTae || components.vaePath.isNullOrBlank()
+        }
+        if (decoderTae != null) addFile(decoderTae) else addFile(components.vaePath)
+
+        addFile(components.t5xxlPath)
+        addFile(components.llmPath)
+        addFile(components.llmVisionPath)
+        addFile(components.audioVaePath)
+        addFile(components.embeddingsConnectorsPath)
+        addFile(components.motionModulePath)
+        addFile(components.clipVisionPath)
+        addFile(components.ipAdapterPath)
+        addFile(inputs.ipAdapterImagePath)
+        addFile(components.controlNetPath)
+
+        if (options.hires.enabled) {
+            addDirectory(components.hiresUpscalersDir)
+            addFile(components.hiresUpscaler)
+        }
+
+        loras.filter { it.enabled }.forEach { addFile(it.path) }
+        highNoiseLoras.filter { it.enabled }.forEach { addFile(it.path) }
+
+        addFile(inputs.initImagePath)
+        addFile(inputs.endImagePath)
+        addFile(inputs.controlImagePath)
+        addDirectory(inputs.controlVideoPath)
+        inputs.referenceImages.forEach(::addFile)
+        inputs.referenceVideos.forEach(::addDirectory)
+        inputs.referenceVideoAudios.forEach(::addFile)
+        inputs.referenceAudios.forEach(::addFile)
+    }.distinct()
+}
+
+private fun videoPathReferenceAvailable(reference: VideoPathReference): Boolean =
+    File(reference.path).let { file ->
+        if (reference.directory) {
+            file.isDirectory && file.canRead()
+        } else {
+            file.isFile && file.canRead()
+        }
+    }
 
 private fun formatVideoModeLabel(context: Context, mode: VideoGenerationMode): String {
     return when (mode) {

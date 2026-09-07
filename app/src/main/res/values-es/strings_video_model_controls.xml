@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="video_controls_unknown_requirements">Requisitos desconocidos</string>
+    <string name="video_controls_unknown_requirements_hint">Selecciona una familia de vídeo para mostrar sus componentes obligatorios, opcionales y compatibles. Las rutas actuales se pueden editar.</string>
+    <string name="video_controls_required_components">Componentes obligatorios</string>
+    <string name="video_controls_choose_one_component">Elige uno</string>
+    <string name="video_controls_choose_one_component_hint">Selecciona un modelo instalado de este grupo compatible.</string>
+    <string name="video_controls_optional_components">Componentes opcionales</string>
+    <string name="video_controls_incompatible_components">Componentes guardados no disponibles para este perfil</string>
+    <string name="video_controls_select_model_hint">Selecciona un modelo instalado</string>
+    <string name="video_controls_custom_path_label">Ruta personalizada</string>
+    <string name="video_controls_custom_path_detail">Úsala cuando el modelo no aparezca en la lista de modelos instalados.</string>
+    <string name="video_controls_model_unavailable">Este modelo guardado no está disponible en la lista de modelos instalados. Elige un modelo instalado o edita la ruta personalizada.</string>
+    <string name="video_controls_model_incompatible">Este modelo guardado no es compatible con el perfil seleccionado. Elige un modelo compatible o edita la ruta personalizada.</string>
+    <string name="video_controls_edit_custom_path">Editar ruta personalizada</string>
+    <string name="video_controls_choose_installed_model">Elegir un modelo instalado</string>
+</resources>

@@ -267,7 +267,9 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 - Try the LingBot Dense 1.3B bundle with Qwen3-VL 4B Q4 and `taew2_1`, plus a phone example profile at `256x144`, 9 frames, 4 fps, and 12 steps
 - Keep generation and cancellation controls visible while the form scrolls
 - Save MP4 output with audio when available, keep supported native formats, and retry conversion without losing usable native output
-- Browse the video gallery with prompts, generation settings, sharing, deletion, and copyable result information
+- Browse the video gallery with prompts, generation settings, sharing, deletion, and separate prompt copy controls
+- Reuse saved video settings in an editable single-device or distributed generation form
+- Open All media gallery from Library, or use the distributed gallery for distributed outputs only
 
 **Note:** Video options depend on the selected model family and the flags supported by the selected binary. The LingBot phone profile is an example configuration, not a guarantee that every phone has enough memory or that generation will be fast. SVD models can be inspected, but generation is unavailable in the bundled backend.
 

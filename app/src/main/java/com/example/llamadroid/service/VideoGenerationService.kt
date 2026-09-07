@@ -574,6 +574,7 @@ class VideoGenerationService : Service() {
             sdParamsBackendSpec = config.sdParamsBackendSpec,
             sdRuntimeBackendMode = config.sdRuntimeBackendMode,
             maxVramCpuGiB = config.maxVramCpuGiB,
+            customFlags = config.customFlags,
             distributedRuntime = config.distributedRuntime,
             loras = config.loras,
             highNoiseLoras = config.highNoiseLoras,
@@ -590,6 +591,11 @@ class VideoGenerationService : Service() {
             workflow = config.resolvedVideoWorkflow().storedValue,
             videoComponents = resolvedVideoComponents,
             videoInputs = config.resolvedVideoInputs(),
+            videoRuntimeOptions = config.toVideoRuntimeOptions().copy(
+                workflow = config.resolvedVideoWorkflow(),
+                videoComponents = resolvedVideoComponents,
+                videoInputs = config.resolvedVideoInputs()
+            ),
             useTae = config.useTae || resolvedVideoComponents.taePath != null && resolvedVideoComponents.vaePath == null,
             taePath = resolvedVideoComponents.taePath,
             taeName = resolvedVideoComponents.taePath?.let { File(it).name },

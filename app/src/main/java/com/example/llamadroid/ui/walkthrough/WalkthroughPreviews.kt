@@ -4,6 +4,7 @@ import com.example.llamadroid.R
 
 /** Actual demonstration screenshots, with Android selecting the English or Spanish asset. */
 internal fun lessonPreviewResource(id: String): Int? = when (id) {
+    "library" -> R.drawable.tour_preview_library
     "chat" -> R.drawable.tour_lesson_chat
     "agent" -> R.drawable.tour_lesson_agent
     "native_llama" -> R.drawable.tour_lesson_native_llama

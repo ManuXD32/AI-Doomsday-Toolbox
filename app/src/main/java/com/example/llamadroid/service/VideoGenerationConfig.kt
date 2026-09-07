@@ -276,6 +276,8 @@ data class GeneratedVideoMetadata(
     val sdParamsBackendSpec: String = "auto",
     val sdRuntimeBackendMode: String = "auto",
     val maxVramCpuGiB: String = "",
+    /** User supplied native flags retained for draft/reuse round trips. */
+    val customFlags: String = "",
     val distributedRuntime: SdDistributedRuntimeConfig,
     val loras: List<SdLoraSpec> = emptyList(),
     val highNoiseLoras: List<SdLoraSpec> = emptyList(),
@@ -297,6 +299,8 @@ data class GeneratedVideoMetadata(
     val workflow: String? = null,
     val videoComponents: SdVideoComponentPaths = SdVideoComponentPaths(),
     val videoInputs: SdVideoInputs = SdVideoInputs(),
+    /** Full typed runtime state; absent on metadata written before this field existed. */
+    val videoRuntimeOptions: VideoRuntimeOptions? = null,
     val useTae: Boolean = false,
     val taePath: String? = null,
     val taeName: String? = null,
@@ -373,6 +377,7 @@ data class GeneratedVideoMetadata(
         put("sdParamsBackendSpec", sdParamsBackendSpec)
         put("sdRuntimeBackendMode", sdRuntimeBackendMode)
         put("maxVramCpuGiB", maxVramCpuGiB)
+        put("customFlags", customFlags)
         put("distributedEnabled", distributedRuntime.enabled)
         put("distributedRpcServers", distributedRuntime.rpcServers)
         put("distributedPlacementMode", distributedRuntime.placementMode.name)
@@ -402,6 +407,7 @@ data class GeneratedVideoMetadata(
         put("workflow", workflow)
         put("videoComponents", videoComponents.toJsonObject())
         put("videoInputs", videoInputs.toJsonObject())
+        put("videoRuntimeOptions", videoRuntimeOptions?.toJsonObject() ?: JSONObject.NULL)
         put("useTae", useTae)
         put("taePath", taePath)
         put("taeName", taeName)
@@ -480,6 +486,7 @@ data class GeneratedVideoMetadata(
                 sdParamsBackendSpec = json.optString("sdParamsBackendSpec", "auto"),
                 sdRuntimeBackendMode = json.optString("sdRuntimeBackendMode", "auto"),
                 maxVramCpuGiB = json.optString("maxVramCpuGiB"),
+                customFlags = json.optString("customFlags"),
                 distributedRuntime = SdDistributedRuntimeConfig(
                     enabled = json.optBoolean("distributedEnabled", false),
                     rpcServers = json.optString("distributedRpcServers"),
@@ -517,6 +524,9 @@ data class GeneratedVideoMetadata(
                     ?: SdVideoComponentPaths(),
                 videoInputs = json.optJSONObject("videoInputs")?.toSdVideoInputs()
                     ?: SdVideoInputs(),
+                videoRuntimeOptions = json.optJSONObject("videoRuntimeOptions")?.let {
+                    VideoRuntimeOptions.fromJsonObject(it)
+                },
                 useTae = json.optBoolean("useTae", false),
                 taePath = json.optString("taePath").ifBlank { null },
                 taeName = json.optString("taeName").ifBlank { null },

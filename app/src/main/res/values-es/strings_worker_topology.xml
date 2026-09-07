@@ -29,9 +29,6 @@
     <string name="worker_topology_transfer_title">Transferencia de capas</string>
     <string name="worker_topology_transfer_progress">Sincronizando capas · %d%%</string>
     <string name="worker_topology_memory_title">Memoria del clúster</string>
-    <string name="worker_topology_cluster_memory">Capacidad del clúster: %d MB</string>
-    <string name="worker_topology_master_memory">Asignación del maestro: %d MB</string>
-    <string name="worker_topology_worker_memory">Worker %1$d · asignación: %2$d MB</string>
     <string name="worker_topology_logs_title">Logs RPC recientes</string>
     <string name="worker_topology_logs_empty">Aún no hay líneas de log RPC.</string>
     <string name="worker_topology_logs_bound">Últimas líneas del registro: %d</string>

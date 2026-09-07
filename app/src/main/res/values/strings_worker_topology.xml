@@ -29,9 +29,6 @@
     <string name="worker_topology_transfer_title">Layer transfer</string>
     <string name="worker_topology_transfer_progress">Syncing layers · %d%%</string>
     <string name="worker_topology_memory_title">Cluster memory</string>
-    <string name="worker_topology_cluster_memory">Cluster capacity: %d MB</string>
-    <string name="worker_topology_master_memory">Master allocation: %d MB</string>
-    <string name="worker_topology_worker_memory">Worker %1$d · allocation: %2$d MB</string>
     <string name="worker_topology_logs_title">Recent RPC logs</string>
     <string name="worker_topology_logs_empty">No RPC log lines yet.</string>
     <string name="worker_topology_logs_bound">Latest log lines: %d</string>

@@ -24,6 +24,7 @@ import com.example.llamadroid.ui.navigation.AppRootDestination
 import com.example.llamadroid.ui.navigation.AppRoutePresentations
 import com.example.llamadroid.ui.navigation.SoftStudioAppScaffold
 import com.example.llamadroid.ui.library.LibraryScreen
+import com.example.llamadroid.ui.library.AllMediaGalleryScreen
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.CompositionLocalProvider
@@ -573,6 +574,7 @@ fun LlamaApp(
             // AI screens
             composable(Screen.AIHub.route) { AIHubScreen(navController) }
             composable(Screen.Library.route) { LibraryScreen(navController) }
+            composable(Screen.AllMediaGallery.route) { AllMediaGalleryScreen(navController) }
             composable(Screen.AiServersHub.route) { AiServersHubScreen(navController) }
             composable(Screen.FileServer.route) {
                 com.example.llamadroid.ui.components.AppScreenScaffold(

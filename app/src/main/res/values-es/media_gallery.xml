@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="media_gallery_title">Toda la multimedia</string>
+    <string name="media_gallery_subtitle">Imágenes y vídeos guardados por esta app</string>
+    <string name="media_gallery_filter_title">Filtros</string>
+    <string name="media_gallery_type_all">Todos</string>
+    <string name="media_gallery_type_images">Imágenes</string>
+    <string name="media_gallery_type_videos">Vídeos</string>
+    <string name="media_gallery_type_image">Imagen</string>
+    <string name="media_gallery_type_video">Vídeo</string>
+    <string name="media_gallery_source_all">Todos los orígenes</string>
+    <string name="media_gallery_source_sd">Stable Diffusion</string>
+    <string name="media_gallery_source_fast_sd">FastSD</string>
+    <string name="media_gallery_source_onnx">ONNX</string>
+    <string name="media_gallery_source_tama">Tama</string>
+    <string name="media_gallery_source_workflow">Flujo de trabajo</string>
+    <string name="media_gallery_source_processing">Procesamiento</string>
+    <string name="media_gallery_source_unknown">Origen desconocido</string>
+    <string name="media_gallery_location_all">Todas las ubicaciones</string>
+    <string name="media_gallery_location_local">Local</string>
+    <string name="media_gallery_location_distributed">Distribuido</string>
+    <string name="media_gallery_location_unknown">Desconocido</string>
+    <string name="media_gallery_count">Mostrados: %1$d / %2$d</string>
+    <string name="media_gallery_empty">Todavía no hay imágenes ni vídeos guardados.</string>
+    <string name="media_gallery_item_meta">%1$s • %2$s</string>
+    <string name="media_gallery_open">Abrir</string>
+    <string name="media_gallery_details_title">Detalles multimedia</string>
+    <string name="media_gallery_source_label">Origen</string>
+    <string name="media_gallery_location_label">Ubicación</string>
+    <string name="media_gallery_created_label">Creado</string>
+    <string name="media_gallery_prompt_label">Indicación</string>
+    <string name="media_gallery_file_label">Archivo</string>
+    <string name="media_gallery_generation_settings_label">Ajustes de generación</string>
+    <string name="media_gallery_generation_settings_unavailable">Los ajustes de generación no están disponibles para este resultado antiguo.</string>
+    <string name="media_gallery_open_with">Abrir con</string>
+    <string name="media_gallery_open_failed">No se puede abrir este medio: %1$s</string>
+    <string name="media_gallery_fastsd_link_title">Abrir galería FastSD</string>
+    <string name="media_gallery_fastsd_link_desc">Los resultados remotos de FastSD aparecen al abrir su conexión.</string>
+    <string name="soft_studio_library_open_all_media">Toda la multimedia</string>
+    <string name="feature_guide_media_gallery_title">Galería de toda la multimedia</string>
+    <string name="feature_recipe_media_gallery_browse_title">Explorar multimedia guardada</string>
+    <string name="feature_step_media_gallery_purpose">Abre Toda la multimedia desde Biblioteca para revisar imágenes y vídeos guardados en la app. Empieza con los filtros de tipo, origen y ubicación; después abre un elemento para ver sus detalles o la herramienta propietaria.</string>
+    <string name="feature_step_media_gallery_result">Comprueba que los resultados guardados más recientes aparecen primero, que las miniaturas cargan al mostrar sus tarjetas y que los detalles de imágenes y vídeos se leen en la vista desplazable.</string>
+    <string name="feature_step_media_gallery_recover">Actualiza después de generar o borrar. Usa el enlace de la galería FastSD para resultados remotos y vuelve al generador propietario cuando un resultado antiguo no tenga ajustes de generación.</string>
+</resources>

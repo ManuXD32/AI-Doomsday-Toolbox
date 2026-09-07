@@ -30,6 +30,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.produceState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -64,8 +67,8 @@ import com.example.llamadroid.sd.SdVideoNativeOutputFormat
 import com.example.llamadroid.sd.SdVideoOutputFormat
 import com.example.llamadroid.sd.SdVideoPromptFormat
 import com.example.llamadroid.sd.SdVideoWorkflow
+import com.example.llamadroid.sd.matchesSdVideoFamily
 import com.example.llamadroid.sd.pathFor
-import com.example.llamadroid.sd.requiredRolesFor
 import com.example.llamadroid.service.VideoRuntimeOptions
 import com.example.llamadroid.service.SdBinaryCapabilities
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
@@ -102,7 +105,6 @@ fun VideoRuntimeOptionsEditor(
     val supportedWorkflows = profile?.supportedWorkflows?.toList()
         ?: SdVideoWorkflow.entries.toList()
     val workflow = options.workflow ?: supportedWorkflows.first()
-    val componentRoles = videoEditorComponentRoles(profile, workflow, options.videoComponents)
     val availability = videoUiAvailability(
         profile = profile,
         binaryCapabilities = binaryCapabilities,
@@ -284,7 +286,7 @@ fun VideoRuntimeOptionsEditor(
 
         ComponentPathsEditor(
             profile = profile,
-            roles = componentRoles,
+            workflow = workflow,
             paths = options.videoComponents,
             models = componentModels,
             availability = availability,
@@ -471,7 +473,7 @@ private fun SdVideoInputs.withPaths(role: SdVideoInputRole, paths: List<String>)
 @Composable
 private fun ComponentPathsEditor(
     profile: SdVideoFamilyProfile?,
-    roles: List<SdVideoComponentRole>,
+    workflow: SdVideoWorkflow,
     paths: SdVideoComponentPaths,
     models: Map<SdVideoComponentRole, List<ModelEntity>>,
     availability: VideoUiAvailability,
@@ -480,14 +482,58 @@ private fun ComponentPathsEditor(
     onPathsChange: (SdVideoComponentPaths) -> Unit
 ) {
     Text(stringResource(R.string.video_controls_components), style = MaterialTheme.typography.titleSmall)
-    roles.forEach { role ->
-        VideoModelPathField(
-            label = videoComponentLabel(role),
-            value = paths.pathFor(role).orEmpty(),
-            models = models[role].orEmpty(),
-            enabled = role.cliFlag?.let(availability::isFlagEnabled) ?: true,
-            onValueChange = { onPathsChange(paths.withPath(role, it)) }
+    videoComponentRequirementGroups(profile, workflow, paths).forEach { group ->
+        Text(
+            text = stringResource(
+                when (group.kind) {
+                    VideoComponentRequirementKind.UNKNOWN -> R.string.video_controls_unknown_requirements
+                    VideoComponentRequirementKind.REQUIRED -> R.string.video_controls_required_components
+                    VideoComponentRequirementKind.CHOOSE_ONE -> R.string.video_controls_choose_one_component
+                    VideoComponentRequirementKind.OPTIONAL -> R.string.video_controls_optional_components
+                    VideoComponentRequirementKind.INCOMPATIBLE -> R.string.video_controls_incompatible_components
+                }
+            ),
+            style = MaterialTheme.typography.labelLarge,
+            color = if (group.kind == VideoComponentRequirementKind.INCOMPATIBLE) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            }
         )
+        if (group.kind == VideoComponentRequirementKind.UNKNOWN) {
+            Text(
+                text = stringResource(R.string.video_controls_unknown_requirements_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else if (group.kind == VideoComponentRequirementKind.CHOOSE_ONE) {
+            Text(
+                text = stringResource(R.string.video_controls_choose_one_component_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        group.roles.forEach { role ->
+            val allModels = models[role].orEmpty()
+            val compatibleModels = if (profile == null) {
+                allModels
+            } else {
+                allModels.filter { it.matchesSdVideoFamily(profile.family, profile.variant) }
+            }
+            val path = paths.pathFor(role).orEmpty()
+            val selectedModel = selectedVideoModel(path, allModels)
+            val incompatible = group.kind == VideoComponentRequirementKind.INCOMPATIBLE ||
+                (selectedModel != null && compatibleModels.none { it.path == selectedModel.path })
+            VideoModelPathField(
+                label = videoComponentLabel(role),
+                value = path,
+                models = compatibleModels,
+                allModels = allModels,
+                enabled = role.cliFlag?.let(availability::isFlagEnabled) ?: true,
+                incompatible = incompatible,
+                onValueChange = { onPathsChange(paths.withPath(role, it)) }
+            )
+        }
     }
     if (uncondDiffusionModels.isNotEmpty() || !paths.uncondDiffusionModelPath.isNullOrBlank()) {
         VideoModelPathField(
@@ -847,36 +893,119 @@ private fun VideoModelPathField(
     label: String,
     value: String,
     models: List<ModelEntity>,
+    allModels: List<ModelEntity> = models,
     enabled: Boolean = true,
+    incompatible: Boolean = false,
     onValueChange: (String) -> Unit
 ) {
+    val selectedModel = selectedVideoModel(value, allModels)
     var expanded by remember(label) { mutableStateOf(false) }
+    var customPathEditor by rememberSaveable(label) {
+        mutableStateOf(false)
+    }
+    LaunchedEffect(selectedModel?.path) {
+        if (selectedModel != null) customPathEditor = false
+    }
+    val entries = remember(models) { videoModelSelectorEntries(models) }
+    val displayName = videoModelDisplayName(value, allModels)
+    val selectedPath = value
+    val fileAvailable by produceState<Boolean?>(initialValue = null, selectedPath) {
+        this.value = withContext(Dispatchers.IO) { videoModelFileAvailable(selectedPath) }
+    }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(label, style = MaterialTheme.typography.labelLarge)
-        ExposedDropdownMenuBox(
-            expanded = expanded,
-            onExpandedChange = { if (enabled) expanded = !expanded }
-        ) {
+        if (customPathEditor) {
             OutlinedTextField(
                 value = value,
                 onValueChange = onValueChange,
-                modifier = Modifier.fillMaxWidth().menuAnchor().semantics { contentDescription = label },
+                modifier = Modifier.fillMaxWidth().semantics { contentDescription = label },
+                label = { Text(stringResource(R.string.video_controls_custom_path_label)) },
                 placeholder = { Text(stringResource(R.string.video_controls_custom_path_hint)) },
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                 enabled = enabled,
                 singleLine = true,
-                shape = RoundedCornerShape(12.dp)
-            )
-            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                models.forEach { model ->
-                    DropdownMenuItem(
-                        text = { Text(model.filename, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                        onClick = {
-                            onValueChange(model.path)
-                            expanded = false
-                        }
-                    )
+                shape = RoundedCornerShape(12.dp),
+                supportingText = {
+                    Text(stringResource(R.string.video_controls_custom_path_detail))
                 }
+            )
+            TextButton(
+                onClick = { customPathEditor = false },
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(stringResource(R.string.video_controls_choose_installed_model))
+            }
+        } else {
+            ExposedDropdownMenuBox(
+                expanded = expanded,
+                onExpandedChange = { if (enabled) expanded = !expanded }
+            ) {
+                OutlinedTextField(
+                    value = displayName.takeIf { value.isNotBlank() }.orEmpty(),
+                    onValueChange = {},
+                    readOnly = true,
+                    modifier = Modifier.fillMaxWidth().menuAnchor().semantics { contentDescription = label },
+                    placeholder = { Text(stringResource(R.string.video_controls_select_model_hint)) },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                    enabled = enabled,
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    supportingText = {
+                        when {
+                            incompatible -> Text(
+                                stringResource(R.string.video_controls_model_incompatible),
+                                color = MaterialTheme.colorScheme.error,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            value.isNotBlank() && fileAvailable == false -> Text(
+                                stringResource(R.string.video_controls_model_unavailable),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                )
+                ExposedDropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                    modifier = Modifier.heightIn(max = 320.dp)
+                ) {
+                    entries.forEach { entry ->
+                        DropdownMenuItem(
+                            text = {
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(
+                                        entry.model.filename,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    if (entry.hasDuplicateFilename) {
+                                        Text(
+                                            entry.model.path,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            },
+                            onClick = {
+                                onValueChange(entry.model.path)
+                                customPathEditor = false
+                                expanded = false
+                            }
+                        )
+                    }
+                }
+            }
+            TextButton(
+                onClick = { customPathEditor = true },
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(stringResource(R.string.video_controls_edit_custom_path))
             }
         }
     }
@@ -942,17 +1071,6 @@ private fun VideoOptionalTextField(
             singleLine = true,
             shape = RoundedCornerShape(12.dp)
         )
-    }
-}
-
-private fun videoEditorComponentRoles(
-    profile: SdVideoFamilyProfile?, workflow: SdVideoWorkflow, paths: SdVideoComponentPaths
-): List<SdVideoComponentRole> {
-    val compatible = if (profile == null) SdVideoComponentRole.entries.toSet()
-        else profile.requiredRolesFor(workflow).toSet() + profile.optionalComponents
-    return SdVideoComponentRole.entries.filter {
-        it != SdVideoComponentRole.LORA &&
-            (it in compatible || !paths.pathFor(it).isNullOrBlank())
     }
 }
 

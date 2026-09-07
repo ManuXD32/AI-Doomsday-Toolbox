@@ -19,7 +19,8 @@ object AppRoutePresentations {
     private val libraryRoutes = setOf(
         "models", "model_hub", "model_sources", "llm_models", "sd_models", "onnx_models", "whisper_models",
         "litert_models", "model_share", "knowledge_base", "knowledge_chunk", "kiwix_hub",
-        "zim_manager", "kiwix_viewer", "onnx_tts_gallery", "fastsd_gallery", "sd_distributed_gallery"
+        "zim_manager", "kiwix_viewer", "onnx_tts_gallery", "fastsd_gallery", "sd_distributed_gallery",
+        "all_media_gallery"
     )
     private val tamaRoutes = setOf(
         "tama_chat", "tama_gallery", "arcade", "farm", "farm_barn", "farm_coop", "store",

@@ -87,7 +87,9 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -116,6 +118,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.navigation.NavController
 import androidx.core.content.FileProvider
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelEntity
@@ -175,12 +180,15 @@ import com.example.llamadroid.service.VideoGenerationService
 import com.example.llamadroid.service.VideoGenerationState
 import com.example.llamadroid.service.VideoGenerationStateHolder
 import com.example.llamadroid.service.VideoRuntimeOptions
+import com.example.llamadroid.service.VideoReuseHandoffStore
+import com.example.llamadroid.service.VideoReuseTarget
+import com.example.llamadroid.service.VideoReuseDraftAdapter
 import com.example.llamadroid.service.parseVideoRuntimeOptions
+import com.example.llamadroid.service.resolveVideoReuseSources
 import com.example.llamadroid.service.toJsonString
 import com.example.llamadroid.service.assignmentsByRpc
 import com.example.llamadroid.service.buildRamWeightedSdPlacementPlan
 import com.example.llamadroid.service.buildSdDistributedPreviewArgs
-import com.example.llamadroid.service.loadGeneratedVideoMetadata
 import com.example.llamadroid.service.settingsFromJson
 import com.example.llamadroid.service.probeSdBinaryCapabilities
 import com.example.llamadroid.service.settingsToJson
@@ -193,6 +201,10 @@ import com.example.llamadroid.service.toPlanningWorkers
 import com.example.llamadroid.service.toRuntimeConfig
 import com.example.llamadroid.service.toRamPlannerOptions
 import com.example.llamadroid.service.toSdPlanningWorkers
+import com.example.llamadroid.service.toVideoReuseWorkers
+import com.example.llamadroid.media.MediaGalleryIndex
+import com.example.llamadroid.media.MediaGalleryItem
+import com.example.llamadroid.media.MediaGalleryType
 import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.ui.components.AppScreenScaffold
@@ -200,6 +212,7 @@ import com.example.llamadroid.ui.components.AppSectionCard
 import com.example.llamadroid.ui.components.SdSchedulerPicker
 import com.example.llamadroid.ui.components.SdTensorTypeRulesPicker
 import com.example.llamadroid.ui.components.VideoRuntimeOptionsEditor
+import com.example.llamadroid.ui.ai.VideoGalleryDetail
 import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.ui.navigation.Screen
@@ -285,14 +298,32 @@ fun SdDistributedHubScreen(navController: NavController) {
 @Composable
 fun SdDistributedGalleryScreen(navController: NavController) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val walkthroughTargets = LocalWalkthroughTargets.current
-    var filter by remember { mutableStateOf(SdGeneratedMediaFilter.ALL) }
+    var filter by rememberSaveable { mutableStateOf(SdGeneratedMediaFilter.ALL) }
     var refreshNonce by remember { mutableStateOf(0) }
     var mediaItems by remember { mutableStateOf<List<SdGeneratedMediaItem>>(emptyList()) }
     var selectedMedia by remember { mutableStateOf<SdGeneratedMediaItem?>(null) }
 
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) refreshNonce++
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    DisposableEffect(context) {
+        val observer = MediaGalleryIndex.observe(context) { refreshNonce++ }
+        onDispose { observer.close() }
+    }
+
     LaunchedEffect(refreshNonce) {
-        mediaItems = withContext(Dispatchers.IO) { scanSdGeneratedMedia(context) }
+        mediaItems = withContext(Dispatchers.IO) {
+            MediaGalleryIndex.scan(context)
+                .filter(MediaGalleryIndex::isProvenDistributed)
+                .map(::toSdGeneratedMediaItem)
+        }
     }
 
     val filteredItems = remember(mediaItems, filter) {
@@ -395,12 +426,25 @@ fun SdDistributedGalleryScreen(navController: NavController) {
     }
 
     selectedMedia?.let { item ->
-        SdGeneratedMediaDetailDialog(
-            item = item,
-            onDismiss = { selectedMedia = null },
-            onOpenExternal = { openSdGeneratedMedia(context, item) },
-            onShare = { shareSdGeneratedMedia(context, item) }
-        )
+        val videoMetadata = item.videoMetadata
+        if (item.kind == SdGeneratedMediaKind.VIDEO && videoMetadata != null) {
+            VideoGalleryDetail(
+                metadata = videoMetadata,
+                navController = navController,
+                onDismiss = { selectedMedia = null },
+                onDeleted = {
+                    selectedMedia = null
+                    refreshNonce++
+                }
+            )
+        } else {
+            SdGeneratedMediaDetailDialog(
+                item = item,
+                onDismiss = { selectedMedia = null },
+                onOpenExternal = { openSdGeneratedMedia(context, item) },
+                onShare = { shareSdGeneratedMedia(context, item) }
+            )
+        }
     }
 }
 
@@ -847,6 +891,84 @@ fun SdDistributedMasterScreen(navController: NavController) {
     var runtimeExpanded by remember { mutableStateOf(settings.runtimeExpanded) }
     var adaptersExpanded by remember { mutableStateOf(settings.adaptersExpanded) }
     var expertExpanded by remember { mutableStateOf(settings.expertExpanded) }
+    var videoReuseWarning by remember { mutableStateOf<String?>(null) }
+
+    fun localizedVideoReuseWarnings(warnings: List<com.example.llamadroid.service.VideoReuseWarning>): String? {
+        if (warnings.isEmpty()) return null
+        val spanish = resources.configuration.locales[0]?.language.equals("es", ignoreCase = true)
+        return warnings.joinToString(separator = "\n") { it.message(spanish) }
+    }
+
+    fun applyDistributedVideoReuse(
+        restored: SdDistributedMasterSettingsEntity,
+        warnings: List<com.example.llamadroid.service.VideoReuseWarning>
+    ) {
+        enabled = restored.enabled
+        placementMode = restored.placementMode.toSdPlacementMode()
+        backendSpec = restored.backendSpec
+        paramsBackend = restored.paramsBackendSpec
+        autoFit = restored.autoFit
+        autoRamScope = SdDistributedAutoRamScope.fromStoredValue(restored.autoRamScope)
+        maxVramEnabled = restored.maxVramEnabled
+        maxVram = restored.maxVramSpec
+        customFlags = restored.customFlags
+        videoPrompt = restored.videoPrompt
+        videoNegativePrompt = restored.videoNegativePrompt
+        videoWidth = restored.videoWidth
+        videoHeight = restored.videoHeight
+        videoSteps = restored.videoSteps
+        videoCfg = restored.videoCfg
+        videoSeed = restored.videoSeed
+        videoSampler = restored.videoSampler
+        videoScheduler = restored.videoScheduler
+        videoFlowShift = restored.videoFlowShift
+        frames = restored.frames
+        fps = restored.fps
+        runtimeThreads = restored.runtimeThreads
+        mmap = restored.mmap
+        diffusionFa = restored.diffusionFa
+        vaeTiling = restored.vaeTiling
+        vaeTileSize = restored.vaeTileSize
+        vaeTileOverlap = restored.vaeTileOverlap
+        loraStrength = restored.loraStrength
+        controlStrength = restored.controlStrength
+        cacheMode = restored.cacheMode
+        cacheOption = restored.cacheOption
+        scmMask = restored.scmMask
+        scmPolicy = restored.scmPolicy
+        videoWorkflowMode = restored.videoWorkflowMode
+        videoModelPath = restored.videoModelPath
+        videoInputPath = restored.videoInputPath
+        videoUseVae = restored.videoUseVae
+        videoVaePath = restored.videoVaePath
+        videoUseT5xxl = restored.videoUseT5xxl
+        videoT5xxlPath = restored.videoT5xxlPath
+        videoLoraStack = restored.videoLoras()
+        videoHighNoiseLoraStack = restored.videoHighNoiseLoras()
+        videoLoraApplyMode = restored.videoLoraApplyMode
+        videoCustomFlags = restored.videoCustomFlags
+        videoRuntimeOptions = restored.videoRuntimeOptionsOrNull() ?: VideoRuntimeOptions(
+            workflow = if (restored.videoWorkflowMode == "IMG2VID") {
+                SdVideoWorkflow.IMAGE_TO_VIDEO
+            } else {
+                SdVideoWorkflow.TEXT_TO_VIDEO
+            },
+            videoComponents = SdVideoComponentPaths(
+                diffusionModelPath = restored.videoModelPath.ifBlank { null },
+                vaePath = restored.videoVaePath.ifBlank { null },
+                t5xxlPath = restored.videoT5xxlPath.ifBlank { null }
+            ),
+            videoInputs = SdVideoInputs(restored.videoInputPath.ifBlank { null }),
+            seed = restored.videoSeed.toLongOrNull() ?: -1L,
+            useTae = false
+        )
+        generationExpanded = true
+        videoExpanded = true
+        runtimeExpanded = true
+        adaptersExpanded = true
+        launchError = null
+        videoReuseWarning = localizedVideoReuseWarnings(warnings)
+    }
 
     LaunchedEffect(settingsEntity?.updatedAt) {
         val fresh = settingsEntity ?: return@LaunchedEffect
@@ -959,6 +1081,55 @@ fun SdDistributedMasterScreen(navController: NavController) {
         runtimeExpanded = fresh.runtimeExpanded
         adaptersExpanded = fresh.adaptersExpanded
         expertExpanded = fresh.expertExpanded
+    }
+
+    // Consume the durable handoff independently of the settings observer. A
+    // first visit has no row yet, so waiting for settingsEntity would leave a
+    // distributed reuse request unapplied. The handoff remains on disk until
+    // the restored settings have been persisted successfully.
+    LaunchedEffect(Unit) {
+        val handoff = withContext(Dispatchers.IO) { VideoReuseHandoffStore.peek(context) }
+        if (handoff?.target != VideoReuseTarget.DISTRIBUTED) return@LaunchedEffect
+
+        try {
+            val (baseSettings, currentWorkers) = withContext(Dispatchers.IO) {
+                (dao.getMasterSettings() ?: SdDistributedMasterSettingsEntity()) to
+                    dao.getEnabledWorkersOnce()
+            }
+            val readResult = withContext(Dispatchers.IO) {
+                VideoReuseHandoffStore.readPayload(context, handoff)
+            }
+            val payload = readResult?.payload
+            if (payload == null) {
+                videoReuseWarning = localizedVideoReuseWarnings(
+                    readResult?.warnings.orEmpty()
+                ) ?: resources.getString(R.string.video_detail_reuse_failed)
+                return@LaunchedEffect
+            }
+
+            val verifiedSources = resolveVideoReuseSources(context, payload)
+            val restored = VideoReuseDraftAdapter.toDistributedSettings(
+                payload = payload,
+                baseSettings = baseSettings,
+                currentWorkers = currentWorkers.toVideoReuseWorkers(),
+                verifiedSources = verifiedSources
+            )
+            // Persist only the editable distributed draft. This does not start
+            // or reconfigure a running service, and it avoids saveDraftSettings
+            // mutating live runtime/worker state during navigation.
+            val persistedId = withContext(Dispatchers.IO) {
+                dao.upsertMasterSettings(restored.settings)
+            }
+            check(persistedId > 0L) { "distributed video reuse draft was not persisted" }
+            applyDistributedVideoReuse(restored.settings, restored.warnings)
+            withContext(Dispatchers.IO) { VideoReuseHandoffStore.complete(context, handoff) }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            videoReuseWarning = resources.getString(R.string.video_detail_reuse_failed)
+            // Keep the handoff so a transient resolver/DAO failure can retry on
+            // the next visit instead of silently losing the user's selection.
+        }
     }
 
     val draftSettings = settings.copy(
@@ -1788,6 +1959,9 @@ fun SdDistributedMasterScreen(navController: NavController) {
         launchError?.let {
             WarningBand(text = it)
         }
+        videoReuseWarning?.let {
+            WarningBand(text = it)
+        }
 
         ImageRunCard(
             expanded = imageExpanded,
@@ -2269,6 +2443,21 @@ private data class SdGeneratedMediaItem(
     val videoMetadata: GeneratedVideoMetadata? = null
 )
 
+private fun toSdGeneratedMediaItem(item: MediaGalleryItem): SdGeneratedMediaItem =
+    SdGeneratedMediaItem(
+        file = item.file,
+        kind = when (item.type) {
+            MediaGalleryType.IMAGE -> SdGeneratedMediaKind.IMAGE
+            MediaGalleryType.VIDEO -> SdGeneratedMediaKind.VIDEO
+        },
+        mode = item.mode,
+        prompt = item.prompt,
+        mimeType = item.mimeType,
+        createdAt = item.createdAt,
+        imageMetadata = item.imageMetadata,
+        videoMetadata = item.videoMetadata
+    )
+
 @Composable
 private fun SdGeneratedMediaCard(
     item: SdGeneratedMediaItem,
@@ -2512,64 +2701,6 @@ private fun SdGeneratedMediaParameterLine(label: String, value: String) {
             maxLines = 4
         )
     }
-}
-
-private fun scanSdGeneratedMedia(context: Context): List<SdGeneratedMediaItem> {
-    val imageRoot = File(context.filesDir, "sd_output")
-    val imageItems = if (imageRoot.exists()) {
-        imageRoot.walkTopDown()
-            .filter { it.isFile && it.extension.lowercase(Locale.US) in setOf("png", "jpg", "jpeg") }
-            .map { file ->
-                val metadata = SdGeneratedImageMetadata.fromFile(SdGeneratedImageMetadata.metadataFileForImage(file))
-                SdGeneratedMediaItem(
-                    file = file,
-                    kind = SdGeneratedMediaKind.IMAGE,
-                    mode = metadata?.mode ?: file.parentFile?.name?.takeIf { it != imageRoot.name } ?: context.getString(R.string.sd_dist_gallery_image),
-                    prompt = metadata?.prompt.orEmpty(),
-                    mimeType = "image/${if (file.extension.equals("png", ignoreCase = true)) "png" else "jpeg"}",
-                    createdAt = metadata?.createdAt?.takeIf { it > 0L } ?: file.lastModified(),
-                    imageMetadata = metadata
-                )
-            }
-            .toList()
-    } else {
-        emptyList()
-    }
-
-    val videoRoot = File(context.filesDir, "video_gen_output")
-    val metadataItems = loadGeneratedVideoMetadata(videoRoot).mapNotNull { metadata ->
-        val file = File(metadata.mp4Path).takeIf { it.exists() } ?: File(metadata.aviPath).takeIf { it.exists() }
-        file?.let {
-            SdGeneratedMediaItem(
-                file = it,
-                kind = SdGeneratedMediaKind.VIDEO,
-                mode = metadata.mode,
-                prompt = metadata.prompt,
-                mimeType = if (it.extension.equals("avi", ignoreCase = true)) "video/x-msvideo" else "video/mp4",
-                createdAt = metadata.createdAt.takeIf { createdAt -> createdAt > 0L } ?: it.lastModified(),
-                videoMetadata = metadata
-            )
-        }
-    }
-    val metadataPaths = metadataItems.map { it.file.absolutePath }.toSet()
-    val looseVideoItems = if (videoRoot.exists()) {
-        videoRoot.walkTopDown()
-            .filter { it.isFile && it.absolutePath !in metadataPaths && it.extension.lowercase(Locale.US) in setOf("mp4", "avi") }
-            .map { file ->
-                SdGeneratedMediaItem(
-                    file = file,
-                    kind = SdGeneratedMediaKind.VIDEO,
-                    mode = file.parentFile?.name ?: context.getString(R.string.sd_dist_gallery_video),
-                    mimeType = if (file.extension.equals("avi", ignoreCase = true)) "video/x-msvideo" else "video/mp4",
-                    createdAt = file.lastModified()
-                )
-            }
-            .toList()
-    } else {
-        emptyList()
-    }
-
-    return (imageItems + metadataItems + looseVideoItems).sortedByDescending { it.createdAt }
 }
 
 private fun loadSdGalleryThumbnail(item: SdGeneratedMediaItem): android.graphics.Bitmap? =

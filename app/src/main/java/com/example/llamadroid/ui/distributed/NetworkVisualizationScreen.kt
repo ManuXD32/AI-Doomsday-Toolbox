@@ -459,20 +459,28 @@ private fun ClusterMemoryCard(
     totalClusterRam: Int,
     workers: List<WorkerInfo>
 ) {
+    val memoryLabels = topologyMemoryLabelSpecs(workers.size)
     AppSectionCard {
         AppSectionTitle(title = stringResource(R.string.worker_topology_memory_title))
         AppInfoRow(
-            label = stringResource(R.string.worker_topology_cluster_memory),
+            label = stringResource(
+                memoryLabels.cluster.resourceId,
+                *memoryLabels.cluster.formatArgs.toTypedArray()
+            ),
             value = "$totalClusterRam MB",
             highlight = true
         )
         AppInfoRow(
-            label = stringResource(R.string.worker_topology_master_memory),
+            label = stringResource(
+                memoryLabels.master.resourceId,
+                *memoryLabels.master.formatArgs.toTypedArray()
+            ),
             value = "$masterRamMB MB"
         )
         workers.forEachIndexed { index, worker ->
+            val memoryLabel = memoryLabels.workers[index]
             AppInfoRow(
-                label = stringResource(R.string.worker_topology_worker_memory, index + 1),
+                label = stringResource(memoryLabel.resourceId, *memoryLabel.formatArgs.toTypedArray()),
                 value = "${worker.availableRamMB} MB"
             )
         }

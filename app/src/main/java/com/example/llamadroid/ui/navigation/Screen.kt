@@ -4,6 +4,7 @@ sealed class Screen(val route: String) {
     object Dashboard : Screen("dashboard")
     object Walkthrough : Screen("walkthrough")
     object Library : Screen("library")
+    object AllMediaGallery : Screen("all_media_gallery") // Shared saved image and video gallery
     object ModelManager : Screen("models")       // Now goes to Model Hub
     object Chat : Screen("chat")
     object Settings : Screen("settings")
