@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -25,6 +26,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
@@ -32,7 +34,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -71,11 +73,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import androidx.core.content.FileProvider
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
@@ -96,6 +99,14 @@ import com.example.llamadroid.service.OnnxBackgroundRemovalService
 import com.example.llamadroid.service.OnnxBackgroundRemovalState
 import com.example.llamadroid.service.OnnxBackgroundRemovalStateStore
 import com.example.llamadroid.ui.components.AppPageBackground
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.WalkthroughScrollOwner
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.ui.components.AppScrollableTabRow
+import com.example.llamadroid.ui.components.AppAdvancedSection
+import com.example.llamadroid.ui.components.AppStateKind
+import com.example.llamadroid.ui.components.AppStatePanel
+import com.example.llamadroid.ui.components.AppTaskActionFooter
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.Dispatchers
@@ -118,6 +129,8 @@ private val BGR_RESIZE_PRESETS = listOf(256, 384, 512, 768, 1024, 1536, 2048)
 @Composable
 fun OnnxBackgroundRemovalScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val db = remember { AppDatabase.getDatabase(context) }
     val installedModels by db.modelDao().getModelsByType(ModelType.ONNX_BACKGROUND_REMOVAL).collectAsState(initial = emptyList())
@@ -180,7 +193,7 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
                         }
                         when {
                             exitSummary != null -> {
-                                val message = context.getString(R.string.bgr_worker_stopped, exitSummary)
+                                val message = resources.getString(R.string.bgr_worker_stopped, exitSummary)
                                 OnnxBackgroundRemovalStateStore.updateState(OnnxBackgroundRemovalState.Error(message))
                                 withContext(Dispatchers.IO) {
                                     OnnxBackgroundRemovalStorage.writeRuntimeState(
@@ -194,7 +207,7 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
                                 }
                             }
                             staleMs >= BGR_WORKER_STALE_MS -> {
-                                val message = context.getString(R.string.bgr_worker_stale)
+                                val message = resources.getString(R.string.bgr_worker_stale)
                                 OnnxBackgroundRemovalStateStore.updateState(OnnxBackgroundRemovalState.Error(message))
                                 withContext(Dispatchers.IO) {
                                     OnnxBackgroundRemovalStorage.writeRuntimeState(
@@ -261,10 +274,48 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(Intent.createChooser(shareIntent, context.getString(R.string.imagegen_share_chooser)))
+            context.startActivity(Intent.createChooser(shareIntent, resources.getString(R.string.imagegen_share_chooser)))
         }.onFailure {
-            Toast.makeText(context, context.getString(R.string.bgr_share_failed, it.message ?: ""), Toast.LENGTH_LONG).show()
+            Toast.makeText(context, resources.getString(R.string.bgr_share_failed, it.message ?: ""), Toast.LENGTH_LONG).show()
         }
+    }
+
+    fun startRemoval() {
+        val model = selectedModel ?: return
+        val validationError = OnnxBackgroundRemovalService.validateManagedModelPath(
+            context,
+            File(model.path),
+            model.filename
+        )
+        if (validationError != null) {
+            OnnxBackgroundRemovalStateStore.updateState(OnnxBackgroundRemovalState.Error(validationError))
+            Toast.makeText(context, validationError, Toast.LENGTH_LONG).show()
+            return
+        }
+        OnnxBackgroundRemovalService.start(
+            context,
+            OnnxBackgroundRemovalConfig(
+                modelPath = model.path,
+                modelName = model.filename,
+                inputPaths = inputs.map { it.path },
+                inputNames = inputs.map { it.name },
+                backend = backend,
+                runtimeOptions = OnnxRuntimeOptions(
+                    runtimeThreadCount = threadsText.toIntOrNull(),
+                    graphOptimizationLevel = graphOptimization,
+                    executionMode = OnnxExecutionMode.SEQUENTIAL
+                ),
+                alphaThreshold = alphaThreshold,
+                featherRadius = featherRadius.toInt(),
+                maskSoftness = maskSoftness,
+                maskContrast = maskContrast,
+                exportMask = exportMask,
+                resizeBeforeProcessing = resizeBeforeProcessing,
+                resizeMaxEdge = resizeMaxEdge,
+                preserveSourceNames = preserveNames
+            )
+        )
+        walkthroughTargets?.recordEvent("image.background.input")
     }
 
     AppPageBackground {
@@ -272,9 +323,13 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
             containerColor = androidx.compose.ui.graphics.Color.Transparent,
             topBar = {
                 TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                     title = { Text(stringResource(R.string.bgr_title)) },
                     navigationIcon = {
-                        IconButton(onClick = { navController.popBackStack() }) {
+                        IconButton(
+                            onClick = { navController.popBackStack() },
+                            modifier = Modifier.walkthroughTarget("back")
+                        ) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
                         }
                     }
@@ -286,13 +341,21 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
                     .fillMaxSize()
                     .padding(innerPadding)
             ) {
-                TabRow(selectedTabIndex = selectedTab) {
+                AppScrollableTabRow(selectedTabIndex = selectedTab) {
                     Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text(stringResource(R.string.bgr_tab_remove)) })
                     Tab(selected = selectedTab == 1, onClick = { selectedTab = 1; refreshGallery() }, text = { Text(stringResource(R.string.bgr_tab_gallery)) })
                 }
+                val inputListState = rememberLazyListState()
+                WalkthroughScrollOwner(setOf("image.background.input")) { target ->
+                    if (target == "image.background.input") {
+                        if (selectedTab != 0) selectedTab = 0
+                        inputListState.animateScrollToItem(2)
+                    }
+                }
                 if (selectedTab == 0) {
                     LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
+                        state = inputListState,
+                        modifier = Modifier.weight(1f),
                         contentPadding = PaddingValues(20.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
@@ -370,7 +433,14 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
                                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text(stringResource(R.string.bgr_inputs_section), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                                        Button(onClick = { picker.launch(arrayOf("image/*")) }, enabled = !isRunning) {
+                                        Button(
+                                            onClick = {
+                                                walkthroughTargets?.recordEvent("image.background.input")
+                                                picker.launch(arrayOf("image/*"))
+                                            },
+                                            enabled = !isRunning,
+                                            modifier = Modifier.walkthroughTarget("image.background.input")
+                                        ) {
                                             Icon(Icons.Default.FolderOpen, contentDescription = null)
                                             Spacer(Modifier.width(8.dp))
                                             Text(stringResource(R.string.bgr_pick_images))
@@ -469,6 +539,7 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
                             }
                         }
                         item {
+                            AppAdvancedSection(title = stringResource(R.string.soft_studio_advanced)) {
                             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                     Text(stringResource(R.string.bgr_mask_section), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -479,6 +550,7 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
                                     BgrSwitchRow(stringResource(R.string.bgr_export_mask), exportMask) { exportMask = it }
                                     BgrSwitchRow(stringResource(R.string.bgr_preserve_names), preserveNames) { preserveNames = it }
                                 }
+                            }
                             }
                         }
                         item {
@@ -511,64 +583,60 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
                                 OnnxBackgroundRemovalState.Idle -> Unit
                             }
                             Spacer(Modifier.height(8.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                                Button(
-                                    onClick = {
-                                        val model = selectedModel ?: return@Button
-                                        val validationError = OnnxBackgroundRemovalService.validateManagedModelPath(
-                                            context,
-                                            File(model.path),
-                                            model.filename
-                                        )
-                                        if (validationError != null) {
-                                            OnnxBackgroundRemovalStateStore.updateState(
-                                                OnnxBackgroundRemovalState.Error(validationError)
-                                            )
-                                            Toast.makeText(context, validationError, Toast.LENGTH_LONG).show()
-                                            return@Button
-                                        }
-                                        OnnxBackgroundRemovalService.start(
-                                            context,
-                                            OnnxBackgroundRemovalConfig(
-                                                modelPath = model.path,
-                                                modelName = model.filename,
-                                                inputPaths = inputs.map { it.path },
-                                                inputNames = inputs.map { it.name },
-                                                backend = backend,
-                                                runtimeOptions = OnnxRuntimeOptions(
-                                                    runtimeThreadCount = threadsText.toIntOrNull(),
-                                                    graphOptimizationLevel = graphOptimization,
-                                                    executionMode = OnnxExecutionMode.SEQUENTIAL
-                                                ),
-                                                alphaThreshold = alphaThreshold,
-                                                featherRadius = featherRadius.toInt(),
-                                                maskSoftness = maskSoftness,
-                                                maskContrast = maskContrast,
-                                                exportMask = exportMask,
-                                                resizeBeforeProcessing = resizeBeforeProcessing,
-                                                resizeMaxEdge = resizeMaxEdge,
-                                                preserveSourceNames = preserveNames
-                                            )
-                                        )
-                                    },
-                                    enabled = selectedModel != null && inputs.isNotEmpty() && !isRunning,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text(stringResource(R.string.bgr_start))
-                                }
-                                if (isRunning) {
-                                    OutlinedButton(onClick = { OnnxBackgroundRemovalService.cancel(context) }) {
-                                        Text(stringResource(R.string.action_cancel))
-                                    }
-                                }
+                        }
+                    }
+                    AppTaskActionFooter(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                    ) {
+                        if (isRunning) {
+                            (state as? OnnxBackgroundRemovalState.Running)?.let { runningState ->
+                                Text(
+                                    text = runningState.status,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                LinearProgressIndicator(
+                                    progress = { runningState.progress.coerceIn(0f, 1f) },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = { OnnxBackgroundRemovalService.cancel(context) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 48.dp),
+                                colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.error
+                                )
+                            ) {
+                                Icon(Icons.Default.Close, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text(stringResource(R.string.soft_studio_cancel))
+                            }
+                        } else {
+                            Button(
+                                onClick = ::startRemoval,
+                                enabled = selectedModel != null && inputs.isNotEmpty(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 52.dp)
+                            ) {
+                                Text(stringResource(R.string.soft_studio_start))
                             }
                         }
                     }
                 } else {
                     if (galleryImages.isEmpty()) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text(stringResource(R.string.bgr_gallery_empty), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
+                        AppStatePanel(
+                            kind = AppStateKind.Empty,
+                            title = stringResource(R.string.soft_studio_empty_title),
+                            message = stringResource(R.string.bgr_gallery_empty),
+                            modifier = Modifier.fillMaxSize()
+                        )
                     } else {
                         LazyVerticalGrid(
                             columns = GridCells.Adaptive(140.dp),

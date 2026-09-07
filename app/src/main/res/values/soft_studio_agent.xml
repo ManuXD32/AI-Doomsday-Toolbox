@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="studio_plan_title">Edit plan</string>
+    <string name="studio_plan_help">Review the full plan. Saving approves your edited version; cancelling discards this draft.</string>
+    <string name="studio_plan_label">Implementation plan</string>
+    <string name="studio_plan_edited">Edited draft</string>
+    <string name="studio_plan_save">Save and approve</string>
+    <string name="studio_plan_saving">Saving…</string>
+</resources>

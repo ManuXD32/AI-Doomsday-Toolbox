@@ -1,9 +1,8 @@
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <!-- App Name -->
     <string name="app_name">AI Doomsday Toolbox</string>
     
     <!-- Navigation -->
-    <string name="nav_home">Home</string>
     <string name="nav_ai">AI</string>
     <string name="nav_notes">Organizer</string>
     <string name="nav_models">Models</string>
@@ -20,8 +19,6 @@
     <string name="llama_server_cleanup_port_busy">The local server stopped, but port %1$d is still occupied. Retry or recover the recorded local runtime.</string>
     <string name="dashboard_starting">Starting…</string>
     <string name="dashboard_server_running">Server running on port %d</string>
-    <string name="dashboard_no_model">No model selected</string>
-    <string name="dashboard_select_model">Select a model in LLM Settings</string>
     <string name="dashboard_quick_actions">Quick Actions</string>
     <string name="dashboard_system_status">System Status</string>
     <string name="dashboard_cpu">CPU</string>
@@ -61,22 +58,11 @@
     <string name="llama_card_allow_wear_start_hint">Only one server can be started from the watch. Enabling this turns it off on the others.</string>
     
     <!-- AI Hub -->
-    <string name="ai_hub_title">AI Tools</string>
     <string name="ai_hub_subtitle">Your local AI assistant</string>
-    <string name="ai_tools_eyebrow">TOOLS</string>
     <string name="ai_tools_search_label">Search tools</string>
-    <string name="ai_tools_category_chat_agents">Chat &amp; agents</string>
-    <string name="ai_tools_category_generation">Generation</string>
-    <string name="ai_tools_category_onnx">ONNX tools</string>
-    <string name="ai_tools_category_voice_media">Voice &amp; media</string>
-    <string name="ai_tools_category_documents_workflows">Documents &amp; workflows</string>
-    <string name="ai_tools_category_servers_utilities">Servers &amp; utilities</string>
-    <string name="ai_tools_category_pinned">Pinned tools</string>
     <string name="ai_tools_category_pinned_chats">Pinned chats</string>
     <string name="ai_pinned_chat_label">Chat</string>
     <string name="ai_pinned_chat_server_missing">Remembered server unavailable</string>
-    <string name="ai_tools_no_results_title">No matching tools</string>
-    <string name="ai_tools_no_results_desc">Try a different search term.</string>
     <string name="ai_tools_open_settings_cd">Open settings for %1$s</string>
     <string name="ai_tools_pin_cd">Pin %1$s</string>
     <string name="ai_tools_unpin_cd">Unpin %1$s</string>
@@ -113,7 +99,6 @@
     <string name="ai_video_interpolation">Video Interpolation</string>
     <string name="ai_video_interpolation_desc">Increase video smoothness with RIFE</string>
     <string name="live_translator_title">Live Translator</string>
-    <string name="live_translator_subtitle">Turn-based bilingual voice translation</string>
     <string name="live_translator_hub_desc">Translate spoken turns aloud</string>
     <string name="live_translator_default_template">Live translator</string>
     <string name="live_translator_template_travel">Travel</string>
@@ -159,7 +144,6 @@
     <string name="live_translator_timing">Turn timing</string>
     <string name="live_translator_start_speaking_timeout">Start-speaking timeout seconds</string>
     <string name="live_translator_finished_talking_timeout">Finished-talking silence seconds</string>
-    <string name="live_translator_start">Start live transcription</string>
     <string name="live_translator_saved_transcriptions">Saved transcriptions</string>
     <string name="live_translator_selected_session">Selected: %1$s</string>
     <string name="live_translator_transcript_title">Transcript</string>
@@ -283,7 +267,6 @@
     <string name="imagegen_select_model">Select model</string>
     <string name="imagegen_no_model">No SD model selected</string>
     <string name="imagegen_no_vae_installed">No VAE models installed</string>
-    <string name="imagegen_generate_btn">Generate Image</string>
     <string name="imagegen_upscale_btn">Upscale Image</string>
     <string name="imagegen_upscale_factor">Upscale factor</string>
     <string name="imagegen_success">Image generated successfully!</string>
@@ -434,12 +417,22 @@
     <string name="whisper_status_cancelled">Transcription cancelled</string>
     <string name="whisper_record_saved">Recording saved</string>
     <string name="whisper_video_loaded_note">Video file loaded. Audio extraction will happen on transcribe.</string>
-    <string name="whisper_error_shared_file">Failed to load shared file: %s</string>
+    <string name="whisper_copy_success">Transcription copied to clipboard.</string>
+    <string name="whisper_share_result">Share transcription</string>
+    <string name="whisper_permission_retry">Retry</string>
+    <string name="whisper_permission_rationale_title">Microphone permission needed</string>
+    <string name="whisper_permission_rationale_message">Recording uses the microphone to create an audio file for transcription. Allow microphone access to record.</string>
+    <string name="whisper_permission_settings_title">Microphone permission is blocked</string>
+    <string name="whisper_permission_settings_message">Microphone access was denied permanently. Open app settings and enable Microphone permission to record.</string>
+    <string name="whisper_open_settings">Open app settings</string>
+    <string name="whisper_error_shared_file">Could not read the shared media. Share it again while the source is still available.</string>
+    <string name="whisper_error_media_load">Could not read the selected media file.</string>
     <string name="whisper_error_extraction">Failed to extract audio (exit code: %d)</string>
     <string name="whisper_error_binary_not_found">Whisper binary not found</string>
     <string name="whisper_error_audio_conversion_failed">Audio conversion failed</string>
     <string name="whisper_error_ffmpeg_not_found">ffmpeg binary not found</string>
     <string name="whisper_error_ffmpeg_exit_code">ffmpeg exit code %1$d</string>
+    <string name="whisper_error_ffmpeg_detail">FFmpeg error: %1$s</string>
     <string name="whisper_error_audio_conversion_detail">Audio conversion failed: %1$s</string>
     <string name="whisper_error_failed_with_exit_code">Whisper failed with exit code %1$d</string>
     <string name="whisper_error_permission">Recording permission denied</string>
@@ -512,6 +505,7 @@
     
     <!-- PDF Tools -->
     <string name="pdf_toolbox_title">PDF Toolbox</string>
+    <string name="pdf_shared_file_ready">Shared PDF ready</string>
     <string name="pdf_tools_header">📄 PDF Tools</string>
     <string name="pdf_merge">Merge PDFs</string>
     <string name="pdf_merge_desc">Combine multiple PDF files into one</string>
@@ -543,6 +537,8 @@
     <string name="pdf_split_help">Extract specific pages from a PDF</string>
     <string name="pdf_select">Select PDF</string>
     <string name="pdf_selected_file">Selected PDF</string>
+    <string name="pdf_shared_file_import_failed">Could not import the shared PDF. Check that the source is still available and share it again.</string>
+    <string name="navigation_destination_unavailable">That destination is no longer available.</string>
     <string name="pdf_pages_to_extract">Pages to extract</string>
     <string name="pdf_pages_range_hint">e.g. 1-3, 5, 7-10</string>
     <string name="pdf_split_range_help">Enter page numbers or ranges separated by commas</string>
@@ -909,9 +905,6 @@
     <string name="general_output_folder">Output Folder</string>
     <string name="general_output_default">Default (app internal storage)</string>
     <string name="general_output_hint">Used for images, transcriptions, and upscaled videos</string>
-    <string name="general_theme">Theme</string>
-    <string name="general_theme_system">System default (follows device theme)</string>
-    <string name="general_theme_soon">Theme customization coming soon</string>
     <string name="general_language">Language</string>
     <string name="general_language_system">System Default</string>
     <string name="general_language_en">English</string>
@@ -960,6 +953,7 @@
     <string name="llm_generated_params_title">Generated llama.cpp parameters</string>
     <string name="llm_generated_params_desc">These values become explicit llama-server flags on the next launch. Blank optional fields are omitted.</string>
     <string name="llm_physical_batch_size">Physical Batch Size (--ubatch-size)</string>
+    <string name="llm_threads_batch">Thread Batch Count (--threads-batch)</string>
     <string name="llm_optional_flag_blank">Blank = omit flag</string>
     <string name="general_battery">Battery Optimization</string>
     <string name="general_battery_unrestricted">Unrestricted - AI tasks continue when screen is off</string>
@@ -1050,10 +1044,6 @@
     <string name="llm_draft_device_cpu">CPU draft</string>
     <string name="llm_draft_device_hint">Use this to compare CPU and OpenCL draft execution. Auto lets llama.cpp decide.</string>
     <string name="llm_flash_attention_opencl_hint">OpenCL may fall back to CPU for unsupported Flash Attention or vision projector ops. Keep your choice, but compare on/off when benchmarking accelerators.</string>
-    <string name="llm_mmap_title">Disable Memory Mapping</string>
-    <string name="llm_mmap_desc">Load entire model into RAM</string>
-    <string name="llm_mmap_on">⚡ ON: Faster inference, but slower startup and uses more RAM. Model must fit in memory.</string>
-    <string name="llm_mmap_off">💾 OFF (default): Model loads on-demand from storage. Slower but can run larger models.</string>
     <string name="llm_vision_desc">Enable image understanding</string>
     <string name="llm_vision_not_selected">Not selected</string>
     <string name="llm_vision_select_title">Select Vision Projector</string>
@@ -1211,7 +1201,6 @@
     <string name="organizer_tab_calendar">Calendar</string>
     <string name="organizer_tab_alarms">Alarms</string>
     <string name="organizer_calendar_subtitle">Plan events and optional phone alarms</string>
-    <string name="organizer_alarms_subtitle">One-shot phone reminders with sound</string>
     <string name="organizer_calendar_previous_month">Previous month</string>
     <string name="organizer_calendar_next_month">Next month</string>
     <string name="organizer_calendar_empty_day">No events for this day.</string>
@@ -2193,27 +2182,14 @@
     <string name="kv_cache_reuse">Cache Reuse Tokens</string>
     
     <string name="dashboard_active_downloads">%d active download(s)</string>
-    <string name="dashboard_qr_connect">📲 Connect via QR</string>
-    <string name="dashboard_qr_collapse">Collapse</string>
-    <string name="dashboard_qr_expand">Expand</string>
     <string name="dashboard_ram_needed">~%s GB RAM needed</string>
     <string name="dashboard_running_port">Running on port %d</string>
     <string name="dashboard_connect_from">Connect from:</string>
     <string name="dashboard_local_only">Local only (enable remote access in Settings)</string>
-    <string name="dashboard_setup_distributed">Setup Distributed</string>
     <string name="dashboard_setup_distributed_desc">Connect multiple phones to run large models together</string>
     <string name="dashboard_distributed_title">Distributed Inference</string>
-    <string name="dashboard_kiwix_library">Kiwix Library</string>
     <string name="dashboard_offline_wikipedia">Offline Wikipedia &amp; more</string>
     <string name="dashboard_zim_installed">%d ZIM files installed</string>
-    <string name="dashboard_ram_used">Used</string>
-    <string name="dashboard_ram_free">Free</string>
-    <string name="dashboard_ram_total">Total</string>
-    <string name="dashboard_ram_unit">%s GB</string>
-    <string name="net_type_wifi">WiFi</string>
-    <string name="net_type_ethernet">Ethernet</string>
-    <string name="net_type_vpn">VPN</string>
-    <string name="net_type_mobile">Mobile</string>
     <string name="net_type_unknown">Unknown</string>
     <string name="dashboard_qr_for">QR for %s</string>
     
@@ -2224,8 +2200,6 @@
     <!-- File Server -->
     <string name="file_server">File Server</string>
     <string name="file_server_shared_folder">Shared Folder</string>
-    <string name="file_server_not_selected">Not selected</string>
-    <string name="file_server_browse">Browse</string>
     <string name="file_server_start">Start Server (Port 9111)</string>
     <string name="file_server_stop">Stop Server</string>
     <string name="file_server_download_zip">Download as ZIP</string>
@@ -2260,13 +2234,8 @@
     <string name="kiwix_active_downloads">%d active download(s)</string>
     
     <!-- Dashboard Additional -->
-    <string name="dashboard_connect_qr">Connect via QR</string>
     <string name="dashboard_file_server">File Server</string>
     <string name="dashboard_shared_folder">Shared Folder</string>
-    <string name="dashboard_scan_access_files">Scan to access files</string>
-    <string name="dashboard_stop_server_btn">Stop Server</string>
-    <string name="dashboard_start_server_port">Start Server (Port %d)</string>
-    
     <string name="hub_workflows">Workflows</string>
     <string name="hub_workflows_desc">Chain AI operations</string>
     <string name="hub_benchmark">Benchmark</string>
@@ -2319,13 +2288,12 @@
     <string name="agent_deny_skip_reason">Skip</string>
     <string name="agent_project_default_prefix">project_</string>
     <string name="agent_ready_msg">🤖 AI Agent ready for project **%1$s** (/workspace/%2$s/).\n\nConnect to the agent workspace to start coding.</string>
-    <string name="agent_new_project_title">📁 New Project</string>
-    <string name="agent_new_project_desc">Enter a name for your project.</string>
+    <string name="agent_new_project_title">New project</string>
     <string name="agent_project_name_label">Project Name</string>
-    <string name="agent_welcome_title">👋 Welcome to AI Agent!</string>
+    <string name="agent_welcome_title">Welcome to AI Agent</string>
 
     <!-- Agent Workspace -->
-    <string name="agent_workspace_title">📁 Workspace</string>
+    <string name="agent_workspace_title">Workspace</string>
     <string name="agent_workspace_terminal_title">Workspace Terminal</string>
     <string name="agent_workspace_terminal_status_connecting">Connecting</string>
     <string name="agent_workspace_terminal_status_connected">Connected</string>
@@ -2377,7 +2345,7 @@
     <string name="agent_request_python_dependency">The AI wants to install or register Python dependency: %1$s</string>
     <string name="agent_dashboard_title">Agent projects</string>
     <string name="agent_dashboard_return">Back to project dashboard</string>
-    <string name="agent_dashboard_subtitle">Choose a project to open, or continue only the unfinished work you explicitly select. Green means a project UI is running; orange means an LLM is working.</string>
+    <string name="agent_dashboard_subtitle">Open a saved project or create a workspace.</string>
     <string name="agent_dashboard_empty">No projects yet. Create a project or folder to get started.</string>
     <string name="agent_dashboard_running">Running</string>
     <string name="agent_dashboard_llm_working">LLM working</string>
@@ -2400,6 +2368,7 @@
     <string name="agent_retry_debug_done">Retry finished. If the warning remains, open Debug Console for the backend error and connection state.</string>
     <string name="agent_status_needs_direction">Needs direction</string>
     <string name="agent_needs_direction_message">Paused because the agent may be looping: %1$s</string>
+    <string name="agent_needs_direction_interrupted_message">Agent paused and needs your attention: %1$s</string>
     <string name="agent_loop_recovery_budget_reason">Too many recovery attempts for the same request.</string>
     <string name="agent_loop_handoff_budget_reason">Too many agent handoffs for the same request.</string>
     <string name="agent_loop_repeated_plan_reason">The same plan was proposed repeatedly without progress.</string>
@@ -2582,6 +2551,24 @@
     <string name="agent_tool_copy">Copy tool name</string>
     <string name="agent_settings_title">🤖 Agent Settings</string>
     <string name="agent_settings_desc">Configure model and system prompt for each agent</string>
+    <string name="agent_settings_section_general">General defaults</string>
+    <string name="agent_settings_section_workflow">Workflow readiness</string>
+    <string name="agent_settings_section_runtime">Shared runtime defaults</string>
+    <string name="agent_settings_section_roles">Agent role settings</string>
+    <string name="agent_settings_subsection_coordination">Coordination and planning</string>
+    <string name="agent_settings_subsection_implementation">Implementation</string>
+    <string name="agent_settings_subsection_validation">Review and support</string>
+    <string name="agent_global_override_title">Apply one setup to all agents</string>
+    <string name="agent_global_override_desc">Set the engine, connection, model, and tuning once for every configured Agent role.</string>
+    <string name="agent_global_override_enabled_note">Enabled: these values take precedence over each role card when an agent runs.</string>
+    <string name="agent_global_override_disabled_note">Disabled: each role keeps using its own settings below. Your values are kept for later.</string>
+    <string name="agent_global_override_backend_label">Engine for all agents</string>
+    <string name="agent_global_override_connection_label">Connection for all agents</string>
+    <string name="agent_global_override_connection_hint">Use a URL, saved endpoint name, managed server, or another connection identifier.</string>
+    <string name="agent_global_override_connection_litert">On-device LiteRT model library</string>
+    <string name="agent_global_override_model_label">Model for all agents</string>
+    <string name="agent_global_override_context_label">Context size for all agents</string>
+    <string name="agent_global_override_max_output_label">Max output tokens for all agents</string>
     <string name="agent_tool_controls_title">Tool Controls</string>
     <string name="agent_tool_controls_desc">Tools are enabled by default. Turn off only the tools this project should not use.</string>
     <string name="agent_auto_reflection_toggle">Automatic reflection before finish</string>
@@ -2656,9 +2643,17 @@
     <string name="agent_runtime_engine_llama_server">llama-server</string>
     <string name="agent_runtime_engine_llama_swap">llama-swap</string>
     <string name="agent_runtime_engine_litert">LiteRT-LM</string>
+    <string name="agent_runtime_engine_ollama_desc">Remote Ollama API; choose a model from this connection or enter one.</string>
+    <string name="agent_runtime_engine_llama_server_desc">The global llama-server URL, a managed local server, or a saved endpoint.</string>
+    <string name="agent_runtime_engine_llama_swap_desc">The global llama-swap URL, a managed server card, or a saved endpoint.</string>
+    <string name="agent_runtime_engine_litert_desc">On-device LiteRT-LM model selected from the installed model library.</string>
+    <string name="agent_runtime_engine_hint">This choice applies to this Agent role and is saved with each dispatch.</string>
     <string name="agent_runtime_model_label">Model</string>
+    <string name="agent_runtime_model_global_hint">Models come from the global connection. Reload to see the latest list.</string>
+    <string name="agent_runtime_model_endpoint_hint">Models come from the selected endpoint. Reload to see the latest list.</string>
     <string name="agent_runtime_managed_server_label">Managed llama server</string>
     <string name="agent_runtime_litert_model_label">LiteRT model</string>
+    <string name="agent_runtime_litert_model_hint">Choose an installed LiteRT model for this role.</string>
     <string name="agent_runtime_litert_model_missing">No installed LiteRT model</string>
     <string name="agent_runtime_needs_direction">Needs direction</string>
     <string name="agent_runtime_continue">Continue</string>
@@ -2667,9 +2662,26 @@
     <string name="agent_runtime_server_stopped">The assigned managed llama server is stopped. Start it from its server controls, then Continue.</string>
     <string name="agent_runtime_server_not_ready">The assigned managed llama server is not ready yet. Wait for it to run, then Continue.</string>
     <string name="agent_runtime_model_missing">No model selected</string>
+    <string name="agent_runtime_effective_title">Effective runtime</string>
+    <string name="agent_runtime_target_label">Target</string>
+    <string name="agent_runtime_endpoint_detail_label">Endpoint</string>
+    <string name="agent_runtime_status_label">Status</string>
+    <string name="agent_runtime_status_configured">Configured</string>
+    <string name="agent_runtime_status_installed">Installed</string>
+    <string name="agent_runtime_status_ready">Running</string>
+    <string name="agent_runtime_status_starting">Starting</string>
+    <string name="agent_runtime_status_stopped">Stopped</string>
+    <string name="agent_runtime_status_error">Error</string>
+    <string name="agent_runtime_status_missing">Unavailable</string>
+    <string name="agent_runtime_status_needs_selection">Choose a target</string>
+    <string name="agent_runtime_status_unknown">Status unknown</string>
+    <string name="agent_runtime_connection_not_configured">Set a global URL or choose a saved endpoint.</string>
     <string name="agent_runtime_profile_summary">%1$s · %2$s</string>
     <string name="agent_runtime_connection_label">Connection</string>
     <string name="agent_runtime_connection_global">Global connection</string>
+    <string name="agent_runtime_connection_managed">Managed server</string>
+    <string name="agent_runtime_connection_choose_managed">Choose a managed server below.</string>
+    <string name="agent_runtime_backend_url_invalid">The %1$s URL is missing or invalid. Choose a valid connection to continue.</string>
     <string name="agent_runtime_connection_missing">Saved connection unavailable</string>
     <string name="agent_runtime_connection_clear">Clear saved connection</string>
     <string name="agent_runtime_connection_refresh_models">Reload available models</string>
@@ -2708,7 +2720,7 @@
     <string name="agent_install_cmd_label">install command</string>
     <string name="agent_start_cmd_label">start command</string>
     <string name="agent_snapshot_item_desc">%1$s • %2$d %3$s</string>
-    <string name="agent_welcome_desc">Before you start chatting with the AI:</string>
+    <string name="agent_welcome_desc">Start with a project:</string>
     <string name="agent_workspace_project_label">Workspace: %s</string>
     <string name="agent_workspace_last_updated">Last updated: %s</string>
     <string name="agent_workspace_created">Created: %s</string>
@@ -2770,9 +2782,9 @@
     <string name="agent_context_usage_history_item_verbose">%1$s · %2$d → %3$d tokens · %4$d turns omitted · %5$d passes</string>
     <string name="agent_context_usage_history_item">%1$s · %2$d → %3$d tokens</string>
     <string name="agent_tool_recovery_failed_summary">The previous response attempted a tool call, but the call was malformed.</string>
-    <string name="agent_tool_recovery_failed_hint">First emit {\"name\": \"read_file\", \"arguments\": {\"path\": \"brain/tools_reference.md\"}}, then retry with a proper structured tool call outside &lt;think>.</string>
+    <string name="agent_tool_recovery_failed_hint">Retry once with a real structured tool call. If one tool schema is unclear, call tool_help for that tool only. Do not write tool-call JSON as assistant prose or place it inside &lt;think&gt; or a markdown fence.</string>
     <string name="agent_empty_response_summary">The previous response produced no visible answer and no structured tool call.</string>
-    <string name="agent_empty_response_hint">First emit {\"name\": \"read_file\", \"arguments\": {\"path\": \"brain/tools_reference.md\"}}, then reply with either a concise answer or a proper structured tool call outside &lt;think>.</string>
+    <string name="agent_empty_response_hint">Reply with either a concise answer or one real structured tool call. If one tool schema is unclear, call tool_help for that tool only. Do not write tool-call JSON as assistant prose or place it inside &lt;think&gt; or a markdown fence.</string>
     <string name="agent_memory_update_required_summary">Project memory must be updated before this task can finish.</string>
     <string name="agent_memory_update_required_hint">Call write_memory or the Summarizer to record what changed and why, then retry finish_task.</string>
     <string name="agent_reflection_blocked_summary">Reflection found missing work or unresolved risks, so finalization is blocked for now.</string>
@@ -2795,9 +2807,9 @@
     <string name="agent_tool_example_full">Example Tool: %s</string>
     <string name="agent_custom_tool_header">Custom Tool: %s</string>
     <string name="agent_custom_agent_header">Custom Agent: %s</string>
-    <string name="agent_welcome_step1">1️⃣ Set up Ollama &amp; proot environment</string>
-    <string name="agent_welcome_step2">2️⃣ Create a new project by tapping the 📁 icon in the top-left corner</string>
-    <string name="agent_welcome_step3">3️⃣ Select a model and start chatting!</string>
+    <string name="agent_welcome_step1">1. Select New project and choose a local workspace or remote SSH workspace.</string>
+    <string name="agent_welcome_step2">2. Name the project so its files and conversations stay together.</string>
+    <string name="agent_welcome_step3">3. Open model settings to choose your runtime, then start chatting.</string>
     <string name="agent_welcome_note">The project tells the AI where your files are.</string>
     <string name="agent_conversations_menu">Conversations</string>
     <string name="agent_new_project_btn">New Project</string>
@@ -3869,7 +3881,7 @@
     <string name="dataset_move_down">Move job down</string>
 
     <!-- Subtitle Burn Screen -->
-    <string name="subtitle_burn_title">🔤 Subtitle Burn</string>
+    <string name="subtitle_burn_title">Subtitle Burn</string>
     <string name="subtitle_toggle_info">Toggle Info</string>
     <string name="subtitle_styling_guide_title">📖 Styling Options Guide</string>
     <string name="subtitle_guide_font_size">• FontSize: Text size in pixels (16-48 recommended)</string>
@@ -3881,7 +3893,7 @@
     <string name="subtitle_guide_margin_l">• MarginL: Left margin (pixels)</string>
     <string name="subtitle_guide_color">• Color: Subtitle text color</string>
     <string name="subtitle_guide_font">• Font: Font family for subtitles</string>
-    <string name="subtitle_files_title">📁 Files</string>
+    <string name="subtitle_files_title">Files</string>
     <string name="subtitle_select_video">Select Video</string>
     <string name="subtitle_select_subtitle">Select Subtitle (.srt, .ass, .vtt)</string>
     <string name="subtitle_styling_title">🎨 Styling</string>
@@ -3893,8 +3905,6 @@
     <string name="subtitle_font_label">Font</string>
     <string name="subtitle_burn_button">Burn Subtitles</string>
     <string name="subtitle_saved_path">Saved: %s</string>
-    <string name="subtitle_error_message">Error: %s</string>
-
     <!-- FastSD Gallery -->
     <string name="fastsd_ssh_error">Not connected to SSH. Please connect first.</string>
     <string name="fastsd_load_error">Error loading images: %s</string>
@@ -3978,7 +3988,6 @@
     <string name="action_more">More</string>
     <string name="action_hide">Hide</string>
     <string name="action_show">Show</string>
-    <string name="action_connect">Connect</string>
     <string name="agent_new">New</string>
     <string name="agent_refresh">Refresh</string>
     <string name="error_unknown">Unknown error</string>
@@ -4084,7 +4093,8 @@
     <string name="command_template_desc">Build the launch command from the current UI settings. Leave it blank to use the standard generated command.</string>
     <string name="command_template_label">Command Template</string>
     <string name="command_template_placeholder">{default_args} --no-warmup</string>
-    <string name="command_template_placeholders">Placeholders include {default_args}, {binary}, {model}, {context_size}, {batch_size}, {physical_batch_size}, {port}, {parallel}, {cache_ram}, {speculative_args}, {mtp_args}, {flash_attention}, {kv_cache_args}, {custom_flags}</string>
+    <string name="command_template_placeholders">Placeholders include {default_args}, {binary}, {model}, {lora}, {lora_args}, {load_mode_args}, {context_size}, {batch_size}, {physical_batch_size}, {threads_batch}, {port}, {parallel}, {cache_ram}, {speculative_args}, {mtp_args}, {flash_attention}, {kv_cache_args}, {custom_flags}</string>
+    <string name="command_template_legacy_lora_warning">This custom template uses {lora}, which expands only the first adapter. Use {lora_args} to include the complete ordered stack.</string>
     
     <!-- Speculative Decoding -->
     <string name="dist_speculative_title">⚡ Speculative Decoding</string>
@@ -4391,8 +4401,6 @@
     <string name="agent_action_stop">Stop</string>
     <string name="agent_action_cancel">Cancel</string>
     <string name="kiwix_loading_count">Loading %d ZIM file(s)</string>
-    <string name="dist_header_title">🌐 Distributed Inference</string>
-    <string name="dist_header_desc">Connect multiple phones to run large AI models together!\n\nEach device contributes RAM to load different layers of the model.</string>
     <string name="dist_role_master_title">Be the MASTER</string>
     <string name="dist_role_master_desc">Host the model file and coordinate inference across connected workers.</string>
     <string name="dist_role_master_btn">Configure Master</string>
@@ -4727,6 +4735,8 @@
     <string name="share_interpolation">🎞️ Video Interpolation</string>
     <string name="share_img2img">🎨 SD img2img</string>
     <string name="share_img2vid">🎥 Video Generation</string>
+    <string name="share_pdf_toolbox">📄 PDF Toolbox</string>
+    <string name="share_pdf_summary">📝 PDF Summary</string>
     <string name="ai_video_gen">Video Generation</string>
     <string name="ai_video_gen_desc">Create local txt2vid and img2vid clips</string>
     <string name="sd_models_badge_txt2img">txt2img</string>
@@ -4742,18 +4752,10 @@
     <string name="video_gen_mode_txt2vid">txt2vid</string>
     <string name="video_gen_mode_img2vid">img2vid</string>
     <string name="video_gen_input_image_title">Input image</string>
-    <string name="video_gen_input_image_ready">Image ready for img2vid</string>
-    <string name="video_gen_select_image">Select image</string>
     <string name="video_gen_model_label">Video model</string>
-    <string name="video_gen_no_models_installed">No video generation models installed yet.</string>
     <string name="video_gen_get_models">Open SD Models</string>
-    <string name="video_gen_select_model">Select a video generation model</string>
     <string name="video_gen_vae_toggle_label">Use VAE</string>
-    <string name="video_gen_no_vae_installed">No VAE models installed.</string>
-    <string name="video_gen_select_vae">Select a VAE model</string>
     <string name="video_gen_t5_toggle_label">Use T5-XXL</string>
-    <string name="video_gen_no_t5xxl_installed">No T5-XXL models installed.</string>
-    <string name="video_gen_select_t5xxl">Select a T5-XXL model</string>
     <string name="video_gen_mode_label">Mode</string>
     <string name="video_gen_prompt_label">Prompt</string>
     <string name="video_gen_prompt_placeholder">Describe the motion, scene, and style for the video...</string>
@@ -4814,7 +4816,6 @@
     <string name="video_gen_status_generating_eta">Generating video… %1$d%% • ETA %2$s</string>
     <string name="video_gen_status_diffusion_eta">Generating video… %1$d%% • Diffusion ETA %2$s</string>
     <string name="video_gen_status_vae_eta">Generating video… %1$d%% • VAE ETA %2$s</string>
-    <string name="video_gen_status_converting">Converting AVI to MP4…</string>
     <string name="video_gen_status_copying">Copying generated video to the output folder…</string>
     <string name="video_gen_notification_complete">Video generation complete</string>
     <string name="generation_battery_dialog_title">Allow unrestricted battery for generation?</string>
@@ -4828,12 +4829,10 @@
     <string name="video_gen_error_ffmpeg_missing">FFmpeg is not available.</string>
     <string name="video_gen_error_generation_failed">Video generation failed with exit code %1$d.</string>
     <string name="video_gen_error_conversion_failed">MP4 conversion failed with exit code %1$d.</string>
-    <string name="video_gen_error_avi_missing">The generated AVI file was not found.</string>
     <string name="video_gen_error_media_processing_timeout">Video generation stopped because the Android background media-processing quota was exhausted. Keep the app in the foreground or reduce frames or steps, then start again.</string>
     <string name="video_gen_warning_output_not_configured">No output folder is configured, so the video stays in app storage only.</string>
     <string name="video_gen_warning_output_unavailable">The output folder is unavailable, so the video stays in app storage only.</string>
     <string name="video_gen_warning_export_failed">The video was generated, but exporting it failed: %1$s</string>
-    <string name="video_gen_error_shared_image">Could not load the selected image: %1$s</string>
     <string name="video_gen_error_service_unavailable">The video generation service is not ready yet.</string>
     <string name="video_gen_error_model_required">Select a video generation model first.</string>
     <string name="video_gen_error_prompt_required">Enter a prompt first.</string>
@@ -4943,9 +4942,7 @@
     <string name="action_ok">OK</string>
 
     <!-- Network Visualization Screen -->
-    <string name="net_title">NETWORK_STATUS</string>
-    <string name="net_back">Back</string>
-    <string name="net_system_status">SYSTEM STATUS</string>
+    <string name="net_title">Network status</string>
     <string name="net_inference_server">INFERENCE_SERVER:</string>
     <string name="net_status_online">[ONLINE]</string>
     <string name="net_status_loading">[LOADING]</string>
@@ -4954,27 +4951,17 @@
     <string name="net_status_offline">[OFFLINE]</string>
     <string name="net_mode">MODE: %s</string>
     <string name="net_processing">▓▓▓ PROCESSING ▓▓▓</string>
-    <string name="net_topology">NETWORK TOPOLOGY</string>
-    <string name="net_master_node">[MASTER] 👑 LOCAL_NODE</string>
     <string name="net_master_stats">RAM: %1$dMB | LAYERS: %2$d | LOAD: %3$d%%</string>
-    <string name="net_no_workers">[NO_WORKERS_CONNECTED]</string>
     <string name="net_worker_label">[WORKER_%1$d] 📱 %2$s</string>
     <string name="net_worker_stats">RAM: %1$dMB | LAYERS: ~%2$d | LOAD: %3$s</string>
-    <string name="net_model_metrics">MODEL METRICS</string>
     <string name="net_total_layers">TOTAL_LAYERS: %d</string>
     <string name="net_model_size">MODEL_SIZE:   %dMB</string>
     <string name="net_local_layers">LOCAL_LAYERS: %d</string>
     <string name="net_rpc_layers">RPC_LAYERS:   %d</string>
-    <string name="net_layer_distribution">LAYER_DISTRIBUTION:</string>
-    <string name="net_local_label">LOCAL</string>
-    <string name="net_rpc_label">RPC</string>
-    <string name="net_transfer">TRANSFER</string>
     <string name="net_syncing">SYNCING: [%1$s%2$s] %3$d%%</string>
-    <string name="net_memory_allocation">MEMORY ALLOCATION</string>
     <string name="net_total_cluster_ram">TOTAL_CLUSTER_RAM: %dMB</string>
     <string name="net_master_allocation">MASTER_ALLOCATION: %dMB</string>
     <string name="net_worker_allocation">WORKER_%1$d_ALLOC:   %2$dMB</string>
-    <string name="net_controls">CONTROLS</string>
     <string name="net_terminate_server">> TERMINATE_SERVER</string>
     <string name="net_stop_rpc">> STOP_RPC_WORKER</string>
     <string name="net_clear_workers">> CLEAR_WORKERS</string>
@@ -6019,6 +6006,8 @@
     <string name="widget_chat_reply_button">Reply</string>
     <string name="widget_chat_reply_title">Reply to chat</string>
     <string name="widget_chat_reply_hint">Message</string>
+    <string name="widget_navigation_previous_symbol">‹</string>
+    <string name="widget_navigation_next_symbol">›</string>
     <string name="widget_chat_reply_sent">Message sent</string>
     <string name="accel_dashboard_desc">Compatible devices install specialized binaries automatically and fall back to CPU when unavailable.</string>
     <string name="accel_dashboard_title">Snapdragon acceleration</string>
@@ -6116,7 +6105,7 @@
     <string name="adventure_gate_hp_value">HP %1$d/%2$d</string>
     <string name="adventure_gate_hub_body">Choose a realm. Clear phase 15 to open the next portal.</string>
     <string name="adventure_gate_hub_title">Gate Nexum</string>
-    <string name="adventure_gate_info_drops">Bosses on phases 7 and 15 can drop unique relic gear. Each victory rolls a 20% chance if you do not own that relic yet, and replays can roll again. Only one relic can be equipped at a time.</string>
+    <string name="adventure_gate_info_drops" formatted="false">Bosses on phases 7 and 15 can drop unique relic gear. Each victory rolls a 20% chance if you do not own that relic yet, and replays can roll again. Only one relic can be equipped at a time.</string>
     <string name="adventure_gate_info_equipment">Weapons, shields, and rings use normal coins. Your pet can equip one of each, plus one boss relic. Gear can raise stats, boost elements, improve healing or potions, reflect damage, refund mana, or trigger special effects.</string>
     <string name="adventure_gate_info_potions">HP and mana potions are bought with normal coins in the Nexum Shop. Using one in battle consumes your turn, and each battle allows exactly four potions. Using them at home restores Adventure Gate HP or mana only.</string>
     <string name="adventure_gate_info_recovery">Adventure HP and mana persist. Sleep restores 7 HP and 4 mana per minute, relaxing restores 5 HP and 3 mana per minute, and awake non-battle time restores 3 HP and 2 mana per minute. Battles never refill HP or mana.</string>
@@ -6760,9 +6749,6 @@
     <string name="kb_continue_embeddings">Continue embeddings</string>
     <string name="kb_continue_embeddings_folder">Continue embeddings</string>
     <string name="kb_continuing_embeddings">Continuing embeddings...</string>
-    <string name="kb_dashboard_eyebrow">Knowledge</string>
-    <string name="kb_dashboard_summary">%1$d folders • %2$d sources • %3$d vector chunks</string>
-    <string name="kb_dashboard_title">Knowledge Bases</string>
     <string name="kb_deleting_base">Deleting knowledge base...</string>
     <string name="kb_delete_base_confirm_title">Delete knowledge base?</string>
     <string name="kb_delete_base_confirm_message">Delete “%1$s” and all of its sources, chunks, and vectors? This cannot be undone.</string>
@@ -6808,7 +6794,6 @@
     <string name="kb_error_embedding_server_not_ready">The local embedding server did not become ready on port %1$d.</string>
     <string name="kb_error_embedding_requires_local_backend">Select the local llama embedding backend before starting the managed embedding server.</string>
     <string name="kb_errors_count">%1$d need attention</string>
-    <string name="kb_folder_detail_subtitle">Upload documents, watch embedding progress, and test retrieval inside this folder.</string>
     <string name="kb_folder_open_desc">Open uploads, progress, and retrieval test</string>
     <string name="kb_folder_subtitle">Manage retrieval folders, choose an embedding backend, and open a folder to upload documents.</string>
     <string name="kb_import">Import</string>
@@ -6915,7 +6900,6 @@
     <string name="kb_copy_logs">Copy logs</string>
     <string name="kb_logs_copied">Knowledge-base logs copied.</string>
     <string name="kb_logs_clip_label">Knowledge-base logs</string>
-    <string name="kb_logs_subtitle">Embedding server, indexing jobs, and vector writes.</string>
     <string name="kb_logs_title">Knowledge-base logs</string>
     <string name="kb_log_embedding_port_busy_cleanup">Embedding server port %1$d is busy; cleaning stale local llama-server processes.</string>
     <string name="kb_log_embedding_port_retry_cleanup">Embedding server port %1$d is still busy after cleanup; retrying same-port cleanup before giving up.</string>
@@ -6981,10 +6965,7 @@
     <string name="models_kb_embedding_cleared">Knowledge-base embedding model was cleared.</string>
     <string name="models_storage_bar_desc">Device storage: %1$s total, %2$s free, %3$s used by models</string>
     <string name="models_storage_free">Free</string>
-    <string name="models_storage_legend_value">%1$s: %2$s</string>
     <string name="models_storage_models">Models</string>
-    <string name="models_storage_other">Other</string>
-    <string name="models_storage_subtitle">Local model footprint</string>
     <string name="models_storage_title">Device storage</string>
     <string name="models_storage_total">Total</string>
     <string name="models_type_quadtrix">Quadtrix checkpoint</string>
@@ -7394,7 +7375,6 @@
     <string name="models_litert">LiteRT models</string>
     <string name="models_litert_desc">Managed chat models packaged for LiteRT-LM with CPU and experimental GPU runtime paths.</string>
     <string name="litert_models_title">LiteRT models</string>
-    <string name="litert_models_subtitle">Download, import, export, rename, and remove LiteRT-LM chat models separately from GGUF and Stable Diffusion assets.</string>
     <string name="litert_models_gpu_note_title">GPU support</string>
     <string name="litert_models_gpu_note_desc">The catalog lists generic LiteRT-LM files that can run on CPU and, on compatible devices, the LiteRT GPU backend. GPU runs in a protected worker process so delegate crashes do not close the main app.</string>
     <string name="litert_models_catalog_title">Recommended downloads</string>
@@ -7537,7 +7517,6 @@
     <string name="onnx_tts_text_label">Text to read</string>
     <string name="onnx_tts_speed_value">Speed: %1$.2f</string>
     <string name="onnx_tts_steps_value">Quality steps: %1$d</string>
-    <string name="onnx_tts_generate">Generate voice</string>
     <string name="onnx_tts_latest_audio">Latest audio</string>
     <string name="onnx_tts_history">Saved audio</string>
     <string name="onnx_tts_generated_audio_title">Generated audio</string>
@@ -7620,7 +7599,6 @@
     <string name="bgr_mask_contrast">Mask contrast: %1$.2f</string>
     <string name="bgr_export_mask">Export mask preview</string>
     <string name="bgr_preserve_names">Preserve source names</string>
-    <string name="bgr_start">Remove backgrounds</string>
     <string name="bgr_status_starting">Starting background removal...</string>
     <string name="bgr_status_processing_item">Processing %1$d/%2$d: %3$s</string>
     <string name="bgr_phase_decoding_image">Decoding image</string>
@@ -7734,7 +7712,6 @@
     <string name="ai_servers_type_ai_hub_desc">One launcher URL for the active built-in AI servers.</string>
     <string name="dashboard_sd_distributed_title">Distributed Media Generation</string>
     <string name="dashboard_sd_distributed_desc">Split Stable Diffusion image, edit, upscale, and video work across trusted LAN workers.</string>
-    <string name="dashboard_sd_distributed_action">Open media network</string>
     <string name="sd_dist_title">Distributed Media Generation</string>
     <string name="sd_dist_subtitle">Run stable-diffusion.cpp RPC workers, choose media pipeline placement, and apply the plan to image and video generation.</string>
     <string name="sd_dist_hub_worker_title">Run this device as a media worker</string>
@@ -7774,13 +7751,11 @@
     <string name="sd_dist_gallery_no_metadata">Detailed settings are unavailable for this older file.</string>
     <string name="sd_dist_run_config_title">Distributed Run Config</string>
     <string name="sd_dist_run_config_subtitle">Build structured stable-diffusion.cpp runtime flags before launching image, edit, upscale, or video generation.</string>
-    <string name="sd_dist_pipeline_title">Media pipeline lanes</string>
     <string name="sd_dist_module_text_encoder">Text Encoder</string>
     <string name="sd_dist_module_diffusion">Diffusion</string>
     <string name="sd_dist_module_vae">VAE / TAE</string>
     <string name="sd_dist_module_controlnet">ControlNet</string>
     <string name="sd_dist_module_upscaler">Upscaler</string>
-    <string name="sd_dist_module_video_frames">Video frames</string>
     <string name="sd_dist_security_warning">stable-diffusion.cpp RPC has no authentication or encryption. Use it only on a trusted LAN or private hotspot.</string>
     <string name="sd_dist_status_running">Worker running</string>
     <string name="sd_dist_status_stopped">Worker stopped</string>
@@ -7806,7 +7781,6 @@
     <string name="sd_dist_manual_worker">Manual worker</string>
     <string name="sd_dist_worker_host">Worker host or IP</string>
     <string name="sd_dist_threads_short">threads</string>
-    <string name="sd_dist_worker_resource_line">%1$s:%2$d - %3$d MB - %4$d %5$s</string>
     <string name="sd_dist_ram_mb_short">RAM MB</string>
     <string name="sd_dist_add_worker">Add worker</string>
     <string name="sd_dist_workers">Workers</string>
@@ -7815,7 +7789,6 @@
     <string name="sd_dist_new_worker">New worker</string>
     <string name="sd_dist_delete_worker">Delete worker</string>
     <string name="sd_dist_worker_budget_line">%1$d MB - %2$d threads</string>
-    <string name="sd_dist_master_resource_line">This device - %1$d MB - %2$d threads</string>
     <string name="sd_dist_rpc_servers_preview">RPC servers preview</string>
     <string name="sd_dist_use_workers">Use workers</string>
     <string name="sd_dist_view_network">View network</string>
@@ -8018,7 +7991,6 @@
     <string name="sd_dist_live">Live</string>
     <string name="sd_dist_live_online">Live: online</string>
     <string name="sd_dist_live_offline">Live: offline</string>
-    <string name="sd_dist_last_seen">Last seen: %1$s</string>
     <string name="sd_dist_planned_whole_assignment">Planned: %1$s</string>
     <string name="sd_dist_planned_split_assignment">Planned: %1$s ~%2$d%% layers</string>
     <string name="sd_dist_worker_notification_running">Listening on port %1$d</string>
@@ -8351,10 +8323,45 @@
     <string name="wear_quick_chat_modify_pinned_note">Modify pinned note</string>
     <string name="notes_pin_to_watch">Pin to Watch</string>
     <string name="notes_unpin_from_watch">Unpin from Watch</string>
-    <string name="llm_lora_adapter">LoRA adapter</string>
-    <string name="llm_lora_adapter_desc">Optionally apply a compatible GGUF adapter when llama.cpp starts.</string>
-    <string name="llm_no_lora_adapter">No LoRA adapter selected</string>
-    <string name="llm_select_lora_adapter">Select LoRA adapter</string>
+    <string name="llm_lora_stack_title">LoRA adapters</string>
+    <string name="llm_lora_stack_desc">Apply multiple compatible GGUF adapters in order. Each adapter keeps its own strength.</string>
+    <string name="llm_lora_stack_empty">No LoRA adapters selected.</string>
+    <string name="llm_lora_stack_add">Add LoRA adapters</string>
+    <string name="llm_lora_stack_clear">Clear all adapters</string>
+    <string name="llm_lora_stack_select_title">Select LoRA adapters</string>
+    <string name="llm_lora_stack_select_done">Apply selection</string>
+    <plurals name="llm_lora_stack_selected_count">
+        <item quantity="one">%1$d adapter selected</item>
+        <item quantity="other">%1$d adapters selected</item>
+    </plurals>
+    <string name="llm_lora_stack_no_installed">No installed LLM LoRA adapters found.</string>
+    <string name="llm_lora_stack_item">Adapter %1$d</string>
+    <string name="llm_lora_stack_strength">Quick strength</string>
+    <string name="llm_lora_stack_strength_input">Exact strength</string>
+    <string name="llm_lora_stack_strength_hint">Use the 0–2 slider for quick tuning, or enter any finite value.</string>
+    <string name="llm_lora_stack_move_up">Move adapter up</string>
+    <string name="llm_lora_stack_move_down">Move adapter down</string>
+    <string name="llm_lora_stack_remove">Remove adapter</string>
+    <string name="llm_lora_stack_ram_warning">⚠️ Each adapter increases RAM use. Multiple adapters can exceed available memory; test the stack before starting llama.cpp.</string>
+    <string name="llm_lora_stack_invalid_comma">This filename contains a comma, which llama.cpp reserves between adapters. Rename the file before launch.</string>
+    <string name="llm_lora_stack_invalid_scaled_colon">This scaled adapter filename contains a colon, which llama.cpp reserves before the strength. Rename the file or use strength 1.</string>
+    <string name="llm_load_mode_title">Model loading mode</string>
+    <string name="llm_load_mode_desc">Choose how llama.cpp loads model weights. Auto preserves llama.cpp defaults; locking modes may need extra RAM or permissions on Android.</string>
+    <string name="llm_load_mode_label">Load mode</string>
+    <string name="llm_load_mode_auto">Auto</string>
+    <string name="llm_load_mode_auto_desc">Let llama.cpp choose the safest loading behavior for this device and binary.</string>
+    <string name="llm_load_mode_none">None</string>
+    <string name="llm_load_mode_none_desc">Use regular file reads without memory mapping, page locking, or direct I/O.</string>
+    <string name="llm_load_mode_mmap">mmap</string>
+    <string name="llm_load_mode_mmap_desc">Memory-map model weights to avoid copying the full file into RAM up front.</string>
+    <string name="llm_load_mode_mlock">mlock</string>
+    <string name="llm_load_mode_mlock_desc">Read model weights into allocated buffers and lock them in RAM without mmap.</string>
+    <string name="llm_load_mode_mmap_mlock">mmap + mlock</string>
+    <string name="llm_load_mode_mmap_mlock_desc">Memory-map and lock model pages; this keeps the model resident but uses more RAM.</string>
+    <string name="llm_load_mode_dio">Direct I/O (DIO)</string>
+    <string name="llm_load_mode_dio_desc">Use direct I/O when supported to bypass the page cache and reduce cache pressure.</string>
+    <string name="llm_load_mode_unknown">Custom</string>
+    <string name="llm_load_mode_unknown_desc">A loading mode supplied by the selected llama.cpp runtime.</string>
     <string name="agent_runaway_continuation_reason">Automatic agent continuations were paused after “%1$s” because the queue reached %3$d item(s) and %2$d continuation(s) in this run.</string>
     <string name="agent_runaway_loading_reason">Automatic agent continuations were paused because %1$d loading leases were active at once (queue %2$d, continuations %3$d).</string>
     <string name="agent_visual_tester_name">Visual Tester</string>
@@ -8495,7 +8502,7 @@
     <string name="dist_speculative_gpu_layers_hint">all, auto, or an exact count</string>
     <string name="dist_speculative_worker_device_hint">The selected worker supplies the llama.cpp draft device; GPU layers below remain separate from target-model layers.</string>
     <string name="llama_server_dspark_unsupported">%1$s does not expose draft-dspark speculative decoding. Select a llama-server binary with DSpark support.</string>
-    <string name="llama_server_fit_unsupported">%1$s does not expose llama.cpp distributed fitting (--fit/--fit-target). Select a compatible llama-server binary.</string>
+    <string name="llama_server_fit_unsupported" tools:ignore="TypographyDashes">%1$s does not expose llama.cpp distributed fitting (--fit/--fit-target). Select a compatible llama-server binary.</string>
     <string name="llama_local_distributed_args_rejected">Distributed RPC, fitting, and tensor-split arguments are not allowed in a local server profile.</string>
     <string name="dist_memory_card_desc">Choose how much RAM remains available to the master while workers carry the target model.</string>
     <string name="dist_model_settings_desc">Runtime, KV cache, sampling, speculative decoding, tools, and launch templates for this distributed profile.</string>
@@ -8744,7 +8751,7 @@
     <string name="sd_workflow_lora_stack_json_hint">JSON array: [{&quot;path&quot;:&quot;…&quot;,&quot;strength&quot;:0.8}]</string>
     <string name="sd_workflow_esrgan_excluded">Pure ESRGAN upscaling is separate from diffusion workflows and does not accept LoRAs.</string>
     <string name="sd_workflow_preset_label">Workflow preset</string>
-    <string name="sd_workflow_preset_help">Choose a pinned first-party stack. Launch is blocked if its required files or native smoke checks are not ready.</string>
+    <string name="sd_workflow_preset_help">Choose a model setup. Its required models and runtime must be ready before generation.</string>
     <string name="sd_workflow_preset_none">No preset</string>
     <string name="sd_workflow_hash_verifying">Checking workflow files in the background…</string>
     <string name="sd_workflow_prompt_face_neutral_positive">neutral facial expression, closed relaxed mouth, natural open eyes, preserve identity and lighting</string>

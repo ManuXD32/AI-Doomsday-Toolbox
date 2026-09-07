@@ -73,6 +73,28 @@ interface AiRuntimeJobDao {
         updatedAt: Long
     )
 
+    @Query(
+        """
+        UPDATE ai_runtime_jobs
+        SET status = :status,
+            checkpointJson = :checkpointJson,
+            progressText = :progressText,
+            errorMessage = :errorMessage,
+            updatedAt = :updatedAt
+        WHERE type = 'AGENT_CHAT'
+          AND conversationId = :conversationId
+          AND status IN ('RUNNING', 'RECOVERING')
+        """
+    )
+    suspend fun updateActiveAgentConversationState(
+        conversationId: Long,
+        status: String,
+        checkpointJson: String?,
+        progressText: String?,
+        errorMessage: String?,
+        updatedAt: Long
+    )
+
     @Query("DELETE FROM ai_runtime_jobs WHERE status IN ('COMPLETED', 'FAILED', 'CANCELLED') AND updatedAt < :olderThan")
     suspend fun deleteTerminalJobsOlderThan(olderThan: Long)
 

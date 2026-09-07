@@ -2,10 +2,16 @@ package com.example.llamadroid.ui.agent
 
 import com.example.llamadroid.service.AgentService
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentChatRenderProjectionTest {
+    @Test
+    fun messageActionsReserveDistinctAccessibleTouchTargets() {
+        assertTrue(AGENT_MESSAGE_ACTION_TOUCH_TARGET_DP >= 48)
+    }
+
     @Test
     fun composerAddsOnlyImeSpaceNotAlreadyReservedByWindowResize() {
         assertEquals(
@@ -140,5 +146,89 @@ class AgentChatRenderProjectionTest {
         assertEquals(1, merged.size)
         assertEquals("streaming update", merged.single().content)
         assertTrue(merged.single().isStreaming)
+    }
+
+    @Test
+    fun pendingCallAgentApprovalRemainsAnActionableChatMessage() {
+        val pendingApproval = AgentService.Companion.ChatMessage(
+            role = "assistant",
+            content = "Approve delegation",
+            toolName = "call_agent",
+            needsApproval = true
+        )
+        val approvedCall = pendingApproval.copy(needsApproval = false, isApproved = true)
+
+        assertFalse(shouldRenderCallAgentAsDelegation(pendingApproval))
+        assertTrue(shouldRenderCallAgentAsDelegation(approvedCall))
+    }
+
+    @Test
+    fun retryableLoopPauseIsVisibleAndActionableWhenExtraOutputIsOff() {
+        val pause = AgentService.Companion.ChatMessage(
+            role = "system",
+            content = "Paused because the agent may be looping: repeated recovery",
+            toolName = AgentService.Companion.RETRYABLE_NEEDS_DIRECTION_TOOL
+        )
+
+        assertTrue(AgentService.isRetryableNeedsDirectionMessage(pause))
+        assertEquals(
+            listOf(pause),
+            buildVisibleAgentTimelineMessages(listOf(pause), showAllOutput = false)
+        )
+    }
+
+    @Test
+    fun genericRuntimePauseDoesNotUseLoopRetryMarker() {
+        val pause = AgentService.Companion.ChatMessage(
+            role = "system",
+            content = "Agent paused and needs your attention: server is offline"
+        )
+
+        assertFalse(AgentService.isRetryableNeedsDirectionMessage(pause))
+        assertTrue(
+            buildVisibleAgentTimelineMessages(listOf(pause), showAllOutput = false).isEmpty()
+        )
+    }
+
+    @Test
+    fun legacyLoopPauseRemainsRetryableAfterRestoringOlderMessage() {
+        val pause = AgentService.Companion.ChatMessage(
+            role = "system",
+            content = "Pausado porque el agente podria estar en bucle: recuperacion repetida"
+        )
+
+        assertTrue(AgentService.isRetryableNeedsDirectionMessage(pause))
+    }
+
+    @Test
+    fun retryMarkerSurvivesRuntimeJsonPersistence() {
+        val pause = AgentService.Companion.ChatMessage(
+            role = "system",
+            content = "Paused because the agent may be looping: repeated recovery",
+            toolName = AgentService.Companion.RETRYABLE_NEEDS_DIRECTION_TOOL
+        )
+
+        val restored = AgentService.chatMessageFromJson(AgentService.chatMessageToJson(pause))
+
+        assertEquals(AgentService.Companion.RETRYABLE_NEEDS_DIRECTION_TOOL, restored.toolName)
+        assertTrue(AgentService.isRetryableNeedsDirectionMessage(restored))
+    }
+
+    @Test
+    fun explicitRetryFilterRemovesStaleLoopCardButKeepsNormalInterruption() {
+        val loopPause = AgentService.Companion.ChatMessage(
+            role = "system",
+            content = "Paused because the agent may be looping: repeated recovery",
+            toolName = AgentService.Companion.RETRYABLE_NEEDS_DIRECTION_TOOL
+        )
+        val interruption = AgentService.Companion.ChatMessage(
+            role = "system",
+            content = "Agent paused and needs your attention: server is offline"
+        )
+
+        assertEquals(
+            listOf(interruption),
+            AgentService.withoutRetryableNeedsDirectionMessages(listOf(loopPause, interruption))
+        )
     }
 }

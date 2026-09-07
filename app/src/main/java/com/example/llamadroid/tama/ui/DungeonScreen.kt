@@ -15,7 +15,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -31,13 +30,14 @@ import com.example.llamadroid.tama.adventure.localizedName
 import com.example.llamadroid.tama.db.TamaDatabase
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import kotlinx.coroutines.launch
 
 // Dark fantasy color scheme
 private val DungeonDark = Color(0xFF1A0F0F)
 private val DungeonAccent = Color(0xFF8B0000)
 private val DungeonGold = Color(0xFFDAA520)
-private val DungeonMist = Color(0xFF2F2F2F)
 
 /**
  * Dungeon selection screen - shows available dungeons for text adventures.
@@ -50,6 +50,7 @@ fun DungeonScreen(
     settingsRepository: SettingsRepository
 ) {
     val scope = rememberCoroutineScope()
+    val walkthroughTargets = LocalWalkthroughTargets.current
     var completedDungeonCount by remember { mutableStateOf(0) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     
@@ -82,6 +83,7 @@ fun DungeonScreen(
                     }
                 },
                 actions = {
+                        com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                     IconButton(onClick = { showSettingsDialog = true }) {
                         Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.action_settings))
                     }
@@ -111,6 +113,7 @@ fun DungeonScreen(
             
             // Dungeon list
             LazyColumn(
+                modifier = Modifier.walkthroughTarget("tama.dungeon"),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(DungeonType.entries.toList()) { dungeon ->
@@ -120,6 +123,7 @@ fun DungeonScreen(
                         isUnlocked = isUnlocked,
                         onClick = {
                             if (isUnlocked) {
+                                walkthroughTargets?.recordEvent("tama.dungeon")
                                 navController.navigate(Screen.Adventure.createRoute(dungeon.name))
                             }
                         }
@@ -161,28 +165,24 @@ fun DungeonCard(
     onClick: () -> Unit
 ) {
     val context = LocalContext.current
-    val cardColor = if (isUnlocked) {
-        Brush.horizontalGradient(
-            colors = listOf(DungeonMist, DungeonDark)
-        )
-    } else {
-        Brush.horizontalGradient(
-            colors = listOf(Color.DarkGray.copy(alpha = 0.3f), Color.Black.copy(alpha = 0.5f))
-        )
-    }
-    
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
+            .heightIn(min = 64.dp)
             .clickable(enabled = isUnlocked) { onClick() },
-        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+        colors = CardDefaults.cardColors(
+            containerColor = if (isUnlocked) {
+                MaterialTheme.colorScheme.surfaceVariant
+            } else {
+                MaterialTheme.colorScheme.surfaceContainerLow
+            }
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(cardColor)
                 .padding(16.dp)
         ) {
             Row(
@@ -199,7 +199,7 @@ fun DungeonCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = dungeon.localizedName(context),
-                        color = if (isUnlocked) DungeonGold else Color.Gray,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp
@@ -211,7 +211,7 @@ fun DungeonCard(
                         } else {
                             stringResource(R.string.adventure_unlock_order, dungeon.unlockOrder)
                         },
-                        color = if (isUnlocked) Color.LightGray else Color.Gray,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp
                     )
@@ -224,7 +224,7 @@ fun DungeonCard(
                     Icon(
                         Icons.Default.Lock,
                         contentDescription = stringResource(R.string.adventure_locked),
-                        tint = Color.Gray,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(24.dp)
                     )
                 }

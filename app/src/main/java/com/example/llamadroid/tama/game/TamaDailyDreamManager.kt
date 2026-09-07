@@ -54,7 +54,7 @@ data class DailyDreamMoment(
 )
 
 object TamaDailyDreamManager {
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+    private fun dateFormat() = SimpleDateFormat("yyyy-MM-dd", Locale.US)
     private const val NORMAL_SLEEP_START_HOUR = 23
     private const val DEEP_SLEEP_START_HOUR = 21
     private const val DEEP_SLEEP_END_HOUR = 3
@@ -95,7 +95,7 @@ object TamaDailyDreamManager {
         return Result.success(
             DailyDreamQueueResult(
                 albumId = dream.id,
-                dreamDate = dateFormat.format(Date(pet.sleepStartTime ?: now)),
+                dreamDate = dateFormat().format(Date(pet.sleepStartTime ?: now)),
                 sourceActivity = dream.sourceActivity ?: "sleeping"
             )
         )
@@ -142,7 +142,7 @@ object TamaDailyDreamManager {
         val sourceActivity = if (allowDeep) {
             val deepDreamDate = if (force) {
                 val sleepStart = pet.sleepStartTime ?: now
-                dateFormat.format(Date(sleepStart))
+                dateFormat().format(Date(sleepStart))
             } else {
                 eligibleDeepDreamDate(pet, now) ?: return Result.success(null)
             }
@@ -311,7 +311,7 @@ object TamaDailyDreamManager {
         }
     }
 
-    fun formatDreamDate(timeMillis: Long): String = dateFormat.format(Date(timeMillis))
+    fun formatDreamDate(timeMillis: Long): String = dateFormat().format(Date(timeMillis))
 
     fun eligibleDreamDate(pet: TamaPet, now: Long): String? {
         val sleepStart = pet.sleepStartTime ?: return null
@@ -325,7 +325,7 @@ object TamaDailyDreamManager {
         }
         val endDay = Calendar.getInstance().apply { timeInMillis = now }
         while (!startCursor.after(endDay)) {
-            val dayKey = dateFormat.format(startCursor.time)
+            val dayKey = dateFormat().format(startCursor.time)
             val bedtimeBoundary = (startCursor.clone() as Calendar).apply {
                 set(Calendar.HOUR_OF_DAY, NORMAL_SLEEP_START_HOUR)
                 set(Calendar.MINUTE, 0)
@@ -359,7 +359,7 @@ object TamaDailyDreamManager {
         }
         if (!inDeepSleepWindow || sleptMinutes < DEEP_SLEEP_MINUTES) return null
 
-        return dateFormat.format(Date(sleepStart))
+        return dateFormat().format(Date(sleepStart))
     }
 
     private suspend fun buildDreamPlan(
@@ -774,7 +774,7 @@ object TamaDailyDreamManager {
 
     private fun startOfDayMillis(dayKey: String): Long {
         val calendar = Calendar.getInstance()
-        calendar.time = dateFormat.parse(dayKey) ?: Date()
+        calendar.time = dateFormat().parse(dayKey) ?: Date()
         calendar.set(Calendar.HOUR_OF_DAY, 0)
         calendar.set(Calendar.MINUTE, 0)
         calendar.set(Calendar.SECOND, 0)
@@ -784,7 +784,7 @@ object TamaDailyDreamManager {
 
     private fun endOfDayMillis(dayKey: String): Long {
         val calendar = Calendar.getInstance()
-        calendar.time = dateFormat.parse(dayKey) ?: Date()
+        calendar.time = dateFormat().parse(dayKey) ?: Date()
         calendar.set(Calendar.HOUR_OF_DAY, 23)
         calendar.set(Calendar.MINUTE, 59)
         calendar.set(Calendar.SECOND, 59)

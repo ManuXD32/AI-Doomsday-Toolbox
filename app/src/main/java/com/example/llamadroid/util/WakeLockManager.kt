@@ -10,6 +10,7 @@ import com.example.llamadroid.util.DebugLog
  * Useful for long-running operations like model downloads, ZIM processing, etc.
  */
 object WakeLockManager {
+    private const val APP_WAKE_LOCK_TIMEOUT_MS = 24 * 60 * 60 * 1_000L
     private var wakeLock: PowerManager.WakeLock? = null
     private val wakeOwners = OwnerLockState()
     private val lock = Any()
@@ -33,7 +34,9 @@ object WakeLockManager {
             
             val transition = wakeOwners.acquire(tag)
             if (transition.totalCount == 1) {
-                wakeLock?.acquire()  // Infinite - long AI tasks need indefinite locks
+                // A safety timeout prevents a process-lifetime leak if an owner fails to release.
+                // Normal callers still release as soon as their work completes.
+                wakeLock?.acquire(APP_WAKE_LOCK_TIMEOUT_MS)
                 DebugLog.log("[WakeLock] Acquired by $tag (refCount=${transition.totalCount}, owners=${transition.ownerSummary})")
             } else {
                 DebugLog.log("[WakeLock] Ref increased by $tag (refCount=${transition.totalCount}, owners=${transition.ownerSummary})")

@@ -1,5 +1,8 @@
 package com.example.llamadroid.ui.agent
 
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+
 import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -33,6 +36,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.stringResource
 import coil.compose.AsyncImage
 import com.example.llamadroid.R
+import com.example.llamadroid.ui.components.AppTextDetailsDialog
 import com.example.llamadroid.data.db.AgentProjectEventEntity
 import com.example.llamadroid.service.AgentService
 import com.example.llamadroid.service.PromptContextSnapshot
@@ -104,7 +108,7 @@ fun AgentComposerHost(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AgentTopBar(
-    onShowDashboard: () -> Unit,
+    onNavigateBack: () -> Unit,
     onShowAgentSettings: () -> Unit,
     onShowToolSettings: () -> Unit,
     onShowSettings: () -> Unit,
@@ -136,11 +140,12 @@ fun AgentTopBar(
             )
         },
         navigationIcon = {
-            IconButton(onClick = onShowDashboard) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.agent_dashboard_return))
+            IconButton(onClick = onNavigateBack, modifier = Modifier.walkthroughTarget("back")) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
             }
         },
         actions = {
+            com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
             Box {
                 IconButton(onClick = { showMenu = !showMenu }) {
                     Icon(Icons.Default.MoreVert, stringResource(R.string.action_more))
@@ -286,16 +291,16 @@ fun AgentWorkspaceConsoleHeader(
         else -> MaterialTheme.colorScheme.primary
     }
 
-    ElevatedCard(
+    Card(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 10.dp, vertical = 4.dp)
             .clickable { expanded = !expanded },
         shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
         ),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
@@ -756,7 +761,7 @@ fun ConnectionStatusBar(
                     TextButton(
                         onClick = onRetry,
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                        modifier = Modifier.height(28.dp)
+                        modifier = Modifier.heightIn(min = 48.dp)
                     ) {
                         Text(
                             stringResource(R.string.action_retry),
@@ -776,15 +781,47 @@ fun SshConnectionWarningCard(
     message: String,
     onRetry: () -> Unit,
     onOpenSettings: (() -> Unit)? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    compactTitle: String? = null
 ) {
-    ElevatedCard(
+    if (compactTitle != null) {
+        var showDetails by rememberSaveable { mutableStateOf(false) }
+        Surface(
+            modifier = modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.errorContainer
+        ) {
+            Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text(compactTitle, modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                IconButton(onClick = { showDetails = true }, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Default.Info, stringResource(R.string.soft_studio_view_details))
+                }
+                if (onOpenSettings != null) {
+                    IconButton(onClick = onOpenSettings, modifier = Modifier.size(48.dp)) {
+                        Icon(Icons.Default.Settings, stringResource(R.string.action_settings))
+                    }
+                }
+                IconButton(onClick = onRetry, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Default.Refresh, stringResource(R.string.action_retry))
+                }
+            }
+        }
+        if (showDetails) {
+            AppTextDetailsDialog(title = title, text = message, onDismiss = { showDetails = false })
+        }
+        return
+    }
+    Card(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 8.dp),
-        colors = CardDefaults.elevatedCardColors(
+        colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.errorContainer
-        )
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column(
             modifier = Modifier.padding(14.dp),
@@ -835,6 +872,7 @@ fun DebugPanel(
     onClear: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val debugJournalExportLabel = stringResource(R.string.agent_debug_journal_export)
     val clipboardManager = LocalClipboardManager.current
     var selectedFilter by rememberSaveable { mutableStateOf("ALL") }
     val filters = listOf(
@@ -891,7 +929,7 @@ fun DebugPanel(
                             type = "text/plain"
                             putExtra(Intent.EXTRA_TEXT, exportText)
                         }
-                        context.startActivity(Intent.createChooser(sendIntent, context.getString(R.string.agent_debug_journal_export)))
+                        context.startActivity(Intent.createChooser(sendIntent, debugJournalExportLabel))
                     }) {
                         Text(stringResource(R.string.action_share), fontSize = 10.sp)
                     }
@@ -1213,8 +1251,11 @@ fun AgentInputBar(
     canAttachImage: Boolean = false,
     hasImageAttachment: Boolean = false,
     keyboardPadding: Dp = 0.dp,
-    onAttachImage: (() -> Unit)? = null
+    onAttachImage: (() -> Unit)? = null,
+    walkthroughTargetId: String? = null,
+    walkthroughEventId: String? = null
 ) {
+    val walkthroughTargets = LocalWalkthroughTargets.current
     Surface(
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 6.dp,
@@ -1233,7 +1274,7 @@ fun AgentInputBar(
             if (onAttachImage != null) {
                 FilledIconButton(
                     onClick = onAttachImage,
-                    modifier = Modifier.size(44.dp),
+                    modifier = Modifier.size(48.dp),
                     enabled = canAttachImage && !isLoading,
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = if (hasImageAttachment) {
@@ -1258,7 +1299,9 @@ fun AgentInputBar(
             OutlinedTextField(
                 value = inputText,
                 onValueChange = onInputTextChange,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .then(walkthroughTargetId?.let { Modifier.walkthroughTarget(it) } ?: Modifier),
                 placeholder = {
                     Text(
                         if (canSend) stringResource(R.string.agent_type_msg) else stringResource(R.string.agent_thinking),
@@ -1281,12 +1324,15 @@ fun AgentInputBar(
 
             if (isLoading) {
                 FilledIconButton(
-                    onClick = onSend,
+                    onClick = {
+                        onSend()
+                        walkthroughEventId?.let { eventId -> walkthroughTargets?.recordEvent(eventId) }
+                    },
                     modifier = Modifier.size(48.dp),
                     enabled = inputText.isNotBlank() && canSend,
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = Color.White
+                        contentColor = MaterialTheme.colorScheme.onPrimary
                     ),
                     shape = RoundedCornerShape(16.dp)
                 ) {
@@ -1298,7 +1344,7 @@ fun AgentInputBar(
                     modifier = Modifier.size(48.dp),
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = Color.White
+                        contentColor = MaterialTheme.colorScheme.onError
                     ),
                     shape = RoundedCornerShape(16.dp)
                 ) {
@@ -1306,12 +1352,15 @@ fun AgentInputBar(
                 }
             } else {
                 FilledIconButton(
-                    onClick = onSend,
+                    onClick = {
+                        onSend()
+                        walkthroughEventId?.let { eventId -> walkthroughTargets?.recordEvent(eventId) }
+                    },
                     modifier = Modifier.size(48.dp),
                     enabled = canSend && inputText.isNotBlank(),
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = Color.White
+                        contentColor = MaterialTheme.colorScheme.onPrimary
                     ),
                     shape = RoundedCornerShape(16.dp)
                 ) {

@@ -1,10 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <!-- App Name (keep English) -->
     <string name="app_name">AI Doomsday Toolbox</string>
     
     <!-- Navigation -->
-    <string name="nav_home">Inicio</string>
     <string name="nav_ai">IA</string>
     <string name="nav_notes">Organizador</string>
     <string name="nav_models">Modelos</string>
@@ -21,8 +20,6 @@
     <string name="llama_server_cleanup_port_busy">El servidor local se detuvo, pero el puerto %1$d sigue ocupado. Reintenta o recupera el entorno local registrado.</string>
     <string name="dashboard_starting">Iniciando…</string>
     <string name="dashboard_server_running">Puerto %d activo</string>
-    <string name="dashboard_no_model">Sin modelo</string>
-    <string name="dashboard_select_model">Ve a Modelos para descargar uno</string>
     <string name="dashboard_quick_actions">Acciones</string>
     <string name="dashboard_system_status">Sistema</string>
     <string name="dashboard_cpu">CPU</string>
@@ -62,22 +59,11 @@
     <string name="llama_card_allow_wear_start_hint">Solo un servidor puede iniciarse desde el reloj. Activarlo aqui lo desactiva en los demas.</string>
     
     <!-- AI Hub -->
-    <string name="ai_hub_title">Herramientas IA</string>
     <string name="ai_hub_subtitle">Inferencia IA en tu dispositivo</string>
-    <string name="ai_tools_eyebrow">HERRAMIENTAS</string>
     <string name="ai_tools_search_label">Buscar herramientas</string>
-    <string name="ai_tools_category_chat_agents">Chat y agentes</string>
-    <string name="ai_tools_category_generation">Generación</string>
-    <string name="ai_tools_category_onnx">Herramientas ONNX</string>
-    <string name="ai_tools_category_voice_media">Voz y multimedia</string>
-    <string name="ai_tools_category_documents_workflows">Documentos y flujos</string>
-    <string name="ai_tools_category_servers_utilities">Servidores y utilidades</string>
-    <string name="ai_tools_category_pinned">Herramientas fijadas</string>
     <string name="ai_tools_category_pinned_chats">Chats fijados</string>
     <string name="ai_pinned_chat_label">Chat</string>
     <string name="ai_pinned_chat_server_missing">El servidor recordado no está disponible</string>
-    <string name="ai_tools_no_results_title">Sin herramientas coincidentes</string>
-    <string name="ai_tools_no_results_desc">Prueba con otro término de búsqueda.</string>
     <string name="ai_tools_open_settings_cd">Abrir ajustes de %1$s</string>
     <string name="ai_tools_pin_cd">Fijar %1$s</string>
     <string name="ai_tools_unpin_cd">Desfijar %1$s</string>
@@ -119,7 +105,6 @@
     <string name="ai_video_interpolation">Interpolación de video</string>
     <string name="ai_video_interpolation_desc">Aumenta la suavidad del video con RIFE</string>
     <string name="live_translator_title">Traductor en vivo</string>
-    <string name="live_translator_subtitle">Traducción de voz bilingüe por turnos</string>
     <string name="live_translator_hub_desc">Traduce turnos hablados en voz alta</string>
     <string name="live_translator_default_template">Traductor en vivo</string>
     <string name="live_translator_template_travel">Viaje</string>
@@ -165,7 +150,6 @@
     <string name="live_translator_timing">Tiempos del turno</string>
     <string name="live_translator_start_speaking_timeout">Tiempo para empezar a hablar en segundos</string>
     <string name="live_translator_finished_talking_timeout">Silencio al terminar de hablar en segundos</string>
-    <string name="live_translator_start">Iniciar transcripción en vivo</string>
     <string name="live_translator_saved_transcriptions">Transcripciones guardadas</string>
     <string name="live_translator_selected_session">Seleccionada: %1$s</string>
     <string name="live_translator_transcript_title">Transcripción</string>
@@ -301,7 +285,6 @@
     <string name="imagegen_select_model">Seleccionar modelo</string>
     <string name="imagegen_no_model">Sin modelo SD</string>
     <string name="imagegen_no_vae_installed">No hay modelos VAE instalados</string>
-    <string name="imagegen_generate_btn">Generar imagen</string>
     <string name="imagegen_upscale_btn">Escalar imagen</string>
     <string name="imagegen_upscale_factor">Factor</string>
     <string name="imagegen_success">¡Imagen generada correctamente!</string>
@@ -447,12 +430,22 @@
     <string name="whisper_status_cancelled">Transcripción cancelada</string>
     <string name="whisper_record_saved">Grabación guardada</string>
     <string name="whisper_video_loaded_note">Video cargado. La extracción ocurrirá al transcribir.</string>
-    <string name="whisper_error_shared_file">Fallo al cargar archivo compartido: %s</string>
+    <string name="whisper_copy_success">Transcripción copiada al portapapeles.</string>
+    <string name="whisper_share_result">Compartir transcripción</string>
+    <string name="whisper_permission_retry">Reintentar</string>
+    <string name="whisper_permission_rationale_title">Se necesita permiso del micrófono</string>
+    <string name="whisper_permission_rationale_message">La grabación usa el micrófono para crear un archivo de audio para la transcripción. Permite el acceso al micrófono para grabar.</string>
+    <string name="whisper_permission_settings_title">El permiso del micrófono está bloqueado</string>
+    <string name="whisper_permission_settings_message">El acceso al micrófono se denegó permanentemente. Abre los ajustes de la aplicación y activa el permiso del micrófono para grabar.</string>
+    <string name="whisper_open_settings">Abrir ajustes de la aplicación</string>
+    <string name="whisper_error_shared_file">No se pudo leer el archivo multimedia compartido. Vuelve a compartirlo mientras el origen siga disponible.</string>
+    <string name="whisper_error_media_load">No se pudo leer el archivo multimedia seleccionado.</string>
     <string name="whisper_error_extraction">Fallo al extraer audio (código: %d)</string>
     <string name="whisper_error_binary_not_found">No se encontró el binario de Whisper</string>
     <string name="whisper_error_audio_conversion_failed">La conversión de audio falló</string>
     <string name="whisper_error_ffmpeg_not_found">No se encontró el binario de ffmpeg</string>
     <string name="whisper_error_ffmpeg_exit_code">ffmpeg salió con el código %1$d</string>
+    <string name="whisper_error_ffmpeg_detail">Error de FFmpeg: %1$s</string>
     <string name="whisper_error_audio_conversion_detail">La conversión de audio falló: %1$s</string>
     <string name="whisper_error_failed_with_exit_code">Whisper falló con el código de salida %1$d</string>
     <string name="whisper_error_permission">Permiso de grabación denegado</string>
@@ -534,6 +527,7 @@
     
     <!-- PDF Tools -->
     <string name="pdf_toolbox_title">Herramientas PDF</string>
+    <string name="pdf_shared_file_ready">PDF compartido listo</string>
     <string name="pdf_tools_header">📄 Herramientas PDF</string>
     <string name="pdf_merge">Unir PDFs</string>
     <string name="pdf_merge_desc">Combina varios archivos PDF en uno solo</string>
@@ -565,6 +559,8 @@
     <string name="pdf_split_help">Extrae páginas específicas de un PDF</string>
     <string name="pdf_select">Seleccionar PDF</string>
     <string name="pdf_selected_file">PDF seleccionado</string>
+    <string name="pdf_shared_file_import_failed">No se pudo importar el PDF compartido. Comprueba que el origen siga disponible y vuelve a compartirlo.</string>
+    <string name="navigation_destination_unavailable">Ese destino ya no está disponible.</string>
     <string name="pdf_pages_to_extract">Páginas a extraer</string>
     <string name="pdf_pages_range_hint">ej. 1-3, 5, 7-10</string>
     <string name="pdf_split_range_help">Introduce números o rangos de páginas separados por comas</string>
@@ -756,12 +752,9 @@
     
     <!-- Model Manager New Strings -->
     <string name="models_storage_title">Almacenamiento del dispositivo</string>
-    <string name="models_storage_subtitle">Espacio ocupado por modelos locales</string>
     <string name="models_storage_total">Total</string>
     <string name="models_storage_free">Libre</string>
     <string name="models_storage_models">Modelos</string>
-    <string name="models_storage_other">Otros</string>
-    <string name="models_storage_legend_value">%1$s: %2$s</string>
     <string name="models_storage_bar_desc">Almacenamiento del dispositivo: %1$s en total, %2$s libres, %3$s usados por modelos</string>
     <string name="models_tab_installed">Instalados</string>
     <string name="models_tab_downloading">Descargando</string>
@@ -945,9 +938,6 @@
     <string name="general_output_folder">Carpeta de Salida</string>
     <string name="general_output_default">Almacenamiento interno</string>
     <string name="general_output_hint">Para imágenes, transcripciones y videos</string>
-    <string name="general_theme">Tema</string>
-    <string name="general_theme_system">Sistema</string>
-    <string name="general_theme_soon">Próximamente</string>
     <string name="general_language">Idioma</string>
     <string name="general_language_system">Sistema</string>
     <string name="general_language_en">English</string>
@@ -996,6 +986,7 @@
     <string name="llm_generated_params_title">Parámetros generados de llama.cpp</string>
     <string name="llm_generated_params_desc">Estos valores se convierten en flags explícitos de llama-server en el próximo arranque. Los campos opcionales vacíos se omiten.</string>
     <string name="llm_physical_batch_size">Tamaño de lote físico (--ubatch-size)</string>
+    <string name="llm_threads_batch">Cantidad de hilos de lote (--threads-batch)</string>
     <string name="llm_optional_flag_blank">Vacío = omitir flag</string>
     <string name="general_battery">Batería</string>
     <string name="general_battery_unrestricted">Sin restricciones</string>
@@ -1086,10 +1077,6 @@
     <string name="llm_draft_device_cpu">Borrador en CPU</string>
     <string name="llm_draft_device_hint">Úsalo para comparar ejecución del borrador en CPU y OpenCL. Automático deja que llama.cpp decida.</string>
     <string name="llm_flash_attention_opencl_hint">OpenCL puede caer a CPU en operaciones Flash Attention o de proyector de visión no soportadas. Mantén tu elección, pero compara activado/desactivado al medir aceleradores.</string>
-    <string name="llm_mmap_title">Desactivar mapeo de memoria (MMAP)</string>
-    <string name="llm_mmap_desc">Cargar el modelo completo en RAM</string>
-    <string name="llm_mmap_on">⚡ ACTIVADO: Inferencia más rápida, pero inicio más lento y usa más RAM. El modelo debe caber en memoria.</string>
-    <string name="llm_mmap_off">💾 DESACTIVADO (por defecto): El modelo se carga bajo demanda. Más lento pero permite modelos más grandes.</string>
     <string name="llm_vision_desc">Habilitar comprensión de imágenes</string>
     <string name="llm_vision_not_selected">No seleccionado</string>
     <string name="llm_vision_select_title">Seleccionar Proyector de Visión</string>
@@ -1244,7 +1231,6 @@
     <string name="organizer_tab_calendar">Calendario</string>
     <string name="organizer_tab_alarms">Alarmas</string>
     <string name="organizer_calendar_subtitle">Planifica eventos y alarmas opcionales del teléfono</string>
-    <string name="organizer_alarms_subtitle">Recordatorios únicos del teléfono con sonido</string>
     <string name="organizer_calendar_previous_month">Mes anterior</string>
     <string name="organizer_calendar_next_month">Mes siguiente</string>
     <string name="organizer_calendar_empty_day">No hay eventos para este día.</string>
@@ -1558,6 +1544,7 @@
     <string name="llama_folder_delete_desc">Eliminar carpeta %1$s</string>
     <plurals name="llama_folder_chat_count">
         <item quantity="one">%d chat</item>
+        <item quantity="many">%d chats</item>
         <item quantity="other">%d chats</item>
     </plurals>
     <string name="llama_prompt_profile_label">Perfil de prompt</string>
@@ -2350,8 +2337,6 @@
     <!-- File Server -->
     <string name="file_server">Servidor de Archivos</string>
     <string name="file_server_shared_folder">Carpeta Compartida</string>
-    <string name="file_server_not_selected">No seleccionada</string>
-    <string name="file_server_browse">Explorar</string>
     <string name="file_server_start">Iniciar Servidor (Puerto 9111)</string>
     <string name="file_server_stop">Detener Servidor</string>
     <string name="file_server_download_zip">Descargar como ZIP</string>
@@ -2386,13 +2371,8 @@
     <string name="kiwix_active_downloads">%d descarga(s) activa(s)</string>
     
     <!-- Dashboard Additional -->
-    <string name="dashboard_connect_qr">Conectar vía QR</string>
     <string name="dashboard_file_server">Servidor de Archivos</string>
     <string name="dashboard_shared_folder">Carpeta Compartida</string>
-    <string name="dashboard_scan_access_files">Escanear para acceder a archivos</string>
-    <string name="dashboard_stop_server_btn">Detener Servidor</string>
-    <string name="dashboard_start_server_port">Iniciar Servidor (Puerto %d)</string>
-    
     <string name="hub_workflows">Flujos de trabajo</string>
     <string name="hub_workflows_desc">Encadena operaciones de IA</string>
     <string name="hub_benchmark">Benchmark</string>
@@ -2445,13 +2425,12 @@
     <string name="agent_deny_skip_reason">Omitir</string>
     <string name="agent_project_default_prefix">proyecto_</string>
     <string name="agent_ready_msg">🤖 Agente IA listo para el proyecto **%1$s** (/workspace/%2$s/).\n\nConéctate al espacio de trabajo del agente para empezar a programar.</string>
-    <string name="agent_new_project_title">📁 Nuevo Proyecto</string>
-    <string name="agent_new_project_desc">Introduce un nombre para tu proyecto.</string>
+    <string name="agent_new_project_title">Nuevo proyecto</string>
     <string name="agent_project_name_label">Nombre del proyecto</string>
-    <string name="agent_welcome_title">👋 ¡Bienvenido al Agente IA!</string>
+    <string name="agent_welcome_title">Te damos la bienvenida al Agente IA</string>
 
     <!-- Agent Workspace -->
-    <string name="agent_workspace_title">📁 Espacio de Trabajo</string>
+    <string name="agent_workspace_title">Espacio de trabajo</string>
     <string name="agent_workspace_terminal_title">Terminal del espacio de trabajo</string>
     <string name="agent_workspace_terminal_status_connecting">Conectando</string>
     <string name="agent_workspace_terminal_status_connected">Conectado</string>
@@ -2503,7 +2482,7 @@
     <string name="agent_request_python_dependency">La IA quiere instalar o registrar la dependencia Python: %1$s</string>
     <string name="agent_dashboard_title">Proyectos de agente</string>
     <string name="agent_dashboard_return">Volver al panel de proyectos</string>
-    <string name="agent_dashboard_subtitle">Elige un proyecto para abrirlo, o continua solo el trabajo sin terminar que selecciones explicitamente. Verde significa que una UI del proyecto esta ejecutandose; naranja significa que un LLM esta trabajando.</string>
+    <string name="agent_dashboard_subtitle">Abre un proyecto guardado o crea un espacio de trabajo.</string>
     <string name="agent_dashboard_empty">Aun no hay proyectos. Crea un proyecto o una carpeta para empezar.</string>
     <string name="agent_dashboard_running">Ejecutando</string>
     <string name="agent_dashboard_llm_working">LLM trabajando</string>
@@ -2526,6 +2505,7 @@
     <string name="agent_retry_debug_done">Reintento terminado. Si el aviso sigue, abre la consola de depuracion para ver el error del backend y el estado de conexion.</string>
     <string name="agent_status_needs_direction">Necesita direccion</string>
     <string name="agent_needs_direction_message">Pausado porque el agente podria estar en bucle: %1$s</string>
+    <string name="agent_needs_direction_interrupted_message">El agente se ha pausado y necesita tu atención: %1$s</string>
     <string name="agent_loop_recovery_budget_reason">Demasiados intentos de recuperacion para la misma solicitud.</string>
     <string name="agent_loop_handoff_budget_reason">Demasiados traspasos entre agentes para la misma solicitud.</string>
     <string name="agent_loop_repeated_plan_reason">Se propuso el mismo plan repetidamente sin progreso.</string>
@@ -2707,6 +2687,24 @@
     <string name="agent_tool_copy">Copiar nombre</string>
     <string name="agent_settings_title">🤖 Ajustes de Agente</string>
     <string name="agent_settings_desc">Configura el modelo y la instrucción del sistema para cada agente</string>
+    <string name="agent_settings_section_general">Valores generales</string>
+    <string name="agent_settings_section_workflow">Preparación del flujo</string>
+    <string name="agent_settings_section_runtime">Valores de ejecución compartidos</string>
+    <string name="agent_settings_section_roles">Ajustes por rol de agente</string>
+    <string name="agent_settings_subsection_coordination">Coordinación y planificación</string>
+    <string name="agent_settings_subsection_implementation">Implementación</string>
+    <string name="agent_settings_subsection_validation">Revisión y soporte</string>
+    <string name="agent_global_override_title">Aplicar una configuración a todos los agentes</string>
+    <string name="agent_global_override_desc">Define una vez el motor, la conexión, el modelo y el ajuste para todos los roles de Agente configurados.</string>
+    <string name="agent_global_override_enabled_note">Activado: estos valores tienen prioridad sobre la tarjeta de cada rol al ejecutar un agente.</string>
+    <string name="agent_global_override_disabled_note">Desactivado: cada rol sigue usando sus propios ajustes. Tus valores se conservan para después.</string>
+    <string name="agent_global_override_backend_label">Motor para todos los agentes</string>
+    <string name="agent_global_override_connection_label">Conexión para todos los agentes</string>
+    <string name="agent_global_override_connection_hint">Usa una URL, el nombre de un endpoint guardado, un servidor administrado u otro identificador de conexión.</string>
+    <string name="agent_global_override_connection_litert">Biblioteca de modelos LiteRT del dispositivo</string>
+    <string name="agent_global_override_model_label">Modelo para todos los agentes</string>
+    <string name="agent_global_override_context_label">Tamaño de contexto para todos los agentes</string>
+    <string name="agent_global_override_max_output_label">Tokens máximos de salida para todos los agentes</string>
     <string name="agent_tool_controls_title">Controles de herramientas</string>
     <string name="agent_tool_controls_desc">Las herramientas están activadas por defecto. Desactiva solo las que este proyecto no debe usar.</string>
     <string name="agent_auto_reflection_toggle">Reflexión automática antes de terminar</string>
@@ -2798,9 +2796,17 @@
     <string name="agent_runtime_engine_llama_server">llama-server</string>
     <string name="agent_runtime_engine_llama_swap">llama-swap</string>
     <string name="agent_runtime_engine_litert">LiteRT-LM</string>
+    <string name="agent_runtime_engine_ollama_desc">API remota de Ollama; elige un modelo de esta conexión o introduce uno.</string>
+    <string name="agent_runtime_engine_llama_server_desc">La URL global de llama-server, un servidor local administrado o un endpoint guardado.</string>
+    <string name="agent_runtime_engine_llama_swap_desc">La URL global de llama-swap, una tarjeta de servidor administrado o un endpoint guardado.</string>
+    <string name="agent_runtime_engine_litert_desc">Modelo LiteRT-LM del dispositivo elegido de la biblioteca instalada.</string>
+    <string name="agent_runtime_engine_hint">Esta elección se aplica a este rol del Agente y se guarda en cada ejecución.</string>
     <string name="agent_runtime_model_label">Modelo</string>
+    <string name="agent_runtime_model_global_hint">Los modelos proceden de la conexión global. Recarga para ver la lista actual.</string>
+    <string name="agent_runtime_model_endpoint_hint">Los modelos proceden del endpoint elegido. Recarga para ver la lista actual.</string>
     <string name="agent_runtime_managed_server_label">Servidor llama administrado</string>
     <string name="agent_runtime_litert_model_label">Modelo LiteRT</string>
+    <string name="agent_runtime_litert_model_hint">Elige un modelo LiteRT instalado para este rol.</string>
     <string name="agent_runtime_litert_model_missing">No hay un modelo LiteRT instalado</string>
     <string name="agent_runtime_needs_direction">Necesita indicaciones</string>
     <string name="agent_runtime_continue">Continuar</string>
@@ -2809,9 +2815,26 @@
     <string name="agent_runtime_server_stopped">El servidor llama administrado asignado está detenido. Inícialo desde sus controles y pulsa Continuar.</string>
     <string name="agent_runtime_server_not_ready">El servidor llama administrado asignado aún no está listo. Espera a que se ejecute y pulsa Continuar.</string>
     <string name="agent_runtime_model_missing">No hay ningún modelo seleccionado</string>
+    <string name="agent_runtime_effective_title">Ejecución efectiva</string>
+    <string name="agent_runtime_target_label">Destino</string>
+    <string name="agent_runtime_endpoint_detail_label">Endpoint</string>
+    <string name="agent_runtime_status_label">Estado</string>
+    <string name="agent_runtime_status_configured">Configurado</string>
+    <string name="agent_runtime_status_installed">Instalado</string>
+    <string name="agent_runtime_status_ready">En ejecución</string>
+    <string name="agent_runtime_status_starting">Iniciando</string>
+    <string name="agent_runtime_status_stopped">Detenido</string>
+    <string name="agent_runtime_status_error">Error</string>
+    <string name="agent_runtime_status_missing">No disponible</string>
+    <string name="agent_runtime_status_needs_selection">Elige un destino</string>
+    <string name="agent_runtime_status_unknown">Estado desconocido</string>
+    <string name="agent_runtime_connection_not_configured">Configura una URL global o elige un endpoint guardado.</string>
     <string name="agent_runtime_profile_summary">%1$s · %2$s</string>
     <string name="agent_runtime_connection_label">Conexión</string>
     <string name="agent_runtime_connection_global">Conexión global</string>
+    <string name="agent_runtime_connection_managed">Servidor administrado</string>
+    <string name="agent_runtime_connection_choose_managed">Elige un servidor administrado abajo.</string>
+    <string name="agent_runtime_backend_url_invalid">Falta la URL de %1$s o no es válida. Elige una conexión válida para continuar.</string>
     <string name="agent_runtime_connection_missing">Conexión guardada no disponible</string>
     <string name="agent_runtime_connection_clear">Quitar conexión guardada</string>
     <string name="agent_runtime_connection_refresh_models">Recargar modelos disponibles</string>
@@ -2911,9 +2934,9 @@
     <string name="agent_context_usage_history_item_verbose">%1$s · %2$d → %3$d tokens · %4$d turnos omitidos · %5$d pases</string>
     <string name="agent_context_usage_history_item">%1$s · %2$d → %3$d tokens</string>
     <string name="agent_tool_recovery_failed_summary">La respuesta anterior intentó llamar una herramienta, pero la llamada estaba mal formada.</string>
-    <string name="agent_tool_recovery_failed_hint">Primero emite {\"name\": \"read_file\", \"arguments\": {\"path\": \"brain/tools_reference.md\"}} y luego reintenta con una llamada estructurada correcta fuera de &lt;think&gt;.</string>
+    <string name="agent_tool_recovery_failed_hint">Reintenta una vez con una llamada estructurada real. Si el esquema de una herramienta no está claro, llama a tool_help solo para esa herramienta. No escribas el JSON de la llamada como prosa del asistente ni lo coloques dentro de &lt;think&gt; o una cerca Markdown.</string>
     <string name="agent_empty_response_summary">La respuesta anterior no produjo texto visible ni una llamada estructurada de herramienta.</string>
-    <string name="agent_empty_response_hint">Primero emite {\"name\": \"read_file\", \"arguments\": {\"path\": \"brain/tools_reference.md\"}} y luego responde con texto conciso o con una llamada estructurada correcta fuera de &lt;think&gt;.</string>
+    <string name="agent_empty_response_hint">Responde con texto conciso o con una llamada estructurada real. Si el esquema de una herramienta no está claro, llama a tool_help solo para esa herramienta. No escribas el JSON de la llamada como prosa del asistente ni lo coloques dentro de &lt;think&gt; o una cerca Markdown.</string>
     <string name="agent_memory_update_required_summary">La memoria del proyecto debe actualizarse antes de terminar esta tarea.</string>
     <string name="agent_memory_update_required_hint">Llama a write_memory o al agente Summarizer para registrar qué cambió y por qué, y luego reintenta finish_task.</string>
     <string name="agent_reflection_blocked_summary">La reflexión detectó trabajo faltante o riesgos sin resolver, así que por ahora se bloquea la finalización.</string>
@@ -2938,10 +2961,10 @@
     <string name="agent_custom_agent_header">Agente personalizado: %s</string>
 
 
-    <string name="agent_welcome_desc">Antes de empezar a chatear con la IA:</string>
-    <string name="agent_welcome_step1">1️⃣ Configura Ollama y el entorno proot</string>
-    <string name="agent_welcome_step2">2️⃣ Crea un nuevo proyecto tocando el icono 📁 en la esquina superior izquierda</string>
-    <string name="agent_welcome_step3">3️⃣ ¡Selecciona un modelo y empieza a chatear!</string>
+    <string name="agent_welcome_desc">Empieza con un proyecto:</string>
+    <string name="agent_welcome_step1">1. Selecciona Nuevo proyecto y elige un espacio de trabajo local o remoto por SSH.</string>
+    <string name="agent_welcome_step2">2. Ponle un nombre para mantener juntos sus archivos y conversaciones.</string>
+    <string name="agent_welcome_step3">3. Abre los ajustes del modelo para elegir el motor y empieza a conversar.</string>
     <string name="agent_welcome_note">El proyecto le indica a la IA dónde están tus archivos.</string>
     <string name="agent_conversations_menu">Conversaciones</string>
     <string name="agent_new_project_btn">Nuevo Proyecto</string>
@@ -3984,7 +4007,7 @@
     <string name="dataset_move_down">Bajar tarea</string>
 
     <!-- Subtitle Burn Screen -->
-    <string name="subtitle_burn_title">🔤 Quemar Subtítulos</string>
+    <string name="subtitle_burn_title">Incrustar subtítulos</string>
     <string name="subtitle_toggle_info">Mostrar Información</string>
     <string name="subtitle_styling_guide_title">📖 Guía de Estilo</string>
     <string name="subtitle_guide_font_size">• Tamaño: Tamaño del texto en píxeles (16-48 recomendado)</string>
@@ -3996,7 +4019,7 @@
     <string name="subtitle_guide_margin_l">• MargenL: Margen izquierdo (píxeles)</string>
     <string name="subtitle_guide_color">• Color: Color del texto de los subtítulos</string>
     <string name="subtitle_guide_font">• Fuente: Familia de fuente para los subtítulos</string>
-    <string name="subtitle_files_title">📁 Archivos</string>
+    <string name="subtitle_files_title">Archivos</string>
     <string name="subtitle_select_video">Seleccionar Video</string>
     <string name="subtitle_select_subtitle">Seleccionar Subtítulo (.srt, .ass, .vtt)</string>
     <string name="subtitle_styling_title">🎨 Estilo</string>
@@ -4008,8 +4031,6 @@
     <string name="subtitle_font_label">Fuente</string>
     <string name="subtitle_burn_button">Quemar Subtítulos</string>
     <string name="subtitle_saved_path">Guardado: %s</string>
-    <string name="subtitle_error_message">Error: %s</string>
-
     <!-- FastSD Gallery -->
     <string name="fastsd_ssh_error">Sin conexión SSH. Conéctese primero.</string>
     <string name="fastsd_load_error">Error al cargar imágenes: %s</string>
@@ -4093,7 +4114,6 @@
     <string name="action_more">Más</string>
     <string name="action_hide">Ocultar</string>
     <string name="action_show">Mostrar</string>
-    <string name="action_connect">Conectar</string>
     <string name="agent_new">Nuevo</string>
     <string name="agent_refresh">Actualizar</string>
     <string name="error_unknown">Error desconocido</string>
@@ -4112,28 +4132,15 @@
     <string name="tool_kokoro_desc">Kokoro TTS - Motor de Texto-a-Voz offline de alta calidad.</string>
     <string name="tool_piper_desc">Piper TTS - TTS neuronal local, eficiente y de sonido natural.</string>
     <string name="action_delete">Eliminar</string>
-    <string name="dashboard_active_downloads">Descargas activas</string>
-    <string name="dashboard_connect_from">Conecta desde %s</string>
+    <string name="dashboard_active_downloads">%d descargas activas</string>
+    <string name="dashboard_connect_from">Conectar desde:</string>
     <string name="dashboard_distributed_title">IA Distribuida</string>
-    <string name="dashboard_kiwix_library">Biblioteca Kiwix</string>
     <string name="dashboard_local_only">Solo local</string>
     <string name="dashboard_offline_wikipedia">Wikipedia Offline</string>
-    <string name="dashboard_qr_collapse">Contraer QR</string>
-    <string name="dashboard_qr_connect">Escanear para conectar</string>
-    <string name="dashboard_qr_expand">Ver QR</string>
     <string name="dashboard_qr_for">QR para %s</string>
-    <string name="dashboard_ram_free">Libre</string>
     <string name="dashboard_ram_needed">~%s GB RAM necesarios</string>
-    <string name="dashboard_ram_total">Total</string>
-    <string name="dashboard_ram_unit">%s GB</string>
-    <string name="net_type_wifi">WiFi</string>
-    <string name="net_type_ethernet">Ethernet</string>
-    <string name="net_type_vpn">VPN</string>
-    <string name="net_type_mobile">Móvil</string>
     <string name="net_type_unknown">Desconocido</string>
-    <string name="dashboard_ram_used">Usado</string>
     <string name="dashboard_running_port">Ejecutándose en puerto %d</string>
-    <string name="dashboard_setup_distributed">Configurar Distribuido</string>
     <string name="dashboard_setup_distributed_desc">Conecta varios teléfonos para ejecutar modelos grandes juntos</string>
     <string name="dashboard_zim_installed">%d archivos ZIM instalados</string>
     <string name="imagegen_clip_skip">CLIP Skip</string>
@@ -4232,7 +4239,8 @@
     <string name="command_template_desc">Construye el comando de arranque usando la configuración actual de la UI. Déjalo vacío para usar el comando estándar generado.</string>
     <string name="command_template_label">Plantilla de Comando</string>
     <string name="command_template_placeholder">{default_args} --no-warmup</string>
-    <string name="command_template_placeholders">Marcadores disponibles: {default_args}, {binary}, {model}, {context_size}, {batch_size}, {physical_batch_size}, {port}, {parallel}, {cache_ram}, {speculative_args}, {mtp_args}, {flash_attention}, {kv_cache_args}, {custom_flags}</string>
+    <string name="command_template_placeholders">Marcadores disponibles: {default_args}, {binary}, {model}, {lora}, {lora_args}, {load_mode_args}, {context_size}, {batch_size}, {physical_batch_size}, {threads_batch}, {port}, {parallel}, {cache_ram}, {speculative_args}, {mtp_args}, {flash_attention}, {kv_cache_args}, {custom_flags}</string>
+    <string name="command_template_legacy_lora_warning">Esta plantilla personalizada usa {lora}, que solo expande el primer adaptador. Usa {lora_args} para incluir la pila ordenada completa.</string>
     
     <!-- Decodificación Especulativa -->
     <string name="dist_speculative_title">⚡ Decodificación Especulativa</string>
@@ -4535,8 +4543,6 @@
     <string name="agent_action_stop">Detener</string>
     <string name="agent_action_cancel">Cancelar</string>
     <string name="kiwix_loading_count">Cargando %d archivo(s) ZIM</string>
-    <string name="dist_header_title">🌐 Inferencia Distribuida</string>
-    <string name="dist_header_desc">¡Conecta varios teléfonos para ejecutar grandes modelos de IA juntos!\n\nCada dispositivo aporta RAM para cargar diferentes capas del modelo.</string>
     <string name="dist_role_master_title">Ser el MAESTRO</string>
     <string name="dist_role_master_desc">Aloja el archivo del modelo y coordina la inferencia entre los trabajadores conectados.</string>
     <string name="dist_role_master_btn">Configurar Maestro</string>
@@ -4917,6 +4923,8 @@
     <string name="share_interpolation">🎞️ Interpolación de video</string>
     <string name="share_img2img">🎨 SD img2img</string>
     <string name="share_img2vid">🎥 Generación de video</string>
+    <string name="share_pdf_toolbox">📄 Herramientas PDF</string>
+    <string name="share_pdf_summary">📝 Resumen PDF</string>
     <string name="ai_video_gen">Generación de Video</string>
     <string name="ai_video_gen_desc">Crea clips locales txt2vid e img2vid</string>
     <string name="sd_models_badge_txt2img">txt2img</string>
@@ -4932,18 +4940,10 @@
     <string name="video_gen_mode_txt2vid">txt2vid</string>
     <string name="video_gen_mode_img2vid">img2vid</string>
     <string name="video_gen_input_image_title">Imagen de entrada</string>
-    <string name="video_gen_input_image_ready">Imagen lista para img2vid</string>
-    <string name="video_gen_select_image">Seleccionar imagen</string>
     <string name="video_gen_model_label">Modelo de video</string>
-    <string name="video_gen_no_models_installed">Todavía no hay modelos de generación de video instalados.</string>
     <string name="video_gen_get_models">Abrir modelos SD</string>
-    <string name="video_gen_select_model">Selecciona un modelo de generación de video</string>
     <string name="video_gen_vae_toggle_label">Usar VAE</string>
-    <string name="video_gen_no_vae_installed">No hay modelos VAE instalados.</string>
-    <string name="video_gen_select_vae">Selecciona un modelo VAE</string>
     <string name="video_gen_t5_toggle_label">Usar T5-XXL</string>
-    <string name="video_gen_no_t5xxl_installed">No hay modelos T5-XXL instalados.</string>
-    <string name="video_gen_select_t5xxl">Selecciona un modelo T5-XXL</string>
     <string name="video_gen_mode_label">Modo</string>
     <string name="video_gen_prompt_label">Prompt</string>
     <string name="video_gen_prompt_placeholder">Describe el movimiento, la escena y el estilo del video...</string>
@@ -5004,7 +5004,6 @@
     <string name="video_gen_status_generating_eta">Generando video… %1$d%% • ETA %2$s</string>
     <string name="video_gen_status_diffusion_eta">Generando video… %1$d%% • ETA de difusion %2$s</string>
     <string name="video_gen_status_vae_eta">Generando video… %1$d%% • ETA de VAE %2$s</string>
-    <string name="video_gen_status_converting">Convirtiendo AVI a MP4…</string>
     <string name="video_gen_status_copying">Copiando el video generado a la carpeta de salida…</string>
     <string name="video_gen_notification_complete">Generación de video completada</string>
     <string name="generation_battery_dialog_title">¿Permitir batería sin restricciones para generar?</string>
@@ -5018,12 +5017,10 @@
     <string name="video_gen_error_ffmpeg_missing">FFmpeg no está disponible.</string>
     <string name="video_gen_error_generation_failed">La generación de video falló con el código de salida %1$d.</string>
     <string name="video_gen_error_conversion_failed">La conversión a MP4 falló con el código de salida %1$d.</string>
-    <string name="video_gen_error_avi_missing">No se encontró el archivo AVI generado.</string>
     <string name="video_gen_error_media_processing_timeout">La generación de video se detuvo porque se agotó la cuota de Android para procesamiento multimedia en segundo plano. Mantén la app en primer plano o reduce fotogramas o pasos y vuelve a iniciar.</string>
     <string name="video_gen_warning_output_not_configured">No hay carpeta de salida configurada, así que el video queda solo en el almacenamiento interno de la app.</string>
     <string name="video_gen_warning_output_unavailable">La carpeta de salida no está disponible, así que el video queda solo en el almacenamiento interno de la app.</string>
     <string name="video_gen_warning_export_failed">El video se generó, pero la exportación falló: %1$s</string>
-    <string name="video_gen_error_shared_image">No se pudo cargar la imagen seleccionada: %1$s</string>
     <string name="video_gen_error_service_unavailable">El servicio de generación de video todavía no está listo.</string>
     <string name="video_gen_error_model_required">Selecciona primero un modelo de generación de video.</string>
     <string name="video_gen_error_prompt_required">Escribe primero un prompt.</string>
@@ -5135,9 +5132,7 @@
     <string name="action_ok">Aceptar</string>
 
     <!-- Network Visualization Screen -->
-    <string name="net_title">ESTADO_DE_RED</string>
-    <string name="net_back">Atrás</string>
-    <string name="net_system_status">ESTADO DEL SISTEMA</string>
+    <string name="net_title">Estado de la red</string>
     <string name="net_inference_server">SERVIDOR_INFERENCIA:</string>
     <string name="net_status_online">[EN LÍNEA]</string>
     <string name="net_status_loading">[CARGANDO]</string>
@@ -5146,27 +5141,17 @@
     <string name="net_status_offline">[DESCONECTADO]</string>
     <string name="net_mode">MODO: %s</string>
     <string name="net_processing">▓▓▓ PROCESANDO ▓▓▓</string>
-    <string name="net_topology">TOPOLOGÍA DE RED</string>
-    <string name="net_master_node">[MAESTRO] 👑 NODO_LOCAL</string>
     <string name="net_master_stats">RAM: %1$dMB | CAPAS: %2$d | CARGA: %3$d%%</string>
-    <string name="net_no_workers">[SIN_TRABAJADORES_CONECTADOS]</string>
     <string name="net_worker_label">[TRABAJADOR_%1$d] 📱 %2$s</string>
     <string name="net_worker_stats">RAM: %1$dMB | CAPAS: ~%2$d | CARGA: %3$s</string>
-    <string name="net_model_metrics">MÉTRICAS DEL MODELO</string>
     <string name="net_total_layers">CAPAS_TOTALES: %d</string>
     <string name="net_model_size">TAMAÑO_MODELO:   %dMB</string>
     <string name="net_local_layers">CAPAS_LOCALES: %d</string>
     <string name="net_rpc_layers">CAPAS_RPC:   %d</string>
-    <string name="net_layer_distribution">DISTRIBUCIÓN_DE_CAPAS:</string>
-    <string name="net_local_label">LOCAL</string>
-    <string name="net_rpc_label">RPC</string>
-    <string name="net_transfer">TRANSFERENCIA</string>
     <string name="net_syncing">SINCRONIZANDO: [%1$s%2$s] %3$d%%</string>
-    <string name="net_memory_allocation">ASIGNACIÓN DE MEMORIA</string>
     <string name="net_total_cluster_ram">RAM_TOTAL_CLUSTER: %dMB</string>
     <string name="net_master_allocation">ASIGNACIÓN_MAESTRO: %dMB</string>
     <string name="net_worker_allocation">ASIGN_TRABAJADOR_%1$d:   %2$dMB</string>
-    <string name="net_controls">CONTROLES</string>
     <string name="net_terminate_server">> TERMINAR_SERVIDOR</string>
     <string name="net_stop_rpc">> DETENER_TRABAJADOR_RPC</string>
     <string name="net_clear_workers">> LIMPIAR_TRABAJADORES</string>
@@ -6523,6 +6508,8 @@
     <string name="widget_chat_reply_button">Responder</string>
     <string name="widget_chat_reply_title">Responder al chat</string>
     <string name="widget_chat_reply_hint">Mensaje</string>
+    <string name="widget_navigation_previous_symbol">‹</string>
+    <string name="widget_navigation_next_symbol">›</string>
     <string name="widget_chat_reply_sent">Mensaje enviado</string>
     <string name="adventure_gate_skill_points_short">PH</string>
     <string name="adventure_gate_skill_shop_price">%1$s - %2$d PH</string>
@@ -6590,7 +6577,7 @@
     <string name="adventure_gate_info_potions">Las pociones de PV y maná se compran con monedas normales en la tienda del Nexo. Usar una en combate gasta el turno, y cada combate permite exactamente cuatro pociones. En casa recuperan solo PV o maná de la Puerta.</string>
     <string name="adventure_gate_info_equipment">Armas, escudos y anillos usan monedas normales. Tu mascota puede llevar uno de cada, y una sola reliquia de jefe. El equipo sube stats, potencia elementos, mejora curas o pociones, refleja daño, devuelve maná o activa efectos especiales.</string>
     <string name="adventure_gate_info_shields">El escudo equipado marca las debilidades y resistencias de tu mascota. Los ataques enemigos hacen 1.5x si golpean una debilidad del escudo y 0.6x si golpean una resistencia.</string>
-    <string name="adventure_gate_info_drops">Los jefes de las fases 7 y 15 pueden soltar equipo reliquia único. Cada victoria tira un 20% si aún no tienes esa reliquia, y repetir el jefe vuelve a tirar. Solo puedes equipar una reliquia a la vez.</string>
+    <string name="adventure_gate_info_drops" formatted="false">Los jefes de las fases 7 y 15 pueden soltar equipo reliquia único. Cada victoria tira un 20% si aún no tienes esa reliquia, y repetir el jefe vuelve a tirar. Solo puedes equipar una reliquia a la vez.</string>
     <string name="adventure_gate_info_skills">Cada nivel da 1 punto de habilidad. Las habilidades iniciales son gratis. Las nuevas cuestan 1 PH en niveles 1-10, 2 PH en 11-24, 3 PH en 25-39 y 4 PH en 40+.</string>
     <string name="adventure_gate_info_statuses">Veneno y quemadura hacen daño con el tiempo. Congelación y parálisis pueden hacer perder un turno. Los iconos aparecen en las cartas de monstruo.</string>
     <string name="adventure_gate_info_types">Los iconos de tipo muestran el elemento de ataques, magia y monstruos. Una debilidad recibe 1.5x de daño, una resistencia recibe 0.6x, y los jefes reducen golpes que no sean débiles. Mantén pulsado un monstruo para ver sus debilidades y resistencias exactas.</string>
@@ -7155,13 +7142,9 @@
     <string name="llama_tool_kb_auto_context_desc">Inyecta contexto temporal con citas desde las bases seleccionadas antes de responder.</string>
     <string name="llama_tool_kb_selected_count">%1$d bases de conocimiento seleccionadas</string>
     <string name="llama_tool_kb_max_results">Resultados KB</string>
-    <string name="kb_dashboard_eyebrow">Conocimiento</string>
-    <string name="kb_dashboard_title">Bases de conocimiento</string>
-    <string name="kb_dashboard_summary">%1$d carpetas • %2$d fuentes • %3$d vectores</string>
     <string name="kb_title">Bases de conocimiento</string>
     <string name="kb_subtitle">Crea índices separados para proyectos, notas y documentos, y elige cuáles puede usar cada chat o agente.</string>
     <string name="kb_folder_subtitle">Gestiona carpetas de recuperación, elige un motor de embeddings y abre una carpeta para subir documentos.</string>
-    <string name="kb_folder_detail_subtitle">Sube documentos, sigue el progreso de embeddings y prueba la recuperación dentro de esta carpeta.</string>
     <string name="kb_metric_bases">Bases</string>
     <string name="kb_metric_folders">Carpetas</string>
     <string name="kb_metric_sources">Fuentes</string>
@@ -7309,7 +7292,6 @@
     <string name="kb_copy_logs">Copiar logs</string>
     <string name="kb_logs_copied">Logs de bases de conocimiento copiados.</string>
     <string name="kb_logs_clip_label">Logs de bases de conocimiento</string>
-    <string name="kb_logs_subtitle">Servidor de embeddings, trabajos de indexación y escritura de vectores.</string>
     <string name="kb_logs_title">Logs de bases de conocimiento</string>
     <string name="kb_log_embedding_port_busy_cleanup">El puerto del servidor de embeddings %1$d está ocupado; limpiando procesos locales obsoletos de llama-server.</string>
     <string name="kb_log_embedding_port_retry_cleanup">El puerto del servidor de embeddings %1$d sigue ocupado tras la limpieza; reintentando la limpieza del mismo puerto antes de abandonar.</string>
@@ -7391,7 +7373,6 @@
     <string name="models_litert">Modelos LiteRT</string>
     <string name="models_litert_desc">Modelos de chat gestionados para LiteRT-LM con rutas de ejecución CPU y GPU experimental.</string>
     <string name="litert_models_title">Modelos LiteRT</string>
-    <string name="litert_models_subtitle">Descarga, importa, exporta, renombra y elimina modelos de chat LiteRT-LM separados de GGUF y Stable Diffusion.</string>
     <string name="litert_models_gpu_note_title">Compatibilidad GPU</string>
     <string name="litert_models_gpu_note_desc">El catálogo muestra archivos LiteRT-LM genéricos que pueden ejecutarse en CPU y, en dispositivos compatibles, con el backend GPU de LiteRT. La GPU se ejecuta en un proceso trabajador protegido para que los fallos del delegado no cierren la app principal.</string>
     <string name="litert_models_catalog_title">Descargas recomendadas</string>
@@ -7534,7 +7515,6 @@
     <string name="onnx_tts_text_label">Texto a leer</string>
     <string name="onnx_tts_speed_value">Velocidad: %1$.2f</string>
     <string name="onnx_tts_steps_value">Pasos de calidad: %1$d</string>
-    <string name="onnx_tts_generate">Generar voz</string>
     <string name="onnx_tts_latest_audio">Último audio</string>
     <string name="onnx_tts_history">Audio guardado</string>
     <string name="onnx_tts_generated_audio_title">Audio generado</string>
@@ -7617,7 +7597,6 @@
     <string name="bgr_mask_contrast">Contraste de máscara: %1$.2f</string>
     <string name="bgr_export_mask">Exportar vista de máscara</string>
     <string name="bgr_preserve_names">Conservar nombres de origen</string>
-    <string name="bgr_start">Quitar fondos</string>
     <string name="bgr_status_starting">Iniciando eliminación de fondo...</string>
     <string name="bgr_status_processing_item">Procesando %1$d/%2$d: %3$s</string>
     <string name="bgr_phase_decoding_image">Decodificando imagen</string>
@@ -7731,7 +7710,6 @@
     <string name="ai_servers_type_ai_hub_desc">Una sola URL lanzadora para los servidores de IA integrados que estan activos.</string>
     <string name="dashboard_sd_distributed_title">Generacion multimedia distribuida</string>
     <string name="dashboard_sd_distributed_desc">Divide trabajo de imagen, edicion, escalado y video de Stable Diffusion entre workers de una LAN de confianza.</string>
-    <string name="dashboard_sd_distributed_action">Abrir red multimedia</string>
     <string name="sd_dist_title">Generacion multimedia distribuida</string>
     <string name="sd_dist_subtitle">Ejecuta workers RPC de stable-diffusion.cpp, elige la colocacion del pipeline y aplica el plan a imagen y video.</string>
     <string name="sd_dist_hub_worker_title">Usar este dispositivo como worker multimedia</string>
@@ -7771,13 +7749,11 @@
     <string name="sd_dist_gallery_no_metadata">Los ajustes detallados no estan disponibles para este archivo antiguo.</string>
     <string name="sd_dist_run_config_title">Configuracion distribuida</string>
     <string name="sd_dist_run_config_subtitle">Construye flags estructurados de stable-diffusion.cpp antes de lanzar imagen, edicion, escalado o video.</string>
-    <string name="sd_dist_pipeline_title">Carriles del pipeline multimedia</string>
     <string name="sd_dist_module_text_encoder">Codificador de texto</string>
     <string name="sd_dist_module_diffusion">Difusion</string>
     <string name="sd_dist_module_vae">VAE / TAE</string>
     <string name="sd_dist_module_controlnet">ControlNet</string>
     <string name="sd_dist_module_upscaler">Escalador</string>
-    <string name="sd_dist_module_video_frames">Fotogramas de video</string>
     <string name="sd_dist_security_warning">RPC de stable-diffusion.cpp no tiene autenticacion ni cifrado. Usalo solo en una LAN de confianza o hotspot privado.</string>
     <string name="sd_dist_status_running">Worker en ejecucion</string>
     <string name="sd_dist_status_stopped">Worker detenido</string>
@@ -7803,7 +7779,6 @@
     <string name="sd_dist_manual_worker">Worker manual</string>
     <string name="sd_dist_worker_host">Host o IP del worker</string>
     <string name="sd_dist_threads_short">hilos</string>
-    <string name="sd_dist_worker_resource_line">%1$s:%2$d - %3$d MB - %4$d %5$s</string>
     <string name="sd_dist_ram_mb_short">RAM MB</string>
     <string name="sd_dist_add_worker">Anadir worker</string>
     <string name="sd_dist_workers">Workers</string>
@@ -7812,7 +7787,6 @@
     <string name="sd_dist_new_worker">Nuevo worker</string>
     <string name="sd_dist_delete_worker">Eliminar worker</string>
     <string name="sd_dist_worker_budget_line">%1$d MB - %2$d hilos</string>
-    <string name="sd_dist_master_resource_line">Este dispositivo - %1$d MB - %2$d hilos</string>
     <string name="sd_dist_rpc_servers_preview">Vista previa de servidores RPC</string>
     <string name="sd_dist_use_workers">Usar workers</string>
     <string name="sd_dist_view_network">Ver red</string>
@@ -8015,7 +7989,6 @@
     <string name="sd_dist_live">En vivo</string>
     <string name="sd_dist_live_online">En vivo: online</string>
     <string name="sd_dist_live_offline">En vivo: offline</string>
-    <string name="sd_dist_last_seen">Ultima vez visto: %1$s</string>
     <string name="sd_dist_planned_whole_assignment">Planeado: %1$s</string>
     <string name="sd_dist_planned_split_assignment">Planeado: %1$s ~%2$d%% capas</string>
     <string name="sd_dist_worker_notification_running">Escuchando en puerto %1$d</string>
@@ -8348,10 +8321,46 @@
     <string name="wear_quick_chat_modify_pinned_note">Modificar nota fijada</string>
     <string name="notes_pin_to_watch">Fijar en el reloj</string>
     <string name="notes_unpin_from_watch">Desfijar del reloj</string>
-    <string name="llm_lora_adapter">Adaptador LoRA</string>
-    <string name="llm_lora_adapter_desc">Aplica opcionalmente un adaptador GGUF compatible al iniciar llama.cpp.</string>
-    <string name="llm_no_lora_adapter">Ningún adaptador LoRA seleccionado</string>
-    <string name="llm_select_lora_adapter">Seleccionar adaptador LoRA</string>
+    <string name="llm_lora_stack_title">Adaptadores LoRA</string>
+    <string name="llm_lora_stack_desc">Aplica varios adaptadores GGUF compatibles en orden. Cada adaptador conserva su propia intensidad.</string>
+    <string name="llm_lora_stack_empty">No hay adaptadores LoRA seleccionados.</string>
+    <string name="llm_lora_stack_add">Añadir adaptadores LoRA</string>
+    <string name="llm_lora_stack_clear">Borrar todos los adaptadores</string>
+    <string name="llm_lora_stack_select_title">Seleccionar adaptadores LoRA</string>
+    <string name="llm_lora_stack_select_done">Aplicar selección</string>
+    <plurals name="llm_lora_stack_selected_count">
+        <item quantity="one">%1$d adaptador seleccionado</item>
+        <item quantity="many">%1$d adaptadores seleccionados</item>
+        <item quantity="other">%1$d adaptadores seleccionados</item>
+    </plurals>
+    <string name="llm_lora_stack_no_installed">No se encontraron adaptadores LoRA de LLM instalados.</string>
+    <string name="llm_lora_stack_item">Adaptador %1$d</string>
+    <string name="llm_lora_stack_strength">Intensidad rápida</string>
+    <string name="llm_lora_stack_strength_input">Intensidad exacta</string>
+    <string name="llm_lora_stack_strength_hint">Usa el control de 0–2 para un ajuste rápido o introduce cualquier valor finito.</string>
+    <string name="llm_lora_stack_move_up">Subir adaptador</string>
+    <string name="llm_lora_stack_move_down">Bajar adaptador</string>
+    <string name="llm_lora_stack_remove">Quitar adaptador</string>
+    <string name="llm_lora_stack_ram_warning">⚠️ Cada adaptador aumenta el uso de RAM. Varios adaptadores pueden superar la memoria disponible; prueba la pila antes de iniciar llama.cpp.</string>
+    <string name="llm_lora_stack_invalid_comma">Este nombre de archivo contiene una coma, que llama.cpp reserva para separar adaptadores. Cambia el nombre antes de iniciar.</string>
+    <string name="llm_lora_stack_invalid_scaled_colon">El nombre de este adaptador escalado contiene dos puntos, que llama.cpp reserva antes de la intensidad. Cambia el nombre o usa intensidad 1.</string>
+    <string name="llm_load_mode_title">Modo de carga del modelo</string>
+    <string name="llm_load_mode_desc">Elige cómo llama.cpp carga los pesos del modelo. Automático conserva los valores predeterminados de llama.cpp; los modos de bloqueo pueden necesitar más RAM o permisos en Android.</string>
+    <string name="llm_load_mode_label">Modo de carga</string>
+    <string name="llm_load_mode_auto">Automático</string>
+    <string name="llm_load_mode_auto_desc">Deja que llama.cpp elija el comportamiento de carga más seguro para este dispositivo y binario.</string>
+    <string name="llm_load_mode_none">Ninguno</string>
+    <string name="llm_load_mode_none_desc">Usa lecturas de archivo normales sin mapeo de memoria, bloqueo de páginas ni E/S directa.</string>
+    <string name="llm_load_mode_mmap">mmap</string>
+    <string name="llm_load_mode_mmap_desc">Mapea los pesos del modelo en memoria para no copiar todo el archivo a la RAM de antemano.</string>
+    <string name="llm_load_mode_mlock">mlock</string>
+    <string name="llm_load_mode_mlock_desc">Lee los pesos en búferes asignados y los bloquea en RAM sin usar mmap.</string>
+    <string name="llm_load_mode_mmap_mlock">mmap + mlock</string>
+    <string name="llm_load_mode_mmap_mlock_desc">Mapea y bloquea las páginas del modelo; lo mantiene residente, pero usa más RAM.</string>
+    <string name="llm_load_mode_dio">E/S directa (DIO)</string>
+    <string name="llm_load_mode_dio_desc">Usa E/S directa cuando sea compatible para evitar la caché de páginas y reducir su presión.</string>
+    <string name="llm_load_mode_unknown">Personalizado</string>
+    <string name="llm_load_mode_unknown_desc">Un modo de carga proporcionado por el runtime llama.cpp seleccionado.</string>
     <string name="agent_runaway_continuation_reason">Se han pausado las continuaciones automáticas del agente después de “%1$s” porque la cola llegó a %3$d elemento(s) y %2$d continuación(es) en esta ejecución.</string>
     <string name="agent_runaway_loading_reason">Se han pausado las continuaciones automáticas del agente porque había %1$d permisos de carga activos a la vez (cola %2$d, continuaciones %3$d).</string>
     <string name="agent_visual_tester_name">Probador visual</string>
@@ -8492,7 +8501,7 @@
     <string name="dist_speculative_gpu_layers_hint">all, auto o un número exacto</string>
     <string name="dist_speculative_worker_device_hint">El worker seleccionado proporciona el dispositivo draft de llama.cpp; sus capas GPU permanecen separadas de las capas del modelo objetivo.</string>
     <string name="llama_server_dspark_unsupported">%1$s no ofrece decodificación especulativa draft-dspark. Selecciona un binario llama-server con soporte DSpark.</string>
-    <string name="llama_server_fit_unsupported">%1$s no ofrece ajuste distribuido de llama.cpp (--fit/--fit-target). Selecciona un binario llama-server compatible.</string>
+    <string name="llama_server_fit_unsupported" tools:ignore="TypographyDashes">%1$s no ofrece ajuste distribuido de llama.cpp (--fit/--fit-target). Selecciona un binario llama-server compatible.</string>
     <string name="llama_local_distributed_args_rejected">Los argumentos RPC, de ajuste y tensor-split no están permitidos en un perfil de servidor local.</string>
     <string name="dist_memory_card_desc">Elige cuánta RAM queda disponible para el maestro mientras los workers cargan el modelo objetivo.</string>
     <string name="dist_model_settings_desc">Tiempo de ejecución, caché KV, muestreo, decodificación especulativa, herramientas y plantillas de este perfil distribuido.</string>
@@ -8563,6 +8572,45 @@
     <string name="agent_invocation_status_cancelled">Cancelado</string>
     <string name="agent_invocation_status_interrupted">Interrumpido</string>
     <string name="agent_invocation_messages_empty">Este agente todavía no ha producido mensajes visibles.</string>
+
+    <!-- Roles de ejecución del agente y ajustes de herramientas separados -->
+    <string name="agent_tool_settings_title">Ajustes de herramientas</string>
+    <string name="agent_tool_settings_desc">Configura las herramientas del agente, las aprobaciones, los proveedores de investigación, la generación de imágenes y la eliminación del fondo por separado de los ajustes del modelo del agente.</string>
+    <string name="agent_codebase_scout_name">Explorador de código</string>
+    <string name="agent_codebase_scout_desc">Descubrimiento de solo lectura del repositorio para archivos, símbolos, arquitectura, restricciones y riesgos.</string>
+    <string name="agent_researcher_name">Investigador</string>
+    <string name="agent_researcher_desc">Investigación externa, de Kiwix y de bases de conocimiento seleccionadas en modo de solo lectura para la planificación.</string>
+    <string name="agent_planner_name">Planificador</string>
+    <string name="agent_planner_desc">Convierte los hallazgos verificados del proyecto y los requisitos del usuario en un plan de implementación estructurado.</string>
+    <string name="agent_server_effective_context">Contexto del servidor: %1$s</string>
+    <string name="agent_plan_read_only_delegation_approval">Requerir aprobación para delegaciones de solo lectura del modo Plan</string>
+    <string name="agent_plan_read_only_delegation_approval_desc">Cuando está desactivado, Explorador de código, Investigador, Planificador y los agentes personalizados verificados de solo lectura pueden iniciarse automáticamente en el modo Plan. La aprobación de delegaciones del modo Construir no cambia.</string>
+    <string name="agent_request_plan_delegation">¿Permitir delegación de solo lectura del modo Plan a %1$s?</string>
+    <string name="agent_tool_search_label">Buscar herramientas</string>
+    <string name="agent_critical_tool_desc">Herramienta crítica para el protocolo. ADT la mantiene activada porque desactivarla podría dejar bloqueado a un agente o corromper el estado del flujo de trabajo.</string>
+    <string name="agent_tool_category_workflow">Flujo de trabajo y delegación</string>
+    <string name="agent_tool_category_inspection">Archivos e inspección</string>
+    <string name="agent_tool_category_mutation">Modificación de archivos</string>
+    <string name="agent_tool_category_execution">Comandos y ejecución</string>
+    <string name="agent_tool_category_memory">Memoria del proyecto</string>
+    <string name="agent_tool_category_research">Investigación y conocimiento</string>
+    <string name="agent_tool_category_media">Herramientas multimedia y visuales</string>
+    <string name="agent_tool_category_advanced">Herramientas avanzadas</string>
+    <string name="agent_workflow_readiness_title">Preparación del flujo de trabajo</string>
+    <string name="agent_workflow_plan_label">Flujo de trabajo del plan</string>
+    <string name="agent_workflow_build_label">Flujo de construcción</string>
+    <string name="agent_workflow_quality_label">Revisión y verificación</string>
+    <string name="agent_workflow_ready">Listo</string>
+    <string name="agent_workflow_plan_limited">Limitado: activa Explorador de código y Planificador para completar el descubrimiento y la planificación.</string>
+    <string name="agent_workflow_build_limited">No disponible: el Programador está desactivado.</string>
+    <string name="agent_workflow_quality_limited">Limitado: el Revisor o el Ejecutor está desactivado.</string>
+    <string name="agent_workflow_research_backend_note">Investigador es configurable, pero los proveedores en línea y Kiwix están desactivados. Las bases de conocimiento seleccionadas todavía pueden estar disponibles.</string>
+    <string name="agent_progress_agent_succeeded">%1$s se completó correctamente</string>
+    <string name="agent_progress_agent_failed">%1$s falló</string>
+    <string name="agent_progress_agent_blocked">%1$s informó de un bloqueo</string>
+    <string name="agent_progress_agent_cancelled">%1$s se canceló</string>
+    <string name="agent_progress_agent_interrupted">%1$s se interrumpió</string>
+
     <!-- Ajustes recordados y VAD de Whisper -->
     <string name="whisper_last_used_defaults_desc">El último modelo, idioma y formato elegidos se reutilizan automáticamente.</string>
     <string name="whisper_vad_title">Omisión inteligente de silencios</string>
@@ -8853,7 +8901,7 @@
     <string name="sd_workflow_lora_stack_json_hint">Array JSON: [{&quot;path&quot;:&quot;…&quot;,&quot;strength&quot;:0.8}]</string>
     <string name="sd_workflow_esrgan_excluded">El escalado ESRGAN puro está separado de los flujos de difusión y no admite LoRA.</string>
     <string name="sd_workflow_preset_label">Preajuste de flujo</string>
-    <string name="sd_workflow_preset_help">Elige una pila propia fijada. El lanzamiento se bloquea si faltan archivos o comprobaciones nativas.</string>
+    <string name="sd_workflow_preset_help">Elige una configuración. Sus modelos y el motor deben estar listos antes de generar.</string>
     <string name="sd_workflow_preset_none">Sin preajuste</string>
     <string name="sd_workflow_hash_verifying">Comprobando los archivos del flujo en segundo plano…</string>
     <string name="sd_workflow_prompt_face_neutral_positive">expresión facial neutra, boca cerrada y relajada, ojos abiertos naturales, conservar identidad e iluminación</string>

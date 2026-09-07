@@ -17,6 +17,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -94,6 +97,11 @@ fun StatsScreen(navController: NavController) {
     var liveSnapshot by remember { mutableStateOf<SystemStatsSnapshot?>(null) }
     var refreshToken by remember { mutableLongStateOf(0L) }
     var exportRange by remember { mutableStateOf<Pair<Long, Long>?>(null) }
+    val statsWindowListState = rememberLazyListState()
+
+    LaunchedEffect(selectedWindow) {
+        statsWindowListState.animateScrollToItem(selectedWindow)
+    }
 
     val documentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         val range = exportRange ?: return@rememberLauncherForActivityResult
@@ -168,12 +176,24 @@ fun StatsScreen(navController: NavController) {
                 }
             }
             item {
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    statsWindows.forEachIndexed { index, window ->
+                LazyRow(
+                    state = statsWindowListState,
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(end = 20.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(statsWindows.size) { index ->
+                        val window = statsWindows[index]
                         FilterChip(
                             selected = selectedWindow == index,
                             onClick = { selectedWindow = index },
-                            label = { Text(stringResource(window.label)) }
+                            label = {
+                                Text(
+                                    stringResource(window.label),
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                )
+                            }
                         )
                     }
                 }
@@ -402,8 +422,19 @@ private fun StatsCollapsibleCard(title: String, summary: String, content: @Compo
         Column(Modifier.fillMaxWidth().padding(16.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column(Modifier.weight(1f)) {
-                    Text(title, style = MaterialTheme.typography.titleMedium)
-                    Text(summary, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                    Text(
+                        summary,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
                 }
                 IconButton(onClick = { expanded = !expanded }) {
                     Icon(if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, contentDescription = null)
@@ -420,8 +451,20 @@ private fun StatsCollapsibleCard(title: String, summary: String, content: @Compo
 @Composable
 private fun MetricRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-        Text(value, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+        )
     }
 }
 

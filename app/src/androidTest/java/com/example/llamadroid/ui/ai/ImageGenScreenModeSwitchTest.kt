@@ -2,6 +2,7 @@ package com.example.llamadroid.ui.ai
 
 import android.net.Uri
 import androidx.activity.ComponentActivity
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -9,6 +10,10 @@ import androidx.compose.ui.test.performClick
 import androidx.navigation.compose.rememberNavController
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.llamadroid.data.SharedFileHolder
+import com.example.llamadroid.data.SharedFileTarget
+import com.example.llamadroid.R
+import com.example.llamadroid.data.SettingsRepository
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -24,6 +29,9 @@ class ImageGenScreenModeSwitchTest {
     @Before
     fun setUp() {
         SharedFileHolder.clear()
+        SettingsRepository(composeRule.activity).setImageGenerationDraft(
+            JSONObject().put("mode", IMAGE_GEN_MODE_TXT2IMG)
+        )
     }
 
     @After
@@ -37,13 +45,25 @@ class ImageGenScreenModeSwitchTest {
             ImageGenScreen(navController = rememberNavController())
         }
 
-        composeRule.onNodeWithText("img2img").performClick()
+        val transformLabel = composeRule.activity.getString(R.string.imagegen_task_transform)
+        composeRule.onNodeWithText(transformLabel).performClick()
         composeRule.waitForIdle()
 
-        composeRule.onNodeWithText("txt2img").performClick()
-        composeRule.waitForIdle()
+        composeRule.onNodeWithText(transformLabel).assertIsSelected()
+    }
 
-        composeRule.onNodeWithText("Generate Image").assertIsDisplayed()
+    @Test
+    fun enlargeModeCanBeComposedOnTheFirstFrame() {
+        composeRule.setContent {
+            ImageGenScreen(
+                navController = rememberNavController(),
+                initialMode = IMAGE_GEN_MODE_UPSCALE
+            )
+        }
+
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.imagegen_task_enlarge)
+        ).assertIsSelected()
     }
 
     @Test
@@ -52,7 +72,7 @@ class ImageGenScreenModeSwitchTest {
             LegacyUpscaleScreen(navController = rememberNavController())
         }
 
-        composeRule.onNodeWithText("No upscaler models installed.").assertIsDisplayed()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.imagegen_no_upscalers_installed)).assertIsDisplayed()
     }
 
     @Test
@@ -60,13 +80,13 @@ class ImageGenScreenModeSwitchTest {
         SharedFileHolder.setPendingFile(
             uri = Uri.parse("content://example/test.png"),
             mimeType = "image/png",
-            targetScreen = "imagegen_upscale"
+            target = SharedFileTarget.LEGACY_IMAGE_UPSCALER
         )
 
         composeRule.setContent {
             LegacyUpscaleScreen(navController = rememberNavController())
         }
 
-        composeRule.onNodeWithText("No upscaler models installed.").assertIsDisplayed()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.imagegen_no_upscalers_installed)).assertIsDisplayed()
     }
 }

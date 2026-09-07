@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.kiwix
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,9 +27,9 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -48,6 +50,10 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import com.example.llamadroid.util.AssetPackManagerUtil
 import com.example.llamadroid.util.AssetPackManagerUtil.AssetPack
+import com.example.llamadroid.ui.components.AppPageBackground
+import com.example.llamadroid.ui.components.AppScrollableTabRow
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -55,34 +61,35 @@ import java.io.File
 fun ZimManagerScreen(navController: NavController) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val db = remember { AppDatabase.getDatabase(context) }
     val repo = remember { ZimRepository(context, db.zimDao()) }
     val settings = remember { SettingsRepository(context) }
     
     
     var selectedTab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Installed", "Catalog")
-    
     // ZIM folder state - removed folder picker, always use internal storage
     val zimFolderUri = null // Using internal app storage
     
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                 title = { Text(stringResource(R.string.zim_title)) },
                 navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
+                    IconButton(
+                        onClick = { navController.popBackStack() },
+                        modifier = Modifier.walkthroughTarget("back")
+                    ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
                     }
                 }
             )
         }
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
+        AppPageBackground(modifier = Modifier.padding(padding)) {
+            Column(modifier = Modifier.fillMaxSize()) {
             // Tab Row - 4 tabs (Settings moved to main Settings screen)
             val tabs = listOf(
                 stringResource(R.string.zim_tab_installed),
@@ -90,14 +97,18 @@ fun ZimManagerScreen(navController: NavController) {
                 stringResource(R.string.zim_tab_downloads),
                 stringResource(R.string.zim_tab_share)
             )
-            ScrollableTabRow(
+            AppScrollableTabRow(
                 selectedTabIndex = selectedTab,
-                edgePadding = 0.dp
+                edgePadding = 0.dp,
+                modifier = Modifier.walkthroughTarget("kiwix.catalog")
             ) {
                 tabs.forEachIndexed { index, title ->
                     Tab(
                         selected = selectedTab == index,
-                        onClick = { selectedTab = index },
+                        onClick = {
+                            selectedTab = index
+                            if (index == 1) walkthroughTargets?.recordEvent("kiwix.catalog")
+                        },
                         text = { Text(title) }
                     )
                 }
@@ -109,6 +120,7 @@ fun ZimManagerScreen(navController: NavController) {
                 1 -> CatalogTab(repo, zimFolderUri)
                 2 -> DownloadingTab()
                 3 -> ZimShareTab()
+            }
             }
         }
     }
@@ -179,6 +191,7 @@ private fun FolderSetupScreen(
 @Composable
 fun InstalledZimsTab(repo: ZimRepository, navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val installedZims by repo.getInstalledZims()
         .collectAsStateWithLifecycle(initialValue = emptyList())
@@ -266,14 +279,14 @@ fun InstalledZimsTab(repo: ZimRepository, navController: NavController) {
                         finalPath = resolvedPath
                         wasCopied = false
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                            android.widget.Toast.makeText(context, context.getString(R.string.zim_using_ref, filename), android.widget.Toast.LENGTH_SHORT).show()
+                            android.widget.Toast.makeText(context, resources.getString(R.string.zim_using_ref, filename), android.widget.Toast.LENGTH_SHORT).show()
                         }
                         com.example.llamadroid.util.DebugLog.log("[ZIM] Using direct path: $resolvedPath")
                     } else {
                         // Fallback: copy to app storage
                         val destFile = File(zimDir, filename)
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                            android.widget.Toast.makeText(context, context.getString(R.string.zim_copying, filename), android.widget.Toast.LENGTH_SHORT).show()
+                            android.widget.Toast.makeText(context, resources.getString(R.string.zim_copying, filename), android.widget.Toast.LENGTH_SHORT).show()
                         }
                         context.contentResolver.openInputStream(it)?.use { input ->
                             java.io.FileOutputStream(destFile).use { output ->
@@ -293,7 +306,7 @@ fun InstalledZimsTab(repo: ZimRepository, navController: NavController) {
                         filename = filename,
                         path = finalPath,
                         title = filename.substringBeforeLast("."),
-                        description = if (wasCopied) context.getString(R.string.zim_imported_copied) else context.getString(R.string.zim_imported_ref),
+                        description = if (wasCopied) resources.getString(R.string.zim_imported_copied) else resources.getString(R.string.zim_imported_ref),
                         language = "unknown",
                         sizeBytes = fileSize,
                         articleCount = 0,
@@ -309,15 +322,15 @@ fun InstalledZimsTab(repo: ZimRepository, navController: NavController) {
                     
                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                         val msg = if (wasCopied) 
-                            context.getString(R.string.zim_import_success_copied, filename) 
+                            resources.getString(R.string.zim_import_success_copied, filename)
                         else 
-                            context.getString(R.string.zim_import_success_ref, filename)
+                            resources.getString(R.string.zim_import_success_ref, filename)
                         android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
                     }
                 } catch (e: Exception) {
                     com.example.llamadroid.util.DebugLog.log("[ZIM] Import failed: ${e.message}")
                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        android.widget.Toast.makeText(context, context.getString(R.string.zim_import_failed, e.message), android.widget.Toast.LENGTH_LONG).show()
+                        android.widget.Toast.makeText(context, resources.getString(R.string.zim_import_failed, e.message), android.widget.Toast.LENGTH_LONG).show()
                     }
                 }
             }
@@ -331,7 +344,7 @@ fun InstalledZimsTab(repo: ZimRepository, navController: NavController) {
                 val sourceFile = File(zim.path)
                 if (!sourceFile.exists()) {
                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        android.widget.Toast.makeText(context, context.getString(R.string.zim_file_not_found), android.widget.Toast.LENGTH_SHORT).show()
+                        android.widget.Toast.makeText(context, resources.getString(R.string.zim_file_not_found), android.widget.Toast.LENGTH_SHORT).show()
                     }
                     return@launch
                 }
@@ -349,7 +362,7 @@ fun InstalledZimsTab(repo: ZimRepository, navController: NavController) {
                     
                     if (uri != null) {
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                            android.widget.Toast.makeText(context, context.getString(R.string.zim_exporting), android.widget.Toast.LENGTH_SHORT).show()
+                            android.widget.Toast.makeText(context, resources.getString(R.string.zim_exporting), android.widget.Toast.LENGTH_SHORT).show()
                         }
                         
                         resolver.openOutputStream(uri)?.use { output ->
@@ -364,7 +377,7 @@ fun InstalledZimsTab(repo: ZimRepository, navController: NavController) {
                         resolver.update(uri, contentValues, null, null)
                         
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                            android.widget.Toast.makeText(context, context.getString(R.string.zim_exported_success, zim.filename), android.widget.Toast.LENGTH_SHORT).show()
+                            android.widget.Toast.makeText(context, resources.getString(R.string.zim_exported_success, zim.filename), android.widget.Toast.LENGTH_SHORT).show()
                         }
                         
                         com.example.llamadroid.util.DebugLog.log("[ZIM] Exported: ${zim.filename} to Downloads")
@@ -375,13 +388,13 @@ fun InstalledZimsTab(repo: ZimRepository, navController: NavController) {
                     val destFile = File(downloadsDir, zim.filename)
                     
                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        android.widget.Toast.makeText(context, context.getString(R.string.zim_exporting), android.widget.Toast.LENGTH_SHORT).show()
+                        android.widget.Toast.makeText(context, resources.getString(R.string.zim_exporting), android.widget.Toast.LENGTH_SHORT).show()
                     }
                     
                     sourceFile.copyTo(destFile, overwrite = true)
                     
                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        android.widget.Toast.makeText(context, context.getString(R.string.zim_exported_success, zim.filename), android.widget.Toast.LENGTH_SHORT).show()
+                        android.widget.Toast.makeText(context, resources.getString(R.string.zim_exported_success, zim.filename), android.widget.Toast.LENGTH_SHORT).show()
                     }
                     
                     com.example.llamadroid.util.DebugLog.log("[ZIM] Exported: ${zim.filename} to Downloads (legacy)")
@@ -389,7 +402,7 @@ fun InstalledZimsTab(repo: ZimRepository, navController: NavController) {
             } catch (e: Exception) {
                 com.example.llamadroid.util.DebugLog.log("[ZIM] Export failed: ${e.message}")
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    android.widget.Toast.makeText(context, context.getString(R.string.zim_export_failed, e.message), android.widget.Toast.LENGTH_LONG).show()
+                    android.widget.Toast.makeText(context, resources.getString(R.string.zim_export_failed, e.message), android.widget.Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -608,6 +621,7 @@ fun ZimShareDialog(
 @Composable
 fun CatalogTab(repo: ZimRepository, zimFolderUri: String?) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     var searchQuery by remember { mutableStateOf("") }
     var selectedLanguage by remember { mutableStateOf("all") }
@@ -633,7 +647,7 @@ fun CatalogTab(repo: ZimRepository, zimFolderUri: String?) {
                 isLoading = false
             },
             onFailure = { e ->
-                errorMessage = context.getString(R.string.zim_error_prefix, e.message)
+                errorMessage = resources.getString(R.string.zim_error_prefix, e.message)
                 isLoading = false
             }
         )
@@ -750,7 +764,7 @@ fun CatalogTab(repo: ZimRepository, zimFolderUri: String?) {
                                 
                                 val request = android.app.DownloadManager.Request(android.net.Uri.parse(entry.url))
                                     .setTitle(entry.title)
-                                    .setDescription(context.getString(R.string.zim_downloading_desc))
+                                    .setDescription(resources.getString(R.string.zim_downloading_desc))
                                     .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                                     .setAllowedOverMetered(true)
                                     .setAllowedOverRoaming(false)
@@ -785,7 +799,7 @@ fun CatalogTab(repo: ZimRepository, zimFolderUri: String?) {
                                     
                                     android.widget.Toast.makeText(
                                         context,
-                                        context.getString(R.string.zim_downloading_toast, entry.title),
+                                        resources.getString(R.string.zim_downloading_toast, entry.title),
                                         android.widget.Toast.LENGTH_SHORT
                                     ).show()
                                     
@@ -793,7 +807,7 @@ fun CatalogTab(repo: ZimRepository, zimFolderUri: String?) {
                                 } catch (e: Exception) {
                                     android.widget.Toast.makeText(
                                         context,
-                                        context.getString(R.string.zim_download_failed, e.message),
+                                        resources.getString(R.string.zim_download_failed, e.message),
                                         android.widget.Toast.LENGTH_LONG
                                     ).show()
                                     com.example.llamadroid.util.DebugLog.log("[KIWIX] Download failed: ${e.message}")

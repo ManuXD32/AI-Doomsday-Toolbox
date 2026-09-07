@@ -10,9 +10,13 @@ import com.jcraft.jsch.ChannelExec
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.Session
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -193,6 +197,99 @@ class SSHService(private val context: Context) {
             } catch (e: Exception) {
                 null
             }
+        }
+
+        /**
+         * Execute a small read-only query against the current session without reconnecting.
+         * Unlike [executeQuiet], this path has a hard command deadline and caps combined stdout
+         * and stderr so a remote listing cannot retain an unbounded buffer or block a gallery
+         * refresh indefinitely.
+         */
+        suspend fun executeQuietBounded(
+            command: String,
+            timeoutMillis: Long = 10_000L,
+            maxOutputBytes: Int = 2 * 1024 * 1024
+        ): String? = withContext(Dispatchers.IO) {
+            if (timeoutMillis <= 0L || maxOutputBytes <= 0) return@withContext null
+            val currentSession = session
+            if (currentSession == null || !currentSession.isConnected) {
+                return@withContext null
+            }
+
+            val channel = try {
+                currentSession.openChannel("exec") as ChannelExec
+            } catch (_: Exception) {
+                return@withContext null
+            }
+            val output = BoundedOutputStream(maxOutputBytes)
+            val timeoutNanos = timeoutMillis.coerceAtMost(Long.MAX_VALUE / 1_000_000L) * 1_000_000L
+            val deadlineNanos = System.nanoTime() + timeoutNanos
+            try {
+                channel.setCommand(command)
+                channel.inputStream = null
+                channel.setOutputStream(output)
+                channel.setErrStream(output)
+                channel.connect(timeoutMillis.coerceIn(1L, 10_000L).toInt())
+
+                while (!channel.isClosed) {
+                    currentCoroutineContext().ensureActive()
+                    if (output.exceeded || System.nanoTime() >= deadlineNanos) {
+                        return@withContext null
+                    }
+                    // delay is cancellable, unlike the Thread.sleep loop used by the legacy
+                    // quiet helper. The finally block below closes the channel on cancellation.
+                    delay(50L)
+                }
+                currentCoroutineContext().ensureActive()
+                if (output.exceeded || System.nanoTime() >= deadlineNanos || channel.exitStatus != 0) {
+                    null
+                } else {
+                    output.asUtf8String()
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            } finally {
+                runCatching { channel.disconnect() }
+            }
+        }
+
+        private class BoundedOutputStream(maxBytes: Int) : java.io.OutputStream() {
+            private val limit = maxBytes
+            private val buffer = ByteArrayOutputStream(maxBytes.coerceAtMost(8192))
+
+            @Volatile
+            var exceeded: Boolean = false
+                private set
+
+            @Synchronized
+            override fun write(value: Int) {
+                if (buffer.size() >= limit) {
+                    exceeded = true
+                } else {
+                    buffer.write(value)
+                }
+            }
+
+            @Synchronized
+            override fun write(bytes: ByteArray, offset: Int, length: Int) {
+                if (offset < 0 || length < 0 || offset > bytes.size - length) {
+                    throw IndexOutOfBoundsException()
+                }
+                val remaining = limit - buffer.size()
+                if (remaining <= 0) {
+                    exceeded = true
+                } else if (length > remaining) {
+                    buffer.write(bytes, offset, remaining)
+                    exceeded = true
+                } else {
+                    buffer.write(bytes, offset, length)
+                }
+            }
+
+            @Synchronized
+            fun asUtf8String(): String = buffer.toString(Charsets.UTF_8.name())
         }
 
         private fun configureSession(target: Session) {

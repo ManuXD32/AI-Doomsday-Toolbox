@@ -18,8 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     # Cold Kotlin compilation of :app measures ~11 min on a stock runner, and
     # :app:testDebugUnitTest measured 20m33s locally (1247 tests). With a 1.62 GB
-    # checkout on top, and gradle.properties pinning workers.max=1 /
-    # parallel=false, budget generously so a slow cold run isn't a false failure.
+    # checkout on top. gradle.properties currently gives the in-process Kotlin,
+    # Gradle, and R8 work a 12 GB heap, caps workers at four, and keeps project
+    # parallelism disabled; budget generously so a slow cold run isn't a false failure.
     timeout-minutes: 75
 
     permissions:
@@ -67,5 +68,41 @@ jobs:
             app/build/test-results/
             wear-protocol/build/reports/tests/
             wear-protocol/build/test-results/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  lint:
+    name: Android lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Lint debug app
+        run: >-
+          ./gradlew --no-daemon --console=plain --stacktrace
+          :app:lintDebug
+
+      - name: Upload lint reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-reports
+          path: |
+            app/build/reports/lint-results-debug.html
+            app/build/reports/lint-results-debug.xml
+            app/build/reports/lint-results-debug.txt
           retention-days: 14
           if-no-files-found: ignore

@@ -1,6 +1,7 @@
 package com.example.llamadroid.tama.data
 
 import java.util.UUID
+import java.util.Locale
 
 /**
  * Event log entry for LLM context.
@@ -20,7 +21,7 @@ data class TamaEvent(
      * Convert to text format for LLM context.
      */
     fun toLogString(): String {
-        val time = java.text.SimpleDateFormat("HH:mm").format(java.util.Date(timestamp))
+        val time = java.text.SimpleDateFormat("HH:mm", Locale.getDefault()).format(java.util.Date(timestamp))
         return "[$time] ${eventType.emoji} $details"
     }
     

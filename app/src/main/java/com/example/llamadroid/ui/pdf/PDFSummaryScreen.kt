@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -35,29 +37,43 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.data.SharedFileHolder
+import com.example.llamadroid.data.SharedFileTarget
 import com.example.llamadroid.service.PDFService
 import com.example.llamadroid.service.PDFSummaryService
 import com.example.llamadroid.service.PdfSummaryStateHolder
 import com.example.llamadroid.ui.components.SummaryMarkdownCard
 import com.example.llamadroid.ui.components.SummarySettingsChipCard
+import com.example.llamadroid.ui.components.AppAdvancedSection
+import com.example.llamadroid.ui.components.AppTaskActionFooter
+import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.util.DocumentUriDisplayName
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PDFSummaryScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val settingsRepo = remember { SettingsRepository(context) }
     val pdfService = remember { PDFService(context) }
@@ -98,6 +114,35 @@ fun PDFSummaryScreen(navController: NavController) {
 
     val selectedPdf = selectedPdfString?.let(Uri::parse)
 
+    // Consume PDFs selected through the Activity share chooser. The target guard prevents a
+    // pending document intended for another destination from being stolen by this screen.
+    LaunchedEffect(Unit) {
+        val pendingFile = SharedFileHolder.consumeFor(SharedFileTarget.PDF_SUMMARY)
+        if (pendingFile?.mimeType == "application/pdf") {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    SharedFileHolder.importToCache(
+                        context = context,
+                        pendingFile = pendingFile,
+                        fallbackDisplayName = resources.getString(R.string.file_type_pdf),
+                        filePrefix = "shared_pdf_summary"
+                    )
+                }
+            }.onSuccess { imported ->
+                PdfSummaryStateHolder.reset()
+                PdfSummaryStateHolder.setSelectedPdfUri(imported.uri.toString())
+                PdfSummaryStateHolder.setSelectedPdfName(imported.displayName)
+                PDFSummaryService.clearResult()
+                PDFSummaryService.clearPartialChunkSummaries()
+            }.onFailure { error ->
+                android.util.Log.w("PDFSummaryScreen", "Shared PDF import failed", error)
+                PdfSummaryStateHolder.setError(
+                    resources.getString(R.string.pdf_shared_file_import_failed)
+                )
+            }
+        }
+    }
+
     val pdfPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
@@ -109,7 +154,13 @@ fun PDFSummaryScreen(navController: NavController) {
             if (isSummarizing) return@let
             PdfSummaryStateHolder.reset()
             PdfSummaryStateHolder.setSelectedPdfUri(it.toString())
-            PdfSummaryStateHolder.setSelectedPdfName(it.lastPathSegment ?: context.getString(R.string.file_type_pdf))
+            PdfSummaryStateHolder.setSelectedPdfName(
+                DocumentUriDisplayName.resolve(
+                    context,
+                    it,
+                    resources.getString(R.string.file_type_pdf)
+                )
+            )
             PDFSummaryService.clearResult()
             PDFSummaryService.clearPartialChunkSummaries()
         }
@@ -137,7 +188,58 @@ fun PDFSummaryScreen(navController: NavController) {
         else -> null
     }
 
+    fun extractText() {
+        val pdf = selectedPdf ?: return
+        walkthroughTargets?.recordEvent("documents.pdf.input")
+        scope.launch {
+            PdfSummaryStateHolder.setIsExtracting(true)
+            PdfSummaryStateHolder.setProgressMessage(resources.getString(R.string.pdf_extracting_progress))
+            PdfSummaryStateHolder.setError(null)
+            val result = pdfService.extractTextDetailed(pdf)
+            result.onSuccess { extraction ->
+                PdfSummaryStateHolder.setExtractedText(extraction.text)
+                val details = resources.getString(
+                    R.string.pdf_extract_success_pages,
+                    extraction.text.length,
+                    extraction.totalPages,
+                    extraction.textLayerPages,
+                    extraction.ocrPages,
+                    extraction.emptyPages
+                )
+                PdfSummaryStateHolder.setExtractionDetails(details)
+                PDFSummaryService.estimateChunkCount(context, extraction.text)
+                    .onSuccess { estimate ->
+                        val estimateLabel = if (estimate.tokenCountMode.name == "EXACT") {
+                            resources.getString(R.string.pdf_chunk_count_exact, estimate.chunkCount)
+                        } else {
+                            resources.getString(R.string.pdf_chunk_count_estimated, estimate.chunkCount)
+                        }
+                        PdfSummaryStateHolder.setExtractionDetails("$details\n$estimateLabel")
+                    }
+            }.onFailure {
+                PdfSummaryStateHolder.setError(
+                    resources.getString(
+                        R.string.pdf_extract_failed,
+                        it.message ?: resources.getString(R.string.error_generic)
+                    )
+                )
+            }
+            PdfSummaryStateHolder.setIsExtracting(false)
+        }
+    }
+
+    fun startSummary() {
+        PdfSummaryStateHolder.setProgressMessage(resources.getString(R.string.pdf_summarizing_ai))
+        PdfSummaryStateHolder.setError(null)
+        PDFSummaryService.startSummarization(
+            context = context,
+            text = extractedText,
+            pdfFileName = selectedPdfName ?: resources.getString(R.string.file_type_pdf)
+        )
+    }
+
     Scaffold(
+        modifier = Modifier.imePadding(),
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.pdf_ai_summary_title)) },
@@ -147,6 +249,7 @@ fun PDFSummaryScreen(navController: NavController) {
                     }
                 },
                 actions = {
+                    com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                     IconButton(
                         onClick = {
                             scope.launch { PDFSummaryService.refreshBackendMetadata(context) }
@@ -154,7 +257,7 @@ fun PDFSummaryScreen(navController: NavController) {
                     ) {
                         Icon(Icons.Default.Refresh, stringResource(R.string.pdf_refresh_backend_info))
                     }
-                    IconButton(onClick = { navController.navigate("settings_pdf") }) {
+                    IconButton(onClick = { navController.navigate(Screen.PDFSettings.route) }) {
                         Icon(Icons.Default.Settings, stringResource(R.string.nav_settings))
                     }
                 }
@@ -165,37 +268,16 @@ fun PDFSummaryScreen(navController: NavController) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .consumeWindowInsets(padding)
         ) {
-            SummarySettingsChipCard(
-                title = stringResource(R.string.pdf_active_settings_title),
-                supportingText = metadataMessage,
-                chips = listOf(
-                    when (normalizedBackend) {
-                        SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> stringResource(R.string.pdf_backend_llama_server)
-                        SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> stringResource(R.string.pdf_backend_llama_swap)
-                        else -> stringResource(R.string.pdf_backend_ollama)
-                    },
-                    when (normalizedBackend) {
-                        SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> serverModelLabel ?: stringResource(R.string.pdf_server_value_unavailable)
-                        SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> llamaSwapModel ?: stringResource(R.string.pdf_select_llama_swap_model)
-                        else -> ollamaModel ?: stringResource(R.string.pdf_select_ollama_model)
-                    },
-                    stringResource(R.string.pdf_target_language_chip, targetLanguage),
-                    stringResource(R.string.pdf_chunk_context_chip, contextSize),
-                    stringResource(R.string.pdf_chunk_max_chip, maxTokens),
-                    stringResource(R.string.pdf_merge_context_chip, mergeContext),
-                    stringResource(R.string.pdf_merge_max_chip, mergeMaxTokens),
-                    if (timeoutMinutes == SettingsRepository.PDF_TIMEOUT_DISABLED) {
-                        stringResource(R.string.pdf_timeout_off)
-                    } else {
-                        stringResource(R.string.pdf_timeout_value_minutes, timeoutMinutes)
-                    },
-                    if (thinkingEnabled) stringResource(R.string.action_enabled) else stringResource(R.string.action_disabled)
-                )
-            )
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
 
             warningMessage?.let {
                 Card(
@@ -212,10 +294,31 @@ fun PDFSummaryScreen(navController: NavController) {
                 }
             }
 
+            // Import failures happen before a usable PDF URI exists, so keep the error visible
+            // above the picker instead of hiding it inside the selected-document branch.
+            if (selectedPdf == null) {
+                errorMessage?.let {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.8f)
+                        )
+                    ) {
+                        Text(
+                            text = it,
+                            modifier = Modifier.padding(16.dp),
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+                }
+            }
+
             if (selectedPdf == null) {
                 OutlinedButton(
                     onClick = { pdfPicker.launch(arrayOf("application/pdf")) },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .walkthroughTarget("documents.pdf.input"),
                     enabled = !isSummarizing
                 ) {
                     Icon(Icons.Default.Add, contentDescription = null)
@@ -223,7 +326,12 @@ fun PDFSummaryScreen(navController: NavController) {
                     Text(stringResource(R.string.pdf_select_pdf))
                 }
             } else {
-                Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .walkthroughTarget("documents.pdf.input"),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
                     androidx.compose.foundation.layout.Row(modifier = Modifier.padding(16.dp)) {
                         Text(
                             selectedPdfName ?: stringResource(R.string.pdf_selected_file),
@@ -243,55 +351,7 @@ fun PDFSummaryScreen(navController: NavController) {
                     }
                 }
 
-                if (extractedText.isBlank()) {
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                PdfSummaryStateHolder.setIsExtracting(true)
-                                PdfSummaryStateHolder.setProgressMessage(context.getString(R.string.pdf_extracting_progress))
-                                PdfSummaryStateHolder.setError(null)
-                                val result = pdfService.extractTextDetailed(selectedPdf)
-                                result.onSuccess { extraction ->
-                                    PdfSummaryStateHolder.setExtractedText(extraction.text)
-                                    val details = context.getString(
-                                        R.string.pdf_extract_success_pages,
-                                        extraction.text.length,
-                                        extraction.totalPages,
-                                        extraction.textLayerPages,
-                                        extraction.ocrPages,
-                                        extraction.emptyPages
-                                    )
-                                    PdfSummaryStateHolder.setExtractionDetails(details)
-                                    PDFSummaryService.estimateChunkCount(context, extraction.text)
-                                        .onSuccess { estimate ->
-                                            val estimateLabel = if (estimate.tokenCountMode.name == "EXACT") {
-                                                context.getString(R.string.pdf_chunk_count_exact, estimate.chunkCount)
-                                            } else {
-                                                context.getString(R.string.pdf_chunk_count_estimated, estimate.chunkCount)
-                                            }
-                                            PdfSummaryStateHolder.setExtractionDetails("$details\n$estimateLabel")
-                                        }
-                                }.onFailure {
-                                    PdfSummaryStateHolder.setError(
-                                        context.getString(
-                                            R.string.pdf_extract_failed,
-                                            it.message ?: context.getString(R.string.error_generic)
-                                        )
-                                    )
-                                }
-                                PdfSummaryStateHolder.setIsExtracting(false)
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !isExtracting && !isSummarizing
-                    ) {
-                        if (isExtracting) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                            androidx.compose.foundation.layout.Spacer(modifier = Modifier.size(8.dp))
-                        }
-                        Text(stringResource(R.string.pdf_extract_text_step))
-                    }
-                } else {
+                if (extractedText.isNotBlank()) {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(
@@ -321,27 +381,6 @@ fun PDFSummaryScreen(navController: NavController) {
                         }
                     }
 
-                    if (summary.isBlank()) {
-                        Button(
-                            onClick = {
-                                PdfSummaryStateHolder.setProgressMessage(context.getString(R.string.pdf_summarizing_ai))
-                                PdfSummaryStateHolder.setError(null)
-                                PDFSummaryService.startSummarization(
-                                    context = context,
-                                    text = extractedText,
-                                    pdfFileName = selectedPdfName ?: context.getString(R.string.file_type_pdf)
-                                )
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = !isSummarizing && backendReady
-                        ) {
-                            if (isSummarizing) {
-                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                                androidx.compose.foundation.layout.Spacer(modifier = Modifier.size(8.dp))
-                            }
-                            Text(stringResource(R.string.pdf_generate_summary_step_remote))
-                        }
-                    }
                 }
 
                 if (isSummarizing) {
@@ -369,12 +408,6 @@ fun PDFSummaryScreen(navController: NavController) {
                         }
                     }
 
-                    OutlinedButton(
-                        onClick = { PDFSummaryService.cancel() },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(stringResource(R.string.action_cancel))
-                    }
                 }
 
                 errorMessage?.let {
@@ -411,7 +444,7 @@ fun PDFSummaryScreen(navController: NavController) {
                     SummaryMarkdownCard(
                         title = stringResource(R.string.pdf_partial_results_title),
                         markdown = partialSummaries.mapIndexed { index, summaryPart ->
-                            "### ${context.getString(R.string.summary_partial_item_label, index + 1)}\n$summaryPart"
+                            "### ${resources.getString(R.string.summary_partial_item_label, index + 1)}\n$summaryPart"
                         }.joinToString("\n\n")
                     )
                 }
@@ -421,6 +454,70 @@ fun PDFSummaryScreen(navController: NavController) {
                         title = stringResource(R.string.pdf_summary_result_label),
                         markdown = summary
                     )
+                }
+            }
+            AppAdvancedSection(title = stringResource(R.string.pdf_active_settings_title)) {
+            SummarySettingsChipCard(
+                title = stringResource(R.string.pdf_active_settings_title),
+                supportingText = metadataMessage,
+                chips = listOf(
+                    when (normalizedBackend) {
+                        SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> stringResource(R.string.pdf_backend_llama_server)
+                        SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> stringResource(R.string.pdf_backend_llama_swap)
+                        else -> stringResource(R.string.pdf_backend_ollama)
+                    },
+                    when (normalizedBackend) {
+                        SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> serverModelLabel ?: stringResource(R.string.pdf_server_value_unavailable)
+                        SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> llamaSwapModel ?: stringResource(R.string.pdf_select_llama_swap_model)
+                        else -> ollamaModel ?: stringResource(R.string.pdf_select_ollama_model)
+                    },
+                    stringResource(R.string.pdf_target_language_chip, if (targetLanguage == SettingsRepository.DEFAULT_SUMMARY_TARGET_LANGUAGE) stringResource(R.string.soft_studio_source_language) else targetLanguage),
+                    stringResource(R.string.pdf_chunk_context_chip, contextSize),
+                    stringResource(R.string.pdf_chunk_max_chip, maxTokens),
+                    stringResource(R.string.pdf_merge_context_chip, mergeContext),
+                    stringResource(R.string.pdf_merge_max_chip, mergeMaxTokens),
+                    if (timeoutMinutes == SettingsRepository.PDF_TIMEOUT_DISABLED) {
+                        stringResource(R.string.pdf_timeout_off)
+                    } else {
+                        stringResource(R.string.pdf_timeout_value_minutes, timeoutMinutes)
+                    },
+                    if (thinkingEnabled) stringResource(R.string.action_enabled) else stringResource(R.string.action_disabled)
+                )
+            )
+            }
+            }
+            AppTaskActionFooter(modifier = Modifier.fillMaxWidth()) {
+                when {
+                    isSummarizing -> {
+                        OutlinedButton(
+                            onClick = { PDFSummaryService.cancel() },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(stringResource(R.string.action_cancel))
+                        }
+                    }
+                    selectedPdf != null && extractedText.isBlank() -> {
+                        Button(
+                            onClick = ::extractText,
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !isExtracting
+                        ) {
+                            if (isExtracting) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.size(8.dp))
+                            }
+                            Text(stringResource(R.string.pdf_extract_text_step))
+                        }
+                    }
+                    selectedPdf != null && extractedText.isNotBlank() && summary.isBlank() -> {
+                        Button(
+                            onClick = ::startSummary,
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = backendReady
+                        ) {
+                            Text(stringResource(R.string.pdf_generate_summary_step_remote))
+                        }
+                    }
                 }
             }
         }

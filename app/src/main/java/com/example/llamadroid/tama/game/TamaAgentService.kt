@@ -52,12 +52,13 @@ import kotlin.coroutines.resume
  * Mirroring the multi-agent logic but tailored for the pet's personality and history.
  */
 class TamaAgentService(
-    private val context: Context,
+    context: Context,
     private val dao: TamaDao,
     val settingsRepo: SettingsRepository,
     val ollamaService: OllamaService,
     private val scope: CoroutineScope
 ) {
+    private val context = context.applicationContext
     private val llamaServerChatService = LlamaServerChatService()
     private val whisperBindingIntent = Intent(context, WhisperService::class.java)
 

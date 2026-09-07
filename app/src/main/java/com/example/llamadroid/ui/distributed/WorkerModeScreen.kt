@@ -1,9 +1,9 @@
 package com.example.llamadroid.ui.distributed
 
+import android.annotation.SuppressLint
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.ui.zIndex
-import android.app.ActivityManager
 import android.content.Context
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
@@ -23,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -30,19 +31,20 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.llamadroid.service.DistributedService
-import com.example.llamadroid.service.DistributedMode
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.StateFlow
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
-import androidx.compose.material.icons.filled.Info
 import com.example.llamadroid.R
-import com.example.llamadroid.util.SystemMonitor
-import com.example.llamadroid.util.SystemStats
+import com.example.llamadroid.util.MemoryTelemetry
+import com.example.llamadroid.util.MemoryTelemetrySnapshot
 import android.webkit.WebView
+import android.webkit.WebResourceRequest
 import android.webkit.WebViewClient
 import android.webkit.WebSettings
 import androidx.compose.ui.viewinterop.AndroidView
@@ -53,15 +55,17 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.CloseFullscreen
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Public
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.KeyboardArrowDown
+import com.example.llamadroid.service.WorkerMemoryBudget
+import com.example.llamadroid.ui.components.AppChromeDefaults
+import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 
 /**
  * Worker mode screen - run rpc-server to contribute compute resources.
@@ -70,19 +74,21 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 @Composable
 fun WorkerModeScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     val scrollState = rememberScrollState()
     
     val isRunning by DistributedService.isRunning.collectAsStateWithLifecycle()
     val localIp by DistributedService.localIp.collectAsStateWithLifecycle()
     val workerPort by DistributedService.workerPort.collectAsStateWithLifecycle()
-    val workerRamMB by DistributedService.workerRamMB.collectAsStateWithLifecycle()
     val connectionCount by DistributedService.connectionCount.collectAsStateWithLifecycle()
-    
-    // System Monitor for RAM Card
-    val systemMonitor = remember { SystemMonitor(context) }
-    val stats by systemMonitor.observeStats()
-        .collectAsStateWithLifecycle(initialValue = SystemStats(0, 0, 0f, 0f))
+
+    // One shared, IO-only stream serves both worker cards and the foreground notification.
+    // The screen keeps the flow reference stable and lets each card collect independently.
+    val memoryTelemetry = remember(context) { MemoryTelemetry.observe(context) }
+    val workerControls = remember {
+        WorkerControlState(DistributedService.workerRamMB.value.toLong().coerceAtLeast(0L))
+    }
     
     // Get device name (try user-set name first, fallback to model)
     val deviceName = remember { 
@@ -91,21 +97,6 @@ fun WorkerModeScreen(navController: NavController) {
         } catch (e: Exception) { null } ?: android.os.Build.MODEL ?: "Unknown Device"
     }
     
-    // Get device memory info
-    val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-    val memInfo = ActivityManager.MemoryInfo()
-    activityManager.getMemoryInfo(memInfo)
-    val availableRamMB = (memInfo.availMem / (1024 * 1024)).toInt()
-    val totalRamMB = (memInfo.totalMem / (1024 * 1024)).toInt()
-    
-    // Safety buffer: Leave at least 512MB or 10% of total RAM for the OS
-    val maxSafeRamMB = (totalRamMB - 512).coerceAtLeast((totalRamMB * 0.9).toInt())
-    
-    // Initialize slider with current value or safe default
-    var ramSliderValue by remember { mutableFloatStateOf(workerRamMB.toFloat().coerceIn(256f, maxSafeRamMB.toFloat())) }
-    var ramTextValue by remember { mutableStateOf(workerRamMB.toString()) }  // For text input
-    var threadsValue by remember { mutableIntStateOf(4) }
-    var enableCache by remember { mutableStateOf(false) }
     
     // QR Code generation
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -172,258 +163,35 @@ fun WorkerModeScreen(navController: NavController) {
         }
     }
     
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.dist_worker_mode)) },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.kiwix_back))
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                )
-            )
-        }
-    ) { padding ->
+    AppScreenScaffold(
+        title = stringResource(R.string.dist_worker_mode),
+        onBack = { navController.popBackStack() }
+    ) { _ ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
                 .verticalScroll(scrollState)
-                .padding(24.dp),
+                .padding(24.dp)
+                .walkthroughTarget("distributed.worker"),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             // Status indicator with connection count
             StatusCard(isRunning = isRunning, connectionCount = connectionCount, ip = localIp, port = workerPort, deviceName = deviceName)
             
-            // Memory Stats Card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-            ) {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Info,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            stringResource(R.string.dashboard_memory),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                        )
-                    }
-                    
-                    LinearProgressIndicator(
-                        progress = { stats.ramUsagePercent / 100f },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(8.dp)
-                            .clip(RoundedCornerShape(4.dp)),
-                        color = when {
-                            stats.ramUsagePercent > 80 -> MaterialTheme.colorScheme.error
-                            stats.ramUsagePercent > 60 -> Color(0xFFFFA726)
-                            else -> MaterialTheme.colorScheme.primary
-                        },
-                        trackColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
-                    
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column {
-                            Text(
-                                stringResource(R.string.dashboard_ram_unit, String.format("%.1f", stats.totalRamGb - stats.freeRamGb)),
-                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.error
-                            )
-                            Text(
-                                stringResource(R.string.dashboard_ram_used),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                stringResource(R.string.dashboard_ram_unit, String.format("%.1f", stats.freeRamGb)),
-                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                stringResource(R.string.dashboard_ram_free),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text(
-                                stringResource(R.string.dashboard_ram_unit, String.format("%.1f", stats.totalRamGb)),
-                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
-                            )
-                            Text(
-                                stringResource(R.string.dashboard_ram_total),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            }
-            
-            // RAM Configuration
-            if (!isRunning) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(20.dp)
-                    ) {
-                        Text(
-                            text = stringResource(R.string.dist_ram_to_share),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        
-                        Spacer(modifier = Modifier.height(8.dp))
-                        
-                        // RAM with text input (synced with slider)
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "${ramSliderValue.toInt()} ${stringResource(R.string.agent_unit_mb)}",
-                                style = MaterialTheme.typography.headlineMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.weight(1f)
-                            )
-                            OutlinedTextField(
-                                value = ramTextValue,
-                                onValueChange = { newValue ->
-                                    ramTextValue = newValue
-                                    newValue.toIntOrNull()?.let { ram ->
-                                        val clamped = ram.coerceIn(256, maxSafeRamMB)
-                                        ramSliderValue = clamped.toFloat()
-                                    }
-                                },
-                                label = { Text(stringResource(R.string.agent_unit_mb)) },
-                                singleLine = true,
-                                modifier = Modifier.width(100.dp),
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                            )
-                        }
-                        
-                        Slider(
-                            value = ramSliderValue,
-                            onValueChange = { 
-                                ramSliderValue = it
-                                ramTextValue = it.toInt().toString()
-                            },
-                            valueRange = 256f..maxSafeRamMB.toFloat().coerceAtLeast(256f),
-                            steps = ((maxSafeRamMB - 256) / 256).coerceAtLeast(0),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        
-                        Text(
-                            text = stringResource(R.string.dist_total_avail_ram, availableRamMB, totalRamMB),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.45f),
-                                    RoundedCornerShape(8.dp)
-                                )
-                                .padding(12.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.Top
-                        ) {
-                            Icon(
-                                Icons.Default.Info,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onTertiaryContainer
-                            )
-                            Text(
-                                text = stringResource(R.string.dist_worker_ram_budget_warning),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onTertiaryContainer
-                            )
-                        }
-                        
-                        Spacer(modifier = Modifier.height(16.dp))
-                        
-                        // Threads setting
-                        Text(
-                            text = stringResource(R.string.dist_threads_count, threadsValue),
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Medium
-                        )
-                        
-                        Slider(
-                            value = threadsValue.toFloat(),
-                            onValueChange = { threadsValue = it.toInt() },
-                            valueRange = 1f..8f,
-                            steps = 6,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        
-                        Spacer(modifier = Modifier.height(16.dp))
-                        
-                        // Cache toggle
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = stringResource(R.string.dist_enable_local_cache),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                Text(
-                                    text = stringResource(R.string.dist_local_cache_desc),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Switch(
-                                checked = enableCache,
-                                onCheckedChange = { enableCache = it }
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        OutlinedButton(
-                            onClick = { DistributedService.clearWorkerCache(context) },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Default.Delete, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(stringResource(R.string.dist_clear_worker_cache))
-                        }
-                    }
-                }
-            }
+            WorkerMemoryCard(
+                memoryTelemetry = memoryTelemetry,
+                isRunning = isRunning,
+                appliedBudgetFlow = DistributedService.workerMemoryBudget,
+                controls = workerControls
+            )
+            WorkerRamConfigurationCard(
+                context = context,
+                memoryTelemetry = memoryTelemetry,
+                isRunning = isRunning,
+                workerRamFlow = DistributedService.workerRamMB,
+                controls = workerControls
+            )
             
             // Connection Info (Merged into StatusCard conceptually check below)
             // Keeping separated QR card for now but simplified logic
@@ -543,6 +311,7 @@ fun WorkerModeScreen(navController: NavController) {
                             Spacer(modifier = Modifier.height(12.dp))
                             Button(
                                 onClick = { 
+                                    walkthroughTargets?.recordEvent("distributed.worker")
                                     showWebMonitor = true 
                                 },
                                 modifier = Modifier.fillMaxWidth(),
@@ -613,24 +382,14 @@ fun WorkerModeScreen(navController: NavController) {
                                             // CRITICAL: Use applicationContext to avoid leaking Activity context
                                             // and to ensure WebView survives Activity recreation/backgrounding
                                             val appContext = context.applicationContext
+                                            val monitorUrl = "http://$masterIp:$masterPort"
                                             val view = webViewInstance ?: WebView(appContext).apply {
                                                 layoutParams = android.view.ViewGroup.LayoutParams(
                                                     android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                                                     android.view.ViewGroup.LayoutParams.MATCH_PARENT
                                                 )
-                                                settings.javaScriptEnabled = true
-                                                settings.domStorageEnabled = true
-                                                settings.useWideViewPort = true
-                                                settings.loadWithOverviewMode = true
-                                                settings.builtInZoomControls = true
-                                                settings.displayZoomControls = false
-                                                
-                                                // Enable mixed content if strictly needed (usually not for local IP)
-                                                settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                                                
-                                                webViewClient = WebViewClient()
-                                                
-                                                loadUrl("http://$masterIp:$masterPort")
+                                                configureWorkerMonitor(monitorUrl)
+                                                loadUrl(monitorUrl)
                                                 webViewRef = this
                                                 webViewInstance = this // Save instance
                                             }
@@ -679,42 +438,13 @@ fun WorkerModeScreen(navController: NavController) {
             
             Spacer(modifier = Modifier.height(8.dp))
             
-            // Start/Stop Button
-            Button(
-                onClick = {
-                    if (isRunning) {
-                        DistributedService.stopWorker(context)
-                    } else {
-                        DistributedService.setWorkerRam(ramSliderValue.toInt())
-                        DistributedService.startWorker(
-                            context = context,
-                            port = 50052,
-                            ramMB = ramSliderValue.toInt(),
-                            threads = threadsValue,
-                            enableCache = enableCache
-                        )
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isRunning) 
-                        MaterialTheme.colorScheme.error 
-                    else 
-                        MaterialTheme.colorScheme.primary
-                )
-            ) {
-                Icon(
-                    imageVector = if (isRunning) Icons.Default.Close else Icons.Default.PlayArrow,
-                    contentDescription = null
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = if (isRunning) stringResource(R.string.dist_stop_worker) else stringResource(R.string.dist_start_worker),
-                    style = MaterialTheme.typography.titleMedium
-                )
-            }
+            WorkerStartStopButton(
+                context = context,
+                memoryTelemetry = memoryTelemetry,
+                isRunning = isRunning,
+                controls = workerControls,
+                onAction = { walkthroughTargets?.recordEvent("distributed.worker") }
+            )
         }
     }
 
@@ -838,6 +568,452 @@ fun WorkerModeScreen(navController: NavController) {
     }
 }
 
+@SuppressLint("SetJavaScriptEnabled")
+private fun WebView.configureWorkerMonitor(allowedUrl: String) {
+    settings.javaScriptEnabled = true
+    settings.domStorageEnabled = true
+    settings.allowFileAccess = false
+    settings.allowContentAccess = false
+    settings.javaScriptCanOpenWindowsAutomatically = false
+    settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+    settings.useWideViewPort = true
+    settings.loadWithOverviewMode = true
+    settings.builtInZoomControls = true
+    settings.displayZoomControls = false
+    webViewClient = object : WebViewClient() {
+        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean =
+            request?.url?.toString()?.let { !hasSameWebOrigin(allowedUrl, it) } ?: true
+
+        @Suppress("DEPRECATION")
+        override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean =
+            url?.let { !hasSameWebOrigin(allowedUrl, it) } ?: true
+    }
+}
+
+private fun hasSameWebOrigin(allowedUrl: String, candidateUrl: String): Boolean {
+    val allowed = runCatching { java.net.URI(allowedUrl) }.getOrNull() ?: return false
+    val candidate = runCatching { java.net.URI(candidateUrl) }.getOrNull() ?: return false
+    val allowedScheme = allowed.scheme?.lowercase(java.util.Locale.US) ?: return false
+    val candidateScheme = candidate.scheme?.lowercase(java.util.Locale.US) ?: return false
+    if (allowedScheme !in setOf("http", "https") || candidateScheme !in setOf("http", "https")) {
+        return false
+    }
+    val allowedHost = allowed.host ?: return false
+    val candidateHost = candidate.host ?: return false
+    fun effectivePort(uri: java.net.URI): Int = when {
+        uri.port >= 0 -> uri.port
+        uri.scheme.equals("https", ignoreCase = true) -> 443
+        uri.scheme.equals("http", ignoreCase = true) -> 80
+        else -> -1
+    }
+    return allowed.userInfo == null &&
+        candidate.userInfo == null &&
+        allowedScheme == candidateScheme &&
+        allowedHost.equals(candidateHost, ignoreCase = true) &&
+        effectivePort(allowed) == effectivePort(candidate)
+}
+
+@Composable
+private fun WorkerMemoryCard(
+    memoryTelemetry: StateFlow<MemoryTelemetrySnapshot>,
+    isRunning: Boolean,
+    appliedBudgetFlow: StateFlow<WorkerMemoryBudget>,
+    controls: WorkerControlState
+) {
+    val memory by memoryTelemetry.collectAsStateWithLifecycle()
+    val appliedBudget by appliedBudgetFlow.collectAsStateWithLifecycle()
+    val budget = remember(memory.totalBytes, memory.availableBytes, controls.requestedRamMiB) {
+        WorkerMemoryBudget.fromBytes(
+            totalBytes = memory.totalBytes,
+            availableBytes = memory.availableBytes,
+            requestedMiB = controls.requestedRamMiB
+        )
+    }
+    // Device usage stays live; the allocation already applied to a running worker stays fixed.
+    val displayedBudget = budget
+    val unavailableFraction = if (displayedBudget.totalMiB > 0L) {
+        ((displayedBudget.totalMiB - displayedBudget.availableMiB).toFloat() /
+            displayedBudget.totalMiB.toFloat()).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = AppChromeDefaults.CardShape,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Text(
+                    stringResource(R.string.dashboard_memory),
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                )
+            }
+            LinearProgressIndicator(
+                progress = { unavailableFraction },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(8.dp)
+                    .clip(RoundedCornerShape(4.dp)),
+                color = when {
+                    unavailableFraction > 0.8f -> MaterialTheme.colorScheme.error
+                    unavailableFraction > 0.6f -> Color(0xFFFFA726)
+                    else -> MaterialTheme.colorScheme.primary
+                },
+                trackColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+            WorkerMemoryMetric(
+                label = stringResource(R.string.dist_worker_memory_total),
+                valueMiB = displayedBudget.totalMiB
+            )
+            WorkerMemoryMetric(
+                label = stringResource(R.string.dist_worker_memory_available),
+                valueMiB = displayedBudget.availableMiB,
+                valueColor = MaterialTheme.colorScheme.primary
+            )
+            WorkerMemoryMetric(
+                label = stringResource(R.string.dist_worker_memory_reserved),
+                valueMiB = displayedBudget.reservedMiB
+            )
+            WorkerMemoryMetric(
+                label = stringResource(R.string.dist_worker_memory_contribution),
+                valueMiB = if (isRunning) appliedBudget.contributionMiB else displayedBudget.contributionMiB,
+                valueColor = MaterialTheme.colorScheme.primary
+            )
+            if (memory.sampledAtEpochMs > 0L) {
+                Text(
+                    text = stringResource(R.string.worker_topology_memory_live),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkerRamConfigurationCard(
+    context: Context,
+    memoryTelemetry: StateFlow<MemoryTelemetrySnapshot>,
+    isRunning: Boolean,
+    workerRamFlow: StateFlow<Int>,
+    controls: WorkerControlState
+) {
+    if (isRunning) return
+
+    val memory by memoryTelemetry.collectAsStateWithLifecycle()
+    val workerRamMB by workerRamFlow.collectAsStateWithLifecycle()
+    var ramFieldFocused by remember { mutableStateOf(false) }
+    val budget = remember(memory.totalBytes, memory.availableBytes, controls.requestedRamMiB) {
+        WorkerMemoryBudget.fromBytes(
+            totalBytes = memory.totalBytes,
+            availableBytes = memory.availableBytes,
+            requestedMiB = controls.requestedRamMiB
+        )
+    }
+    val sanitizedRamMiB = budget.contributionMiB
+    val sliderMaximumMiB = budget.maximumMiB.coerceAtLeast(1L)
+
+    // A service-applied value is authoritative whenever a route is recreated or a worker stops.
+    LaunchedEffect(workerRamMB, isRunning) {
+        if (!isRunning && controls.requestedRamMiB != workerRamMB.toLong()) {
+            controls.requestedRamMiB = workerRamMB.toLong().coerceAtLeast(0L)
+            controls.ramTextValue = controls.requestedRamMiB.toString()
+        }
+    }
+
+    // Available memory can shrink while stopped. Clamp the editable contribution, but leave a
+    // focused draft alone until focus leaves the field. The write itself is debounced below.
+    LaunchedEffect(memory, isRunning, ramFieldFocused) {
+        if (!isRunning && !ramFieldFocused && memory.totalBytes > 0L) {
+            controls.requestedRamMiB = sanitizedRamMiB
+            controls.ramTextValue = sanitizedRamMiB.toString()
+        }
+    }
+    LaunchedEffect(context, isRunning) {
+        if (!isRunning) {
+            snapshotFlow { controls.requestedRamMiB }
+                .distinctUntilChanged()
+                .debounce(250L)
+                .collect { requestedMiB ->
+                    if (!DistributedService.isRunning.value) {
+                        DistributedService.setWorkerRam(
+                            context = context,
+                            ramMB = requestedMiB.coerceAtLeast(0L)
+                                .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                        )
+                    }
+                }
+        }
+    }
+    val latestRequestedRamMiB by rememberUpdatedState(controls.requestedRamMiB)
+    DisposableEffect(Unit) {
+        onDispose {
+            if (!DistributedService.isRunning.value) {
+                DistributedService.setWorkerRam(
+                    context = context,
+                    ramMB = latestRequestedRamMiB.coerceAtLeast(0L)
+                        .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                )
+            }
+        }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.dist_ram_to_share),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "$sanitizedRamMiB ${stringResource(R.string.agent_unit_mb)}",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                    value = controls.ramTextValue,
+                    onValueChange = { newValue ->
+                        controls.ramTextValue = newValue
+                        newValue.toLongOrNull()?.let { requested ->
+                            controls.requestedRamMiB = requested.coerceAtLeast(0L)
+                        }
+                    },
+                    label = { Text(stringResource(R.string.agent_unit_mb)) },
+                    singleLine = true,
+                    modifier = Modifier
+                        .width(100.dp)
+                        .onFocusChanged { ramFieldFocused = it.isFocused },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+            }
+            Slider(
+                value = sanitizedRamMiB.coerceIn(0L, sliderMaximumMiB).toFloat(),
+                onValueChange = { value ->
+                    val requested = value.toLong().coerceIn(0L, sliderMaximumMiB)
+                    controls.requestedRamMiB = requested
+                    controls.ramTextValue = requested.toString()
+                },
+                valueRange = 0f..sliderMaximumMiB.toFloat(),
+                steps = ((sliderMaximumMiB / WorkerMemoryBudget.MINIMUM_VIABLE_MIB) - 1L)
+                    .coerceAtLeast(0L)
+                    .coerceAtMost(Int.MAX_VALUE.toLong())
+                    .toInt(),
+                enabled = budget.maximumMiB > 0L,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                text = stringResource(
+                    R.string.dist_total_avail_ram,
+                    memory.availableMiB.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                    memory.totalMiB.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = stringResource(
+                    R.string.dist_worker_memory_budget_summary,
+                    budget.reservedMiB.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                    budget.maximumMiB.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (!budget.canLaunch) {
+                Text(
+                    text = stringResource(
+                        R.string.dist_worker_memory_unavailable,
+                        WorkerMemoryBudget.MINIMUM_VIABLE_MIB
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.45f),
+                        RoundedCornerShape(8.dp)
+                    )
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.onTertiaryContainer)
+                Text(
+                    text = stringResource(R.string.dist_worker_ram_budget_warning),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            }
+            Text(
+                text = stringResource(R.string.dist_threads_count, controls.threadsValue),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Medium
+            )
+            Slider(
+                value = controls.threadsValue.toFloat(),
+                onValueChange = { controls.threadsValue = it.toInt() },
+                valueRange = 1f..8f,
+                steps = 6,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.dist_enable_local_cache),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = stringResource(R.string.dist_local_cache_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = controls.enableCache,
+                    onCheckedChange = { controls.enableCache = it }
+                )
+            }
+            OutlinedButton(
+                onClick = { DistributedService.clearWorkerCache(context) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Delete, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(stringResource(R.string.dist_clear_worker_cache))
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkerStartStopButton(
+    context: Context,
+    memoryTelemetry: StateFlow<MemoryTelemetrySnapshot>,
+    isRunning: Boolean,
+    controls: WorkerControlState,
+    onAction: () -> Unit = {}
+) {
+    val memory by memoryTelemetry.collectAsStateWithLifecycle()
+    val budget = remember(memory.totalBytes, memory.availableBytes, controls.requestedRamMiB) {
+        WorkerMemoryBudget.fromBytes(
+            totalBytes = memory.totalBytes,
+            availableBytes = memory.availableBytes,
+            requestedMiB = controls.requestedRamMiB
+        )
+    }
+    Button(
+        onClick = {
+            onAction()
+            if (isRunning) {
+                DistributedService.stopWorker(context)
+            } else {
+                // Save this stopped snapshot first. The service validates the same contribution
+                // again immediately before launching the native worker.
+                val savedBudget = DistributedService.setWorkerRam(
+                    context = context,
+                    ramMB = controls.requestedRamMiB.coerceAtLeast(0L)
+                        .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                )
+                if (savedBudget.canLaunch) {
+                    DistributedService.startWorker(
+                        context = context,
+                        port = DistributedService.RPC_DEFAULT_PORT,
+                        ramMB = savedBudget.contributionMiB
+                            .coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                        threads = controls.threadsValue,
+                        enableCache = controls.enableCache
+                    )
+                }
+            }
+        },
+        enabled = isRunning || budget.canLaunch,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(56.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (isRunning) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.primary
+        )
+    ) {
+        Icon(
+            imageVector = if (isRunning) Icons.Default.Close else Icons.Default.PlayArrow,
+            contentDescription = null
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = if (isRunning) stringResource(R.string.dist_stop_worker)
+            else stringResource(R.string.dist_start_worker),
+            style = MaterialTheme.typography.titleMedium
+        )
+    }
+}
+
+private class WorkerControlState(initialRamMiB: Long) {
+    var requestedRamMiB by mutableLongStateOf(initialRamMiB.coerceAtLeast(0L))
+    var ramTextValue by mutableStateOf(initialRamMiB.coerceAtLeast(0L).toString())
+    var threadsValue by mutableIntStateOf(4)
+    var enableCache by mutableStateOf(false)
+}
+
+@Composable
+private fun WorkerMemoryMetric(
+    label: String,
+    valueMiB: Long,
+    valueColor: Color = MaterialTheme.colorScheme.onSurface
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = stringResource(
+                R.string.dist_worker_memory_value,
+                valueMiB.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
+            ),
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = valueColor
+        )
+    }
+}
+
 @Composable
 private fun StatusCard(isRunning: Boolean, connectionCount: Int, ip: String?, port: Int, deviceName: String) {
     Card(
@@ -887,7 +1063,12 @@ private fun StatusCard(isRunning: Boolean, connectionCount: Int, ip: String?, po
                 Text(
                     text = when {
                         connectionCount > 0 -> stringResource(R.string.dist_receiving_layers)
-                        isRunning -> "Listening on $ip:$port\nBroadcasting as: $deviceName" // Explicit feedback
+                        isRunning -> stringResource(
+                            R.string.worker_topology_worker_listening,
+                            ip ?: "—",
+                            port,
+                            deviceName
+                        )
                         else -> stringResource(R.string.dist_configure_worker_ram)
                     },
                     style = MaterialTheme.typography.bodyMedium,

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="model_storage_count_bytes">Instalados: %1$d · %2$s</string>
+    <string name="model_storage_checking">Comprobando almacenamiento…</string>
+    <string name="model_storage_unknown_bytes">Archivos desconocidos: %1$s</string>
+    <string name="model_storage_partial_bytes">Descargas incompletas: %1$s</string>
+    <string name="model_storage_unknown_title">Desconocidos</string>
+    <string name="model_storage_unknown_desc">Archivos descargados pendientes de identificación. Revisa sus datos y elige una familia y un componente de modelo.</string>
+</resources>

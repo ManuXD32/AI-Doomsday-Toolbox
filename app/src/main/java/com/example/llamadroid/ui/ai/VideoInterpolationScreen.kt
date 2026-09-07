@@ -1,5 +1,9 @@
 package com.example.llamadroid.ui.ai
 
+import androidx.compose.foundation.layout.consumeWindowInsets
+
+import androidx.compose.foundation.layout.imePadding
+
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -31,7 +35,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -66,6 +70,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -74,6 +79,7 @@ import androidx.navigation.NavController
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.SharedFileHolder
+import com.example.llamadroid.data.SharedFileTarget
 import com.example.llamadroid.service.DownloadableMediaAsset
 import com.example.llamadroid.service.MediaAssetDownloader
 import com.example.llamadroid.service.MediaModelDownloadPhase
@@ -98,6 +104,11 @@ import com.example.llamadroid.service.UpscalerModels
 import com.example.llamadroid.service.UpscalerModelCapability
 import com.example.llamadroid.service.UpscalerModelFiles
 import com.example.llamadroid.util.UpscalerAssetPackSupport
+import com.example.llamadroid.ui.components.AppScrollableTabRow
+import com.example.llamadroid.ui.components.AppTaskActionFooter
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.WalkthroughScrollOwner
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -107,6 +118,8 @@ import java.io.File
 @Composable
 fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boolean = false) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val settingsRepo = remember { SettingsRepository(context) }
     val downloader = remember { MediaAssetDownloader(context) }
@@ -160,6 +173,9 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
     var crf by remember { mutableIntStateOf(20) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var selectedTab by remember { mutableIntStateOf(0) }
+    WalkthroughScrollOwner(setOf("video.interpolation.options")) { target ->
+        if (target == "video.interpolation.options" && selectedTab != 0) selectedTab = 0
+    }
     val combinedWorkflow = embeddedWorkflow
     var combinedUpscaleEngine by remember { mutableStateOf(UpscalerEngine.REALSR) }
     var combinedUpscaleModel by remember {
@@ -206,7 +222,7 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
             onSuccess = { savedPath ->
                 Toast.makeText(
                     context,
-                    context.getString(R.string.interpolation_success_toast, savedPath),
+                    resources.getString(R.string.interpolation_success_toast, savedPath),
                     Toast.LENGTH_LONG
                 ).show()
             },
@@ -232,7 +248,7 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
                     }
                 }
             } catch (e: Exception) {
-                downloadError = e.message ?: context.getString(R.string.interpolation_download_failed)
+                downloadError = e.message ?: resources.getString(R.string.interpolation_download_failed)
             }
         }
     }
@@ -257,7 +273,7 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
         uri ?: return@rememberLauncherForActivityResult
         val path = copyUriToCache(uri, "interpolation_input.mp4")
         if (path == null) {
-            errorMessage = context.getString(R.string.interpolation_error_video_copy)
+            errorMessage = resources.getString(R.string.interpolation_error_video_copy)
         } else {
             selectedVideoPath = path
             scope.launch {
@@ -270,11 +286,11 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
     }
 
     LaunchedEffect(Unit) {
-        val pending = SharedFileHolder.consumePendingFile()
+        val pending = SharedFileHolder.consumeFor(SharedFileTarget.VIDEO_INTERPOLATION)
         if (pending != null && pending.mimeType.startsWith("video/")) {
             val path = copyUriToCache(pending.uri, "interpolation_shared_input.mp4")
             if (path == null) {
-                errorMessage = context.getString(R.string.interpolation_error_video_copy)
+                errorMessage = resources.getString(R.string.interpolation_error_video_copy)
             } else {
                 selectedVideoPath = path
                 pendingSharedVideoPath = path
@@ -306,10 +322,112 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
         )
     }
 
+    val footerState = if (combinedWorkflow) combinedState.asInterpolationCardState() else state
+    val footerRunning = footerState !is VideoInterpolationState.Idle &&
+        footerState !is VideoInterpolationState.Completed && footerState !is VideoInterpolationState.Error
     Scaffold(
+        modifier = Modifier.imePadding(),
+        bottomBar = {
+            if (selectedTab == 0 || embeddedWorkflow || footerRunning) {
+            StartInterpolationCard(
+                state = if (combinedWorkflow) combinedState.asInterpolationCardState() else state,
+                progress = if (combinedWorkflow) combinedProgress else progress,
+                eta = if (combinedWorkflow) combinedStatus else eta,
+                modelInstalled = modelInstalled,
+                combinedWorkflow = combinedWorkflow,
+                onStart = {
+                    val path = selectedVideoPath
+                    if (path == null) {
+                        errorMessage = resources.getString(R.string.interpolation_error_no_video)
+                        return@StartInterpolationCard
+                    }
+                    if (!MediaModelManager.isInstalled(context, selectedModel)) {
+                        showDownloadDialog = true
+                        return@StartInterpolationCard
+                    }
+                    val outputPath = File(context.cacheDir, "interpolated_${System.currentTimeMillis()}.mp4").absolutePath
+                    val config = VideoInterpolationConfig(
+                        inputPath = path,
+                        outputPath = outputPath,
+                        modelId = selectedModel.id,
+                        multiplier = selectedMultiplier,
+                        backend = selectedBackend,
+                        preserveAudio = preserveAudio,
+                        sceneCutProtection = sceneCutProtection,
+                        codec = selectedCodec,
+                        crf = crf
+                    )
+                    if (combinedWorkflow) {
+                        val model = combinedUpscaleModel
+                        if (model == null || combinedAvailableScales.isEmpty()) {
+                            errorMessage = resources.getString(R.string.upscaler_model_variant_unavailable)
+                            return@StartInterpolationCard
+                        }
+                        val upscaleOutput = File(context.cacheDir, "interpolated_upscaled_${System.currentTimeMillis()}.mp4")
+                        val combinedConfig = VideoInterpolateUpscaleConfig(
+                            interpolationConfig = config,
+                            upscaleConfig = VideoUpscalerConfig(
+                                inputPath = outputPath,
+                                outputPath = upscaleOutput.absolutePath,
+                                engine = combinedUpscaleEngine,
+                                model = model.name,
+                                scale = combinedUpscaleScale,
+                                denoise = if (model.engine == UpscalerEngine.REALCUGAN) combinedUpscaleDenoise else -1
+                            )
+                        )
+                        walkthroughTargets?.recordEvent("video.interpolation.options")
+                        context.startForegroundService(
+                            VideoInterpolationService.createStartInterpolateUpscaleIntent(context, combinedConfig)
+                        )
+                        return@StartInterpolationCard
+                    }
+                    walkthroughTargets?.recordEvent("video.interpolation.options")
+                    scope.launch {
+                        interpolationService?.interpolate(config)?.fold(
+                            onSuccess = { generatedPath ->
+                                val finalPath = generatedPath
+                                val galleryItem = VideoInterpolationGalleryStore.save(
+                                    context = context,
+                                    source = File(finalPath),
+                                    config = config,
+                                    info = videoInfo,
+                                    backendUsed = (state as? VideoInterpolationState.Completed)?.backendUsed,
+                                    workflow = "INTERPOLATE_ONLY",
+                                    upscaleModel = null,
+                                    upscaleScale = null
+                                )
+                                galleryItems = VideoInterpolationGalleryStore.list(context)
+                                exportResult(
+                                    context = context,
+                                    sourcePath = galleryItem.videoFile.absolutePath,
+                                    fileName = galleryItem.videoFile.name,
+                                    outputFolder = outputFolder
+                                ).fold(
+                                    onSuccess = { savedPath ->
+                                        Toast.makeText(
+                                            context,
+                                            resources.getString(R.string.interpolation_success_toast, savedPath),
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    },
+                                    onFailure = { errorMessage = it.message }
+                                )
+                            },
+                            onFailure = { errorMessage = it.message }
+                        )
+                    }
+                },
+                onCancel = {
+                    interpolationService?.cancel()
+                    context.startService(VideoInterpolationService.createCancelIntent(context))
+                }
+            )
+            }
+        },
         topBar = {
             if (!embeddedWorkflow) {
                 TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                     title = { Text(stringResource(R.string.interpolation_title)) },
                     navigationIcon = {
                         IconButton(onClick = { navController.popBackStack() }) {
@@ -324,11 +442,12 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .consumeWindowInsets(padding)
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
+                .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            if (!embeddedWorkflow) TabRow(selectedTabIndex = selectedTab) {
+            if (!embeddedWorkflow) AppScrollableTabRow(selectedTabIndex = selectedTab) {
                 Tab(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
@@ -359,7 +478,7 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
                                     putExtra(Intent.EXTRA_STREAM, uri)
                                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 },
-                                context.getString(R.string.interpolation_share)
+                                resources.getString(R.string.interpolation_share)
                             )
                         )
                     },
@@ -451,7 +570,8 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
                 onCodec = { selectedCodec = it },
                 crf = crf,
                 onCrf = { crf = it },
-                videoInfo = videoInfo
+                videoInfo = videoInfo,
+                modifier = Modifier.walkthroughTarget("video.interpolation.options")
             )
 
             if (combinedWorkflow && videoInfo != null) {
@@ -501,104 +621,14 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
                     val ok = MediaModelManager.isInstalled(context, it)
                     Toast.makeText(
                         context,
-                        context.getString(if (ok) R.string.interpolation_model_verify_ok else R.string.interpolation_model_verify_failed),
+                        resources.getString(if (ok) R.string.interpolation_model_verify_ok else R.string.interpolation_model_verify_failed),
                         Toast.LENGTH_SHORT
                     ).show()
                     refreshInstalled()
                 }
             )
 
-            StartInterpolationCard(
-                state = if (combinedWorkflow) combinedState.asInterpolationCardState() else state,
-                progress = if (combinedWorkflow) combinedProgress else progress,
-                eta = if (combinedWorkflow) combinedStatus else eta,
-                modelInstalled = modelInstalled,
-                combinedWorkflow = combinedWorkflow,
-                onStart = {
-                    val path = selectedVideoPath
-                    if (path == null) {
-                        errorMessage = context.getString(R.string.interpolation_error_no_video)
-                        return@StartInterpolationCard
-                    }
-                    if (!MediaModelManager.isInstalled(context, selectedModel)) {
-                        showDownloadDialog = true
-                        return@StartInterpolationCard
-                    }
-                    val outputPath = File(context.cacheDir, "interpolated_${System.currentTimeMillis()}.mp4").absolutePath
-                    val config = VideoInterpolationConfig(
-                        inputPath = path,
-                        outputPath = outputPath,
-                        modelId = selectedModel.id,
-                        multiplier = selectedMultiplier,
-                        backend = selectedBackend,
-                        preserveAudio = preserveAudio,
-                        sceneCutProtection = sceneCutProtection,
-                        codec = selectedCodec,
-                        crf = crf
-                    )
-                    if (combinedWorkflow) {
-                        val model = combinedUpscaleModel
-                        if (model == null || combinedAvailableScales.isEmpty()) {
-                            errorMessage = context.getString(R.string.upscaler_model_variant_unavailable)
-                            return@StartInterpolationCard
-                        }
-                        val upscaleOutput = File(context.cacheDir, "interpolated_upscaled_${System.currentTimeMillis()}.mp4")
-                        val combinedConfig = VideoInterpolateUpscaleConfig(
-                            interpolationConfig = config,
-                            upscaleConfig = VideoUpscalerConfig(
-                                inputPath = outputPath,
-                                outputPath = upscaleOutput.absolutePath,
-                                engine = combinedUpscaleEngine,
-                                model = model.name,
-                                scale = combinedUpscaleScale,
-                                denoise = if (model.engine == UpscalerEngine.REALCUGAN) combinedUpscaleDenoise else -1
-                            )
-                        )
-                        context.startForegroundService(
-                            VideoInterpolationService.createStartInterpolateUpscaleIntent(context, combinedConfig)
-                        )
-                        return@StartInterpolationCard
-                    }
-                    scope.launch {
-                        interpolationService?.interpolate(config)?.fold(
-                            onSuccess = { generatedPath ->
-                                val finalPath = generatedPath
-                                val galleryItem = VideoInterpolationGalleryStore.save(
-                                    context = context,
-                                    source = File(finalPath),
-                                    config = config,
-                                    info = videoInfo,
-                                    backendUsed = (state as? VideoInterpolationState.Completed)?.backendUsed,
-                                    workflow = "INTERPOLATE_ONLY",
-                                    upscaleModel = null,
-                                    upscaleScale = null
-                                )
-                                galleryItems = VideoInterpolationGalleryStore.list(context)
-                                exportResult(
-                                    context = context,
-                                    sourcePath = galleryItem.videoFile.absolutePath,
-                                    fileName = galleryItem.videoFile.name,
-                                    outputFolder = outputFolder
-                                ).fold(
-                                    onSuccess = { savedPath ->
-                                        Toast.makeText(
-                                            context,
-                                            context.getString(R.string.interpolation_success_toast, savedPath),
-                                            Toast.LENGTH_LONG
-                                        ).show()
-                                    },
-                                    onFailure = { errorMessage = it.message }
-                                )
-                            },
-                            onFailure = { errorMessage = it.message }
-                        )
-                    }
-                },
-                onCancel = {
-                    interpolationService?.cancel()
-                    context.startService(VideoInterpolationService.createCancelIntent(context))
-                }
-            )
+
 
             val visibleError = errorMessage
                 ?: (combinedState as? VideoInterpolateUpscaleState.Error)
@@ -614,13 +644,13 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF4CAF50).copy(alpha = 0.18f))
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
                 ) {
                     Row(
                         modifier = Modifier.padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFF4CAF50))
+                        Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(stringResource(R.string.interpolation_success_message), fontWeight = FontWeight.Bold)
                     }
@@ -769,9 +799,10 @@ private fun InterpolationOptionsCard(
     onCodec: (VideoInterpolationCodec) -> Unit,
     crf: Int,
     onCrf: (Int) -> Unit,
-    videoInfo: VideoInterpolationInfo?
+    videoInfo: VideoInterpolationInfo?,
+    modifier: Modifier = Modifier
 ) {
-    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+    Card(modifier = modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(stringResource(R.string.interpolation_options), style = MaterialTheme.typography.titleMedium)
             Text(stringResource(R.string.interpolation_multiplier_label), style = MaterialTheme.typography.labelLarge)
@@ -915,49 +946,24 @@ private fun StartInterpolationCard(
     onCancel: () -> Unit
 ) {
     val isRunning = state !is VideoInterpolationState.Idle &&
-        state !is VideoInterpolationState.Completed &&
-        state !is VideoInterpolationState.Error
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isRunning) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
-        )
-    ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (isRunning) {
-                val percent = (progress * 100).toInt().coerceIn(0, 100)
-                Text(stringResource(R.string.interpolation_running_title), style = MaterialTheme.typography.titleMedium)
-                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
-                Text(
-                    if (combinedWorkflow && eta.isNotBlank()) {
-                        "$percent% · $eta"
-                    } else {
-                        stringResource(R.string.interpolation_progress_eta, percent, eta.ifBlank { "--" })
-                    },
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Button(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            } else {
-                Button(onClick = onStart, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        stringResource(
-                            if (combinedWorkflow) R.string.interpolation_start_combined
-                            else R.string.interpolation_start
-                        )
-                    )
-                }
-                if (!modelInstalled) {
-                    Text(
-                        stringResource(R.string.interpolation_start_model_required),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
+        state !is VideoInterpolationState.Completed && state !is VideoInterpolationState.Error
+    AppTaskActionFooter {
+        if (isRunning) {
+            val percent = (progress * 100).toInt().coerceIn(0, 100)
+            Text(if (combinedWorkflow && eta.isNotBlank()) "$percent% · $eta"
+                else stringResource(R.string.interpolation_progress_eta, percent, eta.ifBlank { "--" }),
+                style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+            Button(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.soft_studio_cancel))
+            }
+        } else {
+            if (!modelInstalled) Text(stringResource(R.string.interpolation_start_model_required),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            Button(onClick = onStart, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.PlayArrow, null)
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(if (combinedWorkflow) R.string.interpolation_start_combined else R.string.interpolation_start))
             }
         }
     }

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="responsive_kb_embedding_server_details">Detalles del servidor</string>
+    <string name="responsive_kb_embedding_server_prerequisite">Elige un modelo de embeddings antes de iniciar el servidor local.</string>
+    <string name="responsive_battery_dialog_actions">Acciones</string>
+    <string name="responsive_battery_dialog_settings_compact">Ajustes de batería</string>
+    <string name="responsive_battery_dialog_oem_fix_compact">Ayuda del dispositivo</string>
+    <string name="responsive_battery_dialog_continue_compact">Continuar</string>
+</resources>

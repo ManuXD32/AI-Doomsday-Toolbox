@@ -61,7 +61,23 @@ class ToolCatalogTest {
     fun `route matcher includes tool subroutes`() {
         assertTrue(ToolCatalog.matchesRoute(Screen.AIHub.route).not())
         assertTrue(ToolCatalog.matchesRoute("${Screen.ImageGen.route}?startMode={startMode}"))
+        assertTrue(ToolCatalog.matchesRoute("${Screen.ImageGen.route}?startMode={startMode}&tab={tab}"))
         assertTrue(ToolCatalog.matchesRoute(Screen.LlamaChat.route))
         assertTrue(ToolCatalog.matchesRoute(Screen.DatasetProject.route))
+    }
+
+    @Test
+    fun `soft studio catalog keeps task and infrastructure entry points discoverable`() {
+        val byId = ToolCatalog.tools.associateBy { it.id }
+
+        assertEquals(ToolCategory.CREATE, byId.getValue("onnx_image_generation").category)
+        assertEquals(ToolCategory.VOICE, byId.getValue("onnx_tts").category)
+        assertEquals(ToolCategory.ORGANIZER, byId.getValue("organizer").category)
+        assertEquals(ToolCategory.ORGANIZER, byId.getValue("offline_library").category)
+        assertEquals(ToolCategory.INFRASTRUCTURE, byId.getValue("distributed_llm").category)
+        assertEquals(ToolCategory.INFRASTRUCTURE, byId.getValue("distributed_media").category)
+        assertEquals(ToolCategory.INFRASTRUCTURE, byId.getValue("model_library").category)
+        assertTrue("ONNX search keyword was dropped", byId.getValue("onnx_tts").keywords.contains("onnx"))
+        assertTrue("File sharing is not searchable", byId.getValue("file_server").keywords.contains("share"))
     }
 }

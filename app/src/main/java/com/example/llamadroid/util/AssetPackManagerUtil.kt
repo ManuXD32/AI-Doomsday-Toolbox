@@ -172,13 +172,13 @@ object AssetPackManagerUtil {
                         
                         // Set permissions for executables
                         if (filename.endsWith(".so")) {
-                            destFile.setReadable(true, false)
-                            destFile.setExecutable(true, false)
+                            destFile.setReadable(true, true)
+                            destFile.setExecutable(true, true)
                             destFile.setWritable(true, true)
                             
                             // Also try Runtime.exec chmod as fallback
                             try {
-                                Runtime.getRuntime().exec(arrayOf("chmod", "755", destFile.absolutePath)).waitFor()
+                                Runtime.getRuntime().exec(arrayOf("chmod", "700", destFile.absolutePath)).waitFor()
                             } catch (e: Exception) {
                                 Log.w(TAG, "chmod failed for ${destFile.name}: ${e.message}")
                             }

@@ -13,6 +13,7 @@ import android.os.PowerManager
 import android.os.SystemClock
 import androidx.documentfile.provider.DocumentFile
 import com.example.llamadroid.R
+import com.example.llamadroid.LlamaApplication
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.data.db.AppDatabase
@@ -143,6 +144,10 @@ class StableDiffusionService : Service() {
 
     private fun isModeProcessAlive(mode: SDMode): Boolean = synchronized(modeLifecycleLock) {
         modeProcesses.any { (lane, process) -> lane.mode == mode && process.isAlive }
+    }
+
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(LlamaApplication.updateLocale(newBase))
     }
 
     override fun onCreate() {
@@ -1231,7 +1236,7 @@ class StableDiffusionService : Service() {
 
     private fun ensureWakeLockHeld() {
         if (wakeLock?.isHeld != true) {
-            wakeLock?.acquire()
+            wakeLock?.acquire(GENERATION_WAKE_LOCK_TIMEOUT_MS)
             DebugLog.log("[StableDiffusionService] WakeLock acquired")
             recordServiceBreadcrumb("wake_lock_acquired")
         }
@@ -2115,6 +2120,7 @@ class StableDiffusionService : Service() {
         private const val IDLE_SERVICE_STOP_DELAY_MS = 250L
         private const val POST_RUN_HEALTH_DELAY_MS = 2_000L
         private const val STALL_MONITOR_INTERVAL_MS = 15_000L
+        private const val GENERATION_WAKE_LOCK_TIMEOUT_MS = 24 * 60 * 60 * 1_000L
         private const val DEFAULT_NATIVE_OUTPUT_WINDOW_MS = 5 * 60_000L
         private const val DIAGNOSTIC_SOURCE = "image_generation"
         private const val COMMAND_BREADCRUMB_LIMIT = 768

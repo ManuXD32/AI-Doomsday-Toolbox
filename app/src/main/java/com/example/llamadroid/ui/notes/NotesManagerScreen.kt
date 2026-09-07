@@ -1,7 +1,10 @@
 package com.example.llamadroid.ui.notes
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
+import android.text.format.DateFormat
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.media.MediaPlayer
@@ -18,7 +21,10 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items as lazyRowItems
 import androidx.compose.foundation.lazy.items as lazyListItems
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -29,6 +35,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import com.example.llamadroid.ui.components.AppTaskActionFooter
+import com.example.llamadroid.ui.components.AppAdvancedSection
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,11 +49,14 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import androidx.compose.ui.window.DialogProperties
 import androidx.navigation.NavController
 import com.example.llamadroid.data.db.AppDatabase
@@ -58,6 +73,7 @@ import com.example.llamadroid.ui.ai.llama.MarkdownText
 import com.example.llamadroid.ui.ai.llama.NoteExportPayload
 import com.example.llamadroid.ui.ai.llama.NotesExportPayload
 import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.components.AppScrollableTabRow
 import com.example.llamadroid.ui.components.markdownToPreview
 import com.example.llamadroid.service.formatNativeTodoItems
 import com.example.llamadroid.service.OrganizerAlarmScheduler
@@ -87,13 +103,16 @@ import java.util.*
 @Composable
 fun NotesManagerScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val scope = rememberCoroutineScope()
     val db = remember { AppDatabase.getDatabase(context) }
     val clipboardManager = LocalClipboardManager.current
 
     // State
-    var searchQuery by remember { mutableStateOf("") }
-    var selectedFilter by remember { mutableStateOf<NoteType?>(null) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var selectedFilter by rememberSaveable { mutableStateOf<NoteType?>(null) }
+    var showSelectionActions by rememberSaveable { mutableStateOf(false) }
     var showAddDialog by remember { mutableStateOf(false) }
     var selectedNote by remember { mutableStateOf<NoteEntity?>(null) }
     var showDeleteDialog by remember { mutableStateOf(false) }
@@ -106,7 +125,7 @@ fun NotesManagerScreen(navController: NavController) {
         mutableIntStateOf(com.example.llamadroid.wear.PinnedOrganizerNoteStore.get(context) ?: -1)
     }
     var notesPendingExport by remember { mutableStateOf<List<NoteEntity>>(emptyList()) }
-    var selectedOrganizerTab by remember { mutableIntStateOf(0) }
+    var selectedOrganizerTab by rememberSaveable { mutableIntStateOf(0) }
     var selectedCalendarDate by remember { mutableStateOf(LocalDate.now()) }
     var visibleCalendarMonth by remember { mutableStateOf(YearMonth.now()) }
     var showEventDialog by remember { mutableStateOf(false) }
@@ -121,6 +140,9 @@ fun NotesManagerScreen(navController: NavController) {
     val organizerAlarms by db.organizerDao().getAllAlarms().collectAsState(initial = emptyList())
     val organizerSettings by db.organizerDao().getLlmSettings().collectAsState(initial = null)
     val effectiveOrganizerSettings = organizerSettings ?: OrganizerLlmSettingsEntity()
+    val organizerDisplayLocale = Locale.getDefault()
+    val organizerDisplayZone = ZoneId.systemDefault()
+    val organizerUses24HourClock = DateFormat.is24HourFormat(context)
 
     // Filter notes based on search and type filter
     val filteredNotes = remember(allNotes, searchQuery, selectedFilter) {
@@ -161,18 +183,18 @@ fun NotesManagerScreen(navController: NavController) {
                     val json = gson.toJson(payload)
                     context.contentResolver.openOutputStream(uri)?.use { output ->
                         output.write(json.toByteArray(Charsets.UTF_8))
-                    } ?: error(context.getString(R.string.notes_export_failed_open_output))
+                    } ?: error(resources.getString(R.string.notes_export_failed_open_output))
                     Toast.makeText(
                         context,
-                        context.getString(R.string.notes_export_success, notesToExport.size),
+                        resources.getString(R.string.notes_export_success, notesToExport.size),
                         Toast.LENGTH_SHORT
                     ).show()
                 } catch (e: Exception) {
                     Toast.makeText(
                         context,
-                        context.getString(
+                        resources.getString(
                             R.string.notes_export_failed,
-                            e.message ?: context.getString(R.string.error_generic)
+                            e.message ?: resources.getString(R.string.error_generic)
                         ),
                         Toast.LENGTH_LONG
                     ).show()
@@ -195,26 +217,26 @@ fun NotesManagerScreen(navController: NavController) {
                     val importedNotes = parseNotesImportPayload(
                         json = json,
                         gson = gson,
-                        chatSourceLabel = context.getString(R.string.notes_import_source_native_chat),
-                        defaultNoteTitle = context.getString(R.string.notes_import_default_single_title),
-                        unknownFormatMessage = context.getString(R.string.notes_import_error_unknown_format),
-                        systemLabel = context.getString(R.string.llama_note_transcript_system),
-                        imageLabel = context.getString(R.string.llama_note_transcript_image),
-                        audioLabel = context.getString(R.string.llama_note_transcript_audio)
+                        chatSourceLabel = resources.getString(R.string.notes_import_source_native_chat),
+                        defaultNoteTitle = resources.getString(R.string.notes_import_default_single_title),
+                        unknownFormatMessage = resources.getString(R.string.notes_import_error_unknown_format),
+                        systemLabel = resources.getString(R.string.llama_note_transcript_system),
+                        imageLabel = resources.getString(R.string.llama_note_transcript_image),
+                        audioLabel = resources.getString(R.string.llama_note_transcript_audio)
                     )
                     importedNotes.forEach { db.noteDao().insert(it) }
                     NoteDisplayWidgetProvider.refreshAll(context.applicationContext)
                     Toast.makeText(
                         context,
-                        context.getString(R.string.notes_import_success, importedNotes.size),
+                        resources.getString(R.string.notes_import_success, importedNotes.size),
                         Toast.LENGTH_SHORT
                     ).show()
                 } catch (e: Exception) {
                     Toast.makeText(
                         context,
-                        context.getString(
+                        resources.getString(
                             R.string.notes_import_failed,
-                            e.message ?: context.getString(R.string.error_generic)
+                            e.message ?: resources.getString(R.string.error_generic)
                         ),
                         Toast.LENGTH_LONG
                     ).show()
@@ -229,15 +251,7 @@ fun NotesManagerScreen(navController: NavController) {
         } else {
             stringResource(R.string.organizer_title)
         },
-        subtitle = if (selectedOrganizerTab == 0 && selectedNoteIds.isNotEmpty()) {
-            null
-        } else {
-            when (selectedOrganizerTab) {
-                1 -> stringResource(R.string.organizer_calendar_subtitle)
-                2 -> stringResource(R.string.organizer_alarms_subtitle)
-                else -> stringResource(R.string.notes_empty_desc)
-            }
-        },
+        subtitle = null,
         onBack = {
             if (selectedOrganizerTab == 0 && selectedNoteIds.isNotEmpty()) {
                 selectedNoteIds = emptySet()
@@ -247,53 +261,40 @@ fun NotesManagerScreen(navController: NavController) {
         },
         actions = {
             if (selectedOrganizerTab == 0 && selectedNoteIds.isNotEmpty()) {
-                IconButton(
-                    onClick = {
-                        selectedNoteIds = if (selectedNoteIds.size == filteredNotes.size) {
-                            emptySet()
-                        } else {
-                            filteredNotes.map { it.id }.toSet()
-                        }
+                Box {
+                    IconButton(onClick = { showSelectionActions = true }) {
+                        Icon(Icons.Default.MoreVert, stringResource(R.string.studio_more_actions))
                     }
-                ) {
-                    Icon(Icons.Default.DoneAll, stringResource(R.string.notes_select_all))
-                }
-                IconButton(
-                    onClick = {
-                        val selected = allNotes.filter { it.id in selectedNoteIds }
-                        if (selected.isNotEmpty()) {
-                            notesPendingExport = selected
-                            notesExportLauncher.launch(notesExportFileName(selected))
-                            selectedNoteIds = emptySet()
-                        }
+                    DropdownMenu(expanded = showSelectionActions, onDismissRequest = { showSelectionActions = false }) {
+                        DropdownMenuItem(text = { Text(stringResource(R.string.notes_select_all)) }, onClick = {
+                            showSelectionActions = false
+                            selectedNoteIds = if (selectedNoteIds.size == filteredNotes.size) emptySet()
+                                else filteredNotes.map { it.id }.toSet()
+                        })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.notes_export_selected)) }, onClick = {
+                            showSelectionActions = false
+                            val selected = allNotes.filter { it.id in selectedNoteIds }
+                            if (selected.isNotEmpty()) {
+                                notesPendingExport = selected
+                                notesExportLauncher.launch(notesExportFileName(selected))
+                                selectedNoteIds = emptySet()
+                            }
+                        })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.notes_delete_selected)) }, onClick = {
+                            showSelectionActions = false
+                            showBatchDeleteDialog = true
+                        })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.notes_llm_allow_selected)) }, onClick = {
+                            showSelectionActions = false
+                            val ids = selectedNoteIds.toList()
+                            scope.launch { db.noteDao().setLlmWhitelisted(ids, true); selectedNoteIds = emptySet() }
+                        })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.notes_llm_block_selected)) }, onClick = {
+                            showSelectionActions = false
+                            val ids = selectedNoteIds.toList()
+                            scope.launch { db.noteDao().setLlmWhitelisted(ids, false); selectedNoteIds = emptySet() }
+                        })
                     }
-                ) {
-                    Icon(Icons.Default.Download, stringResource(R.string.notes_export_selected))
-                }
-                IconButton(onClick = { showBatchDeleteDialog = true }) {
-                    Icon(Icons.Default.Delete, stringResource(R.string.notes_delete_selected), tint = MaterialTheme.colorScheme.error)
-                }
-                IconButton(
-                    onClick = {
-                        val idsToUpdate = selectedNoteIds.toList()
-                        scope.launch {
-                            db.noteDao().setLlmWhitelisted(idsToUpdate, true)
-                            selectedNoteIds = emptySet()
-                        }
-                    }
-                ) {
-                    Icon(Icons.Default.CheckCircle, stringResource(R.string.notes_llm_allow_selected))
-                }
-                IconButton(
-                    onClick = {
-                        val idsToUpdate = selectedNoteIds.toList()
-                        scope.launch {
-                            db.noteDao().setLlmWhitelisted(idsToUpdate, false)
-                            selectedNoteIds = emptySet()
-                        }
-                    }
-                ) {
-                    Icon(Icons.Default.RemoveCircle, stringResource(R.string.notes_llm_block_selected))
                 }
                 IconButton(onClick = { selectedNoteIds = emptySet() }) {
                     Icon(Icons.Default.Close, stringResource(R.string.action_cancel))
@@ -306,7 +307,13 @@ fun NotesManagerScreen(navController: NavController) {
                 ) {
                     Icon(Icons.Default.Upload, stringResource(R.string.notes_import_note))
                 }
-                IconButton(onClick = { showAddDialog = true }) {
+                IconButton(
+                    onClick = {
+                        showAddDialog = true
+                        walkthroughTargets?.recordEvent("organizer.editor")
+                    },
+                    modifier = Modifier.walkthroughTarget("organizer.editor")
+                ) {
                     Icon(Icons.Default.Add, stringResource(R.string.notes_new))
                 }
             } else if (selectedOrganizerTab == 1) {
@@ -331,7 +338,15 @@ fun NotesManagerScreen(navController: NavController) {
                 .fillMaxSize()
                 .padding(horizontal = 20.dp, vertical = 12.dp)
         ) {
-            TabRow(selectedTabIndex = selectedOrganizerTab) {
+            AppScrollableTabRow(
+                selectedTabIndex = selectedOrganizerTab,
+                edgePadding = 12.dp,
+                containerColor = Color.Transparent,
+                modifier = Modifier
+                    .walkthroughTarget("organizer.notes")
+                    .walkthroughTarget("organizer.calendar")
+                    .walkthroughTarget("organizer.alarms")
+            ) {
                 listOf(
                     R.string.organizer_tab_notes,
                     R.string.organizer_tab_calendar,
@@ -342,20 +357,62 @@ fun NotesManagerScreen(navController: NavController) {
                         onClick = {
                             selectedOrganizerTab = index
                             selectedNoteIds = emptySet()
+                            walkthroughTargets?.recordEvent(
+                                when (index) {
+                                    0 -> "organizer.notes"
+                                    1 -> "organizer.calendar"
+                                    else -> "organizer.alarms"
+                                }
+                            )
                         },
-                        text = { Text(stringResource(labelRes), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    stringResource(labelRes),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                val count = when (index) {
+                                    0 -> allNotes.size
+                                    1 -> organizerEvents.size
+                                    else -> organizerAlarms.size
+                                }
+                                if (count > 0) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Badge { Text(count.toString()) }
+                                }
+                            }
+                        }
                     )
                 }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            // The tab content sits below a static header/tab block. Constrain that content to
+            // the remaining viewport so each list keeps its own vertical scroll surface.
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+            Column(modifier = Modifier.fillMaxSize()) {
             if (selectedOrganizerTab == 0) {
+            val largeText = LocalDensity.current.fontScale >= 1.3f
+            LazyVerticalGrid(
+                columns = if (largeText) GridCells.Fixed(1) else GridCells.Adaptive(180.dp),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Column {
             // Search bar
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
-                label = { Text(stringResource(R.string.notes_search_hint)) },
+                label = { Text(stringResource(R.string.notes_search_hint), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 leadingIcon = { Icon(Icons.Default.Search, null) },
                 trailingIcon = {
                     if (searchQuery.isNotEmpty()) {
@@ -370,85 +427,65 @@ fun NotesManagerScreen(navController: NavController) {
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Filter chips - horizontal scroll for more filters
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
+            // Keep the filter chips intrinsic-width and scrollable. The selected filter is
+            // brought into view when a narrow phone cannot show the complete row at once.
+            val filterOptions = listOf(
+                null to stringResource(R.string.notes_all),
+                NoteType.TRANSCRIPTION to stringResource(R.string.notes_type_transcription),
+                NoteType.PDF_SUMMARY to stringResource(R.string.notes_type_pdf_summary),
+                NoteType.VIDEO_SUMMARY to stringResource(R.string.notes_type_video_summary),
+                NoteType.WORKFLOW to stringResource(R.string.notes_type_workflow),
+                NoteType.TODO_LIST to stringResource(R.string.notes_type_todo_list),
+                NoteType.MANUAL to stringResource(R.string.notes_type_note)
+            )
+            val filterRowState = rememberLazyListState()
+            val selectedFilterIndex = filterOptions.indexOfFirst { it.first == selectedFilter }
+            LaunchedEffect(selectedFilter) {
+                if (selectedFilterIndex >= 0) {
+                    filterRowState.animateScrollToItem(selectedFilterIndex)
+                }
+            }
+            LazyRow(
+                state = filterRowState,
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(end = 20.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                FilterChip(
-                    selected = selectedFilter == null,
-                    onClick = { selectedFilter = null },
-                    label = { Text(stringResource(R.string.notes_all)) }
-                )
-                FilterChip(
-                    selected = selectedFilter == NoteType.TRANSCRIPTION,
-                    onClick = { selectedFilter = if (selectedFilter == NoteType.TRANSCRIPTION) null else NoteType.TRANSCRIPTION },
-                    label = { Text("🎤") }
-                )
-                FilterChip(
-                    selected = selectedFilter == NoteType.PDF_SUMMARY,
-                    onClick = { selectedFilter = if (selectedFilter == NoteType.PDF_SUMMARY) null else NoteType.PDF_SUMMARY },
-                    label = { Text("📄") }
-                )
-                FilterChip(
-                    selected = selectedFilter == NoteType.VIDEO_SUMMARY,
-                    onClick = { selectedFilter = if (selectedFilter == NoteType.VIDEO_SUMMARY) null else NoteType.VIDEO_SUMMARY },
-                    label = { Text("🎬") }
-                )
-                FilterChip(
-                    selected = selectedFilter == NoteType.WORKFLOW,
-                    onClick = { selectedFilter = if (selectedFilter == NoteType.WORKFLOW) null else NoteType.WORKFLOW },
-                    label = { Text("⚙️") }
-                )
-                FilterChip(
-                    selected = selectedFilter == NoteType.TODO_LIST,
-                    onClick = { selectedFilter = if (selectedFilter == NoteType.TODO_LIST) null else NoteType.TODO_LIST },
-                    label = { Text("☑️") }
-                )
-                FilterChip(
-                    selected = selectedFilter == NoteType.MANUAL,
-                    onClick = { selectedFilter = if (selectedFilter == NoteType.MANUAL) null else NoteType.MANUAL },
-                    label = { Text("📝") }
-                )
+                lazyRowItems(filterOptions) { (type, label) ->
+                    val count = if (type == null) allNotes.size else allNotes.count { it.type == type }
+                    FilterChip(
+                        selected = selectedFilter == type,
+                        onClick = {
+                            selectedFilter = if (selectedFilter == type && type != null) null else type
+                        },
+                        label = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                if (count > 0) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Badge { Text(count.toString()) }
+                                }
+                            }
+                        }
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Notes list
-            if (filteredNotes.isEmpty()) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            Icons.Default.Edit,
-                            contentDescription = null,
-                            modifier = Modifier.size(64.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            stringResource(R.string.notes_no_notes),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                        )
-                        Text(
-                            stringResource(R.string.notes_empty_desc),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                        )
                     }
                 }
-            } else {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+                if (filteredNotes.isEmpty()) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Column(Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(stringResource(R.string.notes_no_notes), style = MaterialTheme.typography.titleMedium)
+                            Text(stringResource(R.string.notes_empty_desc), style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Button(onClick = { showAddDialog = true }) { Text(stringResource(R.string.notes_new)) }
+                        }
+                    }
+                } else {
                     items(filteredNotes, key = { it.id }) { note ->
                         NoteCard(
                             note = note,
@@ -491,6 +528,9 @@ fun NotesManagerScreen(navController: NavController) {
                     events = organizerEvents,
                     alarms = organizerAlarms,
                     settings = effectiveOrganizerSettings,
+                    displayLocale = organizerDisplayLocale,
+                    displayZone = organizerDisplayZone,
+                    uses24HourClock = organizerUses24HourClock,
                     selectedDate = selectedCalendarDate,
                     visibleMonth = visibleCalendarMonth,
                     onSelectedDateChange = { selectedCalendarDate = it },
@@ -521,6 +561,9 @@ fun NotesManagerScreen(navController: NavController) {
                     alarms = organizerAlarms,
                     events = organizerEvents,
                     settings = effectiveOrganizerSettings,
+                    displayLocale = organizerDisplayLocale,
+                    displayZone = organizerDisplayZone,
+                    uses24HourClock = organizerUses24HourClock,
                     onSettingsChange = { settings ->
                         scope.launch { db.organizerDao().upsertLlmSettings(settings) }
                     },
@@ -556,6 +599,8 @@ fun NotesManagerScreen(navController: NavController) {
                         }
                     }
                 )
+            }
+            }
             }
         }
     }
@@ -673,23 +718,23 @@ fun NotesManagerScreen(navController: NavController) {
                     runCatching {
                         val start = parseOrganizerUiDateTime(
                             startText,
-                            context.getString(R.string.organizer_error_datetime_required),
-                            context.getString(R.string.organizer_error_datetime_format)
+                            resources.getString(R.string.organizer_error_datetime_required),
+                            resources.getString(R.string.organizer_error_datetime_format)
                         )
                         val end = endText.trim().takeIf { it.isNotBlank() }?.let {
                             parseOrganizerUiDateTime(
                                 it,
-                                context.getString(R.string.organizer_error_datetime_required),
-                                context.getString(R.string.organizer_error_datetime_format)
+                                resources.getString(R.string.organizer_error_datetime_required),
+                                resources.getString(R.string.organizer_error_datetime_format)
                             )
                         }
                         require(end == null || !end.toInstant().isBefore(start.toInstant())) {
-                            context.getString(R.string.organizer_event_error_end_before_start)
+                            resources.getString(R.string.organizer_event_error_end_before_start)
                         }
                         val now = System.currentTimeMillis()
-                        val color = parseOrganizerUiColor(colorText, context.getString(R.string.organizer_error_color_format))
+                        val color = parseOrganizerUiColor(colorText, resources.getString(R.string.organizer_error_color_format))
                         val savedEventId = if (eventToEdit != null) {
-                            val existing = eventToEdit ?: error(context.getString(R.string.error_generic))
+                            val existing = eventToEdit ?: error(resources.getString(R.string.error_generic))
                             db.organizerDao().updateEvent(
                                 existing.copy(
                                     title = title.trim(),
@@ -723,8 +768,8 @@ fun NotesManagerScreen(navController: NavController) {
                         alarmText.trim().takeIf { it.isNotBlank() }?.let { rawAlarm ->
                             val alarmAt = parseOrganizerUiDateTime(
                                 rawAlarm,
-                                context.getString(R.string.organizer_error_datetime_required),
-                                context.getString(R.string.organizer_error_datetime_format)
+                                resources.getString(R.string.organizer_error_datetime_required),
+                                resources.getString(R.string.organizer_error_datetime_format)
                             )
                             val alarm = OrganizerAlarmEntity(
                                 eventId = savedEventId,
@@ -743,7 +788,7 @@ fun NotesManagerScreen(navController: NavController) {
                         showEventDialog = false
                         eventToEdit = null
                     }.onFailure { error ->
-                        Toast.makeText(context, error.message ?: context.getString(R.string.error_generic), Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, error.message ?: resources.getString(R.string.error_generic), Toast.LENGTH_LONG).show()
                     }
                 }
             }
@@ -762,12 +807,12 @@ fun NotesManagerScreen(navController: NavController) {
                     runCatching {
                         val trigger = parseOrganizerUiDateTime(
                             triggerText,
-                            context.getString(R.string.organizer_error_datetime_required),
-                            context.getString(R.string.organizer_error_datetime_format)
+                            resources.getString(R.string.organizer_error_datetime_required),
+                            resources.getString(R.string.organizer_error_datetime_format)
                         )
                         val now = System.currentTimeMillis()
                         val savedAlarm = if (alarmToEdit != null) {
-                            val existing = alarmToEdit ?: error(context.getString(R.string.error_generic))
+                            val existing = alarmToEdit ?: error(resources.getString(R.string.error_generic))
                             existing.copy(
                                 title = title.trim(),
                                 message = message.trim(),
@@ -802,7 +847,7 @@ fun NotesManagerScreen(navController: NavController) {
                         showAlarmDialog = false
                         alarmToEdit = null
                     }.onFailure { error ->
-                        Toast.makeText(context, error.message ?: context.getString(R.string.error_generic), Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, error.message ?: resources.getString(R.string.error_generic), Toast.LENGTH_LONG).show()
                     }
                 }
             }
@@ -886,6 +931,9 @@ private fun OrganizerCalendarTab(
     events: List<OrganizerEventEntity>,
     alarms: List<OrganizerAlarmEntity>,
     settings: OrganizerLlmSettingsEntity,
+    displayLocale: Locale,
+    displayZone: ZoneId,
+    uses24HourClock: Boolean,
     selectedDate: LocalDate,
     visibleMonth: YearMonth,
     onSelectedDateChange: (LocalDate) -> Unit,
@@ -895,9 +943,8 @@ private fun OrganizerCalendarTab(
     onEditEvent: (OrganizerEventEntity) -> Unit,
     onDeleteEvent: (OrganizerEventEntity) -> Unit
 ) {
-    val zone = remember { ZoneId.systemDefault() }
-    val selectedEvents = remember(events, selectedDate, zone) {
-        events.filter { it.occursOn(selectedDate, zone) }
+    val selectedEvents = remember(events, selectedDate, displayZone) {
+        events.filter { it.occursOn(selectedDate, displayZone) }
     }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -925,7 +972,7 @@ private fun OrganizerCalendarTab(
                             Icon(Icons.Default.KeyboardArrowLeft, stringResource(R.string.organizer_calendar_previous_month))
                         }
                         Text(
-                            visibleMonth.format(DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault())),
+                            visibleMonth.format(DateTimeFormatter.ofPattern("MMMM yyyy", displayLocale)),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -952,7 +999,7 @@ private fun OrganizerCalendarTab(
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             week.forEach { date ->
-                                val hasEvents = date != null && events.any { it.occursOn(date, zone) }
+                                val hasEvents = date != null && events.any { it.occursOn(date, displayZone) }
                                 val isSelected = date == selectedDate
                                 Surface(
                                     modifier = Modifier
@@ -1007,7 +1054,7 @@ private fun OrganizerCalendarTab(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    selectedDate.format(DateTimeFormatter.ofPattern("EEE, MMM d", Locale.getDefault())),
+                    selectedDate.format(DateTimeFormatter.ofPattern("EEE, MMM d", displayLocale)),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
@@ -1029,6 +1076,9 @@ private fun OrganizerCalendarTab(
                 OrganizerEventCard(
                     event = event,
                     alarms = alarms.filter { it.eventId == event.id },
+                    displayLocale = displayLocale,
+                    displayZone = displayZone,
+                    uses24HourClock = uses24HourClock,
                     onEdit = { onEditEvent(event) },
                     onDelete = { onDeleteEvent(event) }
                 )
@@ -1042,6 +1092,9 @@ private fun OrganizerAlarmsTab(
     alarms: List<OrganizerAlarmEntity>,
     events: List<OrganizerEventEntity>,
     settings: OrganizerLlmSettingsEntity,
+    displayLocale: Locale,
+    displayZone: ZoneId,
+    uses24HourClock: Boolean,
     onSettingsChange: (OrganizerLlmSettingsEntity) -> Unit,
     onCreateAlarm: () -> Unit,
     onEditAlarm: (OrganizerAlarmEntity) -> Unit,
@@ -1088,6 +1141,9 @@ private fun OrganizerAlarmsTab(
                 OrganizerAlarmCard(
                     alarm = alarm,
                     linkedEvent = events.firstOrNull { it.id == alarm.eventId },
+                    displayLocale = displayLocale,
+                    displayZone = displayZone,
+                    uses24HourClock = uses24HourClock,
                     onEdit = { onEditAlarm(alarm) },
                     onToggle = { enabled -> onToggleAlarm(alarm, enabled) },
                     onDelete = { onDeleteAlarm(alarm) }
@@ -1102,7 +1158,7 @@ private fun OrganizerLlmAccessCard(
     settings: OrganizerLlmSettingsEntity,
     onSettingsChange: (OrganizerLlmSettingsEntity) -> Unit
 ) {
-    Card(shape = RoundedCornerShape(12.dp)) {
+    AppAdvancedSection(title = stringResource(R.string.organizer_llm_access_title)) {
         Column(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -1169,6 +1225,9 @@ private fun OrganizerSwitchRow(
 private fun OrganizerEventCard(
     event: OrganizerEventEntity,
     alarms: List<OrganizerAlarmEntity>,
+    displayLocale: Locale,
+    displayZone: ZoneId,
+    uses24HourClock: Boolean,
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -1177,30 +1236,40 @@ private fun OrganizerEventCard(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            Text(
+                event.title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                if (event.allDay) stringResource(R.string.organizer_all_day)
+                else organizerEventTimeLabel(event, displayLocale, displayZone, uses24HourClock),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
+                horizontalArrangement = Arrangement.End
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(event.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                    Text(
-                        if (event.allDay) stringResource(R.string.organizer_all_day) else organizerEventTimeLabel(event),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.Edit, stringResource(R.string.action_edit), modifier = Modifier.size(18.dp))
                 }
-                Row {
-                    IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Default.Edit, stringResource(R.string.action_edit), modifier = Modifier.size(18.dp))
-                    }
-                    IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Default.Delete, stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
-                    }
+                IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.Delete, stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
                 }
             }
             event.location.takeIf { it.isNotBlank() }?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
             event.description.takeIf { it.isNotBlank() }?.let {
                 Text(it, style = MaterialTheme.typography.bodyMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
@@ -1220,44 +1289,65 @@ private fun OrganizerEventCard(
 private fun OrganizerAlarmCard(
     alarm: OrganizerAlarmEntity,
     linkedEvent: OrganizerEventEntity?,
+    displayLocale: Locale,
+    displayZone: ZoneId,
+    uses24HourClock: Boolean,
     onEdit: () -> Unit,
     onToggle: (Boolean) -> Unit,
     onDelete: () -> Unit
 ) {
     Card(shape = RoundedCornerShape(10.dp)) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Switch(checked = alarm.enabled, onCheckedChange = onToggle)
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(alarm.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                Text(
-                    organizerAlarmTimeLabel(alarm),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                linkedEvent?.let {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Switch(checked = alarm.enabled, onCheckedChange = onToggle)
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        stringResource(R.string.organizer_alarm_linked_event, it.title),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
+                        alarm.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        organizerAlarmTimeLabel(alarm, displayLocale, displayZone, uses24HourClock),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                alarm.message.takeIf { it.isNotBlank() }?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            linkedEvent?.let {
+                Text(
+                    stringResource(R.string.organizer_alarm_linked_event, it.title),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            alarm.message.takeIf { it.isNotBlank() }?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.Edit, stringResource(R.string.action_edit), modifier = Modifier.size(18.dp))
                 }
-            }
-            IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Default.Edit, stringResource(R.string.action_edit), modifier = Modifier.size(18.dp))
-            }
-            IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Default.Delete, stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
+                IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.Delete, stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
+                }
             }
         }
     }
@@ -1474,52 +1564,36 @@ private fun NoteEditDialog(
     onDismiss: () -> Unit,
     onSave: (title: String, content: String) -> Unit
 ) {
-    var title by remember(note) { mutableStateOf(note?.title ?: "") }
-    var content by remember(note) { mutableStateOf(note?.content ?: "") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        modifier = Modifier.fillMaxSize(0.95f),
-        title = { Text(if (note == null) stringResource(R.string.notes_new_title) else stringResource(R.string.notes_edit_title)) },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-            ) {
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    label = { Text(stringResource(R.string.notes_field_title)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = content,
-                    onValueChange = { content = it },
-                    label = { Text(stringResource(R.string.notes_field_content)) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 300.dp),
-                    maxLines = 50
-                )
+    var title by rememberSaveable(note?.id) { mutableStateOf(note?.title ?: "") }
+    var content by rememberSaveable(note?.id) { mutableStateOf(note?.content ?: "") }
+    Dialog(onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        Scaffold(
+            modifier = Modifier.fillMaxSize().safeDrawingPadding().imePadding(),
+            topBar = {
+                TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },title = { Text(stringResource(if (note == null) R.string.notes_new_title else R.string.notes_edit_title)) },
+                    navigationIcon = {
+                        IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, stringResource(R.string.action_cancel)) }
+                    })
+            },
+            bottomBar = {
+                AppTaskActionFooter {
+                    Button(onClick = { onSave(title, content) }, enabled = title.isNotBlank(), modifier = Modifier.fillMaxWidth()) {
+                        Text(stringResource(R.string.action_save))
+                    }
+                }
             }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onSave(title, content) },
-                enabled = title.isNotBlank()
-            ) {
-                Text(stringResource(R.string.action_save))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_cancel))
+        ) { padding ->
+            Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)
+                .verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                OutlinedTextField(title, { title = it }, label = { Text(stringResource(R.string.notes_field_title)) },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true)
+                OutlinedTextField(content, { content = it }, label = { Text(stringResource(R.string.notes_field_content)) },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 240.dp, max = 480.dp), minLines = 8, maxLines = 20)
             }
         }
-    )
+    }
 }
 
 @Composable
@@ -1592,7 +1666,8 @@ private fun OrganizerEventEditDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        modifier = Modifier.fillMaxSize(0.95f),
+        modifier = Modifier.safeDrawingPadding().imePadding().fillMaxSize(0.95f),
+        properties = DialogProperties(decorFitsSystemWindows = false),
         title = { Text(if (event == null) stringResource(R.string.organizer_event_new) else stringResource(R.string.organizer_event_edit)) },
         text = {
             Column(
@@ -1753,47 +1828,55 @@ private fun OrganizerEventColorSelector(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun OrganizerEventColorPickerDialog(
     selectedColorText: String,
     onDismiss: () -> Unit,
     onColorSelected: (String) -> Unit
 ) {
-    var customHex by remember(selectedColorText) { mutableStateOf(selectedColorText) }
+    val columns = if (LocalDensity.current.fontScale >= 1.3f || LocalWindowInfo.current.containerSize.width / LocalDensity.current.density < 360f) 1 else 2
+    var customHex by rememberSaveable(selectedColorText) { mutableStateOf(selectedColorText) }
     val selectedColor = remember(selectedColorText) { parseOrganizerUiColorOrNull(selectedColorText) }
     val customColor = remember(customHex) { parseOrganizerUiColorOrNull(customHex) }
     val customIsValid = customHex.isBlank() || customColor != null
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        modifier = Modifier.fillMaxSize(0.9f),
-        title = { Text(stringResource(R.string.organizer_color_dialog_title)) },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                organizerDefaultEventColors().chunked(2).forEach { rowColors ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        rowColors.forEach { option ->
-                            OrganizerColorOptionButton(
-                                option = option,
-                                selected = selectedColor == option.colorArgb,
-                                onClick = { onColorSelected(option.hex) },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                        if (rowColors.size == 1) {
-                            Spacer(modifier = Modifier.weight(1f))
+    Dialog(onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        Scaffold(
+            modifier = Modifier.fillMaxSize().safeDrawingPadding().imePadding(),
+            topBar = {
+                TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
+                    title = { Text(stringResource(R.string.organizer_color_dialog_title),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    navigationIcon = {
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Default.Close, stringResource(R.string.action_cancel))
                         }
                     }
+                )
+            },
+            bottomBar = {
+                AppTaskActionFooter {
+                    Button(
+                        onClick = {
+                            customColor?.let { onColorSelected(formatOrganizerUiColorText(it)) }
+                                ?: onColorSelected("")
+                        },
+                        enabled = customIsValid,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(stringResource(R.string.organizer_color_use_custom))
+                    }
                 }
-
+            }
+        ) { padding ->
+            Column(
+                modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)
+                    .verticalScroll(rememberScrollState()).padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
                 OutlinedTextField(
                     value = customHex,
                     onValueChange = { customHex = it },
@@ -1802,36 +1885,28 @@ private fun OrganizerEventColorPickerDialog(
                     singleLine = true,
                     isError = !customIsValid,
                     supportingText = {
-                        if (!customIsValid) {
-                            Text(stringResource(R.string.organizer_error_color_format))
-                        }
+                        if (!customIsValid) Text(stringResource(R.string.organizer_error_color_format))
                     }
                 )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    customColor?.let {
-                        onColorSelected(formatOrganizerUiColorText(it))
-                    } ?: onColorSelected("")
-                },
-                enabled = customIsValid
-            ) {
-                Text(stringResource(R.string.organizer_color_use_custom))
-            }
-        },
-        dismissButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = { onColorSelected("") }) {
+                OutlinedButton(onClick = { onColorSelected("") }, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.organizer_color_clear))
                 }
-                TextButton(onClick = onDismiss) {
-                    Text(stringResource(R.string.action_cancel))
+                organizerDefaultEventColors().chunked(columns).forEach { rowColors ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        rowColors.forEach { option ->
+                            OrganizerColorOptionButton(
+                                option = option,
+                                selected = selectedColor == option.colorArgb,
+                                onClick = { onColorSelected(option.hex) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        if (rowColors.size < columns) Spacer(Modifier.weight(1f))
+                    }
                 }
             }
         }
-    )
+    }
 }
 
 @Composable
@@ -1843,7 +1918,7 @@ private fun OrganizerColorOptionButton(
 ) {
     OutlinedButton(
         onClick = onClick,
-        modifier = modifier.heightIn(min = 44.dp)
+        modifier = modifier.heightIn(min = 48.dp)
     ) {
         OrganizerColorSwatch(
             colorArgb = option.colorArgb,
@@ -1934,7 +2009,7 @@ private fun OrganizerOptionalDateTimeSelector(
         ) {
             Icon(Icons.Default.Add, contentDescription = null)
             Spacer(modifier = Modifier.width(6.dp))
-            Text(addLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(addLabel)
         }
     } else {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1943,16 +2018,18 @@ private fun OrganizerOptionalDateTimeSelector(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                ProvideTextStyle(
-                    value = MaterialTheme.typography.labelLarge.copy(
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                ) {
-                    label()
+                Box(Modifier.weight(1f)) {
+                    ProvideTextStyle(
+                        value = MaterialTheme.typography.labelLarge.copy(
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    ) {
+                        label()
+                    }
                 }
                 IconButton(
                     onClick = { onDateTimeChange(null, null) },
-                    modifier = Modifier.size(36.dp)
+                    modifier = Modifier.size(48.dp)
                 ) {
                     Icon(
                         Icons.Default.Clear,
@@ -1971,6 +2048,7 @@ private fun OrganizerOptionalDateTimeSelector(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun OrganizerDateTimeButtons(
     date: LocalDate,
@@ -1979,9 +2057,12 @@ private fun OrganizerDateTimeButtons(
     onTimeChange: (LocalTime) -> Unit
 ) {
     val context = LocalContext.current
-    Row(
+    val stacked = LocalDensity.current.fontScale >= 1.3f || LocalWindowInfo.current.containerSize.width / LocalDensity.current.density < 360f
+    FlowRow(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        maxItemsInEachRow = if (stacked) 1 else 2
     ) {
         OutlinedButton(
             onClick = {
@@ -1995,7 +2076,7 @@ private fun OrganizerDateTimeButtons(
                     date.dayOfMonth
                 ).show()
             },
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f).heightIn(min = 48.dp)
         ) {
             Icon(Icons.Default.DateRange, contentDescription = null)
             Spacer(modifier = Modifier.width(6.dp))
@@ -2017,7 +2098,7 @@ private fun OrganizerDateTimeButtons(
                     true
                 ).show()
             },
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f).heightIn(min = 48.dp)
         ) {
             Icon(Icons.Default.Schedule, contentDescription = null)
             Spacer(modifier = Modifier.width(6.dp))
@@ -2056,7 +2137,8 @@ private fun OrganizerAlarmEditDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        modifier = Modifier.fillMaxSize(0.95f),
+        modifier = Modifier.safeDrawingPadding().imePadding().fillMaxSize(0.95f),
+        properties = DialogProperties(decorFitsSystemWindows = false),
         title = { Text(if (alarm == null) stringResource(R.string.organizer_alarm_new) else stringResource(R.string.organizer_alarm_edit)) },
         text = {
             Column(
@@ -2153,18 +2235,18 @@ private fun NoteFullScreenDialog(
         NoteType.MANUAL -> "📝" to stringResource(R.string.notes_type_note)
     }
 
-    AlertDialog(
+    Dialog(
         onDismissRequest = {
             mediaPlayer?.release()
             onDismiss()
         },
-        modifier = Modifier.fillMaxSize(0.95f)
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
         Surface(
-            modifier = Modifier.fillMaxSize(),
-            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxSize().safeDrawingPadding(),
+            shape = MaterialTheme.shapes.extraSmall,
             color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 2.dp
+            tonalElevation = 0.dp
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
                 // Header with actions only
@@ -2179,6 +2261,7 @@ private fun NoteFullScreenDialog(
                         }
                     },
                     actions = {
+                        com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                         IconButton(onClick = onEdit) {
                             Icon(Icons.Default.Edit, stringResource(R.string.action_edit))
                         }
@@ -2194,6 +2277,8 @@ private fun NoteFullScreenDialog(
                     }
                 )
 
+                Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
+                // The title, player and content share one scroll owner at large text.
                 // Visible title card
                 Card(
                     modifier = Modifier
@@ -2242,7 +2327,7 @@ private fun NoteFullScreenDialog(
                                         isPlaying = true
                                     }
                                 },
-                                modifier = Modifier.size(36.dp)
+                                modifier = Modifier.size(48.dp)
                             ) {
                                 Icon(
                                     if (isPlaying) Icons.Default.Close else Icons.Default.PlayArrow,
@@ -2263,9 +2348,8 @@ private fun NoteFullScreenDialog(
                 // Scrollable content
                 Column(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                        .padding(16.dp)
+                        .fillMaxWidth()
+                        .padding(20.dp)
                 ) {
                     // Source file info
                     note.sourceFile?.let {
@@ -2291,6 +2375,7 @@ private fun NoteFullScreenDialog(
                             onImageClick = onImageClick
                         )
                     }
+                }
                 }
             }
         }
@@ -2774,19 +2859,25 @@ private fun organizerWeekdayLabels(): List<String> {
     return (0..6).map { monday.plusDays(it.toLong()).format(formatter) }
 }
 
-private fun organizerEventTimeLabel(event: OrganizerEventEntity): String {
-    val start = formatOrganizerUiDateTime(event.startAtMillis)
-    val end = event.endAtMillis?.let(::formatOrganizerUiDateTime)
+private fun organizerEventTimeLabel(
+    event: OrganizerEventEntity,
+    locale: Locale,
+    zone: ZoneId,
+    uses24HourClock: Boolean
+): String {
+    val start = formatOrganizerDateTimeForDisplay(event.startAtMillis, locale, zone, uses24HourClock)
+    val end = event.endAtMillis?.let {
+        formatOrganizerDateTimeForDisplay(it, locale, zone, uses24HourClock)
+    }
     return if (end == null) start else "$start - $end"
 }
 
-private fun organizerAlarmTimeLabel(alarm: OrganizerAlarmEntity): String =
-    formatOrganizerUiDateTime(alarm.triggerAtMillis)
-
-private fun formatOrganizerUiDateTime(millis: Long): String =
-    Instant.ofEpochMilli(millis)
-        .atZone(ZoneId.systemDefault())
-        .format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm", Locale.US))
+private fun organizerAlarmTimeLabel(
+    alarm: OrganizerAlarmEntity,
+    locale: Locale,
+    zone: ZoneId,
+    uses24HourClock: Boolean
+): String = formatOrganizerDateTimeForDisplay(alarm.triggerAtMillis, locale, zone, uses24HourClock)
 
 private fun organizerUiDateTimeText(date: LocalDate, time: LocalTime): String =
     LocalDateTime.of(date, time.withSecond(0).withNano(0))

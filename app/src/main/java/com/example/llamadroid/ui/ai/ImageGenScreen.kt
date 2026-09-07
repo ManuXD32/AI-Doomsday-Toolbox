@@ -1,5 +1,10 @@
 package com.example.llamadroid.ui.ai
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.WalkthroughScrollOwner
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
@@ -16,6 +21,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -24,6 +30,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -32,6 +39,9 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -93,6 +103,11 @@ import com.example.llamadroid.ui.components.DraftLongTextField
 import com.example.llamadroid.ui.components.SliderWithInput
 import com.example.llamadroid.ui.components.IntSliderWithInput
 import com.example.llamadroid.ui.components.SdSchedulerPicker
+import com.example.llamadroid.ui.components.AppScrollableTabRow
+import com.example.llamadroid.ui.components.AppAdvancedSection
+import com.example.llamadroid.ui.components.AppStateKind
+import com.example.llamadroid.ui.components.AppStatePanel
+import com.example.llamadroid.ui.components.AppTaskActionFooter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -106,16 +121,41 @@ import java.util.*
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
+fun ImageGenScreen(
+    navController: NavController,
+    initialMode: Int = 0,
+    initialTab: String = "create"
+) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
+    val resources = LocalResources.current
+    val settingsRepo = remember { SettingsRepository(context) }
+    val restoredDraft = remember { settingsRepo.imageGenerationDraft() }
+    val requestedInitialMode = initialMode.takeIf {
+        it in IMAGE_GEN_MODE_TXT2IMG..IMAGE_GEN_MODE_ADETAILER
+    } ?: IMAGE_GEN_MODE_TXT2IMG
+    val restoredInitialMode = restoredDraft?.optInt("mode", IMAGE_GEN_MODE_TXT2IMG)
+        ?.takeIf { it in IMAGE_GEN_MODE_TXT2IMG..IMAGE_GEN_MODE_ADETAILER }
+        ?: IMAGE_GEN_MODE_TXT2IMG
+    val effectiveInitialMode = if (requestedInitialMode != IMAGE_GEN_MODE_TXT2IMG) {
+        requestedInitialMode
+    } else {
+        restoredInitialMode
+    }
+
+    // Keep Enlarge inside the canonical Image Generation route, but render its smaller dedicated
+    // pane. The monolithic diffusion pane exceeds a Compose runtime/compiler edge case when its
+    // upscaler-only branch is entered, while the dedicated pane uses the same service/state model
+    // without corrupting the slot table.
+    if (effectiveInitialMode == IMAGE_GEN_MODE_UPSCALE) {
+        LegacyUpscaleScreen(navController)
+        return
+    }
+
     val startupGuard = rememberAiJobStartupGuard()
-
-
     val db = remember { AppDatabase.getDatabase(context) }
     val modelRepository = remember { ModelRepository(context, db.modelDao()) }
     val binaryRepo = remember { BinaryRepository(context) }
-    val settingsRepo = remember { SettingsRepository(context) }
-    val restoredDraft = remember { settingsRepo.imageGenerationDraft() }
     val batteryGateState = rememberBatteryOptimizationGateState()
     val keepScreenAwakeDuringGeneration by settingsRepo.keepScreenAwakeDuringGeneration.collectAsState()
     val sdVaeTiling by settingsRepo.sdVaeTiling.collectAsState()
@@ -172,17 +212,30 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     val upscalerModels by db.modelDao().getModelsByType(ModelType.SD_UPSCALER)
         .collectAsState(initial = emptyList())
 
-    // Explicit deep links win over a saved draft; the normal entry point restores the draft.
-    val requestedInitialMode = initialMode.takeIf {
-        it in IMAGE_GEN_MODE_TXT2IMG..IMAGE_GEN_MODE_ADETAILER
-    } ?: IMAGE_GEN_MODE_TXT2IMG
     var selectedMode by remember(initialMode) {
-        mutableIntStateOf(
-            if (requestedInitialMode != IMAGE_GEN_MODE_TXT2IMG) requestedInitialMode
-            else restoredDraft?.optInt("mode", IMAGE_GEN_MODE_TXT2IMG)
-                ?.takeIf { it in IMAGE_GEN_MODE_TXT2IMG..IMAGE_GEN_MODE_ADETAILER }
-                ?: IMAGE_GEN_MODE_TXT2IMG
+        mutableIntStateOf(effectiveInitialMode)
+    }
+    val imageGenerationModeOrder = remember {
+        listOf(
+            IMAGE_GEN_MODE_TXT2IMG,
+            IMAGE_GEN_MODE_IMG2IMG,
+            IMAGE_GEN_MODE_INPAINT,
+            IMAGE_GEN_MODE_ADETAILER,
+            IMAGE_GEN_MODE_UPSCALE
         )
+    }
+    // Start the horizontal mode list at the externally requested item. In particular, this
+    // avoids scheduling an initial animated scroll while the Enlarge pane is being subcomposed
+    // for the first frame, which can corrupt the nested lazy-list composition on a cold launch.
+    val modeRowState = rememberLazyListState(
+        initialFirstVisibleItemIndex = imageGenerationModeOrder
+            .indexOf(selectedMode)
+            .coerceAtLeast(0)
+    )
+    LaunchedEffect(selectedMode) {
+        imageGenerationModeOrder.indexOf(selectedMode)
+            .takeIf { it >= 0 && it != modeRowState.firstVisibleItemIndex }
+            ?.let { modeRowState.animateScrollToItem(it) }
     }
     var selectedWorkflowPresetId by remember { mutableStateOf(restoredDraft?.optString("workflowPreset").orEmpty().ifBlank { null }) }
     var workflowHashVerificationFinished by remember { mutableStateOf(false) }
@@ -288,7 +341,10 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     }
 
     // Main tab selection: 0 = Generate, 1 = Gallery
-    var mainTab by remember { mutableIntStateOf(0) }
+    val mainTabStateHolder = rememberSaveableStateHolder()
+    var mainTab by rememberSaveable(initialTab) {
+        mutableIntStateOf(if (initialTab.equals("gallery", ignoreCase = true)) 1 else 0)
+    }
 
     // Gallery filter: 0 = All, 1 = txt2img, 2 = img2img, 3 = upscaled
     var galleryFilter by remember { mutableIntStateOf(0) }
@@ -690,32 +746,32 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 cleared += label
             }
         }
-        retain(selectedVaePath, compatibleVaeModels, context.getString(R.string.imagegen_component_vae)) {
+        retain(selectedVaePath, compatibleVaeModels, resources.getString(R.string.imagegen_component_vae)) {
             selectedVaePath = null
         }
-        retain(selectedTaePath, compatibleTaeModels, context.getString(R.string.imagegen_component_tae)) {
+        retain(selectedTaePath, compatibleTaeModels, resources.getString(R.string.imagegen_component_tae)) {
             selectedTaePath = null
         }
-        retain(selectedClipLPath, compatibleClipLModels, context.getString(R.string.imagegen_component_clip_l)) {
+        retain(selectedClipLPath, compatibleClipLModels, resources.getString(R.string.imagegen_component_clip_l)) {
             selectedClipLPath = null
         }
-        retain(selectedClipGPath, compatibleClipGModels, context.getString(R.string.imagegen_component_clip_g)) {
+        retain(selectedClipGPath, compatibleClipGModels, resources.getString(R.string.imagegen_component_clip_g)) {
             selectedClipGPath = null
         }
-        retain(selectedT5xxlPath, compatibleT5xxlModels, context.getString(R.string.imagegen_component_t5xxl)) {
+        retain(selectedT5xxlPath, compatibleT5xxlModels, resources.getString(R.string.imagegen_component_t5xxl)) {
             selectedT5xxlPath = null
         }
-        retain(selectedLlmPath, compatibleLlmModels, context.getString(R.string.imagegen_component_llm)) {
+        retain(selectedLlmPath, compatibleLlmModels, resources.getString(R.string.imagegen_component_llm)) {
             selectedLlmPath = null
         }
-        retain(selectedLlmVisionPath, compatibleLlmVisionModels, context.getString(R.string.imagegen_component_llm_vision)) {
+        retain(selectedLlmVisionPath, compatibleLlmVisionModels, resources.getString(R.string.imagegen_component_llm_vision)) {
             selectedLlmVisionPath = null
         }
-        retain(selectedPhotoMakerPath, compatiblePhotoMakerModels, context.getString(R.string.imagegen_component_photomaker)) {
+        retain(selectedPhotoMakerPath, compatiblePhotoMakerModels, resources.getString(R.string.imagegen_component_photomaker)) {
             selectedPhotoMakerPath = null
         }
         if (cleared.isNotEmpty()) {
-            componentResetNotice = context.getString(
+            componentResetNotice = resources.getString(
                 R.string.imagegen_components_cleared,
                 cleared.joinToString(", ")
             )
@@ -729,7 +785,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             loraStack = retained
             selectedLoraPath = retained.firstOrNull()?.path
             if (retained.isEmpty()) loraEnabled = false
-            componentResetNotice = context.getString(R.string.imagegen_loras_cleared_incompatible)
+            componentResetNotice = resources.getString(R.string.imagegen_loras_cleared_incompatible)
         }
     }
     val imagePreparationScope = rememberCoroutineScope()
@@ -737,7 +793,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
 
     // Check for shared file (from share intent)
     LaunchedEffect(Unit) {
-        val pendingFile = com.example.llamadroid.data.SharedFileHolder.consumePendingFile()
+        val pendingFile = com.example.llamadroid.data.SharedFileHolder.consumeFor(
+            com.example.llamadroid.data.SharedFileTarget.IMAGE_GENERATION
+        )
         if (pendingFile != null && pendingFile.mimeType.startsWith("image/")) {
             try {
                 val targetMode = resolveInitialImageGenMode(pendingFile.targetScreen)
@@ -822,7 +880,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 }.onFailure { failure ->
                     android.widget.Toast.makeText(
                         context,
-                        failure.message ?: context.getString(R.string.error_generic),
+                        failure.message ?: resources.getString(R.string.error_generic),
                         android.widget.Toast.LENGTH_LONG
                     ).show()
                 }
@@ -844,7 +902,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                             canvasHeight = height,
                             transform = inpaintCanvasTransform
                         )
-                    } ?: error(context.getString(R.string.imagegen_inpaint_choose_source_first))
+                    } ?: error(resources.getString(R.string.imagegen_inpaint_choose_source_first))
                     InpaintWorkspaceManager.importMask(context, workspace, it)
                 }.onSuccess { importedWorkspace ->
                     inpaintWorkspace = importedWorkspace
@@ -854,7 +912,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 }.onFailure { failure ->
                     android.widget.Toast.makeText(
                         context,
-                        failure.message ?: context.getString(R.string.error_generic),
+                        failure.message ?: resources.getString(R.string.error_generic),
                         android.widget.Toast.LENGTH_LONG
                     ).show()
                 }
@@ -873,7 +931,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         canvasHeight = height,
                         transform = inpaintCanvasTransform
                     )
-                } ?: error(context.getString(R.string.imagegen_inpaint_choose_source_first))
+                } ?: error(resources.getString(R.string.imagegen_inpaint_choose_source_first))
             }.onSuccess { workspace ->
                 inpaintWorkspace = workspace
                 selectedImagePath = workspace.sourcePath
@@ -882,7 +940,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             }.onFailure { failure ->
                 android.widget.Toast.makeText(
                     context,
-                    failure.message ?: context.getString(R.string.error_generic),
+                    failure.message ?: resources.getString(R.string.error_generic),
                     android.widget.Toast.LENGTH_LONG
                 ).show()
             }
@@ -907,7 +965,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 }.onFailure { failure ->
                     android.widget.Toast.makeText(
                         context,
-                        failure.message ?: context.getString(R.string.error_generic),
+                        failure.message ?: resources.getString(R.string.error_generic),
                         android.widget.Toast.LENGTH_LONG
                     ).show()
                 }
@@ -930,7 +988,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                             canvasHeight = height,
                             transform = inpaintCanvasTransform
                         )
-                    } ?: error(context.getString(R.string.imagegen_inpaint_choose_source_first))
+                    } ?: error(resources.getString(R.string.imagegen_inpaint_choose_source_first))
                 }.onSuccess { workspace ->
                     inpaintWorkspace = workspace
                     selectedImagePath = workspace.sourcePath
@@ -952,7 +1010,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 }.onFailure { failure ->
                     android.widget.Toast.makeText(
                         context,
-                        failure.message ?: context.getString(R.string.error_generic),
+                        failure.message ?: resources.getString(R.string.error_generic),
                         android.widget.Toast.LENGTH_LONG
                     ).show()
                 }
@@ -973,7 +1031,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     ?.takeIf { it.isFile && it.canRead() }
                 runCatching {
                     val foreground = readForegroundMaskExport(
-                        maskFile ?: error(context.getString(R.string.imagegen_inpaint_auto_mask_missing))
+                        maskFile ?: error(resources.getString(R.string.imagegen_inpaint_auto_mask_missing))
                     )
                     val raster = foregroundMaskToInpaintRaster(
                         foregroundMask = foreground,
@@ -999,7 +1057,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     pendingAutoMaskPolarity = null
                     android.widget.Toast.makeText(
                         context,
-                        failure.message ?: context.getString(R.string.error_generic),
+                        failure.message ?: resources.getString(R.string.error_generic),
                         android.widget.Toast.LENGTH_LONG
                     ).show()
                 }
@@ -1079,7 +1137,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         val restoredProfile = resolveSdParamsBackendProfileForArtifacts(selectedProfileArtifacts)
         sdParamsBackendSpec = restoredProfile.storedValue
         if (restoredProfile.warnings.isNotEmpty()) {
-            componentResetNotice = context.getString(R.string.sd_params_backend_conflict)
+            componentResetNotice = resources.getString(R.string.sd_params_backend_conflict)
         }
         restoredProfileSelectionKey = profileSelectionIdentity
     }
@@ -1424,7 +1482,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         if (selectedMode != IMAGE_GEN_MODE_UPSCALE &&
             selectedPipeline?.blockingIssues?.isNotEmpty() == true
         ) {
-            errorMessage = context.getString(R.string.imagegen_sd_pipeline_unresolved)
+            errorMessage = resources.getString(R.string.imagegen_sd_pipeline_unresolved)
             GenerationDiagnosticsStore.recordBreadcrumb(
                 source = IMAGE_GEN_UI_DIAGNOSTIC_SOURCE,
                 mode = effectiveSdMode.name,
@@ -1457,7 +1515,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     )
                 )
                 if (!gate.ready) {
-                    errorMessage = context.getString(R.string.sd_workflow_gate_missing)
+                    errorMessage = resources.getString(R.string.sd_workflow_gate_missing)
                     return@generate
                 }
             }
@@ -1545,7 +1603,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             errorMessage = sdADetailerErrorMessage(context, configurationError)
             return@generate
         } catch (configurationError: IllegalArgumentException) {
-            errorMessage = configurationError.message ?: context.getString(R.string.error_generic)
+            errorMessage = configurationError.message ?: resources.getString(R.string.error_generic)
             return@generate
         }
 
@@ -1627,7 +1685,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                             event = "ui_launch_failed",
                             details = "$launchDetails error=${error.javaClass.simpleName}: ${error.message}"
                         )
-                        errorMessage = error.message ?: context.getString(R.string.error_generic)
+                        errorMessage = error.message ?: resources.getString(R.string.error_generic)
                     }
                 }
             } else {
@@ -1758,7 +1816,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                             event = "ui_launch_failed",
                             details = "$launchDetails error=${error.javaClass.simpleName}: ${error.message}"
                         )
-                        errorMessage = error.message ?: context.getString(R.string.error_generic)
+                        errorMessage = error.message ?: resources.getString(R.string.error_generic)
                     }
                 }
             }
@@ -1865,7 +1923,10 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                             bitmap?.let {
                                 Image(
                                     bitmap = it,
-                                    contentDescription = null,
+                                    contentDescription = stringResource(
+                                        R.string.soft_studio_input_image_description,
+                                        File(selectedImagePath.orEmpty()).name
+                                    ),
                                     modifier = Modifier
                                         .size(80.dp)
                                         .clip(RoundedCornerShape(8.dp)),
@@ -2047,6 +2108,250 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
 
             Spacer(modifier = Modifier.height(12.dp))
         }
+        if (selectedMode != 2) item(key = "prompts-and-parameters") {
+            Spacer(modifier = Modifier.height(12.dp))
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        stringResource(R.string.imagegen_prompt_label),
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    if (missingRequiredComponents.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(
+                                stringResource(
+                                    R.string.imagegen_missing_components_message,
+                                    missingRequiredComponents.joinToString(", ") {
+                                        componentRoleLabel(context, it)
+                                    }
+                                ),
+                                modifier = Modifier.padding(8.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
+                    OutlinedTextField(
+                        value = prompt,
+                        onValueChange = { prompt = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .walkthroughTarget("image.prompt")
+                            .height(100.dp),
+                        placeholder = {
+                            val promptContext = when {
+                                selectedMode == IMAGE_GEN_MODE_INPAINT -> SdWorkflowPromptContext.INPAINT
+                                selectedMode == IMAGE_GEN_MODE_ADETAILER -> sdWorkflowPromptContextForDetector(adetailerModelPath)
+                                else -> null
+                            }
+                            val promptText = promptContext?.let { stringResource(sdWorkflowPromptExample(it).positiveRes) }
+                                ?: stringResource(R.string.imagegen_prompt_placeholder)
+                            Text(promptText, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f))
+                        },
+                        shape = RoundedCornerShape(12.dp)
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                walkthroughTargets?.recordEvent("image.options")
+                                showAdvanced = !showAdvanced
+                            }
+                            .walkthroughTarget("image.options"),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            stringResource(R.string.imagegen_advanced_options),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.weight(1f))
+                        Icon(
+                            if (showAdvanced) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                            null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+
+                    if (showAdvanced) {
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Text(stringResource(R.string.imagegen_negative_prompt_label), style = MaterialTheme.typography.bodyMedium)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        OutlinedTextField(
+                            value = negativePrompt,
+                            onValueChange = { negativePrompt = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = {
+                                val promptContext = when {
+                                    selectedMode == IMAGE_GEN_MODE_INPAINT -> SdWorkflowPromptContext.INPAINT
+                                    selectedMode == IMAGE_GEN_MODE_ADETAILER -> sdWorkflowPromptContextForDetector(adetailerModelPath)
+                                    else -> null
+                                }
+                                val negativeText = promptContext?.let { stringResource(sdWorkflowPromptExample(it).negativeRes) }
+                                    ?: stringResource(R.string.imagegen_negative_prompt_placeholder)
+                                Text(negativeText, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f))
+                            },
+                            shape = RoundedCornerShape(12.dp)
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                IntSliderWithInput(
+                                    value = width,
+                                    onValueChange = { width = it },
+                                    valueRange = 256..1024,
+                                    label = stringResource(R.string.imagegen_width_label)
+                                )
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                IntSliderWithInput(
+                                    value = height,
+                                    onValueChange = { height = it },
+                                    valueRange = 256..1024,
+                                    label = stringResource(R.string.imagegen_height_label)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                IntSliderWithInput(
+                                    value = steps,
+                                    onValueChange = { steps = it },
+                                    valueRange = 1..50,
+                                    label = stringResource(R.string.imagegen_steps_label)
+                                )
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                SliderWithInput(
+                                    value = cfgScale,
+                                    onValueChange = { cfgScale = it },
+                                    valueRange = 1f..20f,
+                                    label = stringResource(R.string.imagegen_cfg_label),
+                                    decimalPlaces = 1
+                                )
+                            }
+                        }
+
+                        Text(stringResource(R.string.imagegen_sampler_label), style = MaterialTheme.typography.bodyMedium)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        var samplerExpanded by remember { mutableStateOf(false) }
+                        ExposedDropdownMenuBox(
+                            expanded = samplerExpanded,
+                            onExpandedChange = { samplerExpanded = !samplerExpanded }
+                        ) {
+                            OutlinedTextField(
+                                value = selectedSampler.cliName,
+                                onValueChange = {},
+                                readOnly = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .menuAnchor(),
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = samplerExpanded) }
+                            )
+                            ExposedDropdownMenu(
+                                expanded = samplerExpanded,
+                                onDismissRequest = { samplerExpanded = false }
+                            ) {
+                                SamplingMethod.entries.forEach { sampler ->
+                                    DropdownMenuItem(
+                                        text = { Text(sampler.cliName) },
+                                        onClick = {
+                                            selectedSampler = sampler
+                                            samplerExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        SdSchedulerPicker(
+                            value = selectedScheduler,
+                            onValueChange = { selectedScheduler = it }
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            DraftLongTextField(
+                                value = seed,
+                                onValueChange = { seed = it },
+                                blankValue = -1L,
+                                modifier = Modifier.weight(1f),
+                                label = { Text(stringResource(R.string.imagegen_seed_label)) },
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            IconButton(onClick = { seed = (0..Int.MAX_VALUE).random().toLong() }) {
+                                Icon(Icons.Default.Refresh, stringResource(R.string.imagegen_random_seed))
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        IntSliderWithInput(
+                            value = if (threads <= 0) 4 else threads,
+                            onValueChange = { threads = it },
+                            valueRange = 1..16,
+                            label = stringResource(R.string.imagegen_threads_label),
+                            steps = 14
+                        )
+                        Text(
+                            stringResource(R.string.imagegen_threads_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+                        LocalSdCliMemoryControls(
+                            paramsSpec = sdParamsBackendSpec,
+                            activeModules = activeSdParamsModules,
+                            runtimeMode = sdRuntimeBackendMode,
+                            enabled = selectedActiveModel != null,
+                            maxRamEnabled = sdMaxCpuRamEnabled,
+                            maxRamGiB = sdMaxCpuRamGiB,
+                            onParamsBackendChange = {
+                                sdParamsBackendSpec = it
+                                sdParamsBackendMode = if (it.equals("disk", ignoreCase = true)) {
+                                    SdParamsBackendMode.DISK
+                                } else {
+                                    SdParamsBackendMode.AUTO
+                                }
+                            },
+                            onRuntimeBackendChange = { sdRuntimeBackendMode = it },
+                            onMaxRamEnabledChange = { settingsRepo.setSdMaxCpuRamEnabled(it) },
+                            onMaxRamGiBChange = { settingsRepo.setSdMaxCpuRamGiB(it) }
+                        )
+                    }
+                }
+            }
+        }
+
         if (selectedMode == IMAGE_GEN_MODE_INPAINT) item(key = "inpaint_options") {
             ImageGenInpaintOptionsCard(
                 maskPath = inpaintMaskPath,
@@ -2765,245 +3070,6 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             }
         }
 
-        if (selectedMode != 2) item(key = "prompts-and-parameters") {
-            Spacer(modifier = Modifier.height(12.dp))
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        stringResource(R.string.imagegen_prompt_label),
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    if (missingRequiredComponents.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Card(
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
-                            ),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Text(
-                                stringResource(
-                                    R.string.imagegen_missing_components_message,
-                                    missingRequiredComponents.joinToString(", ") {
-                                        componentRoleLabel(context, it)
-                                    }
-                                ),
-                                modifier = Modifier.padding(8.dp),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onErrorContainer
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
-
-                    OutlinedTextField(
-                        value = prompt,
-                        onValueChange = { prompt = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(100.dp),
-                        placeholder = {
-                            val promptContext = when {
-                                selectedMode == IMAGE_GEN_MODE_INPAINT -> SdWorkflowPromptContext.INPAINT
-                                selectedMode == IMAGE_GEN_MODE_ADETAILER -> sdWorkflowPromptContextForDetector(adetailerModelPath)
-                                else -> null
-                            }
-                            val promptText = promptContext?.let { stringResource(sdWorkflowPromptExample(it).positiveRes) }
-                                ?: stringResource(R.string.imagegen_prompt_placeholder)
-                            Text(promptText, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f))
-                        },
-                        shape = RoundedCornerShape(12.dp)
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { showAdvanced = !showAdvanced },
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            stringResource(R.string.imagegen_advanced_options),
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.weight(1f))
-                        Icon(
-                            if (showAdvanced) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                            null,
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
-
-                    if (showAdvanced) {
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Text(stringResource(R.string.imagegen_negative_prompt_label), style = MaterialTheme.typography.bodyMedium)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        OutlinedTextField(
-                            value = negativePrompt,
-                            onValueChange = { negativePrompt = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            placeholder = {
-                                val promptContext = when {
-                                    selectedMode == IMAGE_GEN_MODE_INPAINT -> SdWorkflowPromptContext.INPAINT
-                                    selectedMode == IMAGE_GEN_MODE_ADETAILER -> sdWorkflowPromptContextForDetector(adetailerModelPath)
-                                    else -> null
-                                }
-                                val negativeText = promptContext?.let { stringResource(sdWorkflowPromptExample(it).negativeRes) }
-                                    ?: stringResource(R.string.imagegen_negative_prompt_placeholder)
-                                Text(negativeText, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f))
-                            },
-                            shape = RoundedCornerShape(12.dp)
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                IntSliderWithInput(
-                                    value = width,
-                                    onValueChange = { width = it },
-                                    valueRange = 256..1024,
-                                    label = stringResource(R.string.imagegen_width_label)
-                                )
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                IntSliderWithInput(
-                                    value = height,
-                                    onValueChange = { height = it },
-                                    valueRange = 256..1024,
-                                    label = stringResource(R.string.imagegen_height_label)
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                IntSliderWithInput(
-                                    value = steps,
-                                    onValueChange = { steps = it },
-                                    valueRange = 1..50,
-                                    label = stringResource(R.string.imagegen_steps_label)
-                                )
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                SliderWithInput(
-                                    value = cfgScale,
-                                    onValueChange = { cfgScale = it },
-                                    valueRange = 1f..20f,
-                                    label = stringResource(R.string.imagegen_cfg_label),
-                                    decimalPlaces = 1
-                                )
-                            }
-                        }
-
-                        Text(stringResource(R.string.imagegen_sampler_label), style = MaterialTheme.typography.bodyMedium)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        var samplerExpanded by remember { mutableStateOf(false) }
-                        ExposedDropdownMenuBox(
-                            expanded = samplerExpanded,
-                            onExpandedChange = { samplerExpanded = !samplerExpanded }
-                        ) {
-                            OutlinedTextField(
-                                value = selectedSampler.cliName,
-                                onValueChange = {},
-                                readOnly = true,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .menuAnchor(),
-                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = samplerExpanded) }
-                            )
-                            ExposedDropdownMenu(
-                                expanded = samplerExpanded,
-                                onDismissRequest = { samplerExpanded = false }
-                            ) {
-                                SamplingMethod.entries.forEach { sampler ->
-                                    DropdownMenuItem(
-                                        text = { Text(sampler.cliName) },
-                                        onClick = {
-                                            selectedSampler = sampler
-                                            samplerExpanded = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-                        SdSchedulerPicker(
-                            value = selectedScheduler,
-                            onValueChange = { selectedScheduler = it }
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            DraftLongTextField(
-                                value = seed,
-                                onValueChange = { seed = it },
-                                blankValue = -1L,
-                                modifier = Modifier.weight(1f),
-                                label = { Text(stringResource(R.string.imagegen_seed_label)) },
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            IconButton(onClick = { seed = (0..Int.MAX_VALUE).random().toLong() }) {
-                                Icon(Icons.Default.Refresh, stringResource(R.string.imagegen_random_seed))
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        IntSliderWithInput(
-                            value = if (threads <= 0) 4 else threads,
-                            onValueChange = { threads = it },
-                            valueRange = 1..16,
-                            label = stringResource(R.string.imagegen_threads_label),
-                            steps = 14
-                        )
-                        Text(
-                            stringResource(R.string.imagegen_threads_desc),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                        LocalSdCliMemoryControls(
-                            paramsSpec = sdParamsBackendSpec,
-                            activeModules = activeSdParamsModules,
-                            runtimeMode = sdRuntimeBackendMode,
-                            enabled = selectedActiveModel != null,
-                            maxRamEnabled = sdMaxCpuRamEnabled,
-                            maxRamGiB = sdMaxCpuRamGiB,
-                            onParamsBackendChange = {
-                                sdParamsBackendSpec = it
-                                sdParamsBackendMode = if (it.equals("disk", ignoreCase = true)) {
-                                    SdParamsBackendMode.DISK
-                                } else {
-                                    SdParamsBackendMode.AUTO
-                                }
-                            },
-                            onRuntimeBackendChange = { sdRuntimeBackendMode = it },
-                            onMaxRamEnabledChange = { settingsRepo.setSdMaxCpuRamEnabled(it) },
-                            onMaxRamGiBChange = { settingsRepo.setSdMaxCpuRamGiB(it) }
-                        )
-                    }
-                }
-            }
-        }
-
         if (selectedMode != 2 && selectedFamilySpec != null) item(key = "runtime") {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -3171,33 +3237,37 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             disabledMessage = stringResource(R.string.gen_cache_disabled_for_upscale)
         ) }
 
-        item(key = "manual-flags") { Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    stringResource(R.string.sd_manual_flags_label),
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                )
-                Text(
-                    stringResource(R.string.sd_manual_flags_desc),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = manualCommandFlags,
-                    onValueChange = { manualCommandFlags = it },
+        item(key = "manual-flags") {
+            AppAdvancedSection(title = stringResource(R.string.soft_studio_advanced)) {
+                Card(
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.sd_manual_flags_label)) },
-                    placeholder = { Text(stringResource(R.string.sd_manual_flags_hint)) },
-                    minLines = 2,
-                    shape = RoundedCornerShape(12.dp)
-                )
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            stringResource(R.string.sd_manual_flags_label),
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                        )
+                        Text(
+                            stringResource(R.string.sd_manual_flags_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = manualCommandFlags,
+                            onValueChange = { manualCommandFlags = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text(stringResource(R.string.sd_manual_flags_label)) },
+                            placeholder = { Text(stringResource(R.string.sd_manual_flags_hint)) },
+                            minLines = 2,
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                    }
+                }
             }
-        } }
+        }
 
         item(key = "run-state") { if (isGenerating) {
             Card(
@@ -3237,18 +3307,6 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                             .clip(RoundedCornerShape(4.dp)),
                     )
 
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    OutlinedButton(
-                        onClick = cancelGeneration,
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = MaterialTheme.colorScheme.error
-                        )
-                    ) {
-                        Icon(Icons.Default.Close, null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(stringResource(R.string.action_cancel))
-                    }
                 }
             }
         } else {
@@ -3307,24 +3365,6 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         }
                     }
                 }
-                Button(
-                    onClick = generate,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp),
-                    enabled = imageGenReadiness.isReady,
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Icon(Icons.Default.Create, null)
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        when (selectedMode) {
-                            2 -> stringResource(R.string.imagegen_upscale_btn)
-                            else -> stringResource(R.string.imagegen_generate_btn)
-                        },
-                        fontWeight = FontWeight.Bold
-                    )
-                }
             }
         } }
 
@@ -3366,56 +3406,78 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     }
 
     @Composable
-    fun GalleryPane() {
+    fun GalleryPane(modifier: Modifier = Modifier) {
         LaunchedEffect(Unit) {
             recordPaneRendered("gallery")
         }
         Column(
-            modifier = Modifier
+            modifier = modifier
                 .fillMaxSize()
-                .padding(horizontal = 16.dp)
+                .padding(horizontal = 20.dp)
         ) {
             val filterLabels = listOf(
                 stringResource(R.string.imagegen_gallery_all),
                 stringResource(R.string.imagegen_mode_txt2img),
                 stringResource(R.string.imagegen_mode_img2img),
                 stringResource(R.string.imagegen_mode_upscale),
-                "⚙️"
+                stringResource(R.string.notes_type_workflow)
             )
-            SingleChoiceSegmentedButtonRow(
-                modifier = Modifier.fillMaxWidth()
+            val galleryFilterRowState = rememberLazyListState()
+            LaunchedEffect(galleryFilter) {
+                galleryFilterRowState.animateScrollToItem(galleryFilter.coerceIn(filterLabels.indices))
+            }
+            LazyRow(
+                state = galleryFilterRowState,
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(end = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                filterLabels.forEachIndexed { index, label ->
-                    SegmentedButton(
+                items(filterLabels.size) { index ->
+                    FilterChip(
                         selected = galleryFilter == index,
                         onClick = { galleryFilter = index },
-                        shape = SegmentedButtonDefaults.itemShape(
-                            index = index,
-                            count = filterLabels.size
-                        )
-                    ) {
-                        Text(label, style = MaterialTheme.typography.labelSmall)
-                    }
+                        label = {
+                            Text(
+                                filterLabels[index],
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    )
                 }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            SingleChoiceSegmentedButtonRow(
-                modifier = Modifier.fillMaxWidth()
+            val sourceLabels = listOf(
+                stringResource(R.string.ai_servers_gallery_source_all),
+                stringResource(R.string.ai_servers_gallery_source_app),
+                stringResource(R.string.ai_servers_gallery_source_server)
+            )
+            val gallerySourceRowState = rememberLazyListState()
+            LaunchedEffect(gallerySourceFilter) {
+                gallerySourceRowState.animateScrollToItem(gallerySourceFilter.coerceIn(sourceLabels.indices))
+            }
+            LazyRow(
+                state = gallerySourceRowState,
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(end = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                listOf(
-                    stringResource(R.string.ai_servers_gallery_source_all),
-                    stringResource(R.string.ai_servers_gallery_source_app),
-                    stringResource(R.string.ai_servers_gallery_source_server)
-                ).forEachIndexed { index, label ->
-                    SegmentedButton(
+                items(sourceLabels.size) { index ->
+                    FilterChip(
                         selected = gallerySourceFilter == index,
                         onClick = { gallerySourceFilter = index },
-                        shape = SegmentedButtonDefaults.itemShape(index = index, count = 3)
-                    ) {
-                        Text(label, style = MaterialTheme.typography.labelSmall)
-                    }
+                        label = {
+                            Text(
+                                sourceLabels[index],
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    )
                 }
             }
 
@@ -3437,31 +3499,21 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             }
 
             if (filteredImages.isEmpty()) {
-                Box(
+                AppStatePanel(
+                    kind = AppStateKind.Empty,
+                    title = stringResource(R.string.soft_studio_empty_title),
+                    message = if (galleryFilter == 0) {
+                        stringResource(R.string.imagegen_gallery_empty)
+                    } else {
+                        stringResource(
+                            R.string.imagegen_gallery_empty_filter,
+                            filterLabels[galleryFilter]
+                        )
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text("📷", style = MaterialTheme.typography.displayLarge)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            if (galleryFilter == 0) {
-                                stringResource(R.string.imagegen_gallery_empty)
-                            } else {
-                                stringResource(
-                                    R.string.imagegen_gallery_empty_filter,
-                                    filterLabels[galleryFilter]
-                                )
-                            },
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+                        .weight(1f)
+                )
             } else {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
@@ -3475,17 +3527,21 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     ) { imageFile ->
                         val bitmap by rememberPreviewImageBitmap(imageFile.absolutePath)
                         val typeBadge = when (imageFile.parentFile?.name) {
-                            "txt2img" -> "🎨"
-                            "img2img" -> "🔄"
-                            "upscaled" -> "⬆️"
-                            "workflow" -> "⚙️"
+                            "txt2img" -> Icons.Default.Create
+                            "img2img" -> Icons.Default.Refresh
+                            "upscaled" -> Icons.Default.KeyboardArrowUp
+                            "workflow" -> Icons.Default.AccountTree
                             else -> null
                         }
 
+                        val imageDescription = stringResource(
+                            R.string.soft_studio_generated_image_description, imageFile.name
+                        )
                         Box(
                             modifier = Modifier
                                 .aspectRatio(1f)
                                 .clip(RoundedCornerShape(12.dp))
+                                .semantics { contentDescription = imageDescription }
                                 .clickable { fullscreenImage = imageFile }
                         ) {
                             if (bitmap != null) {
@@ -3508,7 +3564,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                                     )
                                 }
                             }
-                            typeBadge?.let {
+                            typeBadge?.let { badgeIcon ->
                                 Surface(
                                     modifier = Modifier
                                         .align(Alignment.TopStart)
@@ -3516,10 +3572,11 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                                     shape = RoundedCornerShape(6.dp),
                                     color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
                                 ) {
-                                    Text(
-                                        it,
+                                    Icon(
+                                        imageVector = badgeIcon,
+                                        contentDescription = null,
                                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-                                        style = MaterialTheme.typography.labelSmall
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
@@ -3547,122 +3604,231 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.surface,
-                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-                    )
-                )
-            )
+            .background(MaterialTheme.colorScheme.background)
     ) {
         // Header
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = { navController.popBackStack() }) {
+            IconButton(onClick = { navController.popBackStack() }, modifier = Modifier.walkthroughTarget("back")) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
             }
             Text(
-                "🎨 " + stringResource(R.string.imagegen_title),
+                stringResource(R.string.imagegen_title),
                 modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.headlineSmall.copy(
-                    fontWeight = FontWeight.Bold
-                ),
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
             IconButton(onClick = { showInfoDialog = true }) {
                 Icon(Icons.Default.Info, stringResource(R.string.gen_help_open))
             }
         }
 
         // Main Tab Selector: Generate vs Gallery
-        val mainTabs = listOf("🎨 " + stringResource(R.string.imagegen_tab_generate), "📂 " + stringResource(R.string.imagegen_tab_gallery))
-        TabRow(
+        val mainTabs = listOf(
+            stringResource(R.string.imagegen_tab_generate),
+            stringResource(R.string.imagegen_tab_gallery)
+        )
+        AppScrollableTabRow(
             selectedTabIndex = mainTab,
-            modifier = Modifier.padding(horizontal = 16.dp)
+            modifier = Modifier.padding(horizontal = 20.dp),
+            edgePadding = 12.dp,
+            containerColor = androidx.compose.ui.graphics.Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.primary
         ) {
             mainTabs.forEachIndexed { index, title ->
                 Tab(
                     selected = mainTab == index,
                     onClick = { mainTab = index },
-                    text = { Text(title) }
+                    text = {
+                        Text(
+                            title,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 )
             }
         }
 
-        if (mainTab == 0) {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(bottom = 16.dp)
-            ) {
-                componentResetNotice?.let { notice ->
-                    item(key = "component-reset-notice") {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.tertiaryContainer
-                            ),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
+        val formScroll = rememberLazyListState()
+        WalkthroughScrollOwner(setOf("image.options")) { target ->
+            if (target == "image.options") {
+                if (mainTab != 0) mainTab = 0
+                // The advanced row is inside the prompt item. Its index is stable
+                // relative to the optional readiness notice and input card.
+                val imageInputVisible = selectedMode in setOf(
+                    IMAGE_GEN_MODE_IMG2IMG,
+                    IMAGE_GEN_MODE_UPSCALE,
+                    IMAGE_GEN_MODE_INPAINT
+                ) || (selectedMode == IMAGE_GEN_MODE_ADETAILER && adetailerInputMode == ADetailerInputMode.EXISTING_IMAGE)
+                val optionsIndex = 1 +
+                    (if (componentResetNotice != null) 1 else 0) +
+                    (if (imageInputVisible) 1 else 0)
+                formScroll.animateScrollToItem(optionsIndex)
+            }
+        }
+
+        mainTabStateHolder.SaveableStateProvider(mainTab) {
+            if (mainTab == 0) {
+                LazyColumn(
+                    state = formScroll,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(bottom = 16.dp)
+                ) {
+                    componentResetNotice?.let { notice ->
+                        item(key = "component-reset-notice") {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                                ),
+                                shape = RoundedCornerShape(12.dp)
                             ) {
-                                Text(
-                                    notice,
-                                    modifier = Modifier.weight(1f),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onTertiaryContainer
-                                )
-                                TextButton(onClick = { componentResetNotice = null }) {
-                                    Text(stringResource(R.string.action_dismiss), maxLines = 1)
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        notice,
+                                        modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                                    )
+                                    TextButton(onClick = { componentResetNotice = null }) {
+                                        Text(stringResource(R.string.action_dismiss), maxLines = 1)
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                item(key = "mode") {
-                    val modes = listOf(
-                        IMAGE_GEN_MODE_TXT2IMG to stringResource(R.string.imagegen_task_create),
-                        IMAGE_GEN_MODE_IMG2IMG to stringResource(R.string.imagegen_task_transform),
-                        IMAGE_GEN_MODE_INPAINT to stringResource(R.string.imagegen_task_repair),
-                        IMAGE_GEN_MODE_ADETAILER to stringResource(R.string.imagegen_task_enhance),
-                        IMAGE_GEN_MODE_UPSCALE to stringResource(R.string.imagegen_task_enlarge)
-                    )
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(modes, key = { it.first }) { (modeIndex, modeLabel) ->
-                            val modeEnabled = when (modeIndex) {
-                                IMAGE_GEN_MODE_TXT2IMG -> supportsTxt2Img
-                                IMAGE_GEN_MODE_IMG2IMG, IMAGE_GEN_MODE_INPAINT -> supportsImg2Img
-                                IMAGE_GEN_MODE_ADETAILER -> supportsTxt2Img || supportsImg2Img
-                                else -> true
+                    item(key = "mode") {
+                        val modes = listOf(
+                            IMAGE_GEN_MODE_TXT2IMG to stringResource(R.string.imagegen_task_create),
+                            IMAGE_GEN_MODE_IMG2IMG to stringResource(R.string.imagegen_task_transform),
+                            IMAGE_GEN_MODE_INPAINT to stringResource(R.string.imagegen_task_repair),
+                            IMAGE_GEN_MODE_ADETAILER to stringResource(R.string.imagegen_task_enhance),
+                            IMAGE_GEN_MODE_UPSCALE to stringResource(R.string.imagegen_task_enlarge)
+                        )
+                        LazyRow(
+                            state = modeRowState,
+                            modifier = Modifier.fillMaxWidth(),
+                            contentPadding = PaddingValues(end = 20.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(modes, key = { it.first }) { (modeIndex, modeLabel) ->
+                                val modeEnabled = when (modeIndex) {
+                                    IMAGE_GEN_MODE_TXT2IMG -> supportsTxt2Img
+                                    IMAGE_GEN_MODE_IMG2IMG, IMAGE_GEN_MODE_INPAINT -> supportsImg2Img
+                                    IMAGE_GEN_MODE_ADETAILER -> supportsTxt2Img || supportsImg2Img
+                                    else -> true
+                                }
+                                FilterChip(
+                                    selected = selectedMode == modeIndex,
+                                    onClick = {
+                                        if (modeIndex == IMAGE_GEN_MODE_UPSCALE) {
+                                            navController.navigate(Screen.ImageGen.createRoute(modeIndex))
+                                        } else {
+                                            switchGenerationMode(modeIndex)
+                                        }
+                                    },
+                                    enabled = modeEnabled,
+                                    label = {
+                                        Text(
+                                            modeLabel,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                )
                             }
-                            FilterChip(
-                                selected = selectedMode == modeIndex,
-                                onClick = {
-                                    switchGenerationMode(modeIndex)
-                                },
-                                enabled = modeEnabled,
-                                label = { Text(modeLabel, maxLines = 1) }
-                            )
                         }
                     }
+                    generationModePaneContent()
                 }
-                generationModePaneContent()
+            } else {
+                key("gallery") {
+                    GalleryPane(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                    )
+                }
             }
-        } else {
-            key("gallery") {
-                GalleryPane()
+        }
+        if (mainTab == 0 || isGenerating) {
+            AppTaskActionFooter(
+                modifier = Modifier
+                    .fillMaxWidth()
+            ) {
+                if (isGenerating) {
+                    if (generationStatus.isNotBlank()) {
+                        Text(
+                            text = generationStatus,
+                            modifier = Modifier.fillMaxWidth(),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        text = stringResource(
+                            R.string.imagegen_step_progress,
+                            currentStepVal,
+                            totalStepsVal,
+                            (progress.coerceIn(0f, 1f) * 100f).toInt()
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                    LinearProgressIndicator(
+                        progress = { progress.coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedButton(
+                        onClick = cancelGeneration,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(stringResource(R.string.soft_studio_cancel))
+                    }
+                } else {
+                    Button(
+                        onClick = generate,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 52.dp),
+                        enabled = imageGenReadiness.isReady,
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Icon(Icons.Default.Create, contentDescription = null)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            when (selectedMode) {
+                                2 -> stringResource(R.string.imagegen_upscale_btn)
+                                else -> stringResource(R.string.soft_studio_generate)
+                            },
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             }
         }
     }
@@ -3706,7 +3872,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                                     putExtra(Intent.EXTRA_STREAM, uri)
                                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 }
-                                context.startActivity(Intent.createChooser(shareIntent, context.getString(R.string.imagegen_share_chooser)))
+                                context.startActivity(Intent.createChooser(shareIntent, resources.getString(R.string.imagegen_share_chooser)))
                             } catch (e: Exception) {
                                 android.widget.Toast.makeText(
                                     context,
@@ -3736,9 +3902,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                                     SDModeStateHolder.txt2img.removeImage(file)
                                     SDModeStateHolder.img2img.removeImage(file)
                                     SDModeStateHolder.upscale.removeImage(file)
-                                    android.widget.Toast.makeText(context, context.getString(R.string.imagegen_delete_confirm), android.widget.Toast.LENGTH_SHORT).show()
+                                    android.widget.Toast.makeText(context, resources.getString(R.string.imagegen_delete_confirm), android.widget.Toast.LENGTH_SHORT).show()
                                 } else {
-                                    android.widget.Toast.makeText(context, context.getString(R.string.imagegen_delete_fail), android.widget.Toast.LENGTH_SHORT).show()
+                                    android.widget.Toast.makeText(context, resources.getString(R.string.imagegen_delete_fail), android.widget.Toast.LENGTH_SHORT).show()
                                 }
                                 fullscreenImage = null
                             }
@@ -3747,18 +3913,18 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     ) {
                         Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text(context.getString(R.string.action_delete))
+                        Text(resources.getString(R.string.action_delete))
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     // Close button
                     TextButton(onClick = { fullscreenImage = null }) {
-                        Text(context.getString(R.string.action_close))
+                        Text(resources.getString(R.string.action_close))
                     }
                 }
             },
             title = {
                 Column {
-                    Text(context.getString(R.string.imagegen_generated_title))
+                    Text(resources.getString(R.string.imagegen_generated_title))
                     val actualResolution = fullscreenImage?.absolutePath?.let { readImageFileResolution(it) }
                     val displayResolution = actualResolution ?: bitmap?.let { it.width to it.height }
                     displayResolution?.let {

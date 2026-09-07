@@ -34,14 +34,13 @@ import org.json.JSONObject
  * - Error handling and propagation to UI
  */
 class AgentViewModel(
-    private val context: Context,
+    context: Context,
     private val db: AppDatabase,
     private val settingsRepository: SettingsRepository
 ) : ViewModel() {
-
     // Services
-    val ollamaService = OllamaService(context)
-    val agentService = AgentService(context)
+    val ollamaService = OllamaService(context.applicationContext)
+    val agentService = AgentService(context.applicationContext)
 
     // ========== RATE LIMITING ==========
     private var toolCallCount = 0

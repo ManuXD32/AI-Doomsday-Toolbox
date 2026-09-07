@@ -62,6 +62,24 @@ internal fun shouldAdoptLiveRuntimeConversation(
     return selectedConversationId !in knownConversationIds
 }
 
+internal fun shouldSkipPersistedRuntimeRestore(
+    isLoading: Boolean,
+    liveMessagesEmpty: Boolean
+): Boolean = isLoading && !liveMessagesEmpty
+
+internal fun shouldStackAgentKnowledgeHeader(fontScale: Float): Boolean = fontScale >= 1.5f
+
+/**
+ * A persisted runtime job is only a crash-recovery checkpoint. The conversation row owns the
+ * project backend, so an older or malformed checkpoint must not turn a local project into SSH.
+ */
+internal fun resolveRestoredWorkspaceBackend(
+    canonicalConversationBackend: String?,
+    snapshotBackend: AgentWorkspaceBackendType
+): AgentWorkspaceBackendType = AgentWorkspaceBackendType.entries.firstOrNull { backend ->
+    backend.name.equals(canonicalConversationBackend.orEmpty(), ignoreCase = true)
+} ?: snapshotBackend
+
 internal fun shouldUseSelectedConversationPreview(
     selectedConversationId: Long?,
     runtimeConversationId: Long?,

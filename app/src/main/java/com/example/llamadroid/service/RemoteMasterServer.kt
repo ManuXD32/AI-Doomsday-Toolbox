@@ -28,11 +28,12 @@ import javax.net.ssl.*
  * and change speculative decoding settings on a running master.
  */
 class RemoteMasterServer(
-    private val context: Context,
+    context: Context,
     private val port: Int,
     private val passwordHash: String, // SHA-256 hex of the password
     private val whitelist: List<String> // Empty = allow all
 ) {
+    private val context = context.applicationContext
     
     private var serverSocket: SSLServerSocket? = null
     private var serverJob: Job? = null
@@ -958,55 +959,16 @@ class RemoteMasterServer(
  */
 object SelfSignedCertGenerator {
     fun generate(keyPair: java.security.KeyPair): X509Certificate {
-        // Use Android's hidden but available API for self-signed cert generation
-        // This works on Android 4.0+ via the legacy sun.security.x509 compatibility layer
-        // that's actually part of the Android runtime (conscrypt)
-        
         val startDate = Date()
         val endDate = Date(startDate.time + 365L * 24 * 60 * 60 * 1000) // 1 year
-        
-        // Use reflection to access Android's certificate builder
-        try {
-            // Try using android.security.keystore or legacy approach
-            val builderClass = Class.forName("com.android.org.bouncycastle.x509.X509V3CertificateGenerator")
-            val builder = builderClass.getDeclaredConstructor().newInstance()
-            
-            val setSerialNumber = builderClass.getMethod("setSerialNumber", java.math.BigInteger::class.java)
-            setSerialNumber.invoke(builder, java.math.BigInteger.valueOf(System.currentTimeMillis()))
-            
-            val x500Class = Class.forName("com.android.org.bouncycastle.jce.X509Principal")
-            val x500Name = x500Class.getConstructor(String::class.java).newInstance("CN=RemoteMaster,O=LlamaDroid")
-            
-            val setIssuerDN = builderClass.getMethod("setIssuerDN", java.security.Principal::class.java)
-            setIssuerDN.invoke(builder, x500Name)
-            
-            val setSubjectDN = builderClass.getMethod("setSubjectDN", java.security.Principal::class.java)
-            setSubjectDN.invoke(builder, x500Name)
-            
-            val setNotBefore = builderClass.getMethod("setNotBefore", Date::class.java)
-            setNotBefore.invoke(builder, startDate)
-            
-            val setNotAfter = builderClass.getMethod("setNotAfter", Date::class.java)
-            setNotAfter.invoke(builder, endDate)
-            
-            val setPublicKey = builderClass.getMethod("setPublicKey", java.security.PublicKey::class.java)
-            setPublicKey.invoke(builder, keyPair.public)
-            
-            val setSignatureAlgorithm = builderClass.getMethod("setSignatureAlgorithm", String::class.java)
-            setSignatureAlgorithm.invoke(builder, "SHA256WithRSAEncryption")
-            
-            val generateMethod = builderClass.getMethod("generate", java.security.PrivateKey::class.java)
-            return generateMethod.invoke(builder, keyPair.private) as X509Certificate
-            
-        } catch (e: Exception) {
-            DebugLog.log("[SelfSignedCertGenerator] Reflection approach failed: ${e.message}, using programmatic DER approach")
-            // Fallback: Create certificate using raw DER encoding
-            return createCertificateFromDER(keyPair, startDate, endDate)
-        }
+
+        // Build the certificate through the existing standards-based DER path. Avoid Android's
+        // hidden Bouncy Castle classes: hidden APIs are not stable and can be blocked at runtime.
+        return createCertificateFromDER(keyPair, startDate, endDate)
     }
     
     /**
-     * Fallback: Build a minimal self-signed X.509 v3 certificate from raw DER bytes.
+     * Build a minimal self-signed X.509 v3 certificate from raw DER bytes.
      * This is a minimal implementation that works without BouncyCastle.
      */
     private fun createCertificateFromDER(

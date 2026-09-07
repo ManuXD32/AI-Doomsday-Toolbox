@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="video_input_first_image">First image</string>
+    <string name="video_input_last_image">Last image</string>
+    <string name="video_input_control_image">Control image</string>
+    <string name="video_input_control_video">Control video</string>
+    <string name="video_input_reference_images">Reference images</string>
+    <string name="video_input_reference_videos">Reference videos</string>
+    <string name="video_input_reference_video_audio">Reference videos with audio</string>
+    <string name="video_input_reference_audio">Reference audio</string>
+    <string name="video_input_choose_file">Choose file</string>
+    <string name="video_input_add_files">Add files</string>
+    <string name="video_input_choose_frame_directory">Choose frame directory</string>
+    <string name="video_input_add_frame_directories">Add frame directories</string>
+    <string name="video_input_copying">Preparing input…</string>
+    <string name="video_input_import_failed">Could not prepare this input. Check available storage and choose a readable file or frame directory to retry.</string>
+</resources>

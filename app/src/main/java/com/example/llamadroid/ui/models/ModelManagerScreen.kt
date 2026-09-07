@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.models
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.os.Environment
 import android.os.StatFs
 import androidx.annotation.StringRes
@@ -27,10 +29,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -48,12 +50,21 @@ import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.DownloadProgressHolder
 import com.example.llamadroid.data.model.ModelLibraryManager
 import com.example.llamadroid.data.model.ModelRepository
+import com.example.llamadroid.data.model.library.ModelFamily
+import com.example.llamadroid.data.model.library.ModelSourceDraft
+import com.example.llamadroid.data.model.library.ModelSourceRepository
 import com.example.llamadroid.service.DownloadService
+import com.example.llamadroid.ui.components.ModelStorageOverviewCard
+import com.example.llamadroid.ui.components.rememberModelStorageInventory
 import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppPageBackground
-import com.example.llamadroid.ui.components.AppPageHeader
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppSectionCard
+import com.example.llamadroid.ui.components.AppScrollableTabRow
 import com.example.llamadroid.ui.components.DownloadTaskSection
+import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -62,8 +73,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import java.io.File
-
-private const val MODEL_STORAGE_REFRESH_MILLIS = 15_000L
 
 private fun editableModelTypeOptions(): List<ModelType> = listOf(
     ModelType.LLM,
@@ -105,6 +114,7 @@ private val MODEL_MANAGER_CATEGORIES = listOf(
 @Composable
 fun ModelManagerScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val db = remember { AppDatabase.getDatabase(context) }
     val repo = remember { ModelRepository(context, db.modelDao()) }
     val viewModel: ModelManagerViewModel = viewModel(
@@ -119,6 +129,7 @@ fun ModelManagerScreen(navController: NavController) {
     )
     
     val progressMap by viewModel.downloadProgress.collectAsStateWithLifecycle()
+    val installedModelCount by viewModel.installedModels.collectAsStateWithLifecycle()
     val managerDownloadTypeNames = remember {
         listOf(
             ModelType.LLM,
@@ -141,21 +152,35 @@ fun ModelManagerScreen(navController: NavController) {
             (it.value == DownloadProgressHolder.INDETERMINATE || it.value in 0f..0.999f)
     }
 
-    AppPageBackground {
+    AppScreenScaffold(
+        title = stringResource(R.string.nav_models),
+        onBack = { navController.popBackStack() },
+        actions = {
+            IconButton(
+                onClick = {
+                    walkthroughTargets?.recordEvent("models.download")
+                    navController.navigate("${Screen.ModelSources.route}?family=LLM&tab=download")
+                },
+                modifier = Modifier.walkthroughTarget("models.download")
+            ) {
+                Icon(Icons.Default.CloudDownload, contentDescription = stringResource(R.string.model_library_custom_download_heading))
+            }
+        }
+    ) {
         Column(modifier = Modifier.fillMaxSize()) {
             AppContentColumn(
                 modifier = Modifier.fillMaxWidth(),
                 bottomPadding = 8.dp,
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                AppPageHeader(
-                    eyebrow = "MODELS",
-                    title = stringResource(R.string.nav_models),
-                    subtitle = stringResource(R.string.ai_hub_subtitle)
+                ModelManagerShortcutRow(
+                    navController = navController,
+                    family = ModelFamily.LLM
                 )
                 AppSectionCard {
-                    TabRow(
+                    AppScrollableTabRow(
                         selectedTabIndex = selectedTab,
+                        edgePadding = 12.dp,
                         containerColor = Color.Transparent,
                         contentColor = MaterialTheme.colorScheme.primary
                     ) {
@@ -167,7 +192,9 @@ fun ModelManagerScreen(navController: NavController) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text(
                                             title,
-                                            fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal
+                                            fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
                                         if (index == 1 && activeDownloads > 0) {
                                             Spacer(modifier = Modifier.width(4.dp))
@@ -177,6 +204,15 @@ fun ModelManagerScreen(navController: NavController) {
                                                 Text("$activeDownloads")
                                             }
                                         }
+                                        if (index == 0 && installedModelCount.isNotEmpty()) {
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Badge(
+                                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                            ) {
+                                                Text(installedModelCount.size.toString())
+                                            }
+                                        }
                                     }
                                 }
                             )
@@ -184,38 +220,41 @@ fun ModelManagerScreen(navController: NavController) {
                     }
                 }
             }
-            when (selectedTab) {
-                0 -> InstalledTab(viewModel)
-                1 -> DownloadingTab(viewModel)
-                2 -> DiscoverTab(viewModel)
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+                when (selectedTab) {
+                    0 -> InstalledTab(
+                        viewModel,
+                        onOpenSources = { navController.navigate("${Screen.ModelSources.route}?tab=sources") }
+                    )
+                    1 -> DownloadingTab(viewModel)
+                    2 -> DiscoverTab(viewModel)
+                }
             }
         }
     }
 }
 
 @Composable
-fun InstalledTab(viewModel: ModelManagerViewModel) {
+fun InstalledTab(
+    viewModel: ModelManagerViewModel,
+    onOpenSources: () -> Unit = {}
+) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
+    val resources = LocalResources.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val models by viewModel.installedModels.collectAsStateWithLifecycle()
-    var storageSnapshot by remember(models) {
-        // StatFs is cheap but still a filesystem query; initialize from metadata and let the
-        // visible-route refresh perform the actual query off the main thread.
-        mutableStateOf(ModelStorageSnapshot(0L, 0L, models.sumOf { it.sizeBytes.coerceAtLeast(0L) }))
-    }
+    val storageSnapshot = rememberModelStorageInventory()
+    val sourceRepository = rememberModelSourceRepository(context)
+    val savedSources by sourceRepository.sources.collectAsStateWithLifecycle(initialValue = emptyList())
+    val sourceProvenance by sourceRepository.provenance.collectAsStateWithLifecycle(initialValue = emptyList())
+    var sourceAsset by remember { mutableStateOf<com.example.llamadroid.data.model.library.InstalledModelAsset?>(null) }
 
-    LaunchedEffect(models, lifecycleOwner) {
-        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            while (currentCoroutineContext().isActive) {
-                storageSnapshot = withContext(Dispatchers.IO) {
-                    readModelStorageSnapshot(models)
-                }
-                delay(MODEL_STORAGE_REFRESH_MILLIS)
-            }
-        }
-    }
-    
     // Import state - FILE FIRST approach (FAB launches picker, then show dialog)
     var showImportDialog by remember { mutableStateOf(false) }
     var selectedModelType by remember { mutableStateOf(ModelType.LLM) }
@@ -223,6 +262,9 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
     var hasEmbeddingSupport by remember { mutableStateOf(false) }
     var pendingUri by remember { mutableStateOf<android.net.Uri?>(null) }
     var pendingFilename by remember { mutableStateOf("") }
+    var importSourceUrl by remember { mutableStateOf("") }
+    var importSourceLabel by remember { mutableStateOf("") }
+    var importSourceError by remember { mutableStateOf<String?>(null) }
     
     // Import progress state
     var isImporting by remember { mutableStateOf(false) }
@@ -252,7 +294,7 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                         val sourceFile = File(model.path)
                         if (!sourceFile.exists()) {
                             kotlinx.coroutines.withContext(Dispatchers.Main) {
-                                android.widget.Toast.makeText(context, context.getString(R.string.models_export_error_not_found), android.widget.Toast.LENGTH_SHORT).show()
+                                android.widget.Toast.makeText(context, resources.getString(R.string.models_export_error_not_found), android.widget.Toast.LENGTH_SHORT).show()
                             }
                             return@launch
                         }
@@ -267,12 +309,12 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                                 }
                             }
                             kotlinx.coroutines.withContext(Dispatchers.Main) {
-                                android.widget.Toast.makeText(context, context.getString(R.string.models_export_success, model.filename), android.widget.Toast.LENGTH_SHORT).show()
+                            android.widget.Toast.makeText(context, resources.getString(R.string.models_export_success, model.filename), android.widget.Toast.LENGTH_SHORT).show()
                             }
                         }
                     } catch (e: Exception) {
                         kotlinx.coroutines.withContext(Dispatchers.Main) {
-                            android.widget.Toast.makeText(context, context.getString(R.string.models_export_failed, e.message), android.widget.Toast.LENGTH_SHORT).show()
+                            android.widget.Toast.makeText(context, resources.getString(R.string.models_export_failed, e.message), android.widget.Toast.LENGTH_SHORT).show()
                         }
                     } finally {
                         pendingExportModel = null
@@ -306,6 +348,9 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                     }
                 }
                 // Show import dialog after file is selected
+                importSourceUrl = ""
+                importSourceLabel = ""
+                importSourceError = null
                 showImportDialog = true
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -315,10 +360,14 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
     
     // Combined import dialog (type selection + capabilities)
     if (showImportDialog && pendingUri != null) {
+        val invalidSourceText = stringResource(R.string.model_source_invalid_link)
         AlertDialog(
             onDismissRequest = { 
                 showImportDialog = false
                 pendingUri = null
+                importSourceUrl = ""
+                importSourceLabel = ""
+                importSourceError = null
             },
             title = { Text(stringResource(R.string.models_import)) },
             text = {
@@ -389,6 +438,19 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                     }
 
                     Spacer(modifier = Modifier.height(16.dp))
+                    OptionalModelSourceFields(
+                        family = ModelFamily.LLM,
+                        url = importSourceUrl,
+                        onUrlChange = {
+                            importSourceUrl = it
+                            importSourceError = null
+                        },
+                        label = importSourceLabel,
+                        onLabelChange = { importSourceLabel = it },
+                        error = importSourceError
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
                     Text(
                         stringResource(R.string.models_import_delete_note),
                         style = MaterialTheme.typography.bodySmall,
@@ -398,6 +460,15 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
             },
             confirmButton = {
                 Button(onClick = {
+                    val sourceDraft = optionalModelSourceDraft(
+                        family = ModelFamily.LLM,
+                        url = importSourceUrl,
+                        label = importSourceLabel
+                    )
+                    if (sourceDraft.isFailure) {
+                        importSourceError = invalidSourceText
+                        return@Button
+                    }
                     showImportDialog = false
                     val uri = pendingUri!!
                     val filename = pendingFilename
@@ -418,11 +489,25 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                             type = type,
                             isVision = vision,
                             sdCaps = null,
+                            sourceRepository = sourceRepository,
+                            sourceDraft = sourceDraft.getOrNull(),
                             onProgress = { progress ->
                                 importProgress = progress
                             },
                             onComplete = {
                                 isImporting = false
+                            },
+                            onSourceResult = { result ->
+                                result.onFailure { error ->
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        resources.getString(
+                                            R.string.model_source_save_failed,
+                                            error.message ?: resources.getString(R.string.error_generic)
+                                        ),
+                                        android.widget.Toast.LENGTH_LONG
+                                    ).show()
+                                }
                             }
                         )
                     }
@@ -433,6 +518,9 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                     selectedModelType = ModelType.LLM
                     hasVisionSupport = false
                     hasEmbeddingSupport = false
+                    importSourceUrl = ""
+                    importSourceLabel = ""
+                    importSourceError = null
                 }) {
                     Text(stringResource(R.string.models_import))
                 }
@@ -442,6 +530,9 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                     showImportDialog = false
                     pendingUri = null
                     pendingFilename = ""
+                    importSourceUrl = ""
+                    importSourceLabel = ""
+                    importSourceError = null
                 }) {
                     Text(stringResource(R.string.action_cancel))
                 }
@@ -487,6 +578,38 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
             confirmButton = { /* No confirm button */ }
         )
     }
+
+    sourceAsset?.let { asset ->
+        ModelSourceAttachmentDialog(
+            asset = asset,
+            sources = savedSources,
+            provenance = sourceProvenance,
+            onDismiss = { sourceAsset = null },
+            onSave = { request ->
+                sourceAsset = null
+                scope.launch {
+                    attachModelSource(sourceRepository, request)
+                        .onSuccess {
+                            android.widget.Toast.makeText(
+                                context,
+                                resources.getString(R.string.model_source_saved),
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        .onFailure { error ->
+                            android.widget.Toast.makeText(
+                                context,
+                                resources.getString(
+                                    R.string.model_source_save_failed,
+                                    error.message ?: resources.getString(R.string.error_generic)
+                                ),
+                                android.widget.Toast.LENGTH_LONG
+                            ).show()
+                        }
+                }
+            }
+        )
+    }
     
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
@@ -495,7 +618,20 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
-                ModelStorageOverviewCard(storageSnapshot)
+                ModelStorageOverviewCard(storageSnapshot, "llm")
+            }
+            item {
+                OutlinedButton(
+                    onClick = {
+                        walkthroughTargets?.recordEvent("models.import")
+                        onOpenSources()
+                    },
+                    modifier = Modifier.fillMaxWidth().walkthroughTarget("models.import")
+                ) {
+                    Icon(Icons.Default.Link, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.model_library_manage_sources))
+                }
             }
 
             if (models.isEmpty()) {
@@ -537,6 +673,14 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                 modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
                             )
+                            val group = when {
+                                ModelType.LLM in category.modelTypes -> "llm:base"
+                                ModelType.LLM_DRAFT in category.modelTypes -> "llm:draft"
+                                ModelType.LORA in category.modelTypes -> "llm:lora"
+                                ModelType.EMBEDDING in category.modelTypes -> "llm:embedding"
+                                else -> "llm:projector"
+                            }
+                            com.example.llamadroid.ui.components.ModelStorageCount(storageSnapshot.usage(group), loaded = storageSnapshot.loaded)
                         }
                         items(categoryModels) { model ->
                             ModelCard(
@@ -548,6 +692,7 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                                 actionColor = MaterialTheme.colorScheme.error,
                                 onAction = { pendingDeleteModel = model },
                                 onExport = { exportModel(model) },
+                                onSource = { sourceAsset = installedAssetForModel(model) },
                                 onRename = {
                                     modelToRename = model
                                     newModelName = model.filename.substringBeforeLast(".")
@@ -672,11 +817,11 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                                         val renamed = cleanNewName != model.filename
                                         val finalPath = if (renamed) {
                                             if (!oldFile.exists()) {
-                                                throw IllegalStateException(context.getString(R.string.models_rename_failed))
+                                                throw IllegalStateException(resources.getString(R.string.models_rename_failed))
                                             }
                                             val newFile = java.io.File(oldFile.parent, cleanNewName)
                                             if (!oldFile.renameTo(newFile)) {
-                                                throw IllegalStateException(context.getString(R.string.models_rename_failed))
+                                                throw IllegalStateException(resources.getString(R.string.models_rename_failed))
                                             }
                                             newFile.absolutePath
                                         } else {
@@ -710,7 +855,7 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                                             withContext(Dispatchers.Main) {
                                                 android.widget.Toast.makeText(
                                                     context,
-                                                    context.getString(R.string.models_kb_embedding_cleared),
+                                                    resources.getString(R.string.models_kb_embedding_cleared),
                                                     android.widget.Toast.LENGTH_SHORT
                                                 ).show()
                                             }
@@ -719,13 +864,13 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                                         withContext(Dispatchers.Main) {
                                             android.widget.Toast.makeText(
                                                 context,
-                                                context.getString(R.string.models_edit_success, cleanNewName),
+                                                resources.getString(R.string.models_edit_success, cleanNewName),
                                                 android.widget.Toast.LENGTH_SHORT
                                             ).show()
                                         }
                                     } catch (e: Exception) {
                                         withContext(Dispatchers.Main) {
-                                            android.widget.Toast.makeText(context, context.getString(R.string.models_error_toast, e.message ?: ""), android.widget.Toast.LENGTH_SHORT).show()
+                                            android.widget.Toast.makeText(context, resources.getString(R.string.models_error_toast, e.message ?: ""), android.widget.Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 }
@@ -778,262 +923,6 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
             Icon(Icons.Default.Add, contentDescription = stringResource(R.string.models_import))
         }
     }
-}
-
-@Composable
-private fun ModelStorageOverviewCard(snapshot: ModelStorageSnapshot) {
-    val context = LocalContext.current
-    val totalText = FormatUtils.Display.formatBytes(context, snapshot.totalBytes)
-    val freeText = FormatUtils.Display.formatBytes(context, snapshot.freeBytes)
-    val modelsText = FormatUtils.Display.formatBytes(context, snapshot.modelsBytes)
-    val otherUsedText = FormatUtils.Display.formatBytes(context, snapshot.otherUsedBytes)
-    val barDescription = stringResource(
-        R.string.models_storage_bar_desc,
-        totalText,
-        freeText,
-        modelsText
-    )
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .background(
-                    Brush.linearGradient(
-                        colors = listOf(
-                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.36f),
-                            MaterialTheme.colorScheme.surface,
-                            MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.24f)
-                        )
-                    )
-                )
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                ) {
-                    Icon(
-                        Icons.Default.Info,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .padding(10.dp)
-                            .size(24.dp)
-                    )
-                }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        stringResource(R.string.models_storage_title),
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        stringResource(R.string.models_storage_subtitle),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                StorageValuePill(
-                    label = stringResource(R.string.models_storage_total),
-                    value = totalText,
-                    modifier = Modifier.weight(1f)
-                )
-                StorageValuePill(
-                    label = stringResource(R.string.models_storage_free),
-                    value = freeText,
-                    modifier = Modifier.weight(1f)
-                )
-                StorageValuePill(
-                    label = stringResource(R.string.models_storage_models),
-                    value = modelsText,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            SegmentedStorageBar(
-                snapshot = snapshot,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .semantics { contentDescription = barDescription }
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                StorageLegendItem(
-                    label = stringResource(R.string.models_storage_models),
-                    value = modelsText,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                StorageLegendItem(
-                    label = stringResource(R.string.models_storage_other),
-                    value = otherUsedText,
-                    color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.72f),
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun StorageValuePill(
-    label: String,
-    value: String,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.76f),
-        tonalElevation = 1.dp
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            Text(
-                label,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                value,
-                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-    }
-}
-
-@Composable
-private fun SegmentedStorageBar(
-    snapshot: ModelStorageSnapshot,
-    modifier: Modifier = Modifier
-) {
-    val otherUsedFraction = snapshot.otherUsedFraction
-    val modelsFraction = snapshot.modelsFraction
-
-    Box(
-        modifier = modifier
-            .height(14.dp)
-            .clip(RoundedCornerShape(999.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f))
-    ) {
-        Row(modifier = Modifier.fillMaxSize()) {
-            if (otherUsedFraction > 0f) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .weight(otherUsedFraction)
-                        .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.72f))
-                )
-            }
-            if (modelsFraction > 0f) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .weight(modelsFraction)
-                        .background(
-                            Brush.horizontalGradient(
-                                colors = listOf(
-                                    MaterialTheme.colorScheme.primary,
-                                    MaterialTheme.colorScheme.tertiary
-                                )
-                            )
-                        )
-                )
-            }
-            val freeFraction = (1f - otherUsedFraction - modelsFraction).coerceIn(0f, 1f)
-            if (freeFraction > 0f) {
-                Spacer(modifier = Modifier.weight(freeFraction))
-            }
-        }
-    }
-}
-
-@Composable
-private fun StorageLegendItem(
-    label: String,
-    value: String,
-    color: Color,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier,
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .size(8.dp)
-                .clip(RoundedCornerShape(999.dp))
-                .background(color)
-        )
-        Text(
-            stringResource(R.string.models_storage_legend_value, label, value),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
-private data class ModelStorageSnapshot(
-    val totalBytes: Long,
-    val freeBytes: Long,
-    val modelsBytes: Long
-) {
-    private val usedBytes: Long = (totalBytes - freeBytes).coerceIn(0L, totalBytes.coerceAtLeast(0L))
-    val otherUsedBytes: Long = (usedBytes - modelsBytes).coerceAtLeast(0L)
-    val modelsFraction: Float = fractionOfTotal(modelsBytes)
-    val otherUsedFraction: Float = fractionOfTotal(otherUsedBytes)
-
-    private fun fractionOfTotal(bytes: Long): Float =
-        if (totalBytes > 0L) {
-            (bytes.toDouble() / totalBytes.toDouble()).toFloat().coerceIn(0f, 1f)
-        } else {
-            0f
-        }
-}
-
-private fun readModelStorageSnapshot(models: List<ModelEntity>): ModelStorageSnapshot {
-    val stats = StatFs(Environment.getDataDirectory().absolutePath)
-    val totalBytes = stats.totalBytes.coerceAtLeast(0L)
-    val freeBytes = stats.availableBytes.coerceIn(0L, totalBytes.coerceAtLeast(0L))
-    val modelsBytes = models.sumOf { it.sizeBytes.coerceAtLeast(0L) }
-    return ModelStorageSnapshot(
-        totalBytes = totalBytes,
-        freeBytes = freeBytes,
-        modelsBytes = modelsBytes
-    )
 }
 
 // Helper function to import model
@@ -1092,8 +981,11 @@ private suspend fun importModelWithProgress(
     type: ModelType,
     isVision: Boolean,
     sdCaps: String?,
+    sourceRepository: ModelSourceRepository? = null,
+    sourceDraft: ModelSourceDraft? = null,
     onProgress: (Float) -> Unit,
-    onComplete: () -> Unit
+    onComplete: () -> Unit,
+    onSourceResult: (Result<Unit>) -> Unit = {}
 ) {
     var tempFile: File? = null
     try {
@@ -1159,7 +1051,7 @@ private suspend fun importModelWithProgress(
             }
         }
 
-        viewModel.importLocalModel(
+        val importedModel = viewModel.importLocalModel(
             path = finalPath,
             filename = targetFilename,
             modelType = type,
@@ -1167,7 +1059,20 @@ private suspend fun importModelWithProgress(
             hasEmbedding = false,
             sdCapabilities = sdCaps,
             layerCount = layerCount
-        )
+        ).getOrThrow()
+        if (sourceDraft != null && sourceRepository != null) {
+            val sourceResult = attachModelSource(
+                sourceRepository,
+                ModelSourceAttachmentRequest(
+                    asset = installedAssetForModel(importedModel),
+                    newSource = sourceDraft,
+                    role = installedAssetForModel(importedModel).role
+                )
+            )
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                onSourceResult(sourceResult)
+            }
+        }
     } catch (e: Exception) {
         tempFile?.takeIf { it.exists() }?.delete()
         com.example.llamadroid.util.DebugLog.log("[MODEL-IMPORT] Error: ${e.message}")
@@ -1229,6 +1134,7 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
                 // The exact model-type query keeps Whisper and its separate VAD
                 // assets out without relying on task-id naming conventions.
                 modelTypes = modelTypes,
+                artifactFamily = com.example.llamadroid.data.model.library.ModelFamily.LLM,
                 includeTask = { task -> task.modelType in modelTypes.map { it.name } }
             )
         }
@@ -1281,12 +1187,15 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
                                 Text(
                                     repoId.substringAfterLast("/"),
                                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                                    maxLines = 1
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
                                     repoId.substringBeforeLast("/", ""),
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                             Text(
@@ -1296,12 +1205,20 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
                                     "${(progress * 100).toInt()}%"
                                 },
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.primary
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            // Cancel button
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            // Keep the compact action below the model identifier so a
+                            // long repository name never squeezes the cancel affordance.
                             IconButton(
-                                onClick = { 
+                                onClick = {
                                     val filename = DownloadProgressHolder.getFilename(repoId)
                                     if (filename != null) {
                                         DownloadService.cancelDownload(context, filename, repoId)
@@ -1316,9 +1233,9 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
                                 )
                             }
                         }
-                        
+
                         Spacer(modifier = Modifier.height(12.dp))
-                        
+
                         if (isIndeterminate) {
                             LinearProgressIndicator(
                                 modifier = Modifier
@@ -1497,7 +1414,8 @@ fun DiscoverTab(viewModel: ModelManagerViewModel) {
                                     style = MaterialTheme.typography.bodySmall
                                 )
                                 Text(
-                                    visionFiles.firstOrNull()?.filename ?: "mmproj file",
+                                    visionFiles.firstOrNull()?.filename
+                                        ?: stringResource(R.string.responsive_models_mmproj_file),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -1725,22 +1643,34 @@ fun DiscoverTab(viewModel: ModelManagerViewModel) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     hfModel.id.substringAfterLast("/"),
-                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
                                     hfModel.id.substringBeforeLast("/", ""),
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
-                            if (!isDownloading) {
+                        }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                HfRepositoryBrowseButton(hfModel.id,
+                                    com.example.llamadroid.data.model.library.ModelFamily.LLM)
+                                if (!isDownloading) {
                                 FilledTonalIconButton(
                                     onClick = { viewModel.selectRepoForDownload(hfModel.id) }
                                 ) {
                                     Icon(Icons.Default.Add, contentDescription = stringResource(R.string.desc_download))
                                 }
+                                }
                             }
-                        }
                         
                         Spacer(modifier = Modifier.height(8.dp))
                         
@@ -1813,7 +1743,9 @@ fun DiscoverTab(viewModel: ModelManagerViewModel) {
                                 stringResource(R.string.whisper_downloading_progress, (progress!! * 100).toInt()),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(top = 4.dp)
+                                modifier = Modifier.padding(top = 4.dp),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -1833,7 +1765,8 @@ fun ModelCard(
     actionColor: Color,
     onAction: () -> Unit,
     onExport: (() -> Unit)? = null,
-    onRename: (() -> Unit)? = null
+    onRename: (() -> Unit)? = null,
+    onSource: (() -> Unit)? = null
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1841,15 +1774,16 @@ fun ModelCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
-        Row(
-            modifier = Modifier.padding(16.dp).fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            modifier = Modifier
+                .padding(16.dp)
+                .fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Icon(
                     Icons.Default.Star,
@@ -1857,19 +1791,22 @@ fun ModelCard(
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(40.dp)
                 )
-                // Nothing here truncates. Model filenames, repo ids and metadata are
-                // the information the user came to this screen for, and the card sits
-                // in a LazyColumn so it is free to grow taller.
+                // Keep identifiers readable while bounding unusually long repository
+                // names so the action row remains reachable on narrow phones.
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         title,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
                     if (subtitle.isNotBlank()) {
                         Text(
                             subtitle,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                     // On its own line rather than appended after the repo id: when the
@@ -1878,18 +1815,35 @@ fun ModelCard(
                     Text(
                         sizeText,
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                        color = MaterialTheme.colorScheme.primary
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     details.forEach { detail ->
                         Text(
                             detail,
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.9f)
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.9f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
             }
-            Row {
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                onSource?.let {
+                    IconButton(onClick = it) {
+                        Icon(
+                            Icons.Default.Link,
+                            contentDescription = stringResource(R.string.model_source_attach_title),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
                 onRename?.let {
                     IconButton(onClick = it) {
                         Icon(Icons.Default.Edit, stringResource(R.string.models_rename_title), tint = MaterialTheme.colorScheme.secondary)

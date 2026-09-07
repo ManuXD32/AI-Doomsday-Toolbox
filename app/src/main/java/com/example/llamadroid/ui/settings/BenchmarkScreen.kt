@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.settings
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -23,7 +25,10 @@ import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.service.BenchmarkService
 import com.example.llamadroid.ui.components.DraftIntTextField
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
 import kotlinx.coroutines.launch
@@ -36,6 +41,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun BenchmarkScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val settingsRepo = remember { SettingsRepository(context) }
     val db = remember { AppDatabase.getDatabase(context) }
     val benchmarkService = remember { BenchmarkService(context) }
@@ -85,33 +91,31 @@ fun BenchmarkScreen(navController: NavController) {
     }
     val queuedModels = llmModels.filter { it.path in queueModelPaths }
     
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.benchmark_title)) },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { navController.navigate(Screen.BenchmarkHistory.route) }) {
-                        Icon(Icons.Default.History, stringResource(R.string.benchmark_history_title))
-                    }
-                    if (displayResults.isNotEmpty() && !isRunning) {
-                        IconButton(onClick = { showDeleteDialog = true }) {
-                            Icon(Icons.Default.Delete, stringResource(R.string.benchmark_delete_title))
-                        }
-                    }
+    AppScreenScaffold(
+        title = stringResource(R.string.benchmark_title),
+        onBack = { navController.popBackStack() },
+        actions = {
+            IconButton(onClick = {
+                walkthroughTargets?.recordEvent("benchmark.history")
+                navController.navigate(Screen.BenchmarkHistory.route)
+            }) {
+                Icon(Icons.Default.History, stringResource(R.string.benchmark_history_title))
+            }
+            if (displayResults.isNotEmpty() && !isRunning) {
+                IconButton(onClick = {
+                    walkthroughTargets?.recordEvent("benchmark.run")
+                    showDeleteDialog = true
+                }) {
+                    Icon(Icons.Default.Delete, stringResource(R.string.benchmark_delete_title))
                 }
-            )
+            }
         }
-    ) { padding ->
+    ) { _ ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .padding(16.dp),
+                .padding(16.dp)
+                .walkthroughTarget("benchmark.run"),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // Model Selection
@@ -199,13 +203,13 @@ fun BenchmarkScreen(navController: NavController) {
                                         color = if (isBest) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                                     )
                                     Text(
-                                        stringResource(R.string.benchmark_speed_value, String.format("%.1f", result.promptTokensPerSecond)),
+                                        stringResource(R.string.benchmark_speed_value, String.format(java.util.Locale.getDefault(), "%.1f", result.promptTokensPerSecond)),
                                         modifier = Modifier.weight(1f),
                                         fontFamily = FontFamily.Monospace,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                     Text(
-                                        stringResource(R.string.benchmark_speed_value, String.format("%.1f", result.genTokensPerSecond)),
+                                        stringResource(R.string.benchmark_speed_value, String.format(java.util.Locale.getDefault(), "%.1f", result.genTokensPerSecond)),
                                         modifier = Modifier.weight(1f),
                                         fontFamily = FontFamily.Monospace,
                                         fontWeight = if (isBest) FontWeight.Bold else FontWeight.Normal,
@@ -228,7 +232,7 @@ fun BenchmarkScreen(navController: NavController) {
                                             fontWeight = FontWeight.Bold
                                         )
                                         Text(
-                                            stringResource(R.string.benchmark_gen_speed, String.format("%.1f", bestGen.genTokensPerSecond)),
+                                            stringResource(R.string.benchmark_gen_speed, String.format(java.util.Locale.getDefault(), "%.1f", bestGen.genTokensPerSecond)),
                                             style = MaterialTheme.typography.bodyMedium
                                         )
                                     }
@@ -416,6 +420,7 @@ fun BenchmarkScreen(navController: NavController) {
                     // Stop Button
                     Button(
                         onClick = {
+                            walkthroughTargets?.recordEvent("benchmark.run")
                             BenchmarkService.cancel()
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -433,6 +438,7 @@ fun BenchmarkScreen(navController: NavController) {
                         // Run Button
                         Button(
                             onClick = {
+                                walkthroughTargets?.recordEvent("benchmark.run")
                                 val modelPath = selectedModelPath ?: return@Button
                                 benchmarkService.startBenchmark(
                                     modelPath = modelPath,
@@ -455,6 +461,7 @@ fun BenchmarkScreen(navController: NavController) {
 
                         OutlinedButton(
                             onClick = {
+                                walkthroughTargets?.recordEvent("benchmark.run")
                                 benchmarkService.startBenchmarkQueue(
                                     models = queuedModels.map { model ->
                                         BenchmarkService.QueuedModel(

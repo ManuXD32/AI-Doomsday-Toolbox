@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="support_daily_title">Support the app</string>
+    <string name="support_daily_body">Help support the development of AI Doomsday Toolbox. Donations are optional. Thank you!</string>
+    <string name="support_not_now">Not now</string>
+    <string name="support_link_unavailable">No app could open this link. You can also find it in About.</string>
+</resources>

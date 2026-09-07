@@ -57,6 +57,17 @@ fun SdDistributedMasterSettingsEntity.videoLoras(): List<SdLoraSpec> =
 fun SdDistributedMasterSettingsEntity.videoHighNoiseLoras(): List<SdLoraSpec> =
     runCatching { JSONArray(videoHighNoiseLorasJson).toSdLoraSpecs() }.getOrDefault(emptyList())
 
+/**
+ * Read the versioned video contract when this row has one. Empty and legacy
+ * `{}` values deliberately return null so pre-contract rows keep their old
+ * scalar video columns authoritative.
+ */
+fun SdDistributedMasterSettingsEntity.videoRuntimeOptionsOrNull(): VideoRuntimeOptions? =
+    videoAdvancedJson
+        .trim()
+        .takeIf { it.isNotBlank() && it != "{}" }
+        ?.let(::parseVideoRuntimeOptions)
+
 fun List<SdDistributedWorkerEntity>.toSdPlanningWorkers(): List<SdDistributedPlanningWorker> =
     sortedWith(
         compareByDescending<SdDistributedWorkerEntity> { it.ramMB }
@@ -270,6 +281,7 @@ fun settingsToJson(settings: SdDistributedMasterSettingsEntity): String =
         .put("videoHighNoiseLorasJson", normalizeDistributedLorasJson(settings.videoHighNoiseLorasJson, "", "1.0"))
         .put("videoLoraApplyMode", settings.videoLoraApplyMode)
         .put("videoCustomFlags", settings.videoCustomFlags)
+        .put("videoAdvancedJson", settings.videoAdvancedJson)
         .toString()
 
 fun settingsFromJson(json: String, base: SdDistributedMasterSettingsEntity = SdDistributedMasterSettingsEntity()): SdDistributedMasterSettingsEntity {
@@ -385,7 +397,16 @@ fun settingsFromJson(json: String, base: SdDistributedMasterSettingsEntity = SdD
         videoLorasJson = normalizeDistributedLorasJson(obj.optString("videoLorasJson", base.videoLorasJson), "", "1.0"),
         videoHighNoiseLorasJson = normalizeDistributedLorasJson(obj.optString("videoHighNoiseLorasJson", base.videoHighNoiseLorasJson), "", "1.0"),
         videoLoraApplyMode = obj.optString("videoLoraApplyMode", base.videoLoraApplyMode),
-        videoCustomFlags = obj.optString("videoCustomFlags", base.videoCustomFlags)
+        videoCustomFlags = obj.optString("videoCustomFlags", base.videoCustomFlags),
+        // An old template has no advanced value. Clear it so the screen can
+        // reconstruct the typed draft from its legacy scalar video fields;
+        // malformed JSON must never replace a valid saved draft.
+        videoAdvancedJson = when {
+            !obj.has("videoAdvancedJson") -> "{}"
+            else -> obj.optString("videoAdvancedJson", base.videoAdvancedJson)
+                .takeIf { value -> value.isNotBlank() && parseVideoRuntimeOptions(value) != null }
+                ?: base.videoAdvancedJson
+        }
     )
 }
 

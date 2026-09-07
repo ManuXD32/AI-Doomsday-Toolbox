@@ -85,8 +85,8 @@ enum class WhisperModel(
     
     val sizeDisplay: String
         get() = when {
-            sizeBytes >= 1_000_000_000L -> String.format("%.1f GB", sizeBytes / 1_000_000_000.0)
-            else -> String.format("%.0f MB", sizeBytes / 1_000_000.0)
+            sizeBytes >= 1_000_000_000L -> String.format(java.util.Locale.getDefault(), "%.1f GB", sizeBytes / 1_000_000_000.0)
+            else -> String.format(java.util.Locale.getDefault(), "%.0f MB", sizeBytes / 1_000_000.0)
         }
 }
 

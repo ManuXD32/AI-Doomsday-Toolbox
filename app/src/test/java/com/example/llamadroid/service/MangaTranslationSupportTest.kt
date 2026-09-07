@@ -12,6 +12,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.nio.file.Files
 
 class MangaTranslationSupportTest {
     @Test
@@ -98,6 +99,95 @@ class MangaTranslationSupportTest {
         )
 
         assertEquals(listOf(vision), MangaTranslationSupport.installedOcrModels(listOf(textOnly, vision)))
+    }
+
+    @Test
+    fun `legacy local OCR and projector rows use existing files when download flag is false`() {
+        val root = Files.createTempDirectory("legacy-ocr-models-").toFile().apply { deleteOnExit() }
+        fun modelFile(filename: String): String =
+            java.io.File(root, filename).apply {
+                writeText("gguf")
+                deleteOnExit()
+            }.absolutePath
+
+        val importedVisionLlm = ModelEntity(
+            filename = "unlimited-ocr.gguf",
+            path = modelFile("unlimited-ocr.gguf"),
+            sizeBytes = 1,
+            type = ModelType.LLM,
+            repoId = "local-import",
+            isDownloaded = false,
+            isVision = true
+        )
+        val importedLegacyVision = ModelEntity(
+            filename = "legacy-vision.gguf",
+            path = modelFile("legacy-vision.gguf"),
+            sizeBytes = 1,
+            type = ModelType.VISION,
+            repoId = "local-import",
+            isDownloaded = false
+        )
+        val importedProjector = ModelEntity(
+            filename = "vision-projector.gguf",
+            path = modelFile("vision-projector.gguf"),
+            sizeBytes = 1,
+            type = ModelType.VISION_PROJECTOR,
+            repoId = "local-import",
+            isDownloaded = false
+        )
+        val importedMmproj = ModelEntity(
+            filename = "legacy-mmproj.gguf",
+            path = modelFile("legacy-mmproj.gguf"),
+            sizeBytes = 1,
+            type = ModelType.MMPROJ,
+            repoId = "local-import",
+            isDownloaded = false
+        )
+        val importedTextOnly = ModelEntity(
+            filename = "text-only.gguf",
+            path = modelFile("text-only.gguf"),
+            sizeBytes = 1,
+            type = ModelType.LLM,
+            repoId = "local-import",
+            isDownloaded = false,
+            isVision = false
+        )
+
+        assertEquals(
+            listOf("legacy-vision.gguf", "unlimited-ocr.gguf"),
+            MangaTranslationSupport.installedOcrModels(
+                listOf(importedTextOnly, importedVisionLlm, importedLegacyVision)
+            ).map { it.filename }
+        )
+        assertEquals(
+            listOf("legacy-mmproj.gguf", "vision-projector.gguf"),
+            MangaTranslationSupport.installedProjectors(listOf(importedProjector, importedMmproj))
+                .map { it.filename }
+        )
+    }
+
+    @Test
+    fun `legacy OCR and projector rows with missing files remain unavailable`() {
+        val missingModel = ModelEntity(
+            filename = "missing-vision.gguf",
+            path = "/definitely/missing/missing-vision.gguf",
+            sizeBytes = 1,
+            type = ModelType.LLM,
+            repoId = "local-import",
+            isDownloaded = false,
+            isVision = true
+        )
+        val missingProjector = ModelEntity(
+            filename = "missing-mmproj.gguf",
+            path = "/definitely/missing/missing-mmproj.gguf",
+            sizeBytes = 1,
+            type = ModelType.MMPROJ,
+            repoId = "local-import",
+            isDownloaded = false
+        )
+
+        assertTrue(MangaTranslationSupport.installedOcrModels(listOf(missingModel)).isEmpty())
+        assertTrue(MangaTranslationSupport.installedProjectors(listOf(missingProjector)).isEmpty())
     }
 
     private fun config(

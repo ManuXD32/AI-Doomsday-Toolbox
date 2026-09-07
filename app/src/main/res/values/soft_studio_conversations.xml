@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="soft_studio_conversations_plan_blank">The plan cannot be blank.</string>
+    <string name="soft_studio_conversations_plan_wrong_project">This plan belongs to another project. Reopen it before saving.</string>
+    <string name="soft_studio_conversations_default_project">project</string>
+    <string name="soft_studio_conversations_tool_name_clipboard">Tool name</string>
+    <string name="soft_studio_conversations_tool_fallback">Tool</string>
+    <string name="soft_studio_conversations_required_params">Required parameters: %1$s</string>
+</resources>

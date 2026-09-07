@@ -1,0 +1,9 @@
+<resources>
+    <string name="hf_full_browse">Explorar todos los archivos del repositorio</string>
+    <string name="hf_full_root">Raíz del repositorio</string>
+    <string name="hf_full_explanation">Abre carpetas y selecciona archivos individuales. Se conservan los nombres y la estructura de carpetas. Los archivos descargados se inspeccionan; los modelos desconocidos o incompletos quedan en Desconocidos para clasificarlos.</string>
+    <string name="hf_full_queued">Archivos en cola: %1$d. El progreso, la cancelación y los reintentos están disponibles en Descargas.</string>
+    <string name="hf_full_selection">Archivos seleccionados</string>
+    <string name="hf_full_remove_selection">Quitar %1$s de la selección</string>
+    <string name="hf_full_download_selected">Descargar seleccionados (%1$d)</string>
+</resources>

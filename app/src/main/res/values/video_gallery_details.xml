@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="video_detail_parameters">Generation settings</string>
+    <string name="video_detail_reuse">Reuse generation</string>
+    <string name="video_detail_copy_prompt">Copy %1$s</string>
+    <string name="video_detail_reuse_destination">Where would you like to generate?</string>
+    <string name="video_detail_reuse_local">On this device</string>
+    <string name="video_detail_reuse_distributed">Distributed</string>
+    <string name="video_detail_replace_title">Replace the current draft?</string>
+    <string name="video_detail_replace_body">The saved generation will replace the options in this form. Running jobs will continue unchanged.</string>
+    <string name="video_detail_replace">Replace draft</string>
+    <string name="video_detail_reuse_warning">Saved options loaded. Review models, inputs, and device settings before generating. Older results may not record every option.</string>
+    <string name="video_detail_delete_title">Delete this generation?</string>
+    <string name="video_detail_delete_body">This removes the saved video, its related output files, and generation metadata.</string>
+    <string name="video_detail_lora_summary">Strength %1$s · %2$s · %3$s</string>
+    <string name="video_detail_positive_prompt">Positive prompt</string>
+    <string name="video_detail_full_prompt">Read full prompt</string>
+    <string name="video_detail_reuse_failed">Unable to load this generation. Its metadata may have moved or been deleted. Please retry.</string>
+    <string name="video_detail_saved_device_settings">Recorded device settings</string>
+    <string name="video_detail_saved_device_settings_body">These settings came from the saved generation. Review placement for this device, or use its current model and memory settings.</string>
+    <string name="video_detail_params_mode">Parameter placement mode</string>
+    <string name="video_detail_params_spec">Parameter placement specification</string>
+    <string name="video_detail_runtime_spec">Runtime placement specification</string>
+    <string name="video_detail_ram_limit">CPU RAM limit (GiB, empty for default)</string>
+    <string name="video_detail_use_device_settings">Use current device settings</string>
+    <string name="video_detail_delete_failed">Some output files could not be deleted. Refresh the gallery and try again.</string>
+</resources>

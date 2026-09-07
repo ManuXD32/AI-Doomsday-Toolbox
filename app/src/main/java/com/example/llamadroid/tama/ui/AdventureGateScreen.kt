@@ -37,7 +37,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -74,6 +74,7 @@ import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -81,10 +82,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.example.llamadroid.R
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import com.example.llamadroid.tama.db.TamaDatabase
 import com.example.llamadroid.tama.data.FarmTradeItemCatalog
 import com.example.llamadroid.tama.data.InventoryItem
@@ -162,6 +166,7 @@ fun AdventureGateScreen(
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val repository = remember(database) { AdventureGateRepository(database) }
     val tamaDao = database.tamaDao()
     val activePet by tamaDao.observeActivePet().collectAsState(initial = null)
@@ -259,11 +264,15 @@ fun AdventureGateScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
+                    IconButton(
+                        onClick = { navController.popBackStack() },
+                        modifier = Modifier.walkthroughTarget("back")
+                    ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
                     }
                 },
                 actions = {
+                        com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                     IconButton(onClick = { showInfoDialog = true }) {
                         Icon(Icons.Default.Info, contentDescription = stringResource(R.string.adventure_gate_info_title))
                     }
@@ -293,10 +302,9 @@ fun AdventureGateScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .background(
-                    Brush.verticalGradient(
-                        listOf(GateDark, Color(0xFF21152D), GateDark)
-                    )
+                .background(GateDark)
+                .walkthroughTarget(
+                    if (mode == AdventureGateScreenMode.NIGHT_ARENA) "tama.arena" else "tama.gate"
                 )
         ) {
             when {
@@ -327,6 +335,7 @@ fun AdventureGateScreen(
                     onOpenLoadout = { showLoadoutDialog = true },
                     onOpenGear = { showGearClosetDialog = true },
                     onSelectLevel = { level ->
+                        walkthroughTargets?.recordEvent("tama.arena")
                         val id = petId
                         if (id != null) {
                             scope.launch {
@@ -343,7 +352,10 @@ fun AdventureGateScreen(
                     pet = pet,
                     progressRows = progressRows,
                     selectedWorldId = selectedWorldId,
-                    onSelectWorld = { world -> selectedWorldId = world.id },
+                    onSelectWorld = { world ->
+                        selectedWorldId = world.id
+                        walkthroughTargets?.recordEvent("tama.gate")
+                    },
                     onOpenLoadout = { showLoadoutDialog = true },
                     onOpenShop = { showShopDialog = true },
                     onSelectPhase = { phase -> pendingStoryPhase = phase }
@@ -981,37 +993,23 @@ private fun AdventureGateProfileCard(
                 ElementList(stringResource(R.string.adventure_gate_weak_to), shieldWeaknesses)
                 ElementList(stringResource(R.string.adventure_gate_resists), shieldResistances)
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = onOpenLoadout,
-                    modifier = Modifier.weight(1f),
-                    border = BorderStroke(1.dp, GateAccent.copy(alpha = 0.7f))
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    border = BorderStroke(1.dp, GateAccent),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = GateAccent)
                 ) {
-                    Text(
-                        text = stringResource(R.string.adventure_gate_loadout_button),
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Text(stringResource(R.string.adventure_gate_loadout_button))
                 }
                 Button(
                     onClick = onOpenShop ?: onOpenGear ?: {},
-                    modifier = Modifier.weight(1f),
                     enabled = onOpenShop != null || onOpenGear != null,
-                    colors = ButtonDefaults.buttonColors(containerColor = GateAccent)
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = GateAccent, contentColor = GateDark)
                 ) {
-                    Text(
-                        text = stringResource(
-                            if (onOpenGear != null && onOpenShop == null) {
-                                R.string.adventure_gate_gear_closet
-                            } else {
-                                R.string.adventure_gate_shop_button
-                            }
-                        ),
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Text(stringResource(if (onOpenGear != null && onOpenShop == null)
+                        R.string.adventure_gate_gear_closet else R.string.adventure_gate_shop_button))
                 }
             }
         }
@@ -1167,6 +1165,7 @@ private fun AdventureGateShopDialog(
     onSellEquipment: (String) -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     var selectedTab by rememberSaveable { mutableStateOf(0) }
     var infoDialog by remember { mutableStateOf<Pair<String, String>?>(null) }
     var skillInfoDialog by remember { mutableStateOf<AdventureGateSkillDefinition?>(null) }
@@ -1182,7 +1181,7 @@ private fun AdventureGateShopDialog(
             onEquipEquipment = onEquipEquipment,
             onUnequipEquipment = onUnequipEquipment,
             onInspect = { gear ->
-                infoDialog = context.getString(gear.nameRes) to gearInfoText(context, gear, inventory.quantityOf(gear.id) > 0)
+                infoDialog = resources.getString(gear.nameRes) to gearInfoText(context, gear, inventory.quantityOf(gear.id) > 0)
             }
         )
     }
@@ -1248,7 +1247,10 @@ private fun AdventureGateShopDialog(
             }
         )
     }
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Surface(
             modifier = Modifier
                 .widthIn(max = 460.dp)
@@ -1332,13 +1334,13 @@ private fun AdventureGateShopDialog(
                                     canBuy = money >= supply.price,
                                     onBuy = {
                                         confirmPurchase = GatePurchaseConfirmation(
-                                            title = context.getString(supply.nameRes),
-                                            price = context.getString(R.string.adventure_gate_shop_price, supply.price),
+                                            title = resources.getString(supply.nameRes),
+                                            price = resources.getString(R.string.adventure_gate_shop_price, supply.price),
                                             onConfirm = { onBuySupply(supply.id) }
                                         )
                                     },
                                     onInspect = {
-                                        infoDialog = context.getString(supply.nameRes) to supplyInfoText(context, supply, inventory.quantityOf(supply.id))
+                                        infoDialog = resources.getString(supply.nameRes) to supplyInfoText(context, supply, inventory.quantityOf(supply.id))
                                     }
                                 )
                             }
@@ -1363,13 +1365,13 @@ private fun AdventureGateShopDialog(
                                         canBuy = !owned && money >= recipe.price,
                                         onBuy = {
                                             confirmPurchase = GatePurchaseConfirmation(
-                                                title = context.getString(R.string.adventure_gate_recipe_title, context.getString(supply.nameRes)),
-                                                price = context.getString(R.string.adventure_gate_shop_price, recipe.price),
+                                                title = resources.getString(R.string.adventure_gate_recipe_title, resources.getString(supply.nameRes)),
+                                                price = resources.getString(R.string.adventure_gate_shop_price, recipe.price),
                                                 onConfirm = { onBuyRecipe(recipe.id) }
                                             )
                                         },
                                         onInspect = {
-                                            infoDialog = context.getString(R.string.adventure_gate_recipe_title, context.getString(supply.nameRes)) to recipeInfoText(context, recipe)
+                                            infoDialog = resources.getString(R.string.adventure_gate_recipe_title, resources.getString(supply.nameRes)) to recipeInfoText(context, recipe)
                                         }
                                     )
                                 }
@@ -1397,10 +1399,10 @@ private fun AdventureGateShopDialog(
                                         skill = skill,
                                         onBuy = {
                                             confirmPurchase = GatePurchaseConfirmation(
-                                                title = context.getString(skill.nameRes),
-                                                price = context.getString(
+                                                title = resources.getString(skill.nameRes),
+                                                price = resources.getString(
                                                     R.string.adventure_gate_skill_shop_price,
-                                                    context.getString(R.string.adventure_gate_buy_skill),
+                                                    resources.getString(R.string.adventure_gate_buy_skill),
                                                     AdventureGateCatalog.skillPointCost(skill)
                                                 ),
                                                 onConfirm = { onBuySkill(skill.id) }
@@ -1432,15 +1434,15 @@ private fun AdventureGateShopDialog(
                                     locked = !gear.uniqueDrop && gear.unlockWorldIndex > unlockedWorldIndex,
                                     onBuy = {
                                         confirmPurchase = GatePurchaseConfirmation(
-                                            title = context.getString(gear.nameRes),
-                                            price = context.getString(R.string.adventure_gate_shop_price, gear.price),
+                                            title = resources.getString(gear.nameRes),
+                                            price = resources.getString(R.string.adventure_gate_shop_price, gear.price),
                                             onConfirm = { onBuyEquipment(gear.id) }
                                         )
                                     },
                                     onSell = { onSellEquipment(gear.id) },
                                     onPreview = { showGearCloset = true },
                                     onInspect = {
-                                        infoDialog = context.getString(gear.nameRes) to gearInfoText(context, gear, inventory.quantityOf(gear.id) > 0)
+                                        infoDialog = resources.getString(gear.nameRes) to gearInfoText(context, gear, inventory.quantityOf(gear.id) > 0)
                                     }
                                 )
                             }
@@ -1667,6 +1669,7 @@ private fun GearShopRow(
     onInspect: () -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val equipped = when (gear.slot) {
         AdventureGateEquipmentSlot.WEAPON -> profile.equippedWeaponId == gear.id
         AdventureGateEquipmentSlot.SHIELD -> profile.equippedShieldId == gear.id
@@ -1696,7 +1699,7 @@ private fun GearShopRow(
             }
             if (gear.slot == AdventureGateEquipmentSlot.SHIELD && (gear.petWeaknesses.isNotEmpty() || gear.petResistances.isNotEmpty())) {
                 Text(
-                    text = stringResource(R.string.adventure_gate_weak_to) + ": " + gear.petWeaknesses.joinToString { context.getString(elementNameRes(it)) },
+                    text = stringResource(R.string.adventure_gate_weak_to) + ": " + gear.petWeaknesses.joinToString { resources.getString(elementNameRes(it)) },
                     color = GateDanger.copy(alpha = 0.84f),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 9.sp,
@@ -1704,7 +1707,7 @@ private fun GearShopRow(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = stringResource(R.string.adventure_gate_resists) + ": " + gear.petResistances.joinToString { context.getString(elementNameRes(it)) },
+                    text = stringResource(R.string.adventure_gate_resists) + ": " + gear.petResistances.joinToString { resources.getString(elementNameRes(it)) },
                     color = GateGreen.copy(alpha = 0.84f),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 9.sp,
@@ -1817,7 +1820,10 @@ private fun GearClosetDialog(
         .filter { it.slot == slot && inventory.quantityOf(it.id) > 0 }
         .sortedWith(compareBy<AdventureGateEquipmentDefinition> { it.uniqueDrop }.thenBy { it.unlockWorldIndex }.thenBy { it.id })
 
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Surface(
             modifier = Modifier
                 .widthIn(max = 430.dp)
@@ -2314,6 +2320,7 @@ private fun ShopRowSurface(
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .heightIn(min = 48.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(Color.Black.copy(alpha = 0.18f))
             .padding(8.dp),
@@ -2610,6 +2617,7 @@ private fun AdventureGateBattleView(
     onCloseBattle: () -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     var selectedTargetId by rememberSaveable(battle.petId, battle.worldId, battle.phaseNumber, battle.waveIndex) {
@@ -2775,7 +2783,7 @@ private fun AdventureGateBattleView(
                     targetInstanceId = targetId,
                     amount = event.amount,
                     healing = healingPopup,
-                    label = if (event.type == AdventureGateBattleEventType.MISS) context.getString(R.string.adventure_gate_miss_popup) else null,
+                    label = if (event.type == AdventureGateBattleEventType.MISS) resources.getString(R.string.adventure_gate_miss_popup) else null,
                     color = popupColor
                 )
                 damagePopups = damagePopups + popup
@@ -2978,7 +2986,7 @@ private fun AdventureGateBattleView(
                 battle = battle,
                 onDismiss = { showItemsDialog = false },
                 onInspectSupply = { supply ->
-                    battleInfoDialog = context.getString(supply.nameRes) to supplyInfoText(context, supply, pet.inventory.quantityOf(supply.id))
+                    battleInfoDialog = resources.getString(supply.nameRes) to supplyInfoText(context, supply, pet.inventory.quantityOf(supply.id))
                 },
                 onUseSupply = { supply ->
                     if (locked) return@BattleItemDialog
@@ -4143,11 +4151,12 @@ private fun MonsterInspectDialog(
 ) {
     val monster = AdventureGateCatalog.monster(enemy.definitionId)
     val context = LocalContext.current
+    val resources = LocalResources.current
     val usedAttacks = battle.log
         .filter { it.actorInstanceId == enemy.instanceId && it.messageKey == AdventureGateLogMessage.ENEMY_USED_ATTACK }
         .mapNotNull { it.element }
         .distinct()
-    val usedAttackLabels = usedAttacks.joinToString { context.getString(elementNameRes(it)) }
+    val usedAttackLabels = usedAttacks.joinToString { resources.getString(elementNameRes(it)) }
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = GatePanel,
@@ -4689,6 +4698,7 @@ private fun SkillInfoDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val cost = AdventureGateCatalog.skillPointCost(skill)
     val scaling = stringResource(if (skill.kind == AdventureGateSkillKind.ATTACK) R.string.adventure_gate_stat_attack else R.string.adventure_gate_stat_magic)
     val healingBonus = AdventureGateCatalog.loadoutForProfile(profile)
@@ -4769,7 +4779,7 @@ private fun SkillInfoDialog(
                         if (skill.prerequisiteSkillIds.isNotEmpty()) {
                             SkillInfoLine(
                                 skill.prerequisiteSkillIds.joinToString(prefix = "${stringResource(R.string.adventure_gate_shop_prerequisites)}: ") { id ->
-                                    context.getString(AdventureGateCatalog.skill(id).nameRes)
+                                    resources.getString(AdventureGateCatalog.skill(id).nameRes)
                                 }
                             )
                         }
@@ -4987,9 +4997,10 @@ private fun furthestUnlockedAdventureGateWorld(
 @Composable
 private fun formatLogEntry(entry: AdventureGateBattleLogEntry): String {
     val context = LocalContext.current
-    fun name(res: Int?) = res?.let { context.getString(it) }.orEmpty()
+    val resources = LocalResources.current
+    fun name(res: Int?) = res?.let { resources.getString(it) }.orEmpty()
     fun element(element: AdventureGateElement?) = element?.let {
-        context.getString(
+        resources.getString(
             when (it) {
                 AdventureGateElement.STRIKE -> R.string.adventure_gate_element_strike
                 AdventureGateElement.SLASH -> R.string.adventure_gate_element_slash
@@ -5008,47 +5019,47 @@ private fun formatLogEntry(entry: AdventureGateBattleLogEntry): String {
         )
     }.orEmpty()
     return when (entry.messageKey) {
-        AdventureGateLogMessage.BATTLE_STARTED -> context.getString(R.string.adventure_gate_log_battle_started)
-        AdventureGateLogMessage.PET_USED_SKILL -> context.getString(R.string.adventure_gate_log_pet_used_skill, name(entry.skillNameRes), name(entry.targetNameRes), entry.amount)
-        AdventureGateLogMessage.PET_SUMMONED -> context.getString(R.string.adventure_gate_log_pet_summoned, name(entry.skillNameRes))
-        AdventureGateLogMessage.PET_GUARDED -> context.getString(R.string.adventure_gate_log_pet_guarded)
-        AdventureGateLogMessage.MANA_SHELL_RECOIL -> context.getString(R.string.adventure_gate_log_mana_shell_recoil, entry.amount)
-        AdventureGateLogMessage.PET_HEALED -> context.getString(R.string.adventure_gate_log_pet_healed, name(entry.skillNameRes), entry.amount)
-        AdventureGateLogMessage.ENEMY_USED_ATTACK -> context.getString(R.string.adventure_gate_log_enemy_attack, name(entry.actorNameRes), entry.amount)
-        AdventureGateLogMessage.MISSED -> context.getString(R.string.adventure_gate_log_missed)
-        AdventureGateLogMessage.WEAK_HIT -> context.getString(R.string.adventure_gate_log_weak_hit, element(entry.element), name(entry.targetNameRes))
-        AdventureGateLogMessage.RESISTED_HIT -> context.getString(R.string.adventure_gate_log_resisted_hit, element(entry.element), name(entry.targetNameRes))
-        AdventureGateLogMessage.ENEMY_DEFEATED -> context.getString(R.string.adventure_gate_log_enemy_defeated, name(entry.targetNameRes))
-        AdventureGateLogMessage.PET_DEFEATED -> context.getString(R.string.adventure_gate_log_pet_defeated)
-        AdventureGateLogMessage.WAVE_STARTED -> context.getString(R.string.adventure_gate_log_wave_started, entry.amount)
-        AdventureGateLogMessage.VICTORY -> context.getString(R.string.adventure_gate_log_victory, entry.amount)
-        AdventureGateLogMessage.DEFEAT -> context.getString(R.string.adventure_gate_log_defeat)
-        AdventureGateLogMessage.LEVEL_UP -> context.getString(R.string.adventure_gate_log_level_up, entry.amount)
-        AdventureGateLogMessage.SKILL_UNLOCKED -> context.getString(R.string.adventure_gate_log_skill_unlocked, name(entry.skillNameRes))
-        AdventureGateLogMessage.NOT_ENOUGH_MANA -> context.getString(R.string.adventure_gate_log_not_enough_mana, name(entry.skillNameRes), entry.amount)
-        AdventureGateLogMessage.SKILL_ON_COOLDOWN -> context.getString(R.string.adventure_gate_log_skill_on_cooldown, name(entry.skillNameRes), entry.amount)
-        AdventureGateLogMessage.GUARD_LIMIT_REACHED -> context.getString(R.string.adventure_gate_log_guard_limit, entry.amount)
-        AdventureGateLogMessage.PET_USED_ITEM -> context.getString(
+        AdventureGateLogMessage.BATTLE_STARTED -> resources.getString(R.string.adventure_gate_log_battle_started)
+        AdventureGateLogMessage.PET_USED_SKILL -> resources.getString(R.string.adventure_gate_log_pet_used_skill, name(entry.skillNameRes), name(entry.targetNameRes), entry.amount)
+        AdventureGateLogMessage.PET_SUMMONED -> resources.getString(R.string.adventure_gate_log_pet_summoned, name(entry.skillNameRes))
+        AdventureGateLogMessage.PET_GUARDED -> resources.getString(R.string.adventure_gate_log_pet_guarded)
+        AdventureGateLogMessage.MANA_SHELL_RECOIL -> resources.getString(R.string.adventure_gate_log_mana_shell_recoil, entry.amount)
+        AdventureGateLogMessage.PET_HEALED -> resources.getString(R.string.adventure_gate_log_pet_healed, name(entry.skillNameRes), entry.amount)
+        AdventureGateLogMessage.ENEMY_USED_ATTACK -> resources.getString(R.string.adventure_gate_log_enemy_attack, name(entry.actorNameRes), entry.amount)
+        AdventureGateLogMessage.MISSED -> resources.getString(R.string.adventure_gate_log_missed)
+        AdventureGateLogMessage.WEAK_HIT -> resources.getString(R.string.adventure_gate_log_weak_hit, element(entry.element), name(entry.targetNameRes))
+        AdventureGateLogMessage.RESISTED_HIT -> resources.getString(R.string.adventure_gate_log_resisted_hit, element(entry.element), name(entry.targetNameRes))
+        AdventureGateLogMessage.ENEMY_DEFEATED -> resources.getString(R.string.adventure_gate_log_enemy_defeated, name(entry.targetNameRes))
+        AdventureGateLogMessage.PET_DEFEATED -> resources.getString(R.string.adventure_gate_log_pet_defeated)
+        AdventureGateLogMessage.WAVE_STARTED -> resources.getString(R.string.adventure_gate_log_wave_started, entry.amount)
+        AdventureGateLogMessage.VICTORY -> resources.getString(R.string.adventure_gate_log_victory, entry.amount)
+        AdventureGateLogMessage.DEFEAT -> resources.getString(R.string.adventure_gate_log_defeat)
+        AdventureGateLogMessage.LEVEL_UP -> resources.getString(R.string.adventure_gate_log_level_up, entry.amount)
+        AdventureGateLogMessage.SKILL_UNLOCKED -> resources.getString(R.string.adventure_gate_log_skill_unlocked, name(entry.skillNameRes))
+        AdventureGateLogMessage.NOT_ENOUGH_MANA -> resources.getString(R.string.adventure_gate_log_not_enough_mana, name(entry.skillNameRes), entry.amount)
+        AdventureGateLogMessage.SKILL_ON_COOLDOWN -> resources.getString(R.string.adventure_gate_log_skill_on_cooldown, name(entry.skillNameRes), entry.amount)
+        AdventureGateLogMessage.GUARD_LIMIT_REACHED -> resources.getString(R.string.adventure_gate_log_guard_limit, entry.amount)
+        AdventureGateLogMessage.PET_USED_ITEM -> resources.getString(
             R.string.adventure_gate_log_pet_used_item,
-            AdventureGateCatalog.supply(entry.itemId.orEmpty())?.let { context.getString(it.nameRes) }.orEmpty(),
+            AdventureGateCatalog.supply(entry.itemId.orEmpty())?.let { resources.getString(it.nameRes) }.orEmpty(),
             entry.amount
         )
-        AdventureGateLogMessage.POTION_LIMIT_REACHED -> context.getString(R.string.adventure_gate_log_potion_limit)
-        AdventureGateLogMessage.COINS_REWARDED -> context.getString(R.string.adventure_gate_log_coins_rewarded, entry.amount)
-        AdventureGateLogMessage.POTION_REWARDED -> context.getString(
+        AdventureGateLogMessage.POTION_LIMIT_REACHED -> resources.getString(R.string.adventure_gate_log_potion_limit)
+        AdventureGateLogMessage.COINS_REWARDED -> resources.getString(R.string.adventure_gate_log_coins_rewarded, entry.amount)
+        AdventureGateLogMessage.POTION_REWARDED -> resources.getString(
             R.string.adventure_gate_log_potion_rewarded,
-            AdventureGateCatalog.supply(entry.itemId.orEmpty())?.let { context.getString(it.nameRes) }.orEmpty()
+            AdventureGateCatalog.supply(entry.itemId.orEmpty())?.let { resources.getString(it.nameRes) }.orEmpty()
         )
-        AdventureGateLogMessage.EQUIPMENT_DROPPED -> context.getString(
+        AdventureGateLogMessage.EQUIPMENT_DROPPED -> resources.getString(
             R.string.adventure_gate_log_equipment_dropped,
-            AdventureGateCatalog.equipment(entry.equipmentId.orEmpty())?.let { context.getString(it.nameRes) }.orEmpty()
+            AdventureGateCatalog.equipment(entry.equipmentId.orEmpty())?.let { resources.getString(it.nameRes) }.orEmpty()
         )
-        AdventureGateLogMessage.EQUIPMENT_TRIGGERED -> context.getString(
+        AdventureGateLogMessage.EQUIPMENT_TRIGGERED -> resources.getString(
             R.string.adventure_gate_log_equipment_triggered,
-            AdventureGateCatalog.equipment(entry.equipmentId.orEmpty())?.let { context.getString(it.nameRes) }.orEmpty(),
+            AdventureGateCatalog.equipment(entry.equipmentId.orEmpty())?.let { resources.getString(it.nameRes) }.orEmpty(),
             entry.amount
         )
-        AdventureGateLogMessage.STATUS_DAMAGE -> context.getString(R.string.adventure_gate_log_status_damage, name(entry.targetNameRes), entry.amount)
-        AdventureGateLogMessage.STATUS_SKIP -> context.getString(R.string.adventure_gate_log_status_skip, name(entry.actorNameRes))
+        AdventureGateLogMessage.STATUS_DAMAGE -> resources.getString(R.string.adventure_gate_log_status_damage, name(entry.targetNameRes), entry.amount)
+        AdventureGateLogMessage.STATUS_SKIP -> resources.getString(R.string.adventure_gate_log_status_skip, name(entry.actorNameRes))
     }
 }

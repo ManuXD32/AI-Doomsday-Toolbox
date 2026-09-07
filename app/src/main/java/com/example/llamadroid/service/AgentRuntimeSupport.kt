@@ -36,6 +36,86 @@ data class NormalizedAgentInvocationName(
     val key: String
 )
 
+private val LEGACY_TAGGED_TOOL_CALL_BLOCK =
+    Regex("""<tool_call>\s*([\s\S]*?)\s*</tool_call>""", RegexOption.IGNORE_CASE)
+private val LEGACY_TAGGED_TOOL_ARGUMENT = Regex(
+    """<arg_key>\s*([\s\S]*?)\s*</arg_key>\s*<arg_value>\s*([\s\S]*?)\s*</arg_value>""",
+    RegexOption.IGNORE_CASE
+)
+private val SAFE_RECOVERED_TOOL_NAME = Regex("""[A-Za-z][A-Za-z0-9_.-]{0,127}""")
+
+/**
+ * Recovers the tagged function-call dialect emitted by some llama.cpp chat templates:
+ *
+ * `<tool_call>read_file <arg_key>path</arg_key><arg_value>index.html</arg_value></tool_call>`
+ *
+ * This is deliberately strict. A partial/mismatched block stays malformed and is handled by the
+ * existing visible recovery flow instead of guessing at an executable call.
+ */
+internal fun parseLegacyTaggedToolCalls(text: String): List<OllamaService.ToolCall> =
+    LEGACY_TAGGED_TOOL_CALL_BLOCK.findAll(text).mapNotNull { block ->
+        val body = block.groupValues[1].trim()
+        val firstArgument = Regex("""<arg_key>""", RegexOption.IGNORE_CASE).find(body)
+        val name = body.substring(0, firstArgument?.range?.first ?: body.length).trim()
+        if (!SAFE_RECOVERED_TOOL_NAME.matches(name)) return@mapNotNull null
+
+        val argumentText = firstArgument?.let { body.substring(it.range.first) }.orEmpty()
+        val arguments = linkedMapOf<String, String>()
+        val matches = LEGACY_TAGGED_TOOL_ARGUMENT.findAll(argumentText).toList()
+        matches.forEach { argument ->
+            val key = argument.groupValues[1].trim()
+            if (key.isBlank() || key.length > 128 || key.contains('<') || key.contains('>')) {
+                return@mapNotNull null
+            }
+            arguments[key] = argument.groupValues[2].trim()
+        }
+
+        val unmatchedArgumentMarkup = LEGACY_TAGGED_TOOL_ARGUMENT
+            .replace(argumentText, "")
+            .trim()
+        if (unmatchedArgumentMarkup.isNotEmpty()) return@mapNotNull null
+
+        val rawArguments = JSONObject().apply {
+            arguments.forEach { (key, value) -> put(key, value) }
+        }.toString()
+        OllamaService.ToolCall(
+            name = name,
+            arguments = arguments,
+            rawArgumentsJson = rawArguments
+        )
+    }.toList()
+
+/** Maps the common shell spelling produced by small coding models to Agent's read-only tool. */
+internal fun resolveToolHelpName(
+    requestedName: String,
+    availableToolNames: List<String>
+): String? {
+    val requested = requestedName.trim()
+    availableToolNames.firstOrNull { it.equals(requested, ignoreCase = true) }?.let { return it }
+    val alias = when (requested.lowercase(Locale.ROOT)) {
+        "ls", "dir" -> "list_directory"
+        else -> return null
+    }
+    return availableToolNames.firstOrNull { it.equals(alias, ignoreCase = true) }
+}
+
+internal fun shouldInterruptRestoredAgentWork(
+    hadRestoredSessionState: Boolean,
+    runningInvocationCount: Int
+): Boolean = hadRestoredSessionState || runningInvocationCount > 0
+
+/** Missing legacy fields preserve the already selected backend instead of defaulting to SSH. */
+internal fun resolveSnapshotWorkspaceBackend(
+    payload: JSONObject,
+    currentBackend: AgentWorkspaceBackendType
+): AgentWorkspaceBackendType {
+    if (!payload.has("workspaceBackend") || payload.isNull("workspaceBackend")) return currentBackend
+    val stored = payload.optString("workspaceBackend").trim()
+    return AgentWorkspaceBackendType.entries.firstOrNull {
+        it.name.equals(stored, ignoreCase = true)
+    } ?: currentBackend
+}
+
 /** Keeps model-provided invocation labels safe while allowing Room to suffix duplicates. */
 fun normalizeAgentInvocationName(rawName: String): NormalizedAgentInvocationName? {
     val displayName = rawName
@@ -82,7 +162,7 @@ internal fun buildAgentRuntimeModeControl(isPlanMode: Boolean, isOrchestrator: B
         isPlanMode ->
             "CURRENT RUNTIME MODE: PLAN. Complete only the assigned read-only discovery, research, or planning task. Do not mutate files, memory, media, dependencies, commands, or project execution. Return a structured finish_task report to the Orchestrator."
         isOrchestrator ->
-            "CURRENT RUNTIME MODE: BUILD. Follow the approved durable TODO state. First call todo_write to create or update the durable TODO list, then delegate exactly one current TODO at a time, reread project_state after each specialist report, and finalize only after required review and verification."
+            "CURRENT RUNTIME MODE: BUILD. Follow the approved durable TODO state. If project_state reports zero durable TODOs, call todo_write once to initialize them before any todo_transition or worker delegation. Otherwise preserve the existing stable TODO IDs. Delegate exactly one current TODO at a time, reread project_state after each specialist report, and finalize only after required review and verification."
         else ->
             "CURRENT RUNTIME MODE: BUILD. Complete only the assigned TODO and return a structured report to the Orchestrator."
     }
@@ -257,6 +337,7 @@ private val CRITICAL_AGENT_PROTOCOL_TOOLS = setOf(
     "finish_task",
     "project_state_read",
     "todo_read",
+    "todo_write",
     "todo_transition",
     "tool_help"
 )
@@ -385,6 +466,29 @@ internal fun shouldPersistFullAgentSnapshot(
         "Conversation history truncated",
         "Regenerate history truncated"
     )
+}
+
+internal fun resolveAgentRuntimeSnapshotStatus(
+    isLoading: Boolean,
+    hasPendingToolApproval: Boolean,
+    hasPendingPlanApproval: Boolean,
+    pendingQuestionCount: Int,
+    existingStatus: String? = null
+): String {
+    if (!isLoading && existingStatus in setOf(
+            AiRuntimeJobStore.STATUS_COMPLETED,
+            AiRuntimeJobStore.STATUS_FAILED,
+            AiRuntimeJobStore.STATUS_CANCELLED
+        )
+    ) {
+        return existingStatus!!
+    }
+    return when {
+        isLoading -> AiRuntimeJobStore.STATUS_RUNNING
+        hasPendingToolApproval || hasPendingPlanApproval || pendingQuestionCount > 0 ->
+            AiRuntimeJobStore.STATUS_RECOVERING
+        else -> AiRuntimeJobStore.STATUS_COMPLETED
+    }
 }
 
 data class FileEditComputation(
@@ -1158,6 +1262,36 @@ internal object AgentRuntimeSupport {
         val shouldPause: Boolean,
         val reason: String?
     )
+
+    /**
+     * A queued continuation is tied to the run epoch in which it was created. The epoch check
+     * is the cancellation fence: a Stop invalidates the old epoch before clearing the queue, so
+     * a drain that already dequeued an item cannot dispatch it into a later retry. Automatic
+     * continuations also honor the stop fence; an explicit user action may reopen the run.
+     */
+    fun shouldDispatchQueuedContinuation(
+        queuedEpoch: Long,
+        activeEpoch: Long,
+        automaticContinuationsBlocked: Boolean,
+        userInitiated: Boolean
+    ): Boolean = queuedEpoch == activeEpoch &&
+        (userInitiated || !automaticContinuationsBlocked)
+
+    /** A completed current turn is the only event that can wake a drain waiting on that turn. */
+    fun shouldWakeContinuationDrainAfterCurrentJobCompletion(
+        currentJobWasCleared: Boolean,
+        pendingContinuationCount: Int
+    ): Boolean = currentJobWasCleared && pendingContinuationCount > 0
+
+    /**
+     * A drain completion may restart immediately only when the current chat slot is idle. If a
+     * turn is still active, its completion callback is the single wake source for the next drain.
+     */
+    fun shouldRestartContinuationDrainAfterCompletion(
+        runEpochStillActive: Boolean,
+        currentJobActive: Boolean,
+        pendingContinuationCount: Int
+    ): Boolean = runEpochStillActive && !currentJobActive && pendingContinuationCount > 0
 
     fun evaluateContinuationGuard(
         continuationCount: Int,

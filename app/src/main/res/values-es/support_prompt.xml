@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="support_daily_title">Apoya la app</string>
+    <string name="support_daily_body">Ayuda a seguir desarrollando AI Doomsday Toolbox. Las donaciones son voluntarias. ¡Gracias por tu apoyo!</string>
+    <string name="support_not_now">Ahora no</string>
+    <string name="support_link_unavailable">Ninguna app pudo abrir este enlace. También está disponible en Acerca de.</string>
+</resources>

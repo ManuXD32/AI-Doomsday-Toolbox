@@ -13,8 +13,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -50,6 +52,8 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -74,6 +78,8 @@ import com.example.llamadroid.tama.data.occupiedLivestockCount
 import com.example.llamadroid.tama.data.storedLivestockOutput
 import com.example.llamadroid.tama.game.FarmRepository
 import com.example.llamadroid.tama.game.TamaGameEngine
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -120,7 +126,10 @@ private fun FarmLivestockScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
+    val configuration = LocalConfiguration.current
     val scope = rememberCoroutineScope()
+    val walkthroughTargets = LocalWalkthroughTargets.current
     var feedModeEnabled by rememberSaveable(type.id) { mutableStateOf(false) }
     var now by remember(type.id) { mutableLongStateOf(System.currentTimeMillis()) }
     val allLivestock by farmRepository.observeLivestock(pet.id).collectAsState(initial = emptyList())
@@ -150,7 +159,10 @@ private fun FarmLivestockScreen(
 
     Scaffold(
         topBar = {
-            Surface(color = Color.Black.copy(alpha = 0.90f)) {
+            Surface(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                tonalElevation = 0.dp
+            ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -160,12 +172,12 @@ private fun FarmLivestockScreen(
                 ) {
                     IconButton(
                         onClick = onBack,
-                        modifier = Modifier.size(40.dp)
+                        modifier = Modifier.size(48.dp)
                     ) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             stringResource(R.string.action_back),
-                            tint = Color.White
+                            tint = MaterialTheme.colorScheme.onSurface
                         )
                     }
                     Text(
@@ -174,12 +186,14 @@ private fun FarmLivestockScreen(
                         } else {
                             stringResource(R.string.tama_farm_coop_title)
                         },
-                        color = Color.White,
+                        modifier = Modifier.weight(1f),
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                 }
             }
         }
@@ -201,17 +215,20 @@ private fun FarmLivestockScreen(
                     .background(Color.Black.copy(alpha = 0.04f))
             )
 
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(start = 10.dp, end = 10.dp, top = 8.dp, bottom = 6.dp),
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(if (configuration.fontScale >= 1.3f) 1 else 2),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 8.dp, bottom = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
                 Card(
                     colors = CardDefaults.cardColors(
                         containerColor = Color(0xFFF7EFD8).copy(alpha = 0.88f)
                     ),
-                    shape = RoundedCornerShape(14.dp)
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.walkthroughTarget("tama.livestock.header")
                 ) {
                     Column(
                         modifier = Modifier
@@ -219,13 +236,12 @@ private fun FarmLivestockScreen(
                             .padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Row(
+                        Column(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalAlignment = Alignment.Top
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Column(
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.fillMaxWidth(),
                                 verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 Text(
@@ -262,7 +278,7 @@ private fun FarmLivestockScreen(
                                     scope.launch {
                                         val collected = farmRepository.collectLivestockOutput(pet.id, type)
                                         if (collected > 0) {
-                                            val productName = context.getString(
+                                            val productName = resources.getString(
                                                 if (type == FarmLivestockType.BARN) R.string.tama_item_milk_bottle else R.string.tama_item_egg
                                             )
                                             gameEngine.grantItem(
@@ -276,7 +292,7 @@ private fun FarmLivestockScreen(
                                             gameEngine.logEvent(
                                                 pet.id,
                                                 com.example.llamadroid.tama.data.EventType.OTHER,
-                                                context.getString(
+                                                resources.getString(
                                                     if (type == FarmLivestockType.BARN) R.string.tama_event_collected_milk else R.string.tama_event_collected_eggs,
                                                     collected
                                                 )
@@ -285,6 +301,7 @@ private fun FarmLivestockScreen(
                                     }
                                 },
                                 enabled = stored > 0,
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                                 shape = RoundedCornerShape(12.dp),
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = Color(0xFF8D6E63),
@@ -297,9 +314,7 @@ private fun FarmLivestockScreen(
                                 Text(
                                     stringResource(
                                         if (type == FarmLivestockType.BARN) R.string.tama_farm_collect_milk else R.string.tama_farm_collect_eggs
-                                    ),
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis
+                                    )
                                 )
                             }
                         }
@@ -311,9 +326,13 @@ private fun FarmLivestockScreen(
                             Surface(
                                 color = if (feedModeEnabled) Color(0xFF42A5F5) else Color(0xFFE8DFC0),
                                 shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.clickable {
-                                    feedModeEnabled = !feedModeEnabled
-                                }
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .clickable {
+                                        feedModeEnabled = !feedModeEnabled
+                                        walkthroughTargets?.recordEvent("tama.livestock.feed")
+                                    }
+                                    .walkthroughTarget("tama.livestock.feed")
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
@@ -352,15 +371,7 @@ private fun FarmLivestockScreen(
                     }
                 }
 
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    contentPadding = PaddingValues(bottom = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+                }
                     items(slots.indices.toList()) { index ->
                         val slot = slots[index]
                         val isHungry = livestockNeedsFeed(slot, now)
@@ -374,7 +385,7 @@ private fun FarmLivestockScreen(
                                     if (!isHungry) {
                                         Toast.makeText(
                                             context,
-                                            context.getString(R.string.tama_farm_livestock_not_hungry),
+                                            resources.getString(R.string.tama_farm_livestock_not_hungry),
                                             Toast.LENGTH_SHORT
                                         ).show()
                                         return@launch
@@ -382,14 +393,14 @@ private fun FarmLivestockScreen(
                                     if (wheatCount <= 0) {
                                         Toast.makeText(
                                             context,
-                                            context.getString(R.string.tama_farm_livestock_no_wheat),
+                                            resources.getString(R.string.tama_farm_livestock_no_wheat),
                                             Toast.LENGTH_SHORT
                                         ).show()
                                         return@launch
                                     }
                                     val wheatName = FarmTradeItemCatalog.displayName(
                                         LIVESTOCK_FEED_ITEM_ID,
-                                        context.resources.configuration.locales[0] ?: Locale.getDefault()
+                                        configuration.locales[0] ?: Locale.getDefault()
                                     )
                                     val consumed = gameEngine.consumeItem(
                                         InventoryItem(
@@ -402,7 +413,7 @@ private fun FarmLivestockScreen(
                                     if (!consumed) {
                                         Toast.makeText(
                                             context,
-                                            context.getString(R.string.tama_farm_livestock_no_wheat),
+                                            resources.getString(R.string.tama_farm_livestock_no_wheat),
                                             Toast.LENGTH_SHORT
                                         ).show()
                                         return@launch
@@ -426,13 +437,13 @@ private fun FarmLivestockScreen(
                                     gameEngine.logEvent(
                                         pet.id,
                                         com.example.llamadroid.tama.data.EventType.OTHER,
-                                        context.getString(
+                                        resources.getString(
                                             if (type == FarmLivestockType.BARN) R.string.tama_event_fed_cow else R.string.tama_event_fed_chicken
                                         )
                                     )
                                     Toast.makeText(
                                         context,
-                                        context.getString(
+                                        resources.getString(
                                             if (type == FarmLivestockType.BARN) R.string.tama_farm_livestock_fed_cow else R.string.tama_farm_livestock_fed_chicken
                                         ),
                                         Toast.LENGTH_SHORT
@@ -441,7 +452,6 @@ private fun FarmLivestockScreen(
                             }
                         )
                     }
-                }
             }
         }
     }
@@ -569,5 +579,5 @@ private fun livestockSlotStatus(type: FarmLivestockType, slot: FarmLivestockSlot
     val totalSeconds = remainingMs / 1000L
     val hours = totalSeconds / 3600L
     val minutes = (totalSeconds % 3600L) / 60L
-    return String.format("%02dh %02dm", hours, minutes)
+    return String.format(Locale.getDefault(), "%02dh %02dm", hours, minutes)
 }

@@ -2832,7 +2832,7 @@ class TamaGameEngine(
         logEvent(
             pet.id,
             EventType.GOT_PAID,
-            details ?: context.getString(R.string.tama_event_arcade_reward, safeAmount.toInt())
+            details ?: context.getString(R.string.tama_activity_gain_money, safeAmount.toInt())
         )
         return true
     }

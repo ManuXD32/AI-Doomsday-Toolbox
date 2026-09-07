@@ -55,12 +55,16 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.Spring
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+
+internal const val AGENT_MESSAGE_ACTION_TOUCH_TARGET_DP = 48
 
 @Composable
 private fun agentRoleLabel(roleName: String): String {
@@ -136,6 +140,17 @@ data class AgentDelegationInfo(
 private fun resolvedToolName(message: AgentService.Companion.ChatMessage): String? =
     message.toolName ?: message.pendingToolCall?.name
 
+/**
+ * A call_agent request becomes a delegation card only after it has passed approval.
+ * Rendering a pending request as a delegation hides the generic approval controls and leaves
+ * the card disabled with a misleading "Working" status because no invocation exists yet.
+ */
+internal fun shouldRenderCallAgentAsDelegation(
+    message: AgentService.Companion.ChatMessage
+): Boolean = message.role == "assistant" &&
+    resolvedToolName(message) == "call_agent" &&
+    !message.needsApproval
+
 private fun isGroupableToolCall(message: AgentService.Companion.ChatMessage): Boolean {
     return message.role == "assistant" &&
         resolvedToolName(message) != null &&
@@ -166,7 +181,7 @@ private fun buildAgentChatListItems(
     val items = mutableListOf<AgentChatListItem>()
     val visibleDelegationToolCallIds = visibleMessages
         .asSequence()
-        .filter { it.role == "assistant" && resolvedToolName(it) == "call_agent" }
+        .filter(::shouldRenderCallAgentAsDelegation)
         .mapNotNull { it.toolCallId ?: it.pendingToolCall?.id }
         .toSet()
     val unmatchedDelegations = delegationsByParentToolCallId.values
@@ -194,7 +209,7 @@ private fun buildAgentChatListItems(
         appendUnmatchedDelegations(message.timestamp)
         // Keep delegation separate even when it is next to other tool calls. The
         // parent handoff is meaningful workflow, not merely tool activity.
-        if (message.role == "assistant" && resolvedToolName(message) == "call_agent") {
+        if (shouldRenderCallAgentAsDelegation(message)) {
             val toolCallId = message.toolCallId ?: message.pendingToolCall?.id
             items += AgentChatListItem.Delegation(
                 message = message,
@@ -274,6 +289,7 @@ internal fun buildVisibleAgentTimelineMessages(
             msg.role == "assistant" && msg.content.isBlank() && msg.toolName == null &&
                 msg.thinking.isNullOrBlank() && !msg.isStreaming -> false
             showAllOutput -> true
+            AgentService.isRetryableNeedsDirectionMessage(msg) -> true
             msg.role == "system" ->
                 msg.content.contains("ready") || AgentService.isTransientCompactionStatusMessageForUi(msg)
             isBackgroundCommandReminder(msg.toolName, msg.content, msg.toolOutput) -> false
@@ -331,9 +347,11 @@ fun AgentChatList(
     onKnowledgeLinkClick: (String) -> Boolean = { false },
     delegationsByParentToolCallId: Map<String, AgentDelegationInfo> = emptyMap(),
     onOpenDelegation: (AgentDelegationInfo) -> Unit = {},
+    onRetryNeedsDirection: (AgentService.Companion.ChatMessage) -> Unit = {},
     readOnly: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val renderMessages = remember(messages) {
         buildAgentChatRenderProjection(messages)
     }
@@ -355,8 +373,14 @@ fun AgentChatList(
                     val message = item.message
                     ChatMessageBubble(
                         message = message,
-                        onApprove = { onApprove(message) },
-                        onDeny = { onDeny(message) },
+                        onApprove = {
+                            walkthroughTargets?.recordEvent(if (message.isPlan) "agent.plan" else "agent.approval")
+                            onApprove(message)
+                        },
+                        onDeny = {
+                            walkthroughTargets?.recordEvent(if (message.isPlan) "agent.plan" else "agent.approval")
+                            onDeny(message)
+                        },
                         onDelete = { onDelete(message.id) },
                         onRegenerate = { onRegenerate(message.id) },
                         onEdit = { onEdit(message.id, message.content) },
@@ -368,6 +392,10 @@ fun AgentChatList(
                         isPlanResolving = resolvingPlanMessageId == message.id,
                         onToggleOutput = { onToggleOutput(message.id) },
                         onKnowledgeLinkClick = onKnowledgeLinkClick,
+                        onRetry = {
+                            walkthroughTargets?.recordEvent("agent.continue")
+                            onRetryNeedsDirection(message)
+                        },
                         showMessageActions = !readOnly
                     )
                 }
@@ -402,7 +430,7 @@ private fun DelegationCard(
 ) {
     val fallbackName = listOfNotNull(message?.toolArgs?.get("agent"), message?.toolArgs?.get("name"))
         .joinToString(" - ")
-        .ifBlank { message?.toolArgs?.get("agent") ?: "Agent" }
+        .ifBlank { message?.toolArgs?.get("agent") ?: stringResource(R.string.agent_title) }
     val isTerminal = info?.status?.let { it != "RUNNING" } ?: (result != null)
     val startedAt = info?.startedAt?.takeIf { it > 0L } ?: message?.timestamp ?: System.currentTimeMillis()
     val timestamp = remember(startedAt) { formatAgentMessageTimestamp(startedAt) }
@@ -411,7 +439,9 @@ private fun DelegationCard(
             .fillMaxWidth()
             .padding(horizontal = 4.dp, vertical = 4.dp)
             .clickable(enabled = info != null, onClick = onOpen),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFFF9800).copy(alpha = 0.24f)),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer
+        ),
         border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -617,6 +647,7 @@ private fun ToolCallGroupRow(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .heightIn(min = AGENT_MESSAGE_ACTION_TOUCH_TARGET_DP.dp)
                     .clickable {
                         if (useLocalOutputExpansion) {
                             locallyExpanded = !locallyExpanded
@@ -675,7 +706,10 @@ private fun ToolCallGroupRow(
                                 fontSize = 11.sp,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(Color.Black.copy(alpha = 0.04f), RoundedCornerShape(8.dp))
+                                    .background(
+                                        MaterialTheme.colorScheme.surfaceContainerHighest,
+                                        RoundedCornerShape(8.dp)
+                                    )
                                     .padding(8.dp)
                             )
                         }
@@ -691,7 +725,10 @@ private fun ToolCallGroupRow(
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(Color.Black.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                                    .background(
+                                        MaterialTheme.colorScheme.surfaceContainerHigh,
+                                        RoundedCornerShape(8.dp)
+                                    )
                                     .padding(8.dp)
                             )
                         }
@@ -729,16 +766,19 @@ fun ChatMessageBubble(
     isPlanResolving: Boolean = false,
     onToggleOutput: () -> Unit = {},
     onKnowledgeLinkClick: (String) -> Boolean = { false },
+    onRetry: () -> Unit = {},
     showMessageActions: Boolean = true
 ) {
     val context = LocalContext.current
     val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    val clipboardLabelMessage = stringResource(R.string.clipboard_label_message)
     val isUser = message.role == "user"
     val isTool = message.role == "tool"
     val isSystem = message.role == "system"
     val isAssistant = message.role == "assistant"
     val isDelegation = message.isDelegation
     val isCompactionStatus = AgentService.isTransientCompactionStatusMessageForUi(message)
+    val isRetryableNeedsDirection = AgentService.isRetryableNeedsDirectionMessage(message)
     val formattedTimestamp = remember(message.timestamp) { formatAgentMessageTimestamp(message.timestamp) }
     val imageFile = remember(message.imagePath) { message.imagePath?.let(::File)?.takeIf { it.exists() } }
     var showImagePreview by remember(message.imagePath) { mutableStateOf(false) }
@@ -778,7 +818,8 @@ fun ChatMessageBubble(
             colors = CardDefaults.cardColors(
                 containerColor = when {
                     isUser -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f)
-                    isCompactionStatus -> Color(0xFF2E7D32).copy(alpha = 0.92f)
+                    isCompactionStatus -> MaterialTheme.colorScheme.secondaryContainer
+                    isRetryableNeedsDirection -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.92f)
                     else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)
                 }
             ),
@@ -815,7 +856,10 @@ fun ChatMessageBubble(
                         "write_file" -> stringResource(R.string.agent_approve_file_title)
                         "run_command" -> stringResource(R.string.agent_approve_cmd_title)
                         "edit_lines" -> stringResource(R.string.agent_approve_edit_title)
-                        else -> stringResource(R.string.agent_approve_generic_title, message.toolName ?: "Tool")
+                        else -> stringResource(
+                            R.string.agent_approve_generic_title,
+                            message.toolName ?: stringResource(R.string.soft_studio_conversations_tool_fallback)
+                        )
                     }
                     Text(text = title, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     if (message.content.isNotBlank()) {
@@ -881,18 +925,48 @@ fun ChatMessageBubble(
                         Button(
                             onClick = onDeny, 
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer), 
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f).walkthroughTarget("agent.approvals"),
                             shape = RoundedCornerShape(12.dp)
                         ) {
                             Text(stringResource(R.string.action_deny), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                         }
                         Button(
                             onClick = onApprove, 
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)), 
-                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            ),
+                            modifier = Modifier.weight(1f).walkthroughTarget("agent.approvals"),
                             shape = RoundedCornerShape(12.dp)
                         ) {
-                            Text(stringResource(R.string.action_allow), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                            Text(
+                                stringResource(R.string.action_allow),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                } else if (isRetryableNeedsDirection) {
+                    Text(
+                        text = message.content,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    if (showMessageActions) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Button(
+                            onClick = onRetry,
+                            modifier = Modifier
+                                .align(Alignment.End)
+                                .walkthroughTarget("agent.continue"),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error,
+                                contentColor = MaterialTheme.colorScheme.onError
+                            )
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(stringResource(R.string.action_retry))
                         }
                     }
                 } else {
@@ -1085,7 +1159,10 @@ fun ChatMessageBubble(
         if (!message.isStreaming) {
             val roleLabel = when {
                 isUser -> stringResource(R.string.agent_user_label)
-                isTool -> stringResource(R.string.agent_tool_label, message.toolName ?: "Tool")
+                isTool -> stringResource(
+                    R.string.agent_tool_label,
+                    message.toolName ?: stringResource(R.string.soft_studio_conversations_tool_fallback)
+                )
                 isSystem -> stringResource(R.string.agent_system_label)
                 message.customAgentName != null -> stringResource(R.string.agent_custom_agent_label, message.customAgentName)
                 message.agentRole != null -> stringResource(R.string.agent_role_label, agentRoleLabel(message.agentRole))
@@ -1109,44 +1186,60 @@ fun ChatMessageBubble(
                 modifier = Modifier.padding(start = 4.dp, top = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    Icons.Default.ContentCopy,
-                    stringResource(R.string.action_copy),
-                    modifier = Modifier.size(14.dp).clickable {
-                        val clip = ClipData.newPlainText(context.getString(R.string.clipboard_label_message), message.content)
+                IconButton(
+                    onClick = {
+                        val clip = ClipData.newPlainText(clipboardLabelMessage, message.content)
                         clipboardManager.setPrimaryClip(clip)
                     },
-                    tint = MaterialTheme.colorScheme.outline
-                )
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                if ((isUser || isAssistant || message.isPlan) && !isEditing) {
+                    modifier = Modifier.size(AGENT_MESSAGE_ACTION_TOUCH_TARGET_DP.dp)
+                ) {
                     Icon(
-                        Icons.Default.Edit,
-                        stringResource(R.string.action_edit),
-                        modifier = Modifier.size(14.dp).clickable { onEdit() },
+                        Icons.Default.ContentCopy,
+                        stringResource(R.string.action_copy),
+                        modifier = Modifier.size(18.dp),
                         tint = MaterialTheme.colorScheme.outline
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                }
+
+                if ((isUser || isAssistant || message.isPlan) && !isEditing) {
+                    IconButton(
+                        onClick = onEdit,
+                        modifier = Modifier.size(AGENT_MESSAGE_ACTION_TOUCH_TARGET_DP.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Edit,
+                            stringResource(R.string.action_edit),
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.outline
+                        )
+                    }
                 }
 
                 if (isAssistant) {
-                    Icon(
-                        Icons.Default.Refresh,
-                        stringResource(R.string.action_regenerate),
-                        modifier = Modifier.size(14.dp).clickable { onRegenerate() },
-                        tint = MaterialTheme.colorScheme.outline
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    IconButton(
+                        onClick = onRegenerate,
+                        modifier = Modifier.size(AGENT_MESSAGE_ACTION_TOUCH_TARGET_DP.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Refresh,
+                            stringResource(R.string.action_regenerate),
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.outline
+                        )
+                    }
                 }
 
-                Icon(
-                    Icons.Default.Delete,
-                    stringResource(R.string.action_delete),
-                    modifier = Modifier.size(14.dp).clickable { onDelete() },
-                    tint = MaterialTheme.colorScheme.outline
-                )
+                IconButton(
+                    onClick = onDelete,
+                    modifier = Modifier.size(AGENT_MESSAGE_ACTION_TOUCH_TARGET_DP.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Delete,
+                        stringResource(R.string.action_delete),
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.outline
+                    )
+                }
             }
         }
     }
@@ -1198,7 +1291,8 @@ private fun AgentPlanDecisionButtons(
             ),
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 48.dp),
+                .heightIn(min = 48.dp)
+                .walkthroughTarget("agent.plan"),
             shape = RoundedCornerShape(12.dp)
         ) {
             Icon(Icons.Default.Close, null, modifier = Modifier.size(18.dp))
@@ -1240,25 +1334,27 @@ private fun AgentPlanDecisionButtons(
                 onClick = onApprove,
                 enabled = !isResolving,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF4CAF50)
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
                 ),
                 modifier = Modifier
                     .weight(1f)
-                    .heightIn(min = 48.dp),
+                    .heightIn(min = 48.dp)
+                    .walkthroughTarget("agent.plan"),
                 shape = RoundedCornerShape(12.dp)
             ) {
                 if (isResolving) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(18.dp),
                         strokeWidth = 2.dp,
-                        color = Color.White
+                        color = MaterialTheme.colorScheme.onPrimary
                     )
                 } else {
                     Icon(
                         Icons.Default.Check,
                         null,
                         modifier = Modifier.size(18.dp),
-                        tint = Color.White
+                        tint = MaterialTheme.colorScheme.onPrimary
                     )
                 }
                 Spacer(modifier = Modifier.width(6.dp))
@@ -1269,7 +1365,7 @@ private fun AgentPlanDecisionButtons(
                     ),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onPrimary,
                     maxLines = 1
                 )
             }

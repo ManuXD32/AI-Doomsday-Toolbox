@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Etiquetas compartidas de navegación adaptable y nombres completos de accesibilidad. -->
+    <string name="responsive_nav_home">Inicio</string>
+    <string name="responsive_nav_more">Más</string>
+    <string name="responsive_nav_more_accessibility">Abrir más destinos</string>
+    <string name="responsive_nav_more_title">Más destinos</string>
+    <string name="responsive_nav_more_subtitle">Modelos y ajustes</string>
+    <string name="responsive_nav_more_close">Cerrar más destinos</string>
+</resources>

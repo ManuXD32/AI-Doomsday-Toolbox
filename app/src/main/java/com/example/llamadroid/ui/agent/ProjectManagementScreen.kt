@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.agent
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,6 +27,7 @@ import com.example.llamadroid.service.AgentService
 import com.example.llamadroid.service.ProjectExportService
 import com.example.llamadroid.service.ProjectSnapshotService
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 /**
  * Screen for project management - Export/Import and Snapshots
@@ -38,6 +41,15 @@ fun ProjectManagementScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val exportSuccessText = stringResource(R.string.agent_export_success)
+    val exportFailedFormat = stringResource(R.string.agent_export_failed)
+    val importSuccessText = stringResource(R.string.agent_import_success)
+    val importFailedFormat = stringResource(R.string.agent_import_failed)
+    val rollbackFailedText = stringResource(R.string.agent_rollback_failed)
+    val snapshotDeletedText = stringResource(R.string.agent_snapshot_deleted)
+    val snapshotDefaultNameFormat = stringResource(R.string.agent_snapshot_default_name)
+    val snapshotSuccessText = stringResource(R.string.agent_snapshot_success)
+    val snapshotFailedText = stringResource(R.string.agent_snapshot_failed)
     val scope = rememberCoroutineScope()
     
     val exportService = remember { ProjectExportService(context, agentService) }
@@ -65,7 +77,15 @@ fun ProjectManagementScreen(
             scope.launch {
                 isExporting = true
                 val result = exportService.exportProject(projectFolder, conversationId, uri)
-                statusMessage = if (result.isSuccess) context.getString(R.string.agent_export_success) else context.getString(R.string.agent_export_failed, result.exceptionOrNull()?.message ?: "")
+                statusMessage = if (result.isSuccess) {
+                    exportSuccessText
+                } else {
+                    String.format(
+                        Locale.getDefault(),
+                        exportFailedFormat,
+                        result.exceptionOrNull()?.message ?: ""
+                    )
+                }
                 isExporting = false
             }
         }
@@ -79,7 +99,15 @@ fun ProjectManagementScreen(
             scope.launch {
                 isImporting = true
                 val result = exportService.importProject(projectFolder, conversationId, uri)
-                statusMessage = if (result.isSuccess) context.getString(R.string.agent_import_success) else context.getString(R.string.agent_import_failed, result.exceptionOrNull()?.message ?: "")
+                statusMessage = if (result.isSuccess) {
+                    importSuccessText
+                } else {
+                    String.format(
+                        Locale.getDefault(),
+                        importFailedFormat,
+                        result.exceptionOrNull()?.message ?: ""
+                    )
+                }
                 isImporting = false
             }
         }
@@ -88,6 +116,7 @@ fun ProjectManagementScreen(
     Scaffold(
         topBar = {
             TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                 title = { Text(stringResource(R.string.agent_project_mgmt_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -239,7 +268,7 @@ fun ProjectManagementScreen(
                                     onClick = {
                                         scope.launch {
                                             val result = snapshotService.rollbackToSnapshot(projectFolder, snapshot.id)
-                                            statusMessage = if (result.isSuccess) result.getOrThrow() else context.getString(R.string.agent_rollback_failed)
+                                            statusMessage = if (result.isSuccess) result.getOrThrow() else rollbackFailedText
                                         }
                                     }
                                 ) {
@@ -250,7 +279,7 @@ fun ProjectManagementScreen(
                                     onClick = {
                                         scope.launch {
                                             snapshotService.deleteSnapshot(projectFolder, snapshot.id)
-                                            statusMessage = context.getString(R.string.agent_snapshot_deleted)
+                                            statusMessage = snapshotDeletedText
                                         }
                                     }
                                 ) {
@@ -289,9 +318,15 @@ fun ProjectManagementScreen(
                             isCreatingSnapshot = true
                             val result = snapshotService.createSnapshot(
                                 projectFolder,
-                                snapshotDescription.ifBlank { context.getString(R.string.agent_snapshot_default_name, snapshots.size + 1) }
+                                snapshotDescription.ifBlank {
+                                    String.format(
+                                        Locale.getDefault(),
+                                        snapshotDefaultNameFormat,
+                                        snapshots.size + 1
+                                    )
+                                }
                             )
-                            statusMessage = if (result.isSuccess) context.getString(R.string.agent_snapshot_success) else context.getString(R.string.agent_snapshot_failed)
+                            statusMessage = if (result.isSuccess) snapshotSuccessText else snapshotFailedText
                             snapshotDescription = ""
                             showSnapshotDialog = false
                             isCreatingSnapshot = false

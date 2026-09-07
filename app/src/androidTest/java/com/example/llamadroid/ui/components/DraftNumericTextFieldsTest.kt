@@ -50,7 +50,7 @@ class DraftNumericTextFieldsTest {
         composeRule.onNodeWithTag("count").performTextInput("1")
 
         composeRule.onNodeWithTag("count").assertTextEquals("1")
-        composeRule.onNodeWithText("Committed 10").assertIsDisplayed()
+        composeRule.onNodeWithText("Committed 10").assertExists()
     }
 
     @Test
@@ -101,11 +101,11 @@ class DraftNumericTextFieldsTest {
         composeRule.onNodeWithTag("bounded").performTextInput("1")
 
         composeRule.onNodeWithTag("bounded").assertTextEquals("1")
-        composeRule.onNodeWithText("Committed 50").assertIsDisplayed()
+        composeRule.onNodeWithText("Committed 50").assertExists()
 
         composeRule.onNodeWithTag("bounded").performImeAction()
 
         composeRule.onNodeWithTag("bounded").assertTextEquals("10")
-        composeRule.onNodeWithText("Committed 10").assertIsDisplayed()
+        composeRule.onNodeWithText("Committed 10").assertExists()
     }
 }

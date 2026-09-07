@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="soft_studio_appearance_icon_desc">Apariencia</string>
+    <string name="soft_studio_appearance_title">Apariencia</string>
+    <string name="soft_studio_appearance_desc">Elige el tema de la aplicación y los colores opcionales del fondo de Android.</string>
+    <string name="soft_studio_theme_system">Sistema</string>
+    <string name="soft_studio_theme_light">Claro</string>
+    <string name="soft_studio_theme_dark">Oscuro</string>
+    <string name="soft_studio_dynamic_color_title">Usar colores dinámicos</string>
+    <string name="soft_studio_dynamic_color_desc">Usa los colores del fondo del dispositivo en Android 12 y versiones posteriores.</string>
+    <string name="soft_studio_advanced_expanded">Expandido</string>
+    <string name="soft_studio_advanced_collapsed">Contraído</string>
+</resources>

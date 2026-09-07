@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="studio_plan_title">Editar plan</string>
+    <string name="studio_plan_help">Revisa el plan completo. Al guardar, apruebas la versión editada; al cancelar, descartas este borrador.</string>
+    <string name="studio_plan_label">Plan de implementación</string>
+    <string name="studio_plan_edited">Borrador editado</string>
+    <string name="studio_plan_save">Guardar y aprobar</string>
+    <string name="studio_plan_saving">Guardando…</string>
+</resources>

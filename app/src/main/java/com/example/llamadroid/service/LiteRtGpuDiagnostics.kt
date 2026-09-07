@@ -12,6 +12,7 @@ import android.opengl.GLES20
 import android.os.Build
 import android.os.Debug
 import android.os.Process
+import com.example.llamadroid.util.AppVersionCodeCompat
 import java.io.File
 import java.io.RandomAccessFile
 import java.security.MessageDigest
@@ -478,12 +479,7 @@ private fun packageDiagnosticLine(context: Context): String {
             @Suppress("DEPRECATION")
             context.packageManager.getPackageInfo(context.packageName, 0)
         }
-        val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            info.longVersionCode
-        } else {
-            @Suppress("DEPRECATION")
-            info.versionCode.toLong()
-        }
+        val versionCode = AppVersionCodeCompat.read(info)
         "package name=${context.packageName} versionName=${info.versionName ?: "-"} versionCode=$versionCode"
     }.getOrElse { "package name=${context.packageName} versionInfoError=${it.diagnosticMessage()}" }
 }

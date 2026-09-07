@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.distributed
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.app.ActivityManager
 import android.content.Context
 
@@ -21,6 +23,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -74,7 +77,11 @@ import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.util.GGUFParser
 import com.example.llamadroid.ui.components.DraftFloatTextField
 import com.example.llamadroid.ui.components.DraftIntTextField
+import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.components.AppChromeDefaults
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
@@ -83,8 +90,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import org.json.JSONArray
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import androidx.compose.ui.graphics.Color
@@ -115,6 +120,8 @@ private sealed interface ModelProbeUiState {
 @Composable
 fun MasterModeScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
+    val resources = LocalResources.current
     val db = remember { AppDatabase.getDatabase(context) }
     val settingsRepo = remember { com.example.llamadroid.data.SettingsRepository(context) }
     val nativeBinarySelection by settingsRepo.llmNativeBinarySelection.collectAsState()
@@ -344,9 +351,9 @@ fun MasterModeScreen(navController: NavController) {
             throw cancelled
         } catch (error: Throwable) {
             val message = when (error) {
-                is LlamaModelProbeTimeoutException -> context.getString(R.string.dist_probe_timeout)
-                is LlamaModelProbeNoLayersException -> context.getString(R.string.dist_probe_no_layers)
-                else -> error.message ?: context.getString(R.string.dist_probe_failed)
+                is LlamaModelProbeTimeoutException -> resources.getString(R.string.dist_probe_timeout)
+                is LlamaModelProbeNoLayersException -> resources.getString(R.string.dist_probe_no_layers)
+                else -> error.message ?: resources.getString(R.string.dist_probe_failed)
             }
             ModelProbeUiState.Failed(message, parserLayers)
         }
@@ -442,7 +449,7 @@ fun MasterModeScreen(navController: NavController) {
     } else null
 
     suspend fun resolveCurrentDistributedProfile(): DistributedLlamaLaunchProfile = withContext(Dispatchers.IO) {
-        val model = requireNotNull(selectedModel) { context.getString(R.string.dist_error_no_model) }
+        val model = requireNotNull(selectedModel) { resources.getString(R.string.dist_error_no_model) }
         val workerSpecs = enabledWorkers.map {
             DistributedWorkerLaunchSpec(
                 address = "${it.ip}:${it.port}",
@@ -451,9 +458,9 @@ fun MasterModeScreen(navController: NavController) {
                 workerId = it.id
             )
         }
-        require(workerSpecs.isNotEmpty()) { context.getString(R.string.dist_error_no_workers) }
+        require(workerSpecs.isNotEmpty()) { resources.getString(R.string.dist_error_no_workers) }
         val probe = effectiveLayerResult
-            ?: error(context.getString(R.string.dist_probe_required))
+            ?: error(resources.getString(R.string.dist_probe_required))
         val selectedDraftPath = draftModel?.path
         val effectiveDraftPath = when {
             !speculativeEnabled -> null
@@ -464,7 +471,7 @@ fun MasterModeScreen(navController: NavController) {
             (speculativeMode == LlamaSpeculativeMode.DRAFT_MTP && mtpUseDraftModel)
         if (speculativeEnabled && requiresSelectedDraft) {
             require(!effectiveDraftPath.isNullOrBlank()) {
-                context.getString(R.string.dist_speculative_missing_required_draft)
+                resources.getString(R.string.dist_speculative_missing_required_draft)
             }
         }
         val localState = LlamaService.state.value
@@ -473,7 +480,7 @@ fun MasterModeScreen(navController: NavController) {
                 localState is ServerState.Stopped || localState is ServerState.Error
             }
         require(localOwnedPort != serverPort) {
-            context.getString(R.string.dist_port_conflicts_local, serverPort)
+            resources.getString(R.string.dist_port_conflicts_local, serverPort)
         }
         val selectedMainWorkers = when (mainPlacementMode) {
             MainModelPlacementMode.RESIDENT -> if (mainResidentWorkerId == MASTER_CPU_PLACEMENT_ID) emptyList() else listOfNotNull(
@@ -613,26 +620,15 @@ fun MasterModeScreen(navController: NavController) {
         ProcessController().buildCommandString(launch.argv)
     }
     
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.dist_master_mode)) },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.kiwix_back))
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                )
-            )
-        }
-    ) { padding ->
+    AppScreenScaffold(
+        title = stringResource(R.string.dist_master_mode),
+        onBack = { navController.popBackStack() }
+    ) { _ ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = 16.dp)
+                .walkthroughTarget("distributed.master"),
             verticalArrangement = Arrangement.spacedBy(16.dp),
             contentPadding = PaddingValues(vertical = 16.dp)
         ) {
@@ -652,7 +648,10 @@ fun MasterModeScreen(navController: NavController) {
                         Spacer(modifier = Modifier.height(12.dp))
                         
                         OutlinedCard(
-                            onClick = { showModelPicker = true },
+                            onClick = {
+                                walkthroughTargets?.recordEvent("distributed.master")
+                                showModelPicker = true
+                            },
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
@@ -1909,7 +1908,7 @@ fun MasterModeScreen(navController: NavController) {
                                 label = { Text(stringResource(R.string.dist_advanced_custom_flags)) },
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = false,
-                                placeholder = { Text("--mlock --no-mmap") }
+                                placeholder = { Text("--load-mode mlock") }
                             )
                         }
                         
@@ -2516,7 +2515,7 @@ fun MasterModeScreen(navController: NavController) {
                                                         isEnabled = true
                                                     )
                                                     db.savedWorkerDao().insertWorker(newWorker)
-                                                    Toast.makeText(context, context.getString(R.string.dist_worker_added), Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(context, resources.getString(R.string.dist_worker_added), Toast.LENGTH_SHORT).show()
                                                 }
                                             }
                                         ) {
@@ -2680,6 +2679,7 @@ fun MasterModeScreen(navController: NavController) {
                 
                 Button(
                     onClick = {
+                        walkthroughTargets?.recordEvent("distributed.master")
                         if (isServerRunning) {
                             context.startService(Intent(context, DistributedMasterLlamaService::class.java).apply {
                                 action = DistributedMasterLlamaService.ACTION_STOP
@@ -2702,14 +2702,14 @@ fun MasterModeScreen(navController: NavController) {
                                         context.startForegroundService(intent)
                                         Toast.makeText(
                                             context,
-                                            context.getString(R.string.dist_started_msg, profile.workers.size),
+                                            resources.getString(R.string.dist_started_msg, profile.workers.size),
                                             Toast.LENGTH_LONG
                                         ).show()
                                     }
                                     .onFailure { error ->
                                         Toast.makeText(
                                             context,
-                                            error.message ?: context.getString(R.string.dist_error_start_failed),
+                                            error.message ?: resources.getString(R.string.dist_error_start_failed),
                                             Toast.LENGTH_LONG
                                         ).show()
                                     }
@@ -2757,14 +2757,14 @@ fun MasterModeScreen(navController: NavController) {
                                         .onFailure { error ->
                                             Toast.makeText(
                                                 context,
-                                                error.message ?: context.getString(R.string.dist_command_preview_failed),
+                                                error.message ?: resources.getString(R.string.dist_command_preview_failed),
                                                 Toast.LENGTH_LONG
                                             ).show()
                                         }
                                     isPreviewing = false
                                 }
                             } else {
-                                Toast.makeText(context, context.getString(R.string.dist_error_no_model), Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, resources.getString(R.string.dist_error_no_model), Toast.LENGTH_SHORT).show()
                             }
                         },
                         modifier = Modifier
@@ -2833,7 +2833,10 @@ fun MasterModeScreen(navController: NavController) {
                 
                 // View Network Status Button
                 OutlinedButton(
-                    onClick = { navController.navigate(Screen.NetworkVisualization.route) },
+                    onClick = {
+                        walkthroughTargets?.recordEvent("distributed.master")
+                        navController.navigate(Screen.NetworkVisualization.route)
+                    },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(Icons.Default.Info, contentDescription = null)
@@ -3149,7 +3152,7 @@ fun MasterModeScreen(navController: NavController) {
                                     )
                                 )
                             }
-                             Toast.makeText(context, context.getString(R.string.dist_worker_added_toast, name, ipAddress, portNum.toString()), Toast.LENGTH_SHORT).show()
+                             Toast.makeText(context, resources.getString(R.string.dist_worker_added_toast, name, ipAddress, portNum.toString()), Toast.LENGTH_SHORT).show()
                         }
                         showAddWorkerDialog = false
                     }
@@ -3245,10 +3248,10 @@ fun MasterModeScreen(navController: NavController) {
                                 }
                                 showEditWorkerDialog = false
                                 workerToEdit = null
-                                 Toast.makeText(context, context.getString(R.string.dist_worker_updated_toast), Toast.LENGTH_SHORT).show()
+                                 Toast.makeText(context, resources.getString(R.string.dist_worker_updated_toast), Toast.LENGTH_SHORT).show()
                             }
                         ) {
-                             Text(context.getString(R.string.action_save))
+                             Text(resources.getString(R.string.action_save))
                         }
                     },
                     dismissButton = {
@@ -3330,7 +3333,7 @@ fun MasterModeScreen(navController: NavController) {
                                 }.onSuccess {
                                     isEditingCommand = false
                                 }.onFailure {
-                                    Toast.makeText(context, context.getString(R.string.dist_custom_command_invalid), Toast.LENGTH_LONG).show()
+                                    Toast.makeText(context, resources.getString(R.string.dist_custom_command_invalid), Toast.LENGTH_LONG).show()
                                 }
                             }
                         ) {
@@ -3350,7 +3353,7 @@ fun MasterModeScreen(navController: NavController) {
                             onClick = {
                                 val currentCmd = customCommand ?: originalCmd
                                 clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(currentCmd))
-                                Toast.makeText(context, context.getString(R.string.dist_command_copied), Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, resources.getString(R.string.dist_command_copied), Toast.LENGTH_SHORT).show()
                             }
                         ) {
                             Text(stringResource(R.string.action_copy))
@@ -3430,7 +3433,7 @@ fun MasterModeScreen(navController: NavController) {
                                 )
                                 db.savedCommandDao().insertCommand(newCommand)
                             }
-                            Toast.makeText(context, context.getString(R.string.dist_command_saved), Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, resources.getString(R.string.dist_command_saved), Toast.LENGTH_SHORT).show()
                             showSaveCommandDialog = false
                         }
                     },
@@ -3548,7 +3551,7 @@ fun MasterModeScreen(navController: NavController) {
                                                 }
                                             }
                                         }
-                                        Toast.makeText(context, context.getString(R.string.dist_command_loaded), Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, resources.getString(R.string.dist_command_loaded), Toast.LENGTH_SHORT).show()
                                         showLoadCommandDialog = false
                                     }) {
                                         Text(cmd.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -3807,18 +3810,9 @@ private fun LayerVisualizationCard(
 }
 
 
-// === Shared HTTP client helper to eliminate SSL boilerplate ===
+// === Shared HTTP client helper with platform TLS validation ===
 private fun createRemoteHttpClient(timeoutSec: Long = 5): okhttp3.OkHttpClient {
-    val trustAllCerts = arrayOf<javax.net.ssl.TrustManager>(object : javax.net.ssl.X509TrustManager {
-        override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
-        override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
-        override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
-    })
-    val sslCtx = javax.net.ssl.SSLContext.getInstance("SSL")
-    sslCtx.init(null, trustAllCerts, java.security.SecureRandom())
     return okhttp3.OkHttpClient.Builder()
-        .sslSocketFactory(sslCtx.socketFactory, trustAllCerts[0] as javax.net.ssl.X509TrustManager)
-        .hostnameVerifier { _, _ -> true }
         .connectTimeout(timeoutSec, java.util.concurrent.TimeUnit.SECONDS)
         .readTimeout(timeoutSec, java.util.concurrent.TimeUnit.SECONDS)
         .build()
@@ -3828,6 +3822,7 @@ private fun createRemoteHttpClient(timeoutSec: Long = 5): okhttp3.OkHttpClient {
 @Composable
 fun RemoteMasterCard(modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     
     // ===== Server-side state =====
     val remoteEnabled by DistributedService.remoteControlEnabled.collectAsState()
@@ -4110,7 +4105,7 @@ fun RemoteMasterCard(modifier: Modifier = Modifier) {
                                 val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
                                 IconButton(onClick = {
                                     clipboard.setText(androidx.compose.ui.text.AnnotatedString(serverLogs.joinToString("\n")))
-                                    android.widget.Toast.makeText(context, context.getString(R.string.dist_remote_logs_copied), android.widget.Toast.LENGTH_SHORT).show()
+                                    android.widget.Toast.makeText(context, resources.getString(R.string.dist_remote_logs_copied), android.widget.Toast.LENGTH_SHORT).show()
                                 }, modifier = Modifier.size(32.dp)) {
                                     Icon(Icons.Default.ContentCopy, contentDescription = stringResource(R.string.action_copy), modifier = Modifier.size(18.dp))
                                 }
@@ -4188,8 +4183,8 @@ fun RemoteMasterCard(modifier: Modifier = Modifier) {
                 
                 Button(
                     onClick = {
-                        if (clientIp.isBlank()) { clientError = context.getString(R.string.dist_remote_error_empty_ip); return@Button }
-                        if (clientPassword.isBlank()) { clientError = context.getString(R.string.dist_remote_error_empty_password); return@Button }
+                        if (clientIp.isBlank()) { clientError = resources.getString(R.string.dist_remote_error_empty_ip); return@Button }
+                        if (clientPassword.isBlank()) { clientError = resources.getString(R.string.dist_remote_error_empty_password); return@Button }
                         clientConnecting = true
                         clientError = null
                         
@@ -4201,7 +4196,7 @@ fun RemoteMasterCard(modifier: Modifier = Modifier) {
                                 // Fetch status
                                 val sReq = okhttp3.Request.Builder().url("https://$clientIp/status").header("X-Auth-Token", authToken).build()
                                 val sRes = httpClient.newCall(sReq).execute()
-                                if (!sRes.isSuccessful) { clientError = context.getString(R.string.dist_remote_error_connect); return@launch }
+                                if (!sRes.isSuccessful) { clientError = resources.getString(R.string.dist_remote_error_connect); return@launch }
                                 sRes.body?.string()?.let { DistributedService.setRemoteClientStatusStr(it) }
                                 
                                 // Fetch models
@@ -4211,7 +4206,7 @@ fun RemoteMasterCard(modifier: Modifier = Modifier) {
                                 
                                 DistributedService.setRemoteClientConnected(true)
                             } catch (e: Exception) {
-                                clientError = context.getString(R.string.dist_remote_error_connect)
+                                clientError = resources.getString(R.string.dist_remote_error_connect)
                             } finally {
                                 clientConnecting = false
                             }
@@ -4543,7 +4538,7 @@ fun RemoteMasterCard(modifier: Modifier = Modifier) {
                                             if (showCmd) {
                                                 IconButton(onClick = {
                                                     cmdClipboard.setText(androidx.compose.ui.text.AnnotatedString(launchCmd))
-                                                    android.widget.Toast.makeText(context, context.getString(R.string.dist_command_copied), android.widget.Toast.LENGTH_SHORT).show()
+                                                    android.widget.Toast.makeText(context, resources.getString(R.string.dist_command_copied), android.widget.Toast.LENGTH_SHORT).show()
                                                 }, modifier = Modifier.size(32.dp)) {
                                                     Icon(Icons.Default.ContentCopy, contentDescription = stringResource(R.string.action_copy), modifier = Modifier.size(16.dp))
                                                 }
@@ -4640,7 +4635,7 @@ fun RemoteMasterCard(modifier: Modifier = Modifier) {
                             OutlinedTextField(value = remoteCacheRam, onValueChange = { DistributedService.setRemoteUICacheRam(it.filter { char -> char.isDigit() }) }, label = { Text(stringResource(R.string.dist_advanced_cache_ram)) }, modifier = Modifier.weight(1f), singleLine = true, placeholder = { Text("0") })
                         }
                         Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedTextField(value = remoteCustomFlags, onValueChange = { DistributedService.setRemoteUICustomFlags(it) }, label = { Text(stringResource(R.string.dist_advanced_custom_flags)) }, modifier = Modifier.fillMaxWidth(), singleLine = false, placeholder = { Text("--mlock --no-mmap") })
+                        OutlinedTextField(value = remoteCustomFlags, onValueChange = { DistributedService.setRemoteUICustomFlags(it) }, label = { Text(stringResource(R.string.dist_advanced_custom_flags)) }, modifier = Modifier.fillMaxWidth(), singleLine = false, placeholder = { Text("--load-mode mlock") })
                         
                         Spacer(modifier = Modifier.height(12.dp))
                         HorizontalDivider()
@@ -5035,7 +5030,7 @@ fun RemoteMasterCard(modifier: Modifier = Modifier) {
         AlertDialog(
             onDismissRequest = { showSwitchConfirm = null },
             title = { Text(stringResource(R.string.dist_remote_switch)) },
-            text = { Text(context.getString(R.string.dist_remote_switch_confirm, params.model)) },
+            text = { Text(resources.getString(R.string.dist_remote_switch_confirm, params.model)) },
             confirmButton = {
                 Button(onClick = {
                     showSwitchConfirm = null

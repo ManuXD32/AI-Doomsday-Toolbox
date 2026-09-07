@@ -50,6 +50,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -71,6 +72,8 @@ import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppSectionCard
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -83,6 +86,8 @@ private const val QUADTRIX_RUNTIME_PROFILE = "ADT Quadtrix WebUI"
 @Composable
 fun QuadtrixTrainerScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val settingsRepo = remember { SettingsRepository(context) }
     val database = remember { AppDatabase.getDatabase(context) }
@@ -176,7 +181,7 @@ fun QuadtrixTrainerScreen(navController: NavController) {
             }
             result.onSuccess { selection ->
                 settingsRepo.setQuadtrixWorkspace(selection.uri, selection.directPath)
-                Toast.makeText(context, context.getString(R.string.quadtrix_workspace_ready), Toast.LENGTH_LONG).show()
+                Toast.makeText(context, resources.getString(R.string.quadtrix_workspace_ready), Toast.LENGTH_LONG).show()
                 if (startWebUiAfterFolderPick) {
                     val profileId = saveRuntimeProfile(selection.directPath)
                     QuadtrixTrainingService.startWebUi(context, profileId)
@@ -184,7 +189,7 @@ fun QuadtrixTrainerScreen(navController: NavController) {
             }.onFailure { error ->
                 Toast.makeText(
                     context,
-                    context.getString(R.string.quadtrix_workspace_setup_failed, error.message ?: context.getString(R.string.error_generic)),
+                    resources.getString(R.string.quadtrix_workspace_setup_failed, error.message ?: resources.getString(R.string.error_generic)),
                     Toast.LENGTH_LONG
                 ).show()
             }
@@ -228,7 +233,8 @@ fun QuadtrixTrainerScreen(navController: NavController) {
         AppContentColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(rememberScrollState())
+                .walkthroughTarget("quadtrix.config"),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             CompactStatusHeader(runtime)
@@ -241,11 +247,18 @@ fun QuadtrixTrainerScreen(navController: NavController) {
                 workspaceUri = workspaceUri,
                 workspacePath = workspacePath,
                 onPickWorkspace = {
+                    walkthroughTargets?.recordEvent("quadtrix.config")
                     startWebUiAfterFolderPick = false
                     workspacePicker.launch(null)
                 },
-                onStart = { startWebUi() },
-                onStop = { QuadtrixTrainingService.stop(context) },
+                onStart = {
+                    walkthroughTargets?.recordEvent("quadtrix.config")
+                    startWebUi()
+                },
+                onStop = {
+                    walkthroughTargets?.recordEvent("quadtrix.config")
+                    QuadtrixTrainingService.stop(context)
+                },
                 onOpen = {
                     navController.navigate(
                         Screen.QuadtrixWebUi.createRoute(
@@ -264,16 +277,27 @@ fun QuadtrixTrainerScreen(navController: NavController) {
                 onWorkerTokenChange = { workerToken = it },
                 workerThreads = workerThreads,
                 onWorkerThreadsChange = { workerThreads = it.filter { ch -> ch.isDigit() }.take(3) },
-                onStart = { startWorker() },
-                onStop = { QuadtrixTrainingService.stop(context) }
+                onStart = {
+                    walkthroughTargets?.recordEvent("quadtrix.config")
+                    startWorker()
+                },
+                onStop = {
+                    walkthroughTargets?.recordEvent("quadtrix.config")
+                    QuadtrixTrainingService.stop(context)
+                }
             )
             MonitorCard(
                 runtime = runtime,
+                modifier = Modifier.walkthroughTarget("quadtrix.progress"),
                 onCopyLogs = {
-                    copyText(context, context.getString(R.string.quadtrix_debug_logs), runtime.logs)
-                    Toast.makeText(context, context.getString(R.string.quadtrix_logs_copied), Toast.LENGTH_SHORT).show()
+                    walkthroughTargets?.recordEvent("quadtrix.progress")
+                    copyText(context, resources.getString(R.string.quadtrix_debug_logs), runtime.logs)
+                    Toast.makeText(context, resources.getString(R.string.quadtrix_logs_copied), Toast.LENGTH_SHORT).show()
                 },
-                onClearLogs = { QuadtrixTrainingService.clearLogs() }
+                onClearLogs = {
+                    walkthroughTargets?.recordEvent("quadtrix.progress")
+                    QuadtrixTrainingService.clearLogs()
+                }
             )
         }
     }
@@ -284,12 +308,11 @@ private fun CompactStatusHeader(runtime: QuadtrixRuntimeState) {
     AppSectionCard(
         tonalAccent = statusColor(runtime).copy(alpha = 0.12f)
     ) {
-        Row(
+        Column(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
                     text = stringResource(R.string.quadtrix_eyebrow),
                     style = MaterialTheme.typography.labelLarge,
@@ -464,10 +487,14 @@ private fun WorkerCard(
 @Composable
 private fun MonitorCard(
     runtime: QuadtrixRuntimeState,
+    modifier: Modifier = Modifier,
     onCopyLogs: () -> Unit,
     onClearLogs: () -> Unit
 ) {
-    AppSectionCard(tonalAccent = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.08f)) {
+    AppSectionCard(
+        modifier = modifier,
+        tonalAccent = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.08f)
+    ) {
         SectionHeading(
             title = stringResource(R.string.quadtrix_area_monitor),
             body = stringResource(R.string.quadtrix_monitor_desc)

@@ -2,6 +2,9 @@ package com.example.llamadroid.ui.navigation
 
 sealed class Screen(val route: String) {
     object Dashboard : Screen("dashboard")
+    object Walkthrough : Screen("walkthrough")
+    object Library : Screen("library")
+    object AllMediaGallery : Screen("all_media_gallery") // Shared saved image and video gallery
     object ModelManager : Screen("models")       // Now goes to Model Hub
     object Chat : Screen("chat")
     object Settings : Screen("settings")
@@ -9,14 +12,25 @@ sealed class Screen(val route: String) {
     object Logs : Screen("logs")
     // AI screens
     object AIHub : Screen("ai_hub")              // Landing page for AI features
-    object ImageGen : Screen("image_gen")        // Stable Diffusion image generation
+    object ImageGen : Screen("image_gen") {      // Stable Diffusion image generation
+        fun createRoute(startMode: Int = 0, tab: String = "create"): String {
+            require(startMode in 0..4) { "Image Generation mode must be between 0 and 4" }
+            require(tab == "create" || tab == "gallery") { "Unknown image workspace tab" }
+            return "$route?startMode=$startMode" + if (tab == "gallery") "&tab=gallery" else ""
+        }
+    }
     object ImageGenUpscale : Screen("image_gen_upscale") // Compatibility route into the unified Enlarge task
     object OnnxImageGen : Screen("onnx_image_gen") // ONNX Runtime image generation
     object OnnxBackgroundRemoval : Screen("onnx_background_removal") // ONNX Runtime background removal
     object OnnxTts : Screen("onnx_tts")       // ONNX Runtime text-to-speech
     object OnnxTtsGallery : Screen("onnx_tts_gallery") // ONNX TTS generated audio gallery
     object LiveTranslator : Screen("live_translator") // Turn-based bilingual voice translator
-    object VideoGen : Screen("video_gen")        // Stable Diffusion video generation
+    object VideoGen : Screen("video_gen") {
+        fun createRoute(tab: String = "create"): String {
+            require(tab == "create" || tab == "gallery") { "Unknown video workspace tab" }
+            return route + if (tab == "gallery") "?tab=gallery" else ""
+        }
+    }
     object AudioTranscription : Screen("audio_transcription") // WhisperCPP
     object VideoUpscaler : Screen("video_upscaler")           // Real-ESRGAN video upscaling
     object VideoInterpolation : Screen("video_interpolation") // RIFE video frame interpolation
@@ -33,13 +47,19 @@ sealed class Screen(val route: String) {
     }
     object Workflows : Screen("workflows")                     // AI Workflows (Sequential operations)
     object AiServersHub : Screen("ai_servers_hub")             // Local web servers for AI tools
+    object FileServer : Screen("file_server")                 // Existing LAN file-sharing controls
     // Model screens
     object ModelHub : Screen("model_hub")        // Landing page for model management
+    object ModelSources : Screen("model_sources") // Saved sources, bundles, and pending artifacts
     object LLMModels : Screen("llm_models")      // LlamaCpp model management
     object SDModels : Screen("sd_models")        // SD model management
     object OnnxModels : Screen("onnx_models")    // ONNX model management
     object WhisperModels : Screen("whisper_models") // Whisper model management
     object LiteRtModels : Screen("litert_models") // LiteRT model management
+    // PDF screens
+    object PDFToolbox : Screen("pdf_toolbox")
+    object PDFSummary : Screen("pdf_summary")
+    object PDFSettings : Screen("settings_pdf")
     // Kiwix screens
     object KiwixHub : Screen("kiwix_hub")        // Landing page for Kiwix
     object ZimManager : Screen("zim_manager")    // ZIM file management
@@ -80,7 +100,12 @@ sealed class Screen(val route: String) {
     object TermuxFileManager : Screen("termux_file_manager")  // File manager for Termux tools
     object FastsdGallery : Screen("fastsd_gallery")           // FastSD CPU generated images gallery
     // AI Agent screens
-    object Agent : Screen("agent")                             // AI coding agent chat
+    object Agent : Screen("agent") {                           // AI coding agent chat
+        fun createRoute(conversationId: Long): String {
+            require(conversationId > 0L) { "Conversation ID must be positive" }
+            return "$route?conversationId=$conversationId"
+        }
+    }
     object AgentWorkspace : Screen("agent_workspace")          // Agent workspace file manager
     object AgentInvocation : Screen("agent_invocation/{invocationId}") {
         fun createRoute(invocationId: String): String = "agent_invocation/$invocationId"

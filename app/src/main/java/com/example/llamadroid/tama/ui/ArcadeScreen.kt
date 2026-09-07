@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -23,7 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -48,6 +49,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -62,6 +64,8 @@ import com.example.llamadroid.tama.data.TamaPet
 import com.example.llamadroid.tama.data.resolvePetSpriteAssetPath
 import com.example.llamadroid.tama.game.TamaGameEngine
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import androidx.navigation.NavController
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -153,6 +157,8 @@ fun ArcadeScreen(
     var memoryRewardClaimed by remember { mutableStateOf(false) }
     var tickToken by rememberSaveable { mutableStateOf(0L) }
     val context = LocalContext.current
+    val resources = LocalResources.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
 
     LaunchedEffect(arcadeMode, tickToken) {
         if (arcadeMode != ArcadeMode.CATCH) return@LaunchedEffect
@@ -188,11 +194,11 @@ fun ArcadeScreen(
         coroutineScope.launch {
             gameEngine.awardMoney(
                 reward.toLong(),
-                context.getString(R.string.tama_event_arcade_reward, reward, context.getString(R.string.tama_arcade_game_title))
+                resources.getString(R.string.tama_event_arcade_reward, reward, resources.getString(R.string.tama_arcade_game_title))
             )
             gameEngine.awardHappiness(
                 summary.happiness.toFloat(),
-                context.getString(R.string.tama_event_arcade_happiness_reward, summary.happiness, context.getString(R.string.tama_arcade_game_title))
+                resources.getString(R.string.tama_event_arcade_happiness_reward, summary.happiness, resources.getString(R.string.tama_arcade_game_title))
             )
         }
     }
@@ -205,11 +211,11 @@ fun ArcadeScreen(
         coroutineScope.launch {
             gameEngine.awardMoney(
                 summary.coins.toLong(),
-                context.getString(R.string.tama_event_arcade_reward, summary.coins, context.getString(R.string.tama_arcade_memory_game_title))
+                resources.getString(R.string.tama_event_arcade_reward, summary.coins, resources.getString(R.string.tama_arcade_memory_game_title))
             )
             gameEngine.awardHappiness(
                 summary.happiness.toFloat(),
-                context.getString(R.string.tama_event_arcade_happiness_reward, summary.happiness, context.getString(R.string.tama_arcade_memory_game_title))
+                resources.getString(R.string.tama_event_arcade_happiness_reward, summary.happiness, resources.getString(R.string.tama_arcade_memory_game_title))
             )
         }
     }
@@ -217,10 +223,14 @@ fun ArcadeScreen(
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                 title = { Text(stringResource(R.string.tama_arcade_title), fontFamily = FontFamily.Monospace) },
                 navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = null)
+                    IconButton(
+                        onClick = { navController.popBackStack() },
+                        modifier = Modifier.walkthroughTarget("back")
+                    ) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.action_back))
                     }
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
@@ -257,18 +267,22 @@ fun ArcadeScreen(
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    Text(
-                        text = stringResource(R.string.tama_arcade_subtitle),
-                        fontFamily = FontFamily.Monospace,
-                        color = TamaLight,
-                        fontSize = 12.sp
-                    )
-                    Text(
-                        text = stringResource(R.string.tama_arcade_reward_hint),
-                        fontFamily = FontFamily.Monospace,
-                        color = TamaLight,
-                        fontSize = 11.sp
-                    )
+                    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                        .background(TamaDark).padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = stringResource(R.string.tama_arcade_subtitle),
+                            fontFamily = FontFamily.Monospace,
+                            color = TamaLight,
+                            fontSize = 12.sp
+                        )
+                        Text(
+                            text = stringResource(R.string.tama_arcade_reward_hint),
+                            fontFamily = FontFamily.Monospace,
+                            color = TamaLight,
+                            fontSize = 11.sp
+                        )
+                    }
 
                     ArcadeHub(
                         onPlayCatchGame = {
@@ -277,6 +291,7 @@ fun ArcadeScreen(
                             catchGameState = startCatchGame()
                             tickToken = System.currentTimeMillis()
                             arcadeMode = ArcadeMode.CATCH
+                            walkthroughTargets?.recordEvent("tama.arcade")
                         },
                         onPlayMemoryGame = {
                             memoryRewardClaimed = false
@@ -284,6 +299,7 @@ fun ArcadeScreen(
                             memoryGameState = startMemoryGame()
                             tickToken = System.currentTimeMillis()
                             arcadeMode = ArcadeMode.MEMORY
+                            walkthroughTargets?.recordEvent("tama.arcade")
                         }
                     )
                 }
@@ -376,7 +392,10 @@ private fun ArcadeHub(
     onPlayCatchGame: () -> Unit,
     onPlayMemoryGame: () -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(
+        modifier = Modifier.walkthroughTarget("tama.arcade"),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
         ArcadePanelCard {
             Text(
                 text = stringResource(R.string.tama_arcade_game_title),
@@ -779,7 +798,12 @@ private fun ArcadeResultDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(title), fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 320.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 Text(
                     stringResource(
                         R.string.tama_arcade_result_summary,

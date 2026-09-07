@@ -59,6 +59,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.navigation.NavController
 import com.example.llamadroid.R
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 
@@ -69,6 +71,7 @@ fun QuadtrixWebUiScreen(
     url: String
 ) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val decodedUrl = remember(url) {
         URLDecoder.decode(url.ifBlank { "http://127.0.0.1:8080" }, StandardCharsets.UTF_8.toString())
@@ -183,7 +186,11 @@ fun QuadtrixWebUiScreen(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .walkthroughTarget("quadtrix.progress")
+    ) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = {
@@ -241,6 +248,7 @@ fun QuadtrixWebUiScreen(
                         Spacer(modifier = Modifier.height(16.dp))
                         Button(
                             onClick = {
+                                walkthroughTargets?.recordEvent("quadtrix.progress")
                                 isLoading = true
                                 hasError = false
                                 webView.loadUrl(decodedUrl)
@@ -285,6 +293,7 @@ fun QuadtrixWebUiScreen(
                     text = { Text(stringResource(R.string.quadtrix_webui_reload)) },
                     leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
                     onClick = {
+                        walkthroughTargets?.recordEvent("quadtrix.progress")
                         menuExpanded = false
                         isLoading = true
                         hasError = false
@@ -295,6 +304,7 @@ fun QuadtrixWebUiScreen(
                     text = { Text(stringResource(R.string.quadtrix_webui_clear_browser_state)) },
                     leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
                     onClick = {
+                        walkthroughTargets?.recordEvent("quadtrix.progress")
                         menuExpanded = false
                         isLoading = true
                         hasError = false
@@ -306,11 +316,24 @@ fun QuadtrixWebUiScreen(
                     text = { Text(stringResource(R.string.quadtrix_webui_back_to_launcher)) },
                     leadingIcon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null) },
                     onClick = {
+                        walkthroughTargets?.recordEvent("quadtrix.progress")
                         menuExpanded = false
                         navController.popBackStack()
                     }
                 )
             }
+        }
+
+        // The WebView is a nested destination without the shared AppScreenScaffold. Keep the
+        // contextual guide action in the app chrome overlay while leaving the remote surface
+        // untouched.
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .statusBarsPadding()
+                .padding(top = 4.dp, end = 8.dp)
+        ) {
+            com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
         }
     }
 }

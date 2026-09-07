@@ -31,8 +31,6 @@ import java.util.concurrent.TimeUnit
 private const val PET_AVATAR_RESOURCE_ID = "adt_pet_avatar"
 private const val PET_TILE_IMAGE_SIZE_PX = 96
 private const val PET_TILE_RESOURCE_SCHEMA_VERSION = 3
-// ProtoLayout's ARGB_8888 inline-image value; the constant is not exposed to Kotlin in 1.2.1.
-private const val INLINE_IMAGE_FORMAT_ARGB_8888 = 2
 private const val TILE_BG = 0xFF050816.toInt()
 private const val TILE_PANEL = 0xFF111827.toInt()
 private const val TILE_CARD = 0xFF1F2937.toInt()
@@ -105,6 +103,9 @@ abstract class AdtBaseTileService : TileService() {
         }.build()
     }
 
+    // The legacy tiles builder's IntDef omits the ARGB format supported by its
+    // ProtoLayout wire schema. Keep the same RGBA payload and named schema value.
+    @android.annotation.SuppressLint("WrongConstant")
     private fun loadInlinePetSprite(assetPath: String): ResourceBuilders.InlineImageResource? = runCatching {
         val source = assets.open(assetPath).use(BitmapFactory::decodeStream) ?: return@runCatching null
         val scaled = source.scaleToTileImage()
@@ -124,7 +125,7 @@ abstract class AdtBaseTileService : TileService() {
             .setData(data)
             .setWidthPx(scaled.width)
             .setHeightPx(scaled.height)
-            .setFormat(INLINE_IMAGE_FORMAT_ARGB_8888)
+            .setFormat(androidx.wear.protolayout.ResourceBuilders.IMAGE_FORMAT_ARGB_8888)
             .build()
     }.getOrNull()
 

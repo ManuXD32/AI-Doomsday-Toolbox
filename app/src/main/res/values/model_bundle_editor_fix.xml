@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="model_library_bundle_source_identity">%1$s · %2$s</string>
+    <string name="model_library_bundle_source_role_for">Component type for %1$s</string>
+    <string name="model_library_bundle_source_path_for">Bundle path for %1$s</string>
+    <string name="model_library_bundle_source_path_optional">Optional exact destination or installed member path</string>
+    <string name="model_library_bundle_source_path_invalid">Invalid bundle path. Use a relative path without empty, ., .., absolute, drive-letter, or control-character segments.</string>
+    <string name="model_library_bundle_source_ambiguous">Source path %1$s has multiple installed matches (%2$d). Enter the exact bundle member path for this link.</string>
+    <string name="model_library_bundle_source_collision">Bundle destination conflicts with another component: %1$s. Enter a different exact path.</string>
+    <string name="model_library_bundle_source_incompatible">This source family cannot be used for the selected bundle family and role.</string>
+    <string name="model_library_bundle_source_role_required">Choose a component type for this cross-family source before saving.</string>
+    <string name="model_library_bundle_duplicate_item_key">Two selected components have the same item identity.</string>
+    <string name="model_library_bundle_duplicate_relative_path">Two components would download to %1$s.</string>
+</resources>

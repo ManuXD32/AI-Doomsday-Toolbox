@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="soft_studio_conversations_plan_blank">El plan no puede estar vacío.</string>
+    <string name="soft_studio_conversations_plan_wrong_project">Este plan pertenece a otro proyecto. Vuelve a abrirlo antes de guardarlo.</string>
+    <string name="soft_studio_conversations_default_project">proyecto</string>
+    <string name="soft_studio_conversations_tool_name_clipboard">Nombre de herramienta</string>
+    <string name="soft_studio_conversations_tool_fallback">Herramienta</string>
+    <string name="soft_studio_conversations_required_params">Parámetros obligatorios: %1$s</string>
+</resources>

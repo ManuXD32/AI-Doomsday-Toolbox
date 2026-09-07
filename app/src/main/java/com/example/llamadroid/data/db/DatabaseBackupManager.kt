@@ -359,6 +359,7 @@ object DatabaseBackupManager {
     private fun sanitizePortableAppDatabase(dbFile: File) {
         val db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
         try {
+            sanitizePortableModelLibrary(db)
             if (!tableExists(db, "models")) return
 
             val before = countRows(db, "models")

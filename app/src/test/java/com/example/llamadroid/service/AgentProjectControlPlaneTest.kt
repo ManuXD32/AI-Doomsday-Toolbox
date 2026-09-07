@@ -48,6 +48,7 @@ class AgentProjectControlPlaneTest {
 
         assertTrue("project_state_read" in tools)
         assertTrue("call_agent" in tools)
+        assertTrue("todo_write" in tools)
         assertFalse("read_file" in tools)
         assertFalse("search_code" in tools)
         assertFalse("run_command" in tools)

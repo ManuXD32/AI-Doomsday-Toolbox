@@ -30,13 +30,13 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
@@ -106,6 +106,8 @@ import com.example.llamadroid.service.supportsSdTxt2Img
 import com.example.llamadroid.ui.components.DraftFloatTextField
 import com.example.llamadroid.ui.components.DraftIntTextField
 import com.example.llamadroid.ui.components.DraftNullableIntTextField
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import java.text.DateFormat
 import java.time.DayOfWeek
 import java.time.ZoneId
@@ -118,6 +120,9 @@ import org.json.JSONObject
 @Composable
 fun LlamaSchedulerScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
+    val runNowStartedText = stringResource(R.string.llama_scheduler_run_now_started)
+    val stopRequestedText = stringResource(R.string.llama_scheduler_stop_requested)
     val database = remember { AppDatabase.getDatabase(context.applicationContext) }
     val taskDao = remember { database.llamaScheduledTaskDao() }
     val serverDao = remember { database.llamaServerDao() }
@@ -147,6 +152,7 @@ fun LlamaSchedulerScreen(navController: NavController) {
     Scaffold(
         topBar = {
             TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                 title = {
                     Column {
                         Text(stringResource(R.string.llama_scheduler_title))
@@ -182,15 +188,24 @@ fun LlamaSchedulerScreen(navController: NavController) {
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            TabRow(selectedTabIndex = selectedTab) {
+            TabRow(
+                selectedTabIndex = selectedTab,
+                modifier = Modifier.walkthroughTarget("llama.scheduler")
+            ) {
                 Tab(
                     selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
+                    onClick = {
+                        selectedTab = 0
+                        walkthroughTargets?.recordEvent("llama.scheduler")
+                    },
                     text = { Text(stringResource(R.string.llama_scheduler_tasks_tab)) }
                 )
                 Tab(
                     selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
+                    onClick = {
+                        selectedTab = 1
+                        walkthroughTargets?.recordEvent("llama.scheduler")
+                    },
                     text = { Text(stringResource(R.string.llama_scheduler_logs_tab)) }
                 )
             }
@@ -226,11 +241,11 @@ fun LlamaSchedulerScreen(navController: NavController) {
                     },
                     onRunNow = { task ->
                         LlamaScheduledTaskService.enqueue(context, task.id, System.currentTimeMillis(), force = true)
-                        Toast.makeText(context, context.getString(R.string.llama_scheduler_run_now_started), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, runNowStartedText, Toast.LENGTH_SHORT).show()
                     },
                     onStop = { task ->
                         LlamaScheduledTaskService.cancelRunning(context, taskId = task.id)
-                        Toast.makeText(context, context.getString(R.string.llama_scheduler_stop_requested), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, stopRequestedText, Toast.LENGTH_SHORT).show()
                     }
                 )
             } else {
@@ -254,7 +269,7 @@ fun LlamaSchedulerScreen(navController: NavController) {
                     },
                     onStopLog = { log ->
                         LlamaScheduledTaskService.cancelRunning(context, taskId = log.taskId, logId = log.id)
-                        Toast.makeText(context, context.getString(R.string.llama_scheduler_stop_requested), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, stopRequestedText, Toast.LENGTH_SHORT).show()
                     },
                     onDeleteSelected = {
                         val ids = selectedLogIds.toList()
@@ -363,7 +378,11 @@ private fun SchedulerTaskCard(
     onRunNow: () -> Unit,
     onStop: () -> Unit
 ) {
-    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -495,7 +514,11 @@ private fun SchedulerLogActionsRow(
     onDeleteSelected: () -> Unit,
     onDeleteAll: () -> Unit
 ) {
-    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
         Column(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -542,17 +565,18 @@ private fun SchedulerLogCard(
     onStop: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
-    ElevatedCard(
+    Card(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(enabled = selectionMode) { onToggleSelection() },
-        colors = CardDefaults.elevatedCardColors(
+        colors = CardDefaults.cardColors(
             containerColor = when (log.status) {
                 LlamaScheduledTaskLogStatus.FAILED -> MaterialTheme.colorScheme.errorContainer
                 LlamaScheduledTaskLogStatus.SUCCESS -> MaterialTheme.colorScheme.secondaryContainer
                 else -> MaterialTheme.colorScheme.surface
             }
-        )
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -628,6 +652,7 @@ private fun LlamaScheduledTaskEditorDialog(
     onSave: (LlamaScheduledTaskEntity) -> Unit
 ) {
     val context = LocalContext.current
+    val requiredFieldsErrorText = stringResource(R.string.llama_scheduler_error_required_fields)
     val database = remember { AppDatabase.getDatabase(context.applicationContext) }
     val promptProfiles by remember(database) {
         database.llamaChatPromptProfileDao().getAllProfiles()
@@ -1158,7 +1183,7 @@ private fun LlamaScheduledTaskEditorDialog(
                     val cleanName = name.trim()
                     val cleanPrompt = taskPrompt.trim()
                     if (cleanName.isBlank() || cleanPrompt.isBlank()) {
-                        Toast.makeText(context, context.getString(R.string.llama_scheduler_error_required_fields), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, requiredFieldsErrorText, Toast.LENGTH_SHORT).show()
                         return@TextButton
                     }
                     onSave(
@@ -1207,32 +1232,33 @@ private fun SchedulerPromptPickerField(
     savedSystemPrompts: List<SystemPromptEntity>,
     onSelected: (String) -> Unit
 ) {
-    val context = LocalContext.current
     var expanded by remember { mutableStateOf(false) }
-    val choices = remember(customProfiles, savedSystemPrompts, context) {
-        val builtIns = LlamaBuiltInPromptProfiles.all.map { profile ->
-            SchedulerPromptChoice(
-                name = context.getString(profile.nameRes),
-                source = context.getString(R.string.llama_scheduler_prompt_source_default),
-                content = context.getString(profile.contentRes)
-            )
-        }
-        val nativeProfiles = customProfiles.map { profile ->
-            SchedulerPromptChoice(
-                name = profile.name,
-                source = context.getString(R.string.llama_scheduler_prompt_source_profile),
-                content = profile.content
-            )
-        }
-        val systemPrompts = savedSystemPrompts.map { prompt ->
-            SchedulerPromptChoice(
-                name = prompt.name,
-                source = context.getString(R.string.llama_scheduler_prompt_source_system),
-                content = prompt.content
-            )
-        }
-        builtIns + nativeProfiles + systemPrompts
+    val defaultSourceText = stringResource(R.string.llama_scheduler_prompt_source_default)
+    val profileSourceText = stringResource(R.string.llama_scheduler_prompt_source_profile)
+    val systemSourceText = stringResource(R.string.llama_scheduler_prompt_source_system)
+    val builtIns = mutableListOf<SchedulerPromptChoice>()
+    for (profile in LlamaBuiltInPromptProfiles.all) {
+        builtIns += SchedulerPromptChoice(
+            name = stringResource(profile.nameRes),
+            source = defaultSourceText,
+            content = stringResource(profile.contentRes)
+        )
     }
+    val nativeProfiles = customProfiles.map { profile ->
+        SchedulerPromptChoice(
+            name = profile.name,
+            source = profileSourceText,
+            content = profile.content
+        )
+    }
+    val systemPrompts = savedSystemPrompts.map { prompt ->
+        SchedulerPromptChoice(
+            name = prompt.name,
+            source = systemSourceText,
+            content = prompt.content
+        )
+    }
+    val choices = builtIns + nativeProfiles + systemPrompts
 
     Box {
         OutlinedButton(
@@ -2109,11 +2135,12 @@ private fun StylizedSchedulePicker(
     dayOfMonthText: String,
     onDayOfMonthTextChange: (String) -> Unit
 ) {
-    ElevatedCard(
+    Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.elevatedCardColors(
+        colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-        )
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column(
             modifier = Modifier.padding(14.dp),

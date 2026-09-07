@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="video_output_requires_two_frames">Usa al menos dos fotogramas para generar un vídeo.</string>
+    <string name="video_output_summary">%1$d×%2$d • fotogramas: %3$d • fps: %4$d • pasos: %5$d</string>
+    <string name="video_output_open_preview">Abrir vista previa del vídeo</string>
+    <string name="video_output_animated_webp">WebP animado</string>
+    <string name="video_output_audio_auto">Audio automático</string>
+    <string name="video_output_retry_conversion">Reintentar conversión del vídeo</string>
+    <string name="video_output_retry_failed">No se pudo iniciar la conversión. Cierra otros trabajos de vídeo e inténtalo de nuevo.</string>
+</resources>

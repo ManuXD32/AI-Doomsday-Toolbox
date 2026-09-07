@@ -1,15 +1,24 @@
 package com.example.llamadroid.data
 
+import android.annotation.SuppressLint
+import androidx.core.content.edit
 import android.content.Context
 import android.content.SharedPreferences
 import com.example.llamadroid.data.model.LITERT_BACKEND_AUTO
 import com.example.llamadroid.data.model.normalizeLiteRtBackend
+import com.example.llamadroid.data.db.AgentRuntimeProfile
+import com.example.llamadroid.data.runtime.AgentRuntimeDispatchSettings
+import com.example.llamadroid.data.runtime.AgentRuntimeGlobalOverride
 import com.example.llamadroid.onnx.OnnxBackendOverride
 import com.example.llamadroid.onnx.OnnxCatalogProvider
 import com.example.llamadroid.onnx.OnnxExecutionMode
 import com.example.llamadroid.onnx.OnnxGraphOptimizationLevel
 import com.example.llamadroid.onnx.OnnxRuntimeBackend
 import com.example.llamadroid.service.LlamaSpeculativeMode
+import com.example.llamadroid.service.LlamaLoadMode
+import com.example.llamadroid.service.LlamaLoraSpec
+import com.example.llamadroid.service.ProcessController
+import com.example.llamadroid.service.migrateLegacyLlamaManagedSettings
 import com.example.llamadroid.service.AgentPromptComparisonStore
 import com.example.llamadroid.service.WhisperOutputFormat
 import com.example.llamadroid.service.WhisperVadAssetStore
@@ -18,9 +27,29 @@ import com.example.llamadroid.tama.data.TamaPicGenDefaults
 import com.example.llamadroid.util.AIConstants
 import com.example.llamadroid.util.PromptUtils
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
+
+/**
+ * The app-level appearance mode. The stored value is intentionally stable so
+ * future settings migrations can add modes without changing the public API.
+ */
+enum class AppThemeMode(val storageValue: String) {
+    SYSTEM("system"),
+    LIGHT("light"),
+    DARK("dark");
+
+    companion object {
+        fun fromStorage(value: String?): AppThemeMode = when (value?.trim()?.lowercase(Locale.ROOT)) {
+            LIGHT.storageValue -> LIGHT
+            DARK.storageValue -> DARK
+            else -> SYSTEM
+        }
+    }
+}
 
 data class RemoteSummarySettingsSnapshot(
     val backend: String,
@@ -147,11 +176,84 @@ data class LlamaOcrSettingsSnapshot(
 
 class SettingsRepository(private val context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("llamadroid_settings", Context.MODE_PRIVATE)
+    val walkthrough: WalkthroughPreferences = WalkthroughPreferences(prefs)
+    @Suppress("unused")
+    private val llamaManagedSettingsMigration = migrateLegacyLlamaManagedPreferences()
+
+    private fun migrateLegacyLlamaManagedPreferences() {
+        if (prefs.getInt(PREF_LLAMA_MANAGED_SCHEMA, 0) >= LLAMA_MANAGED_SCHEMA) return
+
+        val configuredLoadMode = if (prefs.contains(PREF_LLAMA_LOAD_MODE)) {
+            LlamaLoadMode.fromValue(prefs.getString(PREF_LLAMA_LOAD_MODE, null))
+        } else if (prefs.getBoolean(PREF_LOW_MEMORY_MODE, false)) {
+            LlamaLoadMode.NONE
+        } else {
+            // The packaged llama.cpp revision defaulted to mmap. Keep that
+            // behavior for every existing or fresh profile until the user
+            // explicitly selects Auto or another new mode.
+            LlamaLoadMode.MMAP
+        }
+        val selectedLoras = if (prefs.contains(PREF_SELECTED_LLM_LORAS)) {
+            decodeLlamaLoraSpecs(prefs.getString(PREF_SELECTED_LLM_LORAS, "[]"))
+        } else {
+            prefs.getString(PREF_SELECTED_LLM_LORA_PATH, null)
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { listOf(LlamaLoraSpec(it)) }
+                .orEmpty()
+        }
+        val controller = ProcessController()
+        val migrated = migrateLegacyLlamaManagedSettings(
+            args = controller.splitCommandLine(prefs.getString(PREF_CUSTOM_FLAGS, "").orEmpty()),
+            configuredLoadMode = configuredLoadMode,
+            selectedLoras = selectedLoras
+        )
+        val legacyPath = migrated.loras.firstOrNull()?.path
+        prefs.edit()
+            .putInt(PREF_LLAMA_MANAGED_SCHEMA, LLAMA_MANAGED_SCHEMA)
+            .putString(PREF_LLAMA_LOAD_MODE, migrated.loadMode.value)
+            .putBoolean(PREF_LOW_MEMORY_MODE, migrated.loadMode == LlamaLoadMode.NONE)
+            .putString(PREF_SELECTED_LLM_LORAS, encodeLlamaLoraSpecs(migrated.loras))
+            .putString(PREF_SELECTED_LLM_LORA_PATH, legacyPath)
+            .putString(PREF_CUSTOM_FLAGS, controller.buildCommandString(migrated.filteredArgs))
+            .commit()
+    }
+
+    private fun encodeLlamaLoraSpecs(loras: List<LlamaLoraSpec>): String =
+        JSONArray().apply {
+            loras.forEach { spec ->
+                put(JSONObject().apply {
+                    put("path", spec.path)
+                    put("strength", spec.strength.toDouble())
+                })
+            }
+        }.toString().replace("\\/", "/")
+
+    private fun decodeLlamaLoraSpecs(value: String?): List<LlamaLoraSpec> = runCatching {
+        val array = JSONArray(value ?: "[]")
+        buildList {
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: continue
+                val path = item.optString("path").trim()
+                val strength = item.optDouble("strength", 1.0).toFloat()
+                if (path.isNotBlank() && strength.isFinite()) {
+                    add(LlamaLoraSpec(path, strength))
+                }
+            }
+        }
+    }.getOrDefault(emptyList())
 
     init {
         if (prefs.contains("model_storage_uri")) {
             prefs.edit().remove("model_storage_uri").apply()
         }
+        // Appearance is process-wide because the activity and settings pages
+        // each keep their own repository instance. The persisted values remain
+        // the source of truth when a fresh repository is created.
+        sharedThemeMode.value = AppThemeMode.fromStorage(
+            prefs.getString(PREF_THEME_MODE, null)
+        )
+        sharedDynamicColor.value = prefs.getBoolean(PREF_DYNAMIC_COLOR, false)
     }
 
     private inline fun <reified T : Enum<T>> enumPref(key: String, defaultValue: T): T {
@@ -173,6 +275,11 @@ class SettingsRepository(private val context: Context) {
                 putInt(key, value)
             }
         }.apply()
+    }
+
+    private fun optionalLongPref(key: String, allowZero: Boolean = false): Long? {
+        if (!prefs.contains(key)) return null
+        return prefs.getLong(key, -1L).takeIf { if (allowZero) it >= 0L else it > 0L }
     }
 
     inner class RemoteSummarySettingsGroup(
@@ -558,14 +665,36 @@ class SettingsRepository(private val context: Context) {
         _selectedModelPath.value = path
     }
 
+    private val _selectedLlmLoras = MutableStateFlow(
+        decodeLlamaLoraSpecs(prefs.getString(PREF_SELECTED_LLM_LORAS, "[]"))
+    )
+    val selectedLlmLoras = _selectedLlmLoras.asStateFlow()
+
     private val _selectedLlmLoraPath = MutableStateFlow(
-        prefs.getString("selected_llm_lora_path", null)
+        _selectedLlmLoras.value.firstOrNull()?.path
+            ?: prefs.getString(PREF_SELECTED_LLM_LORA_PATH, null)
     )
     val selectedLlmLoraPath = _selectedLlmLoraPath.asStateFlow()
 
+    /** Legacy single-adapter setter retained for older call sites. */
     fun setSelectedLlmLoraPath(path: String?) {
-        prefs.edit().putString("selected_llm_lora_path", path).apply()
-        _selectedLlmLoraPath.value = path
+        val normalized = path?.trim()?.takeIf { it.isNotBlank() }
+        setSelectedLlmLoras(normalized?.let { listOf(LlamaLoraSpec(it)) }.orEmpty())
+    }
+
+    fun setSelectedLlmLoras(loras: List<LlamaLoraSpec>) {
+        val normalized = loras.mapNotNull { spec ->
+            val path = spec.path.trim()
+            spec.takeIf { path.isNotBlank() && spec.strength.isFinite() }
+                ?.copy(path = path)
+        }
+        val legacyPath = normalized.firstOrNull()?.path
+        prefs.edit()
+            .putString(PREF_SELECTED_LLM_LORAS, encodeLlamaLoraSpecs(normalized))
+            .putString(PREF_SELECTED_LLM_LORA_PATH, legacyPath)
+            .apply()
+        _selectedLlmLoras.value = normalized
+        _selectedLlmLoraPath.value = legacyPath
     }
     
     // Selected Embedding Model Path
@@ -1212,7 +1341,8 @@ class SettingsRepository(private val context: Context) {
 
     fun setServerPort(port: Int) {
         val normalized = port.coerceIn(1, 65535)
-        prefs.edit().putInt("server_port", normalized).commit()
+        // Persist before publishing the port to runtime observers.
+        prefs.edit(commit = true) { putInt("server_port", normalized) }
         _serverPort.value = normalized
     }
 
@@ -1240,6 +1370,23 @@ class SettingsRepository(private val context: Context) {
             if (normalized == null) remove("server_physical_batch_size") else putInt("server_physical_batch_size", normalized)
         }.apply()
         _serverPhysicalBatchSize.value = normalized
+    }
+
+    private val _serverThreadsBatch = MutableStateFlow(
+        if (prefs.contains("server_threads_batch")) {
+            prefs.getInt("server_threads_batch", 4).coerceIn(1, 131072)
+        } else {
+            null
+        }
+    )
+    val serverThreadsBatch = _serverThreadsBatch.asStateFlow()
+
+    fun setServerThreadsBatch(size: Int?) {
+        val normalized = size?.coerceIn(1, 131072)
+        prefs.edit().apply {
+            if (normalized == null) remove("server_threads_batch") else putInt("server_threads_batch", normalized)
+        }.apply()
+        _serverThreadsBatch.value = normalized
     }
 
     private val _serverParallel = MutableStateFlow(
@@ -2145,6 +2292,33 @@ class SettingsRepository(private val context: Context) {
             pdfTranslationSettings.setTargetLanguage(defaultPdfTranslationLanguage())
         }
     }
+
+    // Appearance preferences shared by the activity theme and General Settings.
+    // Defaults intentionally keep the device theme and the app's own palette.
+    val themeMode: StateFlow<AppThemeMode> = sharedThemeMode.asStateFlow()
+    val dynamicColor: StateFlow<Boolean> = sharedDynamicColor.asStateFlow()
+
+    /** Claim once per local calendar day; callers must use an IO dispatcher for the durable write. */
+    @SuppressLint("ApplySharedPref") // Return durable commit success; callers dispatch this claim to IO.
+    fun claimDailySupportPrompt(todayEpochDay: Long): Boolean = synchronized(dailySupportPromptLock) {
+        if (prefs.contains(PREF_SUPPORT_LAST_SHOWN_DAY) &&
+            todayEpochDay <= prefs.getLong(PREF_SUPPORT_LAST_SHOWN_DAY, Long.MIN_VALUE)
+        ) {
+            false
+        } else {
+            prefs.edit().putLong(PREF_SUPPORT_LAST_SHOWN_DAY, todayEpochDay).commit()
+        }
+    }
+
+    fun setThemeMode(mode: AppThemeMode) {
+        prefs.edit().putString(PREF_THEME_MODE, mode.storageValue).apply()
+        sharedThemeMode.value = mode
+    }
+
+    fun setDynamicColor(enabled: Boolean) {
+        prefs.edit().putBoolean(PREF_DYNAMIC_COLOR, enabled).apply()
+        sharedDynamicColor.value = enabled
+    }
     
     // Legacy model library folder URI (deprecated/no-op for Play-safe storage)
     private val _modelStorageUri = MutableStateFlow<String?>(null)
@@ -2864,19 +3038,28 @@ class SettingsRepository(private val context: Context) {
     val workflowSummaryMergePrompt = workflowSummarySettings.mergePrompt
     fun setWorkflowSummaryMergePrompt(prompt: String?) = workflowSummarySettings.setMergePrompt(prompt)
     
-    // ========== Low Memory Mode (disable mmap for large models) ==========
-    
-    /**
-     * When enabled, passes --no-mmap to llama.cpp, loading the entire model into RAM.
-     * This is SLOWER to start but can help on devices with limited virtual memory.
-     * Most users should keep this OFF since mmap allows running larger models by paging.
-     */
-    private val _lowMemoryMode = MutableStateFlow(prefs.getBoolean("low_memory_mode", false))
+    // ========== llama.cpp model loading mode ==========
+
+    private val _llamaLoadMode = MutableStateFlow(
+        LlamaLoadMode.fromValue(prefs.getString(PREF_LLAMA_LOAD_MODE, LlamaLoadMode.MMAP.value))
+    )
+    val llamaLoadMode = _llamaLoadMode.asStateFlow()
+
+    /** Deprecated compatibility projection for older callers and backups. */
+    private val _lowMemoryMode = MutableStateFlow(_llamaLoadMode.value == LlamaLoadMode.NONE)
     val lowMemoryMode = _lowMemoryMode.asStateFlow()
-    
+
+    fun setLlamaLoadMode(mode: LlamaLoadMode) {
+        prefs.edit()
+            .putString(PREF_LLAMA_LOAD_MODE, mode.value)
+            .putBoolean(PREF_LOW_MEMORY_MODE, mode == LlamaLoadMode.NONE)
+            .apply()
+        _llamaLoadMode.value = mode
+        _lowMemoryMode.value = mode == LlamaLoadMode.NONE
+    }
+
     fun setLowMemoryMode(enabled: Boolean) {
-        prefs.edit().putBoolean("low_memory_mode", enabled).apply()
-        _lowMemoryMode.value = enabled
+        setLlamaLoadMode(if (enabled) LlamaLoadMode.NONE else LlamaLoadMode.MMAP)
     }
     
     // ========== Termux Tool Network Visibility Settings ==========
@@ -4170,11 +4353,348 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
+    // ========== Optional General Agent Override ==========
+
+    /**
+     * The General card has its own persisted values.  Individual role/custom
+     * settings are never copied or rewritten when this card is edited; the
+     * values below are consulted only by [resolveAgentSettingsForDispatch]
+     * while the toggle is enabled.
+     */
+    private val _agentGlobalOverrideEnabled = MutableStateFlow(
+        prefs.getBoolean(PREF_AGENT_GLOBAL_OVERRIDE_ENABLED, false)
+    )
+    val agentGlobalOverrideEnabled = _agentGlobalOverrideEnabled.asStateFlow()
+
+    private val _agentGlobalOverrideBackend = MutableStateFlow(
+        normalizeOllamaOrLlamaBackend(
+            prefs.getString(PREF_AGENT_GLOBAL_OVERRIDE_BACKEND, _agentBackend.value)
+        )
+    )
+    val agentGlobalOverrideBackend = _agentGlobalOverrideBackend.asStateFlow()
+
+    private val _agentGlobalOverrideModel = MutableStateFlow(
+        prefs.getString(PREF_AGENT_GLOBAL_OVERRIDE_MODEL, _agentOrchestratorModel.value)
+    )
+    val agentGlobalOverrideModel = _agentGlobalOverrideModel.asStateFlow()
+
+    private val _agentGlobalOverrideEndpointConfigId = MutableStateFlow(
+        optionalLongPref(PREF_AGENT_GLOBAL_OVERRIDE_ENDPOINT_CONFIG_ID)
+    )
+    val agentGlobalOverrideEndpointConfigId = _agentGlobalOverrideEndpointConfigId.asStateFlow()
+
+    private val _agentGlobalOverrideManagedLlamaServerId = MutableStateFlow(
+        optionalLongPref(PREF_AGENT_GLOBAL_OVERRIDE_MANAGED_SERVER_ID, allowZero = true)
+    )
+    val agentGlobalOverrideManagedLlamaServerId = _agentGlobalOverrideManagedLlamaServerId.asStateFlow()
+
+    private val _agentGlobalOverrideLiteRtModelId = MutableStateFlow(
+        optionalLongPref(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MODEL_ID)
+            ?: _agentLiteRtModelId.value.takeIf { it > 0L }
+    )
+    val agentGlobalOverrideLiteRtModelId = _agentGlobalOverrideLiteRtModelId.asStateFlow()
+
+    private val _agentGlobalOverrideLiteRtBackend = MutableStateFlow(
+        normalizeLiteRtBackend(
+            prefs.getString(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_BACKEND, _agentLiteRtBackend.value)
+        )
+    )
+    val agentGlobalOverrideLiteRtBackend = _agentGlobalOverrideLiteRtBackend.asStateFlow()
+
+    private val _agentGlobalOverrideLiteRtMtpEnabled = MutableStateFlow(
+        prefs.getBoolean(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MTP_ENABLED, _agentLiteRtMtpEnabled.value)
+    )
+    val agentGlobalOverrideLiteRtMtpEnabled = _agentGlobalOverrideLiteRtMtpEnabled.asStateFlow()
+
+    private val _agentGlobalOverrideContextSize = MutableStateFlow(
+        prefs.getInt(PREF_AGENT_GLOBAL_OVERRIDE_CONTEXT_SIZE, _agentOrchestratorCtx.value)
+            .coerceIn(1_024, 1_048_576)
+    )
+    val agentGlobalOverrideContextSize = _agentGlobalOverrideContextSize.asStateFlow()
+
+    private val _agentGlobalOverrideMaxOutputTokens = MutableStateFlow(
+        prefs.getInt(PREF_AGENT_GLOBAL_OVERRIDE_MAX_OUTPUT_TOKENS, _agentOrchestratorMaxOutputTokens.value)
+            .coerceIn(1, 1_048_576)
+    )
+    val agentGlobalOverrideMaxOutputTokens = _agentGlobalOverrideMaxOutputTokens.asStateFlow()
+
+    private val _agentGlobalOverrideThinkingEnabled = MutableStateFlow(
+        prefs.getBoolean(PREF_AGENT_GLOBAL_OVERRIDE_THINKING_ENABLED, _agentOrchestratorThinkingEnabled.value)
+    )
+    val agentGlobalOverrideThinkingEnabled = _agentGlobalOverrideThinkingEnabled.asStateFlow()
+
+    private val _agentGlobalOverrideVisionEnabled = MutableStateFlow(
+        prefs.getBoolean(PREF_AGENT_GLOBAL_OVERRIDE_VISION_ENABLED, _agentOrchestratorVisionEnabled.value)
+    )
+    val agentGlobalOverrideVisionEnabled = _agentGlobalOverrideVisionEnabled.asStateFlow()
+
+    private val _agentGlobalRuntimeOverride = MutableStateFlow(
+        readAgentGlobalRuntimeOverride()
+    )
+    /** Atomic immutable snapshot for UI and dispatch callers. */
+    val agentGlobalRuntimeOverride: StateFlow<AgentRuntimeGlobalOverride> =
+        _agentGlobalRuntimeOverride.asStateFlow()
+
+    private fun readAgentGlobalRuntimeOverride(): AgentRuntimeGlobalOverride =
+        AgentRuntimeGlobalOverride(
+            enabled = _agentGlobalOverrideEnabled.value,
+            backend = _agentGlobalOverrideBackend.value,
+            model = _agentGlobalOverrideModel.value,
+            endpointConfigId = _agentGlobalOverrideEndpointConfigId.value,
+            managedLlamaServerId = _agentGlobalOverrideManagedLlamaServerId.value,
+            liteRtModelId = _agentGlobalOverrideLiteRtModelId.value,
+            liteRtBackend = _agentGlobalOverrideLiteRtBackend.value,
+            liteRtMtpEnabled = _agentGlobalOverrideLiteRtMtpEnabled.value,
+            contextSize = _agentGlobalOverrideContextSize.value,
+            maxOutputTokens = _agentGlobalOverrideMaxOutputTokens.value,
+            thinkingEnabled = _agentGlobalOverrideThinkingEnabled.value,
+            visionEnabled = _agentGlobalOverrideVisionEnabled.value
+        ).normalized()
+
+    private fun publishAgentGlobalRuntimeOverride() {
+        _agentGlobalRuntimeOverride.value = readAgentGlobalRuntimeOverride()
+    }
+
+    fun getAgentGlobalRuntimeOverride(): AgentRuntimeGlobalOverride =
+        agentGlobalRuntimeOverride.value
+
+    fun setAgentGlobalOverrideEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(PREF_AGENT_GLOBAL_OVERRIDE_ENABLED, enabled).apply()
+        _agentGlobalOverrideEnabled.value = enabled
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    fun setAgentGlobalOverrideBackend(backend: String) {
+        val normalized = normalizeOllamaOrLlamaBackend(backend)
+        prefs.edit().putString(PREF_AGENT_GLOBAL_OVERRIDE_BACKEND, normalized).apply()
+        _agentGlobalOverrideBackend.value = normalized
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    fun setAgentGlobalOverrideModel(model: String?) {
+        val normalized = model?.trim()?.takeIf { it.isNotEmpty() }
+        prefs.edit().apply {
+            if (normalized == null) remove(PREF_AGENT_GLOBAL_OVERRIDE_MODEL)
+            else putString(PREF_AGENT_GLOBAL_OVERRIDE_MODEL, normalized)
+        }.apply()
+        _agentGlobalOverrideModel.value = normalized
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    /** Select a named endpoint for every agent; clears managed-server selection. */
+    fun setAgentGlobalOverrideEndpointConfigId(id: Long?) {
+        val normalized = id?.takeIf { it > 0L }
+        prefs.edit().apply {
+            if (normalized == null) remove(PREF_AGENT_GLOBAL_OVERRIDE_ENDPOINT_CONFIG_ID)
+            else putLong(PREF_AGENT_GLOBAL_OVERRIDE_ENDPOINT_CONFIG_ID, normalized)
+            remove(PREF_AGENT_GLOBAL_OVERRIDE_MANAGED_SERVER_ID)
+        }.apply()
+        _agentGlobalOverrideEndpointConfigId.value = normalized
+        _agentGlobalOverrideManagedLlamaServerId.value = null
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    /** Select a managed llama server for every agent; clears named endpoint selection. */
+    fun setAgentGlobalOverrideManagedLlamaServerId(id: Long?) {
+        val normalized = id?.takeIf { it >= 0L }
+        prefs.edit().apply {
+            remove(PREF_AGENT_GLOBAL_OVERRIDE_ENDPOINT_CONFIG_ID)
+            if (normalized == null) remove(PREF_AGENT_GLOBAL_OVERRIDE_MANAGED_SERVER_ID)
+            else putLong(PREF_AGENT_GLOBAL_OVERRIDE_MANAGED_SERVER_ID, normalized)
+        }.apply()
+        _agentGlobalOverrideEndpointConfigId.value = null
+        _agentGlobalOverrideManagedLlamaServerId.value = normalized
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    /** Use the backend's ordinary global URL/model connection for every agent. */
+    fun clearAgentGlobalOverrideConnection() {
+        prefs.edit()
+            .remove(PREF_AGENT_GLOBAL_OVERRIDE_ENDPOINT_CONFIG_ID)
+            .remove(PREF_AGENT_GLOBAL_OVERRIDE_MANAGED_SERVER_ID)
+            .apply()
+        _agentGlobalOverrideEndpointConfigId.value = null
+        _agentGlobalOverrideManagedLlamaServerId.value = null
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    fun setAgentGlobalOverrideLiteRtModelId(modelId: Long?) {
+        val normalized = modelId?.takeIf { it > 0L }
+        prefs.edit().apply {
+            if (normalized == null) remove(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MODEL_ID)
+            else putLong(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MODEL_ID, normalized)
+        }.apply()
+        _agentGlobalOverrideLiteRtModelId.value = normalized
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    fun setAgentGlobalOverrideLiteRtBackend(backend: String) {
+        val normalized = normalizeLiteRtBackend(backend)
+        prefs.edit().putString(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_BACKEND, normalized).apply()
+        _agentGlobalOverrideLiteRtBackend.value = normalized
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    fun setAgentGlobalOverrideLiteRtMtpEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MTP_ENABLED, enabled).apply()
+        _agentGlobalOverrideLiteRtMtpEnabled.value = enabled
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    fun setAgentGlobalOverrideContextSize(size: Int) {
+        val normalized = size.coerceIn(1_024, 1_048_576)
+        prefs.edit().putInt(PREF_AGENT_GLOBAL_OVERRIDE_CONTEXT_SIZE, normalized).apply()
+        _agentGlobalOverrideContextSize.value = normalized
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    fun setAgentGlobalOverrideMaxOutputTokens(value: Int) {
+        val normalized = value.coerceIn(1, 1_048_576)
+        prefs.edit().putInt(PREF_AGENT_GLOBAL_OVERRIDE_MAX_OUTPUT_TOKENS, normalized).apply()
+        _agentGlobalOverrideMaxOutputTokens.value = normalized
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    fun setAgentGlobalOverrideThinkingEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(PREF_AGENT_GLOBAL_OVERRIDE_THINKING_ENABLED, enabled).apply()
+        _agentGlobalOverrideThinkingEnabled.value = enabled
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    fun setAgentGlobalOverrideVisionEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(PREF_AGENT_GLOBAL_OVERRIDE_VISION_ENABLED, enabled).apply()
+        _agentGlobalOverrideVisionEnabled.value = enabled
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    /** Persist a complete General-card snapshot in one preference transaction. */
+    fun setAgentGlobalRuntimeOverride(value: AgentRuntimeGlobalOverride) {
+        val normalized = value.normalized()
+        prefs.edit().apply {
+            putBoolean(PREF_AGENT_GLOBAL_OVERRIDE_ENABLED, normalized.enabled)
+            putString(PREF_AGENT_GLOBAL_OVERRIDE_BACKEND, normalized.backend)
+            if (normalized.model == null) remove(PREF_AGENT_GLOBAL_OVERRIDE_MODEL)
+            else putString(PREF_AGENT_GLOBAL_OVERRIDE_MODEL, normalized.model)
+            if (normalized.endpointConfigId == null) remove(PREF_AGENT_GLOBAL_OVERRIDE_ENDPOINT_CONFIG_ID)
+            else putLong(PREF_AGENT_GLOBAL_OVERRIDE_ENDPOINT_CONFIG_ID, normalized.endpointConfigId)
+            if (normalized.managedLlamaServerId == null) remove(PREF_AGENT_GLOBAL_OVERRIDE_MANAGED_SERVER_ID)
+            else putLong(PREF_AGENT_GLOBAL_OVERRIDE_MANAGED_SERVER_ID, normalized.managedLlamaServerId)
+            if (normalized.liteRtModelId == null) remove(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MODEL_ID)
+            else putLong(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MODEL_ID, normalized.liteRtModelId)
+            putString(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_BACKEND, normalized.liteRtBackend)
+            putBoolean(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MTP_ENABLED, normalized.liteRtMtpEnabled)
+            putInt(PREF_AGENT_GLOBAL_OVERRIDE_CONTEXT_SIZE, normalized.contextSize)
+            putInt(PREF_AGENT_GLOBAL_OVERRIDE_MAX_OUTPUT_TOKENS, normalized.maxOutputTokens)
+            putBoolean(PREF_AGENT_GLOBAL_OVERRIDE_THINKING_ENABLED, normalized.thinkingEnabled)
+            putBoolean(PREF_AGENT_GLOBAL_OVERRIDE_VISION_ENABLED, normalized.visionEnabled)
+        }.apply()
+        _agentGlobalOverrideEnabled.value = normalized.enabled
+        _agentGlobalOverrideBackend.value = normalized.backend
+        _agentGlobalOverrideModel.value = normalized.model
+        _agentGlobalOverrideEndpointConfigId.value = normalized.endpointConfigId
+        _agentGlobalOverrideManagedLlamaServerId.value = normalized.managedLlamaServerId
+        _agentGlobalOverrideLiteRtModelId.value = normalized.liteRtModelId
+        _agentGlobalOverrideLiteRtBackend.value = normalized.liteRtBackend
+        _agentGlobalOverrideLiteRtMtpEnabled.value = normalized.liteRtMtpEnabled
+        _agentGlobalOverrideContextSize.value = normalized.contextSize
+        _agentGlobalOverrideMaxOutputTokens.value = normalized.maxOutputTokens
+        _agentGlobalOverrideThinkingEnabled.value = normalized.thinkingEnabled
+        _agentGlobalOverrideVisionEnabled.value = normalized.visionEnabled
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    /**
+     * Resolve all runtime and tuning choices for one dispatch.  The global
+     * card is selected as a whole when enabled; otherwise the stored profile,
+     * custom-agent values, and existing role preferences remain authoritative.
+     */
+    fun resolveAgentSettingsForDispatch(
+        role: String,
+        customModel: String? = null,
+        customVisionEnabled: Boolean? = null,
+        runtimeProfile: AgentRuntimeProfile? = null
+    ): AgentRuntimeDispatchSettings {
+        val global = getAgentGlobalRuntimeOverride().takeIf { it.enabled }
+        val profile = runtimeProfile?.normalized()
+        val roleName = role.trim().uppercase(Locale.US)
+        val backend = normalizeOllamaOrLlamaBackend(
+            global?.backend ?: profile?.backend ?: agentBackend.value
+        )
+        val model = if (global != null) {
+            global.model
+        } else {
+            profile?.model?.takeIf { it.isNotBlank() }
+                ?: customModel?.trim()?.takeIf { it.isNotBlank() }
+                ?: getAgentModelForRole(roleName)
+        }
+        // A null target in an enabled General override means "use this
+        // backend's ordinary global connection".  Do not accidentally fall
+        // through to the role profile's named endpoint or managed server.
+        val endpointConfigId = if (global != null) {
+            global.endpointConfigId
+        } else {
+            profile?.endpointConfigId
+        }
+        val managedServerId = if (global != null) {
+            global.managedLlamaServerId
+        } else {
+            profile?.managedLlamaServerId
+        }
+        val liteRtModelId = if (global != null) {
+            global.liteRtModelId
+        } else {
+            profile?.liteRtModelId?.takeIf { it > 0L }
+                ?: agentLiteRtModelId.value.takeIf { it > 0L }
+        }
+        return AgentRuntimeDispatchSettings(
+            backend = backend,
+            model = model,
+            endpointConfigId = endpointConfigId,
+            managedLlamaServerId = managedServerId,
+            liteRtModelId = liteRtModelId,
+            liteRtBackend = global?.liteRtBackend ?: agentLiteRtBackend.value,
+            liteRtMtpEnabled = global?.liteRtMtpEnabled ?: agentLiteRtMtpEnabled.value,
+            contextSize = global?.contextSize ?: getAgentContextForRole(roleName),
+            maxOutputTokens = global?.maxOutputTokens ?: getAgentMaxOutputTokensForRole(roleName),
+            thinkingEnabled = global?.thinkingEnabled
+                ?: getAgentThinkingEnabledForRole(roleName),
+            visionEnabled = global?.visionEnabled
+                ?: customVisionEnabled
+                ?: getAgentVisionEnabledForRole(roleName)
+        ).normalized()
+    }
+
 
     // ========== AI Agent Per-Role System Prompts ==========
     
     companion object {
+        private const val PREF_SUPPORT_LAST_SHOWN_DAY = "support_last_shown_epoch_day"
+        private val dailySupportPromptLock = Any()
+        private const val PREF_THEME_MODE = "theme_mode"
+        private const val PREF_DYNAMIC_COLOR = "dynamic_color"
+        private val sharedThemeMode = MutableStateFlow(AppThemeMode.SYSTEM)
+        private val sharedDynamicColor = MutableStateFlow(false)
+
         private const val MANGA_TRANSLATION_CONFIG_KEY = "manga_translation_run_config_v4"
+        private const val LLAMA_MANAGED_SCHEMA = 1
+        private const val PREF_LLAMA_MANAGED_SCHEMA = "llama_managed_settings_schema"
+        private const val PREF_LLAMA_LOAD_MODE = "llama_load_mode"
+        private const val PREF_SELECTED_LLM_LORAS = "selected_llm_loras_json"
+        private const val PREF_SELECTED_LLM_LORA_PATH = "selected_llm_lora_path"
+        private const val PREF_LOW_MEMORY_MODE = "low_memory_mode"
+        private const val PREF_CUSTOM_FLAGS = "custom_flags"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_ENABLED = "agent_global_override_enabled"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_BACKEND = "agent_global_override_backend"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_MODEL = "agent_global_override_model"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_ENDPOINT_CONFIG_ID = "agent_global_override_endpoint_config_id"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_MANAGED_SERVER_ID = "agent_global_override_managed_server_id"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MODEL_ID = "agent_global_override_litert_model_id"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_LITERT_BACKEND = "agent_global_override_litert_backend"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MTP_ENABLED = "agent_global_override_litert_mtp_enabled"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_CONTEXT_SIZE = "agent_global_override_context_size"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_MAX_OUTPUT_TOKENS = "agent_global_override_max_output_tokens"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_THINKING_ENABLED = "agent_global_override_thinking_enabled"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_VISION_ENABLED = "agent_global_override_vision_enabled"
         const val PDF_BACKEND_OLLAMA = "ollama"
         const val PDF_BACKEND_LLAMA_SERVER = "llama-server"
         const val PDF_BACKEND_LLAMA_SWAP = "llama-swap"
@@ -4848,7 +5368,7 @@ Keep it brief but capture essential details."""
     private val _adventureOllamaThreads = MutableStateFlow(prefs.getInt("adventure_ollama_threads", 4))
     val adventureOllamaThreads = _adventureOllamaThreads.asStateFlow()
     fun setAdventureOllamaThreads(count: Int) {
-        prefs.edit().putInt("adventure_ollama_threads", count).apply()
+        prefs.edit { putInt("adventure_ollama_threads", count) }
         _adventureOllamaThreads.value = count
     }
 
@@ -4856,7 +5376,7 @@ Keep it brief but capture essential details."""
     private val _adventureOllamaNumCtx = MutableStateFlow(prefs.getInt("adventure_ollama_num_ctx", 16384))
     val adventureOllamaNumCtx = _adventureOllamaNumCtx.asStateFlow()
     fun setAdventureOllamaNumCtx(count: Int) {
-        prefs.edit().putInt("adventure_ollama_num_ctx", count).apply()
+        prefs.edit { putInt("adventure_ollama_num_ctx", count) }
         _adventureOllamaNumCtx.value = count
     }
 
@@ -4864,7 +5384,7 @@ Keep it brief but capture essential details."""
     private val _adventureLanguage = MutableStateFlow(prefs.getString("adventure_language", "English") ?: "English")
     val adventureLanguage = _adventureLanguage.asStateFlow()
     fun setAdventureLanguage(language: String) {
-        prefs.edit().putString("adventure_language", language).apply()
+        prefs.edit { putString("adventure_language", language) }
         _adventureLanguage.value = language
     }
 
@@ -4874,7 +5394,7 @@ Keep it brief but capture essential details."""
     val adventureBackend = _adventureBackend.asStateFlow()
     fun setAdventureBackend(backend: String) {
         val normalized = normalizeOllamaOrLlamaBackend(backend)
-        prefs.edit().putString("adventure_backend", normalized).apply()
+        prefs.edit { putString("adventure_backend", normalized) }
         _adventureBackend.value = normalized
     }
 
@@ -4883,7 +5403,7 @@ Keep it brief but capture essential details."""
     )
     val adventureLlamaServerUrl = _adventureLlamaServerUrl.asStateFlow()
     fun setAdventureLlamaServerUrl(url: String) {
-        prefs.edit().putString("adventure_llama_server_url", url).apply()
+        prefs.edit { putString("adventure_llama_server_url", url) }
         _adventureLlamaServerUrl.value = url
     }
 
@@ -4892,7 +5412,7 @@ Keep it brief but capture essential details."""
     )
     val adventureLlamaSwapUrl = _adventureLlamaSwapUrl.asStateFlow()
     fun setAdventureLlamaSwapUrl(url: String) {
-        prefs.edit().putString("adventure_llama_swap_url", url).apply()
+        prefs.edit { putString("adventure_llama_swap_url", url) }
         _adventureLlamaSwapUrl.value = url
     }
 
@@ -4901,7 +5421,7 @@ Keep it brief but capture essential details."""
     )
     val adventureLlamaServerModelLabel = _adventureLlamaServerModelLabel.asStateFlow()
     fun setAdventureLlamaServerModelLabel(label: String?) {
-        prefs.edit().putString("adventure_llama_server_model_label", label).apply()
+        prefs.edit { putString("adventure_llama_server_model_label", label) }
         _adventureLlamaServerModelLabel.value = label
     }
 
@@ -4911,7 +5431,7 @@ Keep it brief but capture essential details."""
     val adventureLlamaServerContextTokens = _adventureLlamaServerContextTokens.asStateFlow()
     fun setAdventureLlamaServerContextTokens(tokens: Int?) {
         val normalized = tokens ?: -1
-        prefs.edit().putInt("adventure_llama_server_context_tokens", normalized).apply()
+        prefs.edit { putInt("adventure_llama_server_context_tokens", normalized) }
         _adventureLlamaServerContextTokens.value = normalized
     }
 
@@ -4920,16 +5440,16 @@ Keep it brief but capture essential details."""
     )
     val adventureLlamaServerContextLabel = _adventureLlamaServerContextLabel.asStateFlow()
     fun setAdventureLlamaServerContextLabel(label: String?) {
-        prefs.edit().putString("adventure_llama_server_context_label", label).apply()
+        prefs.edit { putString("adventure_llama_server_context_label", label) }
         _adventureLlamaServerContextLabel.value = label
     }
 
     private val _adventureLiteRtModelId = MutableStateFlow(prefs.getLong("adventure_litert_model_id", -1L))
     val adventureLiteRtModelId = _adventureLiteRtModelId.asStateFlow()
     fun setAdventureLiteRtModelId(modelId: Long?) {
-        prefs.edit().apply {
+        prefs.edit {
             if (modelId == null || modelId <= 0L) remove("adventure_litert_model_id") else putLong("adventure_litert_model_id", modelId)
-        }.apply()
+        }
         _adventureLiteRtModelId.value = modelId?.takeIf { it > 0L } ?: -1L
     }
 
@@ -4937,14 +5457,14 @@ Keep it brief but capture essential details."""
     val adventureLiteRtBackend = _adventureLiteRtBackend.asStateFlow()
     fun setAdventureLiteRtBackend(backend: String) {
         val normalized = normalizeLiteRtBackend(backend)
-        prefs.edit().putString("adventure_litert_backend", normalized).apply()
+        prefs.edit { putString("adventure_litert_backend", normalized) }
         _adventureLiteRtBackend.value = normalized
     }
 
     private val _adventureLiteRtMtpEnabled = MutableStateFlow(prefs.getBoolean("adventure_litert_mtp_enabled", false))
     val adventureLiteRtMtpEnabled = _adventureLiteRtMtpEnabled.asStateFlow()
     fun setAdventureLiteRtMtpEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean("adventure_litert_mtp_enabled", enabled).apply()
+        prefs.edit { putBoolean("adventure_litert_mtp_enabled", enabled) }
         _adventureLiteRtMtpEnabled.value = enabled
     }
 
@@ -4953,7 +5473,7 @@ Keep it brief but capture essential details."""
     )
     val adventureWorldImageEnabled = _adventureWorldImageEnabled.asStateFlow()
     fun setAdventureWorldImageEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean("adventure_world_image_enabled", enabled).apply()
+        prefs.edit { putBoolean("adventure_world_image_enabled", enabled) }
         _adventureWorldImageEnabled.value = enabled
     }
 
@@ -4962,7 +5482,7 @@ Keep it brief but capture essential details."""
     )
     val adventureStageImagesEnabled = _adventureStageImagesEnabled.asStateFlow()
     fun setAdventureStageImagesEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean("adventure_stage_images_enabled", enabled).apply()
+        prefs.edit { putBoolean("adventure_stage_images_enabled", enabled) }
         _adventureStageImagesEnabled.value = enabled
     }
 
@@ -4971,7 +5491,7 @@ Keep it brief but capture essential details."""
     )
     val adventureOnnxModelFilename = _adventureOnnxModelFilename.asStateFlow()
     fun setAdventureOnnxModelFilename(filename: String?) {
-        prefs.edit().putString("adventure_onnx_model_filename", filename).apply()
+        prefs.edit { putString("adventure_onnx_model_filename", filename) }
         _adventureOnnxModelFilename.value = filename
     }
 
@@ -4981,7 +5501,7 @@ Keep it brief but capture essential details."""
     val adventureOnnxSteps = _adventureOnnxSteps.asStateFlow()
     fun setAdventureOnnxSteps(steps: Int) {
         val normalized = steps.coerceAtLeast(1)
-        prefs.edit().putInt("adventure_onnx_steps", normalized).apply()
+        prefs.edit { putInt("adventure_onnx_steps", normalized) }
         _adventureOnnxSteps.value = normalized
     }
 
@@ -4991,7 +5511,7 @@ Keep it brief but capture essential details."""
     val adventureOnnxCfg = _adventureOnnxCfg.asStateFlow()
     fun setAdventureOnnxCfg(cfg: Float) {
         val normalized = cfg.coerceIn(1f, 20f)
-        prefs.edit().putFloat("adventure_onnx_cfg", normalized).apply()
+        prefs.edit { putFloat("adventure_onnx_cfg", normalized) }
         _adventureOnnxCfg.value = normalized
     }
 
@@ -5001,7 +5521,7 @@ Keep it brief but capture essential details."""
     val adventureOnnxResolution = _adventureOnnxResolution.asStateFlow()
     fun setAdventureOnnxResolution(resolution: Int) {
         val normalized = resolution.coerceAtLeast(256)
-        prefs.edit().putInt("adventure_onnx_resolution", normalized).apply()
+        prefs.edit { putInt("adventure_onnx_resolution", normalized) }
         _adventureOnnxResolution.value = normalized
     }
 
@@ -5021,7 +5541,7 @@ Keep it brief but capture essential details."""
         ?.let { raw -> runCatching { JSONObject(raw) }.getOrNull() }
 
     private fun saveJsonDraft(key: String, draft: JSONObject) {
-        prefs.edit().putString(key, draft.toString()).apply()
+        prefs.edit { putString(key, draft.toString()) }
     }
 
 }

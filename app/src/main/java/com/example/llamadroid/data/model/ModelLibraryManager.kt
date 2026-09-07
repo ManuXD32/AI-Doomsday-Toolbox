@@ -42,7 +42,10 @@ object ModelLibraryManager {
         ModelType.SD_CLIP_VISION,
         ModelType.SD_IP_ADAPTER,
         ModelType.LLM_DRAFT,
-        ModelType.SD_ADETAILER
+        ModelType.SD_ADETAILER,
+        ModelType.SD_AUDIO_VAE,
+        ModelType.SD_EMBEDDINGS_CONNECTORS,
+        ModelType.SD_MOTION_MODULE
     )
 
     fun relativeDirFor(type: ModelType): String = when (type) {
@@ -69,6 +72,9 @@ object ModelLibraryManager {
         ModelType.SD_CLIP_VISION -> "sd/clip_vision"
         ModelType.SD_IP_ADAPTER -> "sd/ip_adapter"
         ModelType.SD_ADETAILER -> "sd/adetailer"
+        ModelType.SD_AUDIO_VAE -> "sd/audio_vae"
+        ModelType.SD_EMBEDDINGS_CONNECTORS -> "sd/connectors"
+        ModelType.SD_MOTION_MODULE -> "sd/motion_module"
         ModelType.ONNX_IMAGE_GEN,
         ModelType.ONNX_BACKGROUND_REMOVAL,
         ModelType.ONNX_IMAGE_UPSCALER,

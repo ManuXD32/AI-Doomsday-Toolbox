@@ -37,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -49,6 +50,8 @@ import com.example.llamadroid.data.repository.KnowledgeBaseRepository
 import com.example.llamadroid.data.repository.KnowledgeChunkWindow
 import com.example.llamadroid.data.repository.KnowledgeChunkWindowItem
 import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 
 @Composable
 fun KnowledgeChunkReaderScreen(
@@ -96,7 +99,9 @@ fun KnowledgeChunkReaderScreen(
             else -> {
                 val chunkWindow = requireNotNull(window)
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .walkthroughTarget("knowledge.chunk"),
                     contentPadding = PaddingValues(20.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
@@ -176,6 +181,8 @@ private fun ChunkCard(
     chunk: KnowledgeChunkWindowItem
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     var expanded by remember(chunk.chunkId, chunk.isTarget) { mutableStateOf(chunk.isTarget) }
     val citation = remember(sourceTitle, chunk.chunkIndex, chunk.chunkId) {
         KnowledgeBaseRepository.chunkCitationMarkdown(sourceTitle, chunk.chunkIndex, chunk.chunkId)
@@ -216,14 +223,15 @@ private fun ChunkCard(
                 }
                 IconButton(
                     onClick = {
+                        walkthroughTargets?.recordEvent("knowledge.chunk")
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         clipboard.setPrimaryClip(
                             ClipData.newPlainText(
-                                context.getString(R.string.kb_chunk_reader_clip_label),
+                                resources.getString(R.string.kb_chunk_reader_clip_label),
                                 "${citation}\n\n${chunk.text.trim()}"
                             )
                         )
-                        Toast.makeText(context, context.getString(R.string.kb_chunk_reader_copied), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, resources.getString(R.string.kb_chunk_reader_copied), Toast.LENGTH_SHORT).show()
                     }
                 ) {
                     Icon(
@@ -232,7 +240,10 @@ private fun ChunkCard(
                     )
                 }
                 if (!chunk.isTarget) {
-                    IconButton(onClick = { expanded = !expanded }) {
+                    IconButton(onClick = {
+                        expanded = !expanded
+                        walkthroughTargets?.recordEvent("knowledge.chunk")
+                    }) {
                         Icon(
                             imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                             contentDescription = stringResource(

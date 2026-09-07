@@ -1,5 +1,9 @@
 package com.example.llamadroid.ui.ai
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
+import androidx.compose.foundation.layout.heightIn
+
 import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
@@ -17,10 +21,14 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -36,6 +44,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Warning
@@ -52,15 +61,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
 import com.example.llamadroid.R
@@ -77,6 +87,10 @@ import com.example.llamadroid.service.StableDiffusionService
 import com.example.llamadroid.service.sdLaunchIssueMessage
 import com.example.llamadroid.service.validateSdLaunchInputs
 import com.example.llamadroid.ui.components.IntSliderWithInput
+import com.example.llamadroid.ui.components.AppScrollableTabRow
+import com.example.llamadroid.ui.components.AppStateKind
+import com.example.llamadroid.ui.components.AppStatePanel
+import com.example.llamadroid.ui.components.AppTaskActionFooter
 import com.example.llamadroid.ui.navigation.Screen
 import java.io.File
 import java.io.FileOutputStream
@@ -91,6 +105,7 @@ private const val LEGACY_UPSCALE_UI_DIAGNOSTIC_SOURCE = "image_generation_ui"
 @Composable
 fun LegacyUpscaleScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val db = remember { AppDatabase.getDatabase(context) }
     val binaryRepo = remember { BinaryRepository(context) }
     val settingsRepo = remember { SettingsRepository(context) }
@@ -98,6 +113,7 @@ fun LegacyUpscaleScreen(navController: NavController) {
     val keepScreenAwakeDuringGeneration by settingsRepo.keepScreenAwakeDuringGeneration.collectAsState()
     val sdMaxCpuRamEnabled by settingsRepo.sdMaxCpuRamEnabled.collectAsState()
     val sdMaxCpuRamGiB by settingsRepo.sdMaxCpuRamGiB.collectAsState()
+    val sdUpscaleThreads by settingsRepo.sdUpscaleThreads.collectAsStateWithLifecycle()
     val upscalerModels by db.modelDao().getModelsByType(ModelType.SD_UPSCALER).collectAsState(initial = emptyList())
 
     var mainTab by remember { mutableIntStateOf(0) }
@@ -144,7 +160,11 @@ fun LegacyUpscaleScreen(navController: NavController) {
     }
 
     LaunchedEffect(Unit) {
-        val pendingFile = com.example.llamadroid.data.SharedFileHolder.consumePendingFile()
+        val pendingFile = com.example.llamadroid.data.SharedFileHolder.consumeFor(
+            com.example.llamadroid.data.SharedFileTarget.IMAGE_GENERATION
+        ) ?: com.example.llamadroid.data.SharedFileHolder.consumeFor(
+            com.example.llamadroid.data.SharedFileTarget.LEGACY_IMAGE_UPSCALER
+        )
         if (pendingFile != null && pendingFile.mimeType.startsWith("image/")) {
             GenerationDiagnosticsStore.recordBreadcrumb(
                 source = LEGACY_UPSCALE_UI_DIAGNOSTIC_SOURCE,
@@ -242,7 +262,7 @@ fun LegacyUpscaleScreen(navController: NavController) {
         }
 
         val threadCount = threadsText.toIntOrNull()?.takeIf { it > 0 }
-            ?: settingsRepo.sdUpscaleThreads.value
+            ?: sdUpscaleThreads
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         val outputFile = File(upscaledDir, "sd_$timestamp.png")
         val config = SDUpscaleConfig(
@@ -284,7 +304,7 @@ fun LegacyUpscaleScreen(navController: NavController) {
                     details = launchDetails
                 )
             }.onFailure { error ->
-                errorMessage = error.message ?: context.getString(R.string.error_generic)
+                errorMessage = error.message ?: resources.getString(R.string.error_generic)
                 GenerationDiagnosticsStore.recordBreadcrumb(
                     source = LEGACY_UPSCALE_UI_DIAGNOSTIC_SOURCE,
                     mode = SDMode.UPSCALE.name,
@@ -302,40 +322,37 @@ fun LegacyUpscaleScreen(navController: NavController) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.surface,
-                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-                    )
-                )
-            )
+            .background(MaterialTheme.colorScheme.background)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = { navController.popBackStack() }) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
             }
             Text(
-                "🎨 " + stringResource(R.string.imagegen_title),
+                stringResource(R.string.imagegen_title),
                 modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
         }
 
         val mainTabs = listOf(
-            "🎨 " + stringResource(R.string.imagegen_tab_generate),
-            "📂 " + stringResource(R.string.imagegen_tab_gallery)
+            stringResource(R.string.imagegen_tab_generate),
+            stringResource(R.string.imagegen_tab_gallery)
         )
-        TabRow(
+        AppScrollableTabRow(
             selectedTabIndex = mainTab,
-            modifier = Modifier.padding(horizontal = 16.dp)
+            modifier = Modifier.padding(horizontal = 20.dp),
+            edgePadding = 12.dp,
+            containerColor = androidx.compose.ui.graphics.Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.primary
         ) {
             mainTabs.forEachIndexed { index, title ->
                 Tab(
@@ -349,30 +366,36 @@ fun LegacyUpscaleScreen(navController: NavController) {
         if (mainTab == 0) {
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp)
+                    .weight(1f)
+                    .padding(horizontal = 20.dp)
                     .verticalScroll(rememberScrollState())
             ) {
                 val modes = listOf(
-                    stringResource(R.string.imagegen_mode_txt2img),
-                    stringResource(R.string.imagegen_mode_img2img),
-                    stringResource(R.string.imagegen_mode_upscale)
+                    IMAGE_GEN_MODE_TXT2IMG to stringResource(R.string.imagegen_task_create),
+                    IMAGE_GEN_MODE_IMG2IMG to stringResource(R.string.imagegen_task_transform),
+                    IMAGE_GEN_MODE_INPAINT to stringResource(R.string.imagegen_task_repair),
+                    IMAGE_GEN_MODE_ADETAILER to stringResource(R.string.imagegen_task_enhance),
+                    IMAGE_GEN_MODE_UPSCALE to stringResource(R.string.imagegen_task_enlarge)
                 )
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    modes.forEachIndexed { index, label ->
-                        SegmentedButton(
-                            selected = index == 2,
+                val modeRowState = rememberLazyListState(
+                    initialFirstVisibleItemIndex = modes.lastIndex
+                )
+                LazyRow(
+                    state = modeRowState,
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(end = 20.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(modes, key = { it.first }) { (mode, label) ->
+                        FilterChip(
+                            selected = mode == IMAGE_GEN_MODE_UPSCALE,
                             onClick = {
-                                when (index) {
-                                    0 -> navController.navigate(Screen.ImageGen.route)
-                                    1 -> navController.navigate("${Screen.ImageGen.route}?startMode=1")
-                                    else -> Unit
+                                if (mode != IMAGE_GEN_MODE_UPSCALE) {
+                                    navController.navigate(Screen.ImageGen.createRoute(mode))
                                 }
                             },
-                            shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size)
-                        ) {
-                            Text(label)
-                        }
+                            label = { Text(label, maxLines = 1) }
+                        )
                     }
                 }
 
@@ -399,7 +422,10 @@ fun LegacyUpscaleScreen(navController: NavController) {
                                 bitmap?.let {
                                     androidx.compose.foundation.Image(
                                         bitmap = it,
-                                        contentDescription = null,
+                                        contentDescription = stringResource(
+                                            R.string.soft_studio_input_image_description,
+                                            File(selectedImagePath!!).name
+                                        ),
                                         modifier = Modifier
                                             .size(80.dp)
                                             .clip(RoundedCornerShape(8.dp)),
@@ -474,7 +500,7 @@ fun LegacyUpscaleScreen(navController: NavController) {
                                 onValueChange = { threadsText = it.filter(Char::isDigit) },
                                 modifier = Modifier.fillMaxWidth(),
                                 label = { Text(stringResource(R.string.imagegen_threads_label)) },
-                                placeholder = { Text(settingsRepo.sdUpscaleThreads.value.toString()) },
+                                placeholder = { Text(sdUpscaleThreads.toString()) },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                 shape = RoundedCornerShape(12.dp)
                             )
@@ -648,35 +674,9 @@ fun LegacyUpscaleScreen(navController: NavController) {
                                     .height(8.dp)
                                     .clip(RoundedCornerShape(4.dp))
                             )
-                            Spacer(modifier = Modifier.height(16.dp))
-                            OutlinedButton(
-                                onClick = cancelGeneration,
-                                colors = ButtonDefaults.outlinedButtonColors(
-                                    contentColor = MaterialTheme.colorScheme.error
-                                )
-                            ) {
-                                Icon(Icons.Default.Close, null)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(stringResource(R.string.action_cancel))
-                            }
                         }
                     }
                 } else {
-                    Button(
-                        onClick = generate,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp),
-                        enabled = selectedUpscalerModelPath != null && selectedImagePath != null,
-                        shape = RoundedCornerShape(16.dp)
-                    ) {
-                        Icon(Icons.Default.Create, null)
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            stringResource(R.string.imagegen_upscale_btn),
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
                 }
 
                 errorMessage?.let { error ->
@@ -719,28 +719,80 @@ fun LegacyUpscaleScreen(navController: NavController) {
 
                 Spacer(modifier = Modifier.height(16.dp))
             }
+            AppTaskActionFooter(
+                modifier = Modifier
+                    .fillMaxWidth()
+            ) {
+                if (isGenerating) {
+                    if (generationStatus.isNotBlank()) {
+                        Text(
+                            text = generationStatus,
+                            modifier = Modifier.fillMaxWidth(),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        text = stringResource(
+                            R.string.imagegen_step_progress,
+                            currentStep,
+                            totalSteps,
+                            (progress.coerceIn(0f, 1f) * 100f).toInt()
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                    LinearProgressIndicator(
+                        progress = { progress.coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedButton(
+                        onClick = cancelGeneration,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(stringResource(R.string.soft_studio_cancel))
+                    }
+                } else {
+                    Button(
+                        onClick = generate,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 52.dp),
+                        enabled = selectedUpscalerModelPath != null && selectedImagePath != null,
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Icon(Icons.Default.Create, contentDescription = null)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(stringResource(R.string.imagegen_upscale_btn), fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
         } else {
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp)
+                    .weight(1f)
+                    .padding(horizontal = 20.dp)
             ) {
                 Spacer(modifier = Modifier.height(12.dp))
                 if (galleryImages.isEmpty()) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("📷", style = MaterialTheme.typography.displayLarge)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                stringResource(R.string.imagegen_gallery_empty_filter, stringResource(R.string.imagegen_mode_upscale)),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
+                    AppStatePanel(
+                        kind = AppStateKind.Empty,
+                        title = stringResource(R.string.soft_studio_empty_title),
+                        message = stringResource(
+                            R.string.imagegen_gallery_empty_filter,
+                            stringResource(R.string.imagegen_mode_upscale)
+                        ),
+                        modifier = Modifier.fillMaxSize()
+                    )
                 } else {
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(2),
@@ -759,7 +811,10 @@ fun LegacyUpscaleScreen(navController: NavController) {
                                 if (bitmap != null) {
                                     androidx.compose.foundation.Image(
                                         bitmap = bitmap!!,
-                                        contentDescription = null,
+                                        contentDescription = stringResource(
+                                            R.string.soft_studio_generated_image_description,
+                                            imageFile.name
+                                        ),
                                         modifier = Modifier.fillMaxSize(),
                                         contentScale = ContentScale.Crop
                                     )
@@ -783,10 +838,11 @@ fun LegacyUpscaleScreen(navController: NavController) {
                                     shape = RoundedCornerShape(6.dp),
                                     color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
                                 ) {
-                                    Text(
-                                        "⬆️",
+                                    Icon(
+                                        imageVector = Icons.Default.KeyboardArrowUp,
+                                        contentDescription = null,
                                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-                                        style = MaterialTheme.typography.labelSmall
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
@@ -821,7 +877,7 @@ fun LegacyUpscaleScreen(navController: NavController) {
                                 context.startActivity(
                                     Intent.createChooser(
                                         shareIntent,
-                                        context.getString(R.string.imagegen_share_chooser)
+                                        resources.getString(R.string.imagegen_share_chooser)
                                     )
                                 )
                             }
@@ -843,13 +899,13 @@ fun LegacyUpscaleScreen(navController: NavController) {
                                     modeStateHolder.removeImage(file)
                                     android.widget.Toast.makeText(
                                         context,
-                                        context.getString(R.string.imagegen_delete_confirm),
+                                        resources.getString(R.string.imagegen_delete_confirm),
                                         android.widget.Toast.LENGTH_SHORT
                                     ).show()
                                 } else {
                                     android.widget.Toast.makeText(
                                         context,
-                                        context.getString(R.string.imagegen_delete_fail),
+                                        resources.getString(R.string.imagegen_delete_fail),
                                         android.widget.Toast.LENGTH_SHORT
                                     ).show()
                                 }

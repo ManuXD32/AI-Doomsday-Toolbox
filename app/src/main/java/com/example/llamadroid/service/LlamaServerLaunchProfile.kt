@@ -3,6 +3,10 @@ package com.example.llamadroid.service
 import androidx.annotation.Keep
 import com.example.llamadroid.data.SettingsRepository
 import com.google.gson.Gson
+import com.google.gson.JsonArray
+import com.google.gson.JsonNull
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 
 /**
  * A durable, app-managed llama.cpp launch snapshot owned by one native-chat
@@ -11,17 +15,21 @@ import com.google.gson.Gson
  */
 @Keep
 data class LlamaServerLaunchProfile(
-    val schemaVersion: Int = 3,
+    val schemaVersion: Int = SCHEMA_VERSION,
     val modelPath: String = "",
     val mmprojPath: String? = null,
     val visionEnabled: Boolean = false,
     val loraPath: String? = null,
+    /** Ordered, uncapped LoRA stack; duplicates are retained intentionally. */
+    val loras: List<LlamaLoraSpec> = emptyList(),
     /** Network binding is part of the launch command, not a UI-only preference. */
     val host: String = "127.0.0.1",
     val serverPort: Int = 8080,
     val threads: Int = 4,
     val batchSize: Int = 512,
     val physicalBatchSize: Int? = null,
+    /** Optional CPU threads used for batch and prompt processing. */
+    val threadsBatch: Int? = null,
     val contextSize: Int = 8192,
     val temperature: Float = 0.7f,
     val kvCacheEnabled: Boolean = false,
@@ -29,6 +37,9 @@ data class LlamaServerLaunchProfile(
     val kvCacheTypeV: String = "f16",
     val kvCacheReuse: Int = 0,
     val kvOffloadMode: String = LlamaKvOffloadMode.AUTO.value,
+    /** Canonical llama.cpp model loading mode. */
+    val loadMode: String = LlamaLoadMode.MMAP.value,
+    /** Deprecated compatibility mirror for profiles written before --load-mode. */
     val noMmap: Boolean = false,
     val parallel: Int? = null,
     val cacheRam: Int? = null,
@@ -101,17 +112,20 @@ data class LlamaServerLaunchProfile(
             threads = threads,
             batchSize = batchSize,
             physicalBatchSize = physicalBatchSize,
+            threadsBatch = threadsBatch,
             port = serverPort,
             temperature = temperature,
             host = host,
             mmprojPath = mmprojPath.takeIf { visionEnabled },
+            loadMode = resolvedLoadMode().value,
             loraPath = loraPath,
+            loras = resolvedLoras(),
             kvCacheEnabled = kvCacheEnabled,
             kvCacheTypeK = kvCacheTypeK,
             kvCacheTypeV = kvCacheTypeV,
             kvCacheReuse = kvCacheReuse,
             kvOffloadMode = kvOffloadMode,
-            noMmap = noMmap,
+            noMmap = resolvedLoadMode() == LlamaLoadMode.NONE,
             speculativeMode = mode,
             draftModelPath = configuredDraftModel,
             draftMax = draftMax,
@@ -151,20 +165,32 @@ data class LlamaServerLaunchProfile(
         )
     }
 
+    /** Resolve the legacy boolean for profiles constructed by older callers. */
+    fun resolvedLoadMode(): LlamaLoadMode =
+        if (noMmap) LlamaLoadMode.NONE else LlamaLoadMode.fromValue(loadMode)
+
+    /** The new stack wins when present; otherwise retain the historical single path. */
+    fun resolvedLoras(): List<LlamaLoraSpec> =
+        loras.takeIf { it.isNotEmpty() }
+            ?: loraPath?.trim()?.takeIf { it.isNotBlank() }?.let { listOf(LlamaLoraSpec(it)) }
+            ?: emptyList()
+
     companion object {
-        const val SCHEMA_VERSION: Int = 3
+        const val SCHEMA_VERSION: Int = 4
         private val gson = Gson()
 
         fun capture(settings: SettingsRepository): LlamaServerLaunchProfile = LlamaServerLaunchProfile(
             modelPath = settings.selectedModelPath.value.orEmpty(),
             mmprojPath = settings.selectedMmprojPath.value,
             visionEnabled = settings.enableVision.value,
-            loraPath = settings.selectedLlmLoraPath.value,
+            loraPath = settings.selectedLlmLoras.value.firstOrNull()?.path,
+            loras = settings.selectedLlmLoras.value,
             host = if (settings.remoteAccess.value) "0.0.0.0" else "127.0.0.1",
             serverPort = settings.serverPort.value,
             threads = settings.threads.value,
             batchSize = settings.serverBatchSize.value,
             physicalBatchSize = settings.serverPhysicalBatchSize.value,
+            threadsBatch = settings.serverThreadsBatch.value,
             contextSize = settings.contextSize.value,
             temperature = settings.temperature.value,
             kvCacheEnabled = settings.serverKvCacheEnabled.value,
@@ -172,7 +198,8 @@ data class LlamaServerLaunchProfile(
             kvCacheTypeV = settings.serverKvCacheTypeV.value,
             kvCacheReuse = settings.serverKvCacheReuse.value,
             kvOffloadMode = settings.llamaKvOffloadMode.value,
-            noMmap = settings.lowMemoryMode.value,
+            loadMode = settings.llamaLoadMode.value.value,
+            noMmap = settings.llamaLoadMode.value == LlamaLoadMode.NONE,
             parallel = settings.serverParallel.value,
             cacheRam = settings.serverCacheRam.value,
             contextCheckpoints = settings.serverContextCheckpoints.value,
@@ -215,23 +242,170 @@ data class LlamaServerLaunchProfile(
             ngramMapK4VMinHits = settings.ngramMapK4VMinHits.value
         )
 
-        fun encode(profile: LlamaServerLaunchProfile): String = gson.toJson(profile)
+        fun encode(profile: LlamaServerLaunchProfile): String {
+            val migrated = migrateLegacyLlamaManagedSettings(
+                args = ProcessController().splitCommandLine(profile.customFlags.orEmpty()),
+                configuredLoadMode = profile.resolvedLoadMode(),
+                selectedLoras = profile.resolvedLoras()
+            )
+            val canonical = profile.copy(
+                schemaVersion = SCHEMA_VERSION,
+                loadMode = migrated.loadMode.value,
+                noMmap = migrated.loadMode == LlamaLoadMode.NONE,
+                loraPath = migrated.loras.firstOrNull()?.path,
+                loras = migrated.loras,
+                customFlags = ProcessController().buildCommandString(migrated.filteredArgs)
+                    .takeIf { it.isNotBlank() }
+            )
+            return gson.toJson(canonical)
+        }
 
+        /**
+         * Decode through a JSON-tree migration. Gson does not reliably apply Kotlin
+         * constructor defaults when it bypasses a data class constructor, so the
+         * default tree is merged before deserialisation. A missing `loras` member
+         * means "migrate legacy loraPath" while an explicit `[]` means "no LoRA".
+         */
         fun decode(value: String?): LlamaServerLaunchProfile? = value
             ?.takeIf { it.isNotBlank() }
-            ?.let { encoded -> runCatching { gson.fromJson(encoded, LlamaServerLaunchProfile::class.java) }.getOrNull() }
+            ?.let { encoded ->
+                runCatching {
+                    val root = JsonParser.parseString(encoded)
+                        .takeIf { it.isJsonObject }
+                        ?.asJsonObject
+                        ?: return@runCatching null
+                    gson.fromJson(migrateJson(root), LlamaServerLaunchProfile::class.java)
+                }.getOrNull()
+            }
+
+        /** Exposed to focused unit tests without requiring an Android context. */
+        internal fun migrateJson(root: JsonObject): JsonObject {
+            val defaults = gson.toJsonTree(LlamaServerLaunchProfile()).asJsonObject
+            root.entrySet().forEach { (key, element) -> defaults.add(key, element.deepCopy()) }
+
+            defaults.addProperty("schemaVersion", SCHEMA_VERSION)
+
+            val rawLoadMode = root.get("loadMode")
+                ?.takeUnless { it.isJsonNull }
+                ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
+                ?.asString
+            val loadMode = if (rawLoadMode == null) {
+                val legacyNoMmap = root.get("noMmap")
+                    ?.takeUnless { it.isJsonNull }
+                    ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }
+                    ?.asBoolean
+                    ?: false
+                if (legacyNoMmap) LlamaLoadMode.NONE.value else LlamaLoadMode.MMAP.value
+            } else {
+                LlamaLoadMode.fromValue(rawLoadMode).value
+            }
+            defaults.addProperty("loadMode", loadMode)
+            // Keep the old field as a mirror for readers that still inspect it.
+            defaults.addProperty("noMmap", loadMode == LlamaLoadMode.NONE.value)
+
+            if (root.has("loras")) {
+                val rawLoras = root.get("loras")
+                when {
+                    rawLoras == null || rawLoras.isJsonNull -> {
+                        defaults.add("loras", JsonArray())
+                        defaults.add("loraPath", JsonNull.INSTANCE)
+                    }
+                    !rawLoras.isJsonArray -> {
+                        defaults.add("loras", JsonArray())
+                        defaults.add("loraPath", JsonNull.INSTANCE)
+                    }
+                    else -> {
+                        val normalizedLoras = JsonArray()
+                        rawLoras.asJsonArray.forEach { rawLora ->
+                            if (rawLora.isJsonObject) {
+                                val candidate = rawLora.asJsonObject
+                                val path = candidate.get("path")
+                                    ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
+                                    ?.asString
+                                    ?.trim()
+                                    .orEmpty()
+                                val strength = runCatching {
+                                    candidate.get("strength")
+                                        ?.takeUnless { it.isJsonNull }
+                                        ?.asFloat
+                                        ?: 1f
+                                }.getOrNull()
+                                if (path.isNotBlank() && strength?.isFinite() == true) {
+                                    normalizedLoras.add(JsonObject().apply {
+                                        addProperty("path", path)
+                                        addProperty("strength", strength)
+                                    })
+                                }
+                            }
+                        }
+                        defaults.add("loras", normalizedLoras)
+                        // An explicit empty stack deliberately suppresses the
+                        // historical single-path field.
+                        if (normalizedLoras.size() == 0) defaults.add("loraPath", JsonNull.INSTANCE)
+                    }
+                }
+            } else {
+                val legacyPath = root.get("loraPath")
+                    ?.takeUnless { it.isJsonNull }
+                    ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
+                    ?.asString
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                val migratedLoras = JsonArray()
+                legacyPath?.let {
+                    migratedLoras.add(JsonObject().apply {
+                        addProperty("path", it)
+                        addProperty("strength", 1.0f)
+                    })
+                }
+                defaults.add("loras", migratedLoras)
+            }
+
+            val baseLoras = defaults.getAsJsonArray("loras").mapNotNull { element ->
+                element.takeIf { it.isJsonObject }?.asJsonObject?.let { item ->
+                    val path = item.get("path")?.asString?.trim().orEmpty()
+                    val strength = runCatching { item.get("strength")?.asFloat ?: 1f }.getOrNull()
+                    if (path.isNotBlank() && strength?.isFinite() == true) {
+                        LlamaLoraSpec(path, strength)
+                    } else null
+                }
+            }
+            val customFlags = defaults.get("customFlags")
+                ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
+                ?.asString
+                .orEmpty()
+            val migrated = migrateLegacyLlamaManagedSettings(
+                args = ProcessController().splitCommandLine(customFlags),
+                configuredLoadMode = LlamaLoadMode.fromValue(defaults.get("loadMode")?.asString),
+                selectedLoras = baseLoras
+            )
+            defaults.addProperty("loadMode", migrated.loadMode.value)
+            defaults.addProperty("noMmap", migrated.loadMode == LlamaLoadMode.NONE)
+            defaults.add("loras", gson.toJsonTree(migrated.loras))
+            migrated.loras.firstOrNull()?.path?.let {
+                defaults.addProperty("loraPath", it)
+            } ?: defaults.add("loraPath", JsonNull.INSTANCE)
+            val filteredCustomFlags = ProcessController().buildCommandString(migrated.filteredArgs)
+            if (filteredCustomFlags.isBlank()) {
+                defaults.add("customFlags", JsonNull.INSTANCE)
+            } else {
+                defaults.addProperty("customFlags", filteredCustomFlags)
+            }
+            return defaults
+        }
 
         /** Restores every preference which changes the generated llama-server command. */
         fun restore(profile: LlamaServerLaunchProfile, settings: SettingsRepository) {
             settings.setSelectedModelPath(profile.modelPath)
             settings.setSelectedMmprojPath(profile.mmprojPath)
             settings.setEnableVision(profile.visionEnabled)
-            settings.setSelectedLlmLoraPath(profile.loraPath)
+            settings.setSelectedLlmLoras(profile.resolvedLoras())
             settings.setRemoteAccess(profile.host == "0.0.0.0")
             settings.setServerPort(profile.serverPort)
             settings.setThreads(profile.threads)
             settings.setServerBatchSize(profile.batchSize)
             settings.setServerPhysicalBatchSize(profile.physicalBatchSize)
+            settings.setServerThreadsBatch(profile.threadsBatch)
             settings.setContextSize(profile.contextSize)
             settings.setTemperature(profile.temperature)
             settings.setServerKvCacheEnabled(profile.kvCacheEnabled)
@@ -239,7 +413,7 @@ data class LlamaServerLaunchProfile(
             settings.setServerKvCacheTypeV(profile.kvCacheTypeV)
             settings.setServerKvCacheReuse(profile.kvCacheReuse)
             settings.setLlamaKvOffloadMode(profile.kvOffloadMode)
-            settings.setLowMemoryMode(profile.noMmap)
+            settings.setLlamaLoadMode(profile.resolvedLoadMode())
             settings.setServerParallel(profile.parallel)
             settings.setServerCacheRam(profile.cacheRam)
             settings.setServerContextCheckpoints(profile.contextCheckpoints)

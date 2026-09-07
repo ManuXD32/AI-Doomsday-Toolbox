@@ -14,11 +14,13 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
@@ -73,7 +75,10 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import java.io.File
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import androidx.compose.ui.window.DialogProperties
 
 private val AdventureDark = Color(0xFF0D0D0D)
 private val AdventureText = Color(0xFFE0E0E0)
@@ -92,6 +97,7 @@ fun AdventureScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val tamaDao = database.tamaDao()
     val dungeonType = remember(dungeonTypeName) {
         runCatching { DungeonType.valueOf(dungeonTypeName) }.getOrDefault(DungeonType.CHAOS_REALM)
@@ -170,6 +176,7 @@ fun AdventureScreen(
                     }
                 },
                 actions = {
+                        com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                     IconButton(
                         onClick = {
                             scope.launch {
@@ -228,7 +235,9 @@ fun AdventureScreen(
                     else -> {
                         LazyColumn(
                             state = listState,
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .walkthroughTarget("tama.adventure"),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                             contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)
                         ) {
@@ -362,6 +371,7 @@ fun AdventureScreen(
                         if (inputText.isBlank()) return@Button
                         playerInput = ""
                         AdventureForegroundService.submitChoice(context, petId, dungeonType.name, inputText)
+                        walkthroughTargets?.recordEvent("tama.adventure")
                     },
                     enabled = !isGenerating && playerInput.isNotBlank() && session != null && session.isCompleted.not(),
                     colors = ButtonDefaults.buttonColors(containerColor = AdventureAccent)
@@ -514,10 +524,16 @@ private fun AdventureImagePreviewDialog(
     imagePath: String,
     onDismiss: () -> Unit
 ) {
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .widthIn(max = 560.dp)
+                .heightIn(max = 640.dp)
+                .verticalScroll(androidx.compose.foundation.rememberScrollState())
                 .padding(16.dp)
                 .clip(RoundedCornerShape(18.dp))
                 .background(AdventureDark)

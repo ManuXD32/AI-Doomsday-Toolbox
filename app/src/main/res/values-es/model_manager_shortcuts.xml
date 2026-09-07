@@ -1,0 +1,7 @@
+<resources>
+    <string name="model_manager_shortcut_custom_download">Descarga personalizada</string>
+    <string name="model_manager_shortcut_saved_links">Enlaces guardados</string>
+    <string name="model_manager_shortcut_my_bundles">Mis paquetes</string>
+    <string name="model_manager_shortcut_create_bundle">Crear paquete</string>
+    <string name="model_manager_shortcut_unknown">Desconocidos</string>
+</resources>

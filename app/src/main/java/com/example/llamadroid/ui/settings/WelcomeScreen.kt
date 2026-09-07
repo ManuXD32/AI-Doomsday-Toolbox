@@ -22,10 +22,15 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.example.llamadroid.ui.components.ResponsiveAction
+import com.example.llamadroid.ui.components.ResponsiveActionGroup
+import com.example.llamadroid.ui.components.ResponsiveActionStyle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -43,9 +48,10 @@ fun WelcomeScreen(
     onComplete: () -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val settingsRepo = remember { SettingsRepository(context) }
     
-    var currentStep by remember { mutableIntStateOf(0) }
+    var currentStep by rememberSaveable { mutableIntStateOf(0) }
     val totalSteps = 4 // Welcome, Battery, Output Folder, Phantom Process
     
     // Battery optimization state
@@ -71,23 +77,17 @@ fun WelcomeScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
-                        MaterialTheme.colorScheme.background
-                    )
-                )
-            )
+            .background(MaterialTheme.colorScheme.surface)
+            .safeDrawingPadding()
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(24.dp),
+                .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(16.dp))
             
             // Progress indicator
             Row(
@@ -106,7 +106,7 @@ fun WelcomeScreen(
                 }
             }
             
-            Spacer(modifier = Modifier.height(48.dp))
+            Spacer(modifier = Modifier.height(24.dp))
             
             // Step content
             AnimatedContent(
@@ -122,9 +122,7 @@ fun WelcomeScreen(
                     1 -> BatteryStep(
                         isOptimized = isIgnoringBattery,
                         onRequestPermission = {
-                            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                                data = Uri.parse("package:${context.packageName}")
-                            }
+                            val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
                             context.startActivity(intent)
                             // Re-check after delay
                             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
@@ -136,64 +134,44 @@ fun WelcomeScreen(
                         selectedFolder = outputFolderUri?.let { uri ->
                             try {
                                 androidx.documentfile.provider.DocumentFile.fromTreeUri(context, Uri.parse(uri))?.name
-                                    ?: context.getString(R.string.welcome_status_selected)
-                            } catch (e: Exception) { context.getString(R.string.welcome_status_selected) }
+                                    ?: resources.getString(R.string.welcome_status_selected)
+                            } catch (e: Exception) { resources.getString(R.string.welcome_status_selected) }
                         },
                         onSelectFolder = { folderPicker.launch(null) }
                     )
                     3 -> PhantomProcessStep(
                         onCopyCommands = { commands ->
                             val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            clipboard.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.welcome_phantom_copy_label), commands))
-                            Toast.makeText(context, context.getString(R.string.welcome_toast_commands_copied), Toast.LENGTH_SHORT).show()
+                            clipboard.setPrimaryClip(ClipData.newPlainText(resources.getString(R.string.welcome_phantom_copy_label), commands))
+                            Toast.makeText(context, resources.getString(R.string.welcome_toast_commands_copied), Toast.LENGTH_SHORT).show()
                         }
                     )
                 }
             }
             
-            Spacer(modifier = Modifier.height(48.dp))
+            Spacer(modifier = Modifier.height(24.dp))
             
-            // Navigation buttons
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                if (currentStep > 0) {
-                    OutlinedButton(onClick = { currentStep-- }) {
-                        Text(stringResource(R.string.action_back))
+            ResponsiveActionGroup(
+                actions = buildList {
+                    if (currentStep > 0) add(ResponsiveAction(
+                        label = stringResource(R.string.action_back),
+                        onClick = { currentStep-- }, style = ResponsiveActionStyle.Secondary
+                    ))
+                    if (currentStep < totalSteps - 1) {
+                        add(ResponsiveAction(label = stringResource(R.string.action_skip),
+                            onClick = { currentStep++ }, style = ResponsiveActionStyle.Text))
+                        add(ResponsiveAction(label = stringResource(R.string.action_next),
+                            onClick = { currentStep++ }))
+                    } else {
+                        add(ResponsiveAction(label = stringResource(R.string.welcome_get_started),
+                            onClick = {
+                                settingsRepo.setHasCompletedWelcome(true)
+                                onComplete()
+                            }))
                     }
-                } else {
-                    Spacer(modifier = Modifier.width(1.dp))
-                }
-                
-                if (currentStep < totalSteps - 1) {
-                    Row {
-                        TextButton(onClick = { currentStep++ }) {
-                            Text(stringResource(R.string.action_skip))
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Button(onClick = { currentStep++ }) {
-                            Text(stringResource(R.string.action_next))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Icon(Icons.AutoMirrored.Filled.ArrowForward, null, Modifier.size(18.dp))
-                        }
-                    }
-                } else {
-                    Button(
-                        onClick = {
-                            settingsRepo.setHasCompletedWelcome(true)
-                            onComplete()
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary
-                        )
-                    ) {
-                        Text(stringResource(R.string.welcome_get_started))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Icon(Icons.Default.Check, null, Modifier.size(18.dp))
-                    }
-                }
-            }
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 }
@@ -205,7 +183,7 @@ private fun WelcomeStep() {
     ) {
         Text(
             text = "🛠️",
-            fontSize = 72.sp
+            fontSize = 40.sp
         )
         
         Spacer(modifier = Modifier.height(24.dp))
@@ -271,7 +249,7 @@ private fun BatteryStep(
     ) {
         Text(
             text = if (isOptimized) "✅" else "🔋",
-            fontSize = 72.sp
+            fontSize = 40.sp
         )
         
         Spacer(modifier = Modifier.height(24.dp))
@@ -344,7 +322,7 @@ private fun FolderStep(
     ) {
         Text(
             text = if (selectedFolder != null) "📂" else "📁",
-            fontSize = 72.sp
+            fontSize = 40.sp
         )
         
         Spacer(modifier = Modifier.height(24.dp))
@@ -444,7 +422,7 @@ adb shell settings put global settings_enable_monitor_phantom_procs false
     ) {
         Text(
             text = "⚙️",
-            fontSize = 72.sp
+            fontSize = 40.sp
         )
         
         Spacer(modifier = Modifier.height(24.dp))

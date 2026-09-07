@@ -1,5 +1,7 @@
 package com.example.llamadroid.tama.ui
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.widget.Toast
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -14,6 +16,10 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
@@ -23,6 +29,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalResources
 import com.example.llamadroid.R
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -30,7 +38,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import coil.compose.AsyncImage
 import com.example.llamadroid.tama.data.*
 import com.example.llamadroid.tama.game.FarmRepository
@@ -50,6 +58,8 @@ import com.example.llamadroid.tama.db.FarmUpgradeEntity
 import com.example.llamadroid.tama.game.wellCapacityForLevel
 import com.example.llamadroid.ui.components.pressAndHoldRepeat
 import com.example.llamadroid.ui.components.rememberPressAndHoldRepeatState
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -87,6 +97,8 @@ fun FarmScreen(
     var inspectedCropTile by remember { mutableStateOf<FarmTile?>(null) }
     var currentTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val context = LocalContext.current
+    val resources = LocalResources.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val wellUpgrade = upgrades.find { u -> u.type == "well" }
     val composterUpgrade = upgrades.find { u -> u.type == "composter" }
     val farmlandUpgrade = upgrades.find { u -> u.type == FARMLAND_UPGRADE_ID }
@@ -140,9 +152,13 @@ fun FarmScreen(
         Scaffold(
             topBar = {
                 TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                     title = { Text(stringResource(R.string.tama_farm_title)) },
                     navigationIcon = {
-                        IconButton(onClick = onBack) {
+                        IconButton(
+                            onClick = onBack,
+                            modifier = Modifier.walkthroughTarget("back")
+                        ) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
                         }
                     }
@@ -172,11 +188,15 @@ fun FarmScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.tama_farm_title)) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier.walkthroughTarget("back")
+                    ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
                     }
                 },
                 actions = {
+                        com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                     Row(
                         modifier = Modifier.padding(end = 16.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -241,7 +261,7 @@ fun FarmScreen(
                             scope.launch {
                                 if (gameEngine.spendMoney(FARM_WELL_COST.toLong())) {
                                     farmRepository.buyUpgrade(pet.id, "well", FARM_WELL_COST)
-                                    gameEngine.logEvent(pet.id, EventType.OTHER, context.getString(R.string.tama_event_well_upgrade))
+                                    gameEngine.logEvent(pet.id, EventType.OTHER, resources.getString(R.string.tama_event_well_upgrade))
                                 }
                             }
                         }
@@ -255,7 +275,7 @@ fun FarmScreen(
                             scope.launch {
                                 if (gameEngine.spendMoney(800)) {
                                     farmRepository.buyUpgrade(pet.id, "composter", 800)
-                                    gameEngine.logEvent(pet.id, EventType.OTHER, context.getString(R.string.tama_event_composter_upgrade))
+                                    gameEngine.logEvent(pet.id, EventType.OTHER, resources.getString(R.string.tama_event_composter_upgrade))
                                 }
                             }
                         }
@@ -267,7 +287,8 @@ fun FarmScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .walkthroughTarget("tama.farm"),
                     contentAlignment = Alignment.Center
                 ) {
                     val controlsReserve = if (unlockedFarmPages > 1) 48.dp else 0.dp
@@ -302,6 +323,7 @@ fun FarmScreen(
                                                 scope.launch { farmRepository.saveTile(pet.id, updated) }
                                             }
                                         )
+                                        walkthroughTargets?.recordEvent("tama.farm")
                                     },
                                     onLongPress = {
                                         if (tile.crop != null) inspectedCropTile = tile
@@ -337,7 +359,7 @@ fun FarmScreen(
                     )
                     scope.launch { 
                         farmRepository.saveTile(pet.id, updatedTile)
-                        gameEngine.logEvent(pet.id, EventType.PLANTED, context.getString(R.string.tama_event_planted, inventoryItemDisplayName(context, seed)))
+                        gameEngine.logEvent(pet.id, EventType.PLANTED, resources.getString(R.string.tama_event_planted, inventoryItemDisplayName(context, seed)))
                         // Remove 1 seed from inventory
                         gameEngine.consumeItem(seed, 1)
                     }
@@ -364,12 +386,12 @@ fun FarmScreen(
                             gameEngine.grantItem(
                                 InventoryItem(
                                     id = "water",
-                                    name = context.getString(R.string.tama_item_water),
+                                    name = resources.getString(R.string.tama_item_water),
                                     type = ItemType.MATERIAL
                                 ),
                                 collected
                             )
-                            gameEngine.logEvent(pet.id, EventType.OTHER, context.getString(R.string.tama_event_collected_well_water, collected))
+                            gameEngine.logEvent(pet.id, EventType.OTHER, resources.getString(R.string.tama_event_collected_well_water, collected))
                         }
                     }
                 },
@@ -382,7 +404,7 @@ fun FarmScreen(
                             gameEngine.logEvent(
                                 pet.id,
                                 EventType.OTHER,
-                                context.getString(R.string.tama_event_well_capacity_upgrade, currentLevel + 1)
+                                resources.getString(R.string.tama_event_well_capacity_upgrade, currentLevel + 1)
                             )
                         }
                     }
@@ -396,7 +418,7 @@ fun FarmScreen(
                             gameEngine.logEvent(
                                 pet.id,
                                 EventType.OTHER,
-                                context.getString(
+                                resources.getString(
                                     R.string.tama_event_well_speed_upgrade,
                                     wellIntervalHoursForSpeedLevel(speedLevel + 1)
                                 )
@@ -429,7 +451,7 @@ fun FarmScreen(
                                     gameEngine.grantItem(
                                         InventoryItem(
                                             id = "fertilizer",
-                                            name = context.getString(R.string.tama_item_fertilizer),
+                                            name = resources.getString(R.string.tama_item_fertilizer),
                                             type = ItemType.MATERIAL
                                         ),
                                         collected
@@ -437,7 +459,7 @@ fun FarmScreen(
                                     gameEngine.logEvent(
                                         pet.id,
                                         EventType.OTHER,
-                                        context.getString(R.string.tama_event_collected_fertilizer, collected)
+                                        resources.getString(R.string.tama_event_collected_fertilizer, collected)
                                     )
                                 }
                             }
@@ -454,7 +476,7 @@ fun FarmScreen(
                             gameEngine.logEvent(
                                 pet.id,
                                 EventType.OTHER,
-                                context.getString(R.string.tama_event_composter_capacity_upgrade, currentLevel + 1)
+                                resources.getString(R.string.tama_event_composter_capacity_upgrade, currentLevel + 1)
                             )
                         }
                     }
@@ -561,7 +583,7 @@ fun FarmScreen(
                                 gameEngine.logEvent(
                                     pet.id,
                                     EventType.OTHER,
-                                    context.getString(
+                                    resources.getString(
                                         R.string.tama_event_started_composting_crop,
                                         inventoryItemDisplayName(context, item)
                                     )
@@ -592,12 +614,26 @@ fun FarmTileItem(
     onClick: () -> Unit,
     onLongPress: () -> Unit = {}
 ) {
+    val context = LocalContext.current
+    val plotState = tile.crop?.let { crop ->
+        val name = cropDisplayName(context, crop.type)
+        if (crop.isDecayed) stringResource(R.string.soft_studio_farm_decayed, name)
+        else stringResource(R.string.soft_studio_farm_crop, name, crop.stage + 1)
+    } ?: stringResource(when (tile.status) {
+        TileStatus.SOIL -> R.string.soft_studio_farm_soil
+        TileStatus.FARMLAND -> R.string.soft_studio_farm_tilled
+        TileStatus.WET_FARMLAND -> R.string.soft_studio_farm_watered
+    })
+    val plotLabel = stringResource(R.string.soft_studio_farm_plot, tile.id + 1, plotState)
+    val inspectLabel = stringResource(R.string.soft_studio_farm_inspect)
     Card(
         modifier = Modifier
             .aspectRatio(1f)
+            .semantics(mergeDescendants = true) { contentDescription = plotLabel }
             .combinedClickable(
                 onClick = onClick,
-                onLongClick = onLongPress
+                onLongClickLabel = inspectLabel,
+                onLongClick = if (tile.crop != null) onLongPress else null
             ),
         shape = RoundedCornerShape(8.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -691,7 +727,7 @@ private fun FarmPageControls(
             IconButton(
                 onClick = onPrevious,
                 enabled = currentPage > 0,
-                modifier = Modifier.size(36.dp)
+                modifier = Modifier.size(48.dp)
             ) {
                 Icon(
                     Icons.Default.KeyboardArrowLeft,
@@ -707,7 +743,7 @@ private fun FarmPageControls(
             IconButton(
                 onClick = onNext,
                 enabled = currentPage < pageCount - 1,
-                modifier = Modifier.size(36.dp)
+                modifier = Modifier.size(48.dp)
             ) {
                 Icon(
                     Icons.Default.KeyboardArrowRight,
@@ -827,6 +863,7 @@ fun ToolSidebar(
     onPlantingDroneOpen: () -> Unit,
     onHarvesterDroneOpen: () -> Unit
 ) {
+    val context = LocalContext.current
     val tools = inventory.filter { it.type == ItemType.TOOL || it.id == "fertilizer" || it.id == "water" }
     
     LazyRow(
@@ -841,9 +878,19 @@ fun ToolSidebar(
         items(tools) { item ->
             val isSelected = selectedTool?.id == item.id
             val isDrone = item.id == FARM_PLANTING_DRONE_ID || item.id == FARM_HARVESTING_DRONE_ID
+            val toolName = inventoryItemDisplayName(context, item)
+            val durability = item.durability ?: 100
+            val maxDurability = (item.maxDurability ?: 100).coerceAtLeast(1)
+            val toolLabel = if (item.type == ItemType.TOOL && !isDrone)
+                stringResource(R.string.soft_studio_farm_tool, toolName, durability, maxDurability)
+            else stringResource(R.string.soft_studio_farm_supply, toolName, item.quantity)
             Surface(
                 modifier = Modifier
                     .size(68.dp)
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = toolLabel
+                        selected = isSelected && !isDrone
+                    }
                     .clickable {
                         when (item.id) {
                             FARM_PLANTING_DRONE_ID -> onPlantingDroneOpen()
@@ -867,42 +914,29 @@ fun ToolSidebar(
                     }
                     AsyncImage(
                         model = "file:///android_asset/farm/$iconSource",
-                        contentDescription = item.name,
-                        modifier = Modifier
-                            .size(50.dp)
-                            .scale(1.7f),
+                        contentDescription = null,
+                        modifier = Modifier.size(48.dp).padding(bottom = 6.dp),
                         contentScale = ContentScale.Fit
                     )
                     
-                    // Show quantity for resources
-                    // Show quantity for resources or durability for tools
                     if (item.type == ItemType.TOOL && !isDrone) {
-                        Surface(
-                            color = MaterialTheme.colorScheme.tertiary,
-                            shape = RoundedCornerShape(4.dp),
-                            modifier = Modifier.align(Alignment.BottomCenter).padding(2.dp)
-                        ) {
-                             Text(
-                                "D:${item.durability ?: 100}",
-                                modifier = Modifier.padding(horizontal = 4.dp),
-                                fontSize = 8.sp,
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
+                        LinearProgressIndicator(
+                            progress = { (durability.toFloat() / maxDurability).coerceIn(0f, 1f) },
+                            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                                .padding(8.dp).height(4.dp).clearAndSetSemantics {},
+                            color = MaterialTheme.colorScheme.primary,
+                            trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                        )
                     } else {
                         Surface(
-                            color = MaterialTheme.colorScheme.secondary,
+                            color = MaterialTheme.colorScheme.secondaryContainer,
                             shape = RoundedCornerShape(4.dp),
-                            modifier = Modifier.align(Alignment.TopEnd).padding(2.dp)
+                            modifier = Modifier.align(Alignment.TopEnd).padding(2.dp).clearAndSetSemantics {}
                         ) {
-                             Text(
-                                item.quantity.toString(),
-                                modifier = Modifier.padding(horizontal = 4.dp),
-                                fontSize = 10.sp,
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold
-                            )
+                            Text(item.quantity.toString(), modifier = Modifier.padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
@@ -1152,6 +1186,7 @@ private fun PlantingDroneDialog(
     onTransferToolDurability: (String, Int, (PlantingDroneState, Int) -> PlantingDroneState) -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val fuelItem = inventory.firstOrNull { it.id == FARM_FUEL_BUCKET_ID && it.quantity > 0 }
     val waterItem = inventory.firstOrNull { it.id == "water" && it.quantity > 0 }
     val fertilizerItem = inventory.firstOrNull { it.id == "fertilizer" && it.quantity > 0 }
@@ -1215,7 +1250,7 @@ private fun PlantingDroneDialog(
                 enabled = hoeTransfer > 0,
                 onClick = {
                     onTransferToolDurability("hoe", hoeTransfer) { latest, transferred ->
-                        latest.copy(hoe = addDroneToolDurability(latest.hoe, "hoe", context.getString(R.string.tama_inventory_hoe), transferred))
+                        latest.copy(hoe = addDroneToolDurability(latest.hoe, "hoe", resources.getString(R.string.tama_inventory_hoe), transferred))
                     }
                     true
                 }
@@ -1225,7 +1260,7 @@ private fun PlantingDroneDialog(
                 enabled = wateringCanTransfer > 0,
                 onClick = {
                     onTransferToolDurability("watering_can", wateringCanTransfer) { latest, transferred ->
-                        latest.copy(wateringCan = addDroneToolDurability(latest.wateringCan, "watering_can", context.getString(R.string.tama_inventory_watering_can), transferred))
+                        latest.copy(wateringCan = addDroneToolDurability(latest.wateringCan, "watering_can", resources.getString(R.string.tama_inventory_watering_can), transferred))
                     }
                     true
                 }
@@ -1582,10 +1617,10 @@ private fun DroneSeedPriorityRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-        IconButton(onClick = onMoveUp, enabled = canMoveUp, modifier = Modifier.size(36.dp)) {
+        IconButton(onClick = onMoveUp, enabled = canMoveUp, modifier = Modifier.size(48.dp)) {
             Icon(Icons.Default.KeyboardArrowUp, contentDescription = stringResource(R.string.tama_farm_drone_priority_up))
         }
-        IconButton(onClick = onMoveDown, enabled = canMoveDown, modifier = Modifier.size(36.dp)) {
+        IconButton(onClick = onMoveDown, enabled = canMoveDown, modifier = Modifier.size(48.dp)) {
             Icon(Icons.Default.KeyboardArrowDown, contentDescription = stringResource(R.string.tama_farm_drone_priority_down))
         }
     }
@@ -1711,9 +1746,11 @@ private fun ComposterTileCard(
     onClick: () -> Unit
 ) {
     val context = LocalContext.current
-    val locale = context.resources.configuration.locales[0]
+    val resources = LocalResources.current
+    val configuration = LocalConfiguration.current
+    val locale = configuration.locales[0]
     val processingItemName = slot.inputItemId?.let { FarmTradeItemCatalog.displayName(it, locale) }
-        ?: context.getString(R.string.tama_item_rotten_crop)
+        ?: resources.getString(R.string.tama_item_rotten_crop)
     val processingAsset = FarmTradeItemCatalog.compostableAssetPath(slot.inputItemId ?: "rotten_crop")
         ?.let { "file:///android_asset/$it" }
         ?: "file:///android_asset/farm/Others/rotten_crop.png"
@@ -1889,7 +1926,7 @@ fun calculateRemaining(crop: PlantedCrop): String {
     
     val hours = remaining / 3600000
     val minutes = (remaining % 3600000) / 60000
-    return String.format("%02dh %02dm", hours, minutes)
+    return String.format(java.util.Locale.getDefault(), "%02dh %02dm", hours, minutes)
 }
 
 private fun overallWellStatusText(
@@ -2081,5 +2118,5 @@ private fun formatDurationToHoursMinutes(durationMs: Long): String {
     val remaining = durationMs.coerceAtLeast(0L)
     val hours = remaining / 3_600_000L
     val minutes = (remaining % 3_600_000L) / 60_000L
-    return String.format("%02dh %02dm", hours, minutes)
+    return String.format(java.util.Locale.getDefault(), "%02dh %02dm", hours, minutes)
 }

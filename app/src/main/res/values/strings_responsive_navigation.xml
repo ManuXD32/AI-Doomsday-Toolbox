@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Shared responsive navigation labels and full accessibility names. -->
+    <string name="responsive_nav_home">Home</string>
+    <string name="responsive_nav_more">More</string>
+    <string name="responsive_nav_more_accessibility">Open more destinations</string>
+    <string name="responsive_nav_more_title">More destinations</string>
+    <string name="responsive_nav_more_subtitle">Models and settings</string>
+    <string name="responsive_nav_more_close">Close more destinations</string>
+</resources>

@@ -21,6 +21,7 @@ class LlamaServerLaunchProfileTest {
             threads = 8,
             batchSize = 2048,
             physicalBatchSize = 1024,
+            threadsBatch = 3,
             kvCacheEnabled = true,
             kvCacheTypeK = "q8_0",
             kvCacheTypeV = "q4_0",
@@ -72,13 +73,22 @@ class LlamaServerLaunchProfileTest {
         val restored = requireNotNull(LlamaServerLaunchProfile.decode(LlamaServerLaunchProfile.encode(profile)))
         val controller = ProcessController()
 
-        assertEquals(profile, restored)
+        assertEquals(
+            profile.copy(
+                schemaVersion = LlamaServerLaunchProfile.SCHEMA_VERSION,
+                loadMode = LlamaLoadMode.NONE.value,
+                loras = listOf(LlamaLoraSpec("/models/style.lora"))
+            ),
+            restored
+        )
         assertEquals(
             controller.getCommand("/bin/llama-server", profile.toLlamaConfig()),
             controller.getCommand("/bin/llama-server", restored.toLlamaConfig())
         )
         assertTrue(restored.toLlamaConfig().openClCpuTargetGpuDraft)
         assertTrue(restored.toLlamaConfig().nativeToolsEnabled)
+        assertEquals(3, restored.threadsBatch)
+        assertEquals(3, restored.toLlamaConfig().threadsBatch)
         assertTrue(restored.hasModel())
         assertEquals("coder.gguf · 32768 ctx · 8 threads", restored.summary())
     }
@@ -99,8 +109,21 @@ class LlamaServerLaunchProfileTest {
             )
         )
 
-        assertEquals(2, restored.schemaVersion)
+        assertEquals(LlamaServerLaunchProfile.SCHEMA_VERSION, restored.schemaVersion)
         assertNull(restored.nativeBinarySelection)
+    }
+
+    @Test
+    fun `profiles written before thread batch setting default to omitted flag`() {
+        val restored = requireNotNull(
+            LlamaServerLaunchProfile.decode(
+                """{"schemaVersion":4,"modelPath":"/models/legacy.gguf","physicalBatchSize":1024}"""
+            )
+        )
+
+        assertNull(restored.threadsBatch)
+        assertFalse(ProcessController().getCommand("/bin/llama-server", restored.toLlamaConfig())
+            .contains("--threads-batch"))
     }
 
     @Test

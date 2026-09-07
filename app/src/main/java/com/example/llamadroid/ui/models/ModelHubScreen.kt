@@ -3,29 +3,36 @@ package com.example.llamadroid.ui.models
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Create
-import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
 import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppHeroCard
 import com.example.llamadroid.ui.components.AppPageBackground
-import com.example.llamadroid.ui.components.AppPageHeader
+import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.components.rememberModelStorageInventory
+import com.example.llamadroid.ui.components.ModelStorageCount
+import com.example.llamadroid.data.model.StorageUsage
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 
 /**
  * Model Hub - Landing page for model management
@@ -34,89 +41,82 @@ import com.example.llamadroid.ui.navigation.Screen
 @Composable
 fun ModelHubScreen(navController: NavController) {
     val scrollState = rememberScrollState()
+    val storage = rememberModelStorageInventory()
+    val guideTargets = LocalWalkthroughTargets.current
     
-    AppPageBackground {
+    AppScreenScaffold(title = stringResource(R.string.models_hub), onBack = { navController.popBackStack() }) {
         AppContentColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(scrollState)
         ) {
-            AppPageHeader(
-                eyebrow = "MODELS",
-                title = stringResource(R.string.models_hub),
-                subtitle = stringResource(R.string.settings_subtitle)
-            )
-
-            AppHeroCard(
-                title = stringResource(R.string.models_hub),
-                subtitle = stringResource(R.string.models_local_storage),
-                badge = stringResource(R.string.nav_models)
-            )
-
             ModelFeatureCard(
-                title = "🤖 " + stringResource(R.string.models_llm),
+                title = stringResource(R.string.models_llm),
                 description = stringResource(R.string.models_llm_desc),
-                icon = Icons.Default.Star,
-                gradientColors = listOf(
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
-                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-                ),
-                onClick = { navController.navigate(Screen.LLMModels.route) }
+                icon = Icons.Default.Memory,
+                onClick = { guideTargets?.recordEvent("models.download"); navController.navigate(Screen.LLMModels.route) },
+                modifier = Modifier.walkthroughTarget("models.download"),
+                usage = storage.usage("llm"),
+                storageLoaded = storage.loaded
             )
 
             ModelFeatureCard(
-                title = "🎨 " + stringResource(R.string.models_sd),
+                title = stringResource(R.string.models_sd),
                 description = stringResource(R.string.models_sd_desc),
-                icon = Icons.Default.Create,
-                gradientColors = listOf(
-                    MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f),
-                    MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f)
-                ),
-                onClick = { navController.navigate(Screen.SDModels.route) }
+                icon = Icons.Default.Image,
+                onClick = { navController.navigate(Screen.SDModels.route) },
+                usage = storage.usage("sd"),
+                storageLoaded = storage.loaded
             )
 
             ModelFeatureCard(
-                title = "🧠 " + stringResource(R.string.models_onnx),
+                title = stringResource(R.string.models_onnx),
                 description = stringResource(R.string.models_onnx_desc),
-                icon = Icons.Default.Create,
-                gradientColors = listOf(
-                    Color(0xFFFFB74D).copy(alpha = 0.15f),
-                    Color(0xFFF57C00).copy(alpha = 0.3f)
-                ),
-                onClick = { navController.navigate(Screen.OnnxModels.route) }
+                icon = Icons.Default.Hub,
+                onClick = { navController.navigate(Screen.OnnxModels.route) },
+                usage = storage.usage("onnx"),
+                storageLoaded = storage.loaded
             )
 
             ModelFeatureCard(
                 title = stringResource(R.string.models_litert),
                 description = stringResource(R.string.models_litert_desc),
-                icon = Icons.Default.Star,
-                gradientColors = listOf(
-                    Color(0xFF7E57C2).copy(alpha = 0.15f),
-                    Color(0xFF26A69A).copy(alpha = 0.25f)
-                ),
-                onClick = { navController.navigate(Screen.LiteRtModels.route) }
+                icon = Icons.Default.Memory,
+                onClick = { navController.navigate(Screen.LiteRtModels.route) },
+                usage = storage.usage("litert"),
+                storageLoaded = storage.loaded
             )
 
             ModelFeatureCard(
-                title = "🎙️ " + stringResource(R.string.models_whisper),
+                title = stringResource(R.string.models_whisper),
                 description = stringResource(R.string.models_whisper_desc),
-                icon = Icons.Default.Create,
-                gradientColors = listOf(
-                    Color(0xFF00BCD4).copy(alpha = 0.15f),
-                    Color(0xFF00ACC1).copy(alpha = 0.3f)
-                ),
-                onClick = { navController.navigate(Screen.WhisperModels.route) }
+                icon = Icons.Default.GraphicEq,
+                onClick = { navController.navigate(Screen.WhisperModels.route) },
+                usage = storage.usage("whisper"),
+                storageLoaded = storage.loaded
             )
 
             ModelFeatureCard(
-                title = "📤 " + stringResource(R.string.models_share),
+                title = stringResource(R.string.model_library_hub_title),
+                description = stringResource(R.string.model_library_hub_desc),
+                icon = Icons.Default.Link,
+                onClick = { navController.navigate(Screen.ModelSources.route) }
+            )
+
+            ModelFeatureCard(
+                title = stringResource(R.string.model_storage_unknown_title),
+                description = stringResource(R.string.model_storage_unknown_desc),
+                icon = Icons.Default.HelpOutline,
+                onClick = { navController.navigate("${Screen.ModelSources.route}?tab=unknown") },
+                usage = storage.usage("unknown"), storageLoaded = storage.loaded
+            )
+
+            ModelFeatureCard(
+                title = stringResource(R.string.models_share),
                 description = stringResource(R.string.models_share_desc),
-                icon = Icons.Default.Star,
-                gradientColors = listOf(
-                    Color(0xFF4CAF50).copy(alpha = 0.15f),
-                    Color(0xFF388E3C).copy(alpha = 0.3f)
-                ),
-                onClick = { navController.navigate("model_share") }
+                icon = Icons.Default.Share,
+                onClick = { guideTargets?.recordEvent("models.share"); navController.navigate("model_share") },
+                modifier = Modifier.walkthroughTarget("models.share")
             )
 
             Text(
@@ -134,41 +134,46 @@ private fun ModelFeatureCard(
     title: String,
     description: String,
     icon: ImageVector,
-    gradientColors: List<androidx.compose.ui.graphics.Color>,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    usage: StorageUsage? = null,
+    storageLoaded: Boolean = true
 ) {
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f)
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(
-                    brush = Brush.horizontalGradient(gradientColors)
-                )
-                .padding(24.dp),
+                .padding(18.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
+            Surface(
                 modifier = Modifier.size(48.dp),
-                tint = MaterialTheme.colorScheme.primary
-            )
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.74f)
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    modifier = Modifier.padding(12.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
             
-            Spacer(modifier = Modifier.width(20.dp))
+            Spacer(modifier = Modifier.width(12.dp))
             
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     title,
-                    style = MaterialTheme.typography.titleLarge.copy(
+                    style = MaterialTheme.typography.titleMedium.copy(
                         fontWeight = FontWeight.SemiBold
                     )
                 )
@@ -178,6 +183,10 @@ private fun ModelFeatureCard(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                usage?.let {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    ModelStorageCount(it, loaded = storageLoaded)
+                }
             }
         }
     }

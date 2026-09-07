@@ -1,8 +1,15 @@
 package com.example.llamadroid.ui.agent
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughActive
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+
 import android.content.Context
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.room.withTransaction
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -43,6 +50,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -50,7 +58,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
 import androidx.navigation.NavController
@@ -63,6 +71,7 @@ import com.example.llamadroid.data.db.AiRuntimeJobEntity
 import com.example.llamadroid.data.db.AgentConversationEntity
 import com.example.llamadroid.data.db.AgentMessageEntity
 import com.example.llamadroid.data.db.AgentProjectFolderEntity
+import com.example.llamadroid.data.db.AgentRuntimeProfile
 import com.example.llamadroid.data.db.KnowledgeBaseEntity
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
@@ -98,6 +107,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import org.json.JSONArray
 import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.data.HttpEndpointUrlSupport
 import com.example.llamadroid.data.runtime.AgentRuntimeProfileRuntime
 import com.example.llamadroid.data.runtime.EmptyAgentRuntimeProfileStore
 import com.example.llamadroid.data.runtime.ManagedLlamaServerState
@@ -110,13 +120,46 @@ private data class AgentPlanEditSession(
     val originalPlan: String
 )
 
+private fun formatAgentString(template: String, vararg args: Any?): String =
+    String.format(Locale.getDefault(), template, *args)
+
 /**
  * AgentScreen - AI Coding Agent Chat Interface
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AgentScreen(navController: NavController) {
+fun AgentScreen(
+    navController: NavController,
+    initialConversationId: Long? = null
+) {
     val context = LocalContext.current
+    val attachImageFailedText = stringResource(R.string.agent_attach_image_failed)
+    val skillImportSuccessFormat = stringResource(R.string.agent_skill_import_success)
+    val skillImportFailedFormat = stringResource(R.string.agent_skill_import_failed)
+    val folderMoveInvalidText = stringResource(R.string.agent_folder_move_invalid)
+    val folderDeleteNotEmptyText = stringResource(R.string.agent_folder_delete_not_empty)
+    val restoredMessagesFormat = stringResource(R.string.agent_restored_messages)
+    val workflowPlanApprovalFailedFormat = stringResource(R.string.agent_workflow_plan_approval_failed)
+    val genericToolText = stringResource(R.string.agent_generic_tool)
+    val deniedExecutionFormat = stringResource(R.string.agent_denied_execution)
+    val resumeReasonStoppedByUserText = stringResource(R.string.agent_resume_reason_stopped_by_user)
+    val resumeReasonInterruptedText = stringResource(R.string.agent_resume_reason_interrupted)
+    val resumeReasonNeedsDirectionText = stringResource(R.string.agent_resume_reason_needs_direction)
+    val resumeReasonGenericText = stringResource(R.string.agent_resume_reason_generic)
+    val resumeSystemNoteFormat = stringResource(R.string.agent_resume_system_note)
+    val projectDefaultPrefixText = stringResource(R.string.agent_project_default_prefix)
+    val readyMessageFormat = stringResource(R.string.agent_ready_msg)
+    val compactionRequestedText = stringResource(R.string.agent_compaction_requested)
+    val retryDebugStartFormat = stringResource(R.string.agent_retry_debug_start)
+    val retryDebugSshFormat = stringResource(R.string.agent_retry_debug_ssh)
+    val retryDebugSshNotRequiredText = stringResource(R.string.agent_retry_debug_ssh_not_required)
+    val retryDebugStatusFormat = stringResource(R.string.agent_retry_debug_status)
+    val retryDebugNoDetailText = stringResource(R.string.agent_retry_debug_no_detail)
+    val retryDebugDoneText = stringResource(R.string.agent_retry_debug_done)
+    val guidanceInterruptingText = stringResource(R.string.agent_guidance_interrupting)
+    val blankPlanText = stringResource(R.string.soft_studio_conversations_plan_blank)
+    val wrongPlanProjectText = stringResource(R.string.soft_studio_conversations_plan_wrong_project)
+    val defaultProjectName = stringResource(R.string.soft_studio_conversations_default_project)
     val scope = rememberCoroutineScope()
 
     // Services
@@ -146,8 +189,10 @@ fun AgentScreen(navController: NavController) {
             }
         }
     }
-    // Initialize Ollama URL from saved settings
-    remember { ollamaService.initFromSettings() }
+    // Initialize Ollama URL from saved settings once for this service instance.
+    LaunchedEffect(ollamaService) {
+        ollamaService.initFromSettings()
+    }
 
     // State - use STATIC companion object for navigation persistence
     val messages by AgentService.messages.collectAsStateWithLifecycle()
@@ -169,6 +214,8 @@ fun AgentScreen(navController: NavController) {
     var imagePreviewPath by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
     val agentBackend by settingsRepository.agentBackend.collectAsStateWithLifecycle()
+    val ollamaUrl by ollamaService.baseUrl.collectAsStateWithLifecycle()
+    val globalRuntimeOverride by settingsRepository.agentGlobalRuntimeOverride.collectAsStateWithLifecycle()
     val runtimeProfiles by remember(runtimeProfileStore) {
         runtimeProfileStore.observeProfiles()
     }.collectAsState(initial = emptyList())
@@ -184,13 +231,31 @@ fun AgentScreen(navController: NavController) {
     val currentRuntimeProfile = runtimeProfiles.firstOrNull {
         it.agentKey == activeRuntimeProfileKey
     }
-    val activeRuntime = remember(
+    val effectiveRuntimeProfile = remember(
         currentRuntimeProfile,
+        activeRuntimeProfileKey,
+        globalRuntimeOverride
+    ) {
+        when {
+            currentRuntimeProfile != null -> globalRuntimeOverride.applyTo(currentRuntimeProfile)
+            globalRuntimeOverride.enabled -> AgentRuntimeProfile(
+                agentKey = activeRuntimeProfileKey,
+                backend = globalRuntimeOverride.backend,
+                model = globalRuntimeOverride.model,
+                endpointConfigId = globalRuntimeOverride.endpointConfigId,
+                managedLlamaServerId = globalRuntimeOverride.managedLlamaServerId,
+                liteRtModelId = globalRuntimeOverride.liteRtModelId
+            ).normalized()
+            else -> null
+        }
+    }
+    val activeRuntime = remember(
+        effectiveRuntimeProfile,
         runtimeEndpointConfigs,
         managedRuntimeServers
     ) {
         resolveAgentRuntimeUi(
-            profile = currentRuntimeProfile,
+            profile = effectiveRuntimeProfile,
             endpointConfigs = runtimeEndpointConfigs,
             managedServers = managedRuntimeServers
         )
@@ -200,12 +265,109 @@ fun AgentScreen(navController: NavController) {
     val effectiveAgentBackend = activeRuntime.backendId ?: agentBackend
     val isAgentLlamaServer = SettingsRepository.isLlamaServerBackend(effectiveAgentBackend)
     val isAgentLlamaSwap = SettingsRepository.isLlamaSwapBackend(effectiveAgentBackend)
+    val isAgentGlobalLlamaServer = isAgentLlamaServer && activeRuntime.usesGlobalLlamaServer
     val isAgentLiteRt = SettingsRepository.isLiteRtBackend(effectiveAgentBackend)
     val isAgentOpenAiBackend = SettingsRepository.usesOpenAiChatBackend(effectiveAgentBackend)
     val llamaServerUrl by settingsRepository.llamaServerUrl.collectAsStateWithLifecycle()
     val llamaSwapUrl by settingsRepository.agentLlamaSwapUrl.collectAsStateWithLifecycle()
     val llamaServerRuntimeState by AgentService.llamaServerRuntimeState.collectAsStateWithLifecycle()
     val orchestratorVisionEnabled by settingsRepository.agentOrchestratorVisionEnabled.collectAsStateWithLifecycle()
+
+    // This probe is deliberately local to the selected agent/runtime.  Named endpoints and
+    // managed servers must not be represented by the global Ollama connection flow, otherwise a
+    // retry can report a stale/global status (or send the user to the dashboard).
+    var activeEndpointProbeKey by remember { mutableStateOf<String?>(null) }
+    var activeEndpointProbeResult by remember { mutableStateOf<com.example.llamadroid.service.AgentEndpointProbeResult?>(null) }
+    val activeEndpointBaseUrl = when {
+        activeRuntime.endpointConfig != null -> activeRuntime.endpointConfig.baseUrl
+        activeRuntime.managedServer != null -> activeRuntime.managedServer.baseUrl
+        isAgentGlobalLlamaServer -> llamaServerUrl
+        isAgentLlamaSwap -> llamaSwapUrl
+        else -> ollamaUrl
+    }
+    val activeEndpointBackend = activeRuntime.endpointConfig?.normalizedBackend?.id
+        ?: effectiveAgentBackend
+    val activeEndpointKey = remember(activeEndpointBackend, activeEndpointBaseUrl) {
+        val normalizedBaseUrl = HttpEndpointUrlSupport.normalizeBaseUrl(activeEndpointBaseUrl)
+            ?: activeEndpointBaseUrl?.trim().orEmpty()
+        "$activeEndpointBackend|$normalizedBaseUrl"
+    }
+
+    /** Retest the exact endpoint currently selected by this agent, keeping the chat in place. */
+    suspend fun retestActiveAgentEndpoint() {
+        // Read the latest global flow values at invocation time so Save can probe a URL edited in
+        // ConnectionSettingsDialog before Compose has delivered the next recomposition.
+        val latestBaseUrl = when {
+            activeRuntime.endpointConfig != null -> activeRuntime.endpointConfig.baseUrl
+            activeRuntime.managedServer != null -> activeRuntime.managedServer.baseUrl
+            isAgentGlobalLlamaServer -> settingsRepository.llamaServerUrl.value
+            isAgentLlamaSwap -> settingsRepository.agentLlamaSwapUrl.value
+            else -> ollamaService.baseUrl.value
+        }
+        val result = agentService.probeAgentEndpoint(latestBaseUrl, activeEndpointBackend)
+        activeEndpointProbeKey = "${result.backend}|${result.baseUrl ?: latestBaseUrl?.trim().orEmpty()}"
+        activeEndpointProbeResult = result
+
+        // Global backends also maintain their richer metadata/connection flows. Refresh those
+        // after the exact probe so model/context labels and the status bar agree with the result.
+        if (activeRuntime.endpointConfig == null && activeRuntime.managedServer == null) {
+            when {
+                isAgentGlobalLlamaServer || isAgentLlamaSwap -> {
+                    agentService.refreshLlamaServerRuntimeState(
+                        settingsRepository,
+                        force = true,
+                        backendOverride = effectiveAgentBackend
+                    )
+                }
+                !isAgentLlamaServer && !isAgentLiteRt -> {
+                    ollamaService.initFromSettings()
+                    ollamaService.checkConnection()
+                }
+            }
+        }
+    }
+
+    suspend fun retestConfiguredAgentEndpoint(agentKey: String) {
+        if (agentKey == activeRuntimeProfileKey) {
+            retestActiveAgentEndpoint()
+            return
+        }
+        val storedProfile = runtimeProfiles.firstOrNull { it.agentKey == agentKey }
+        val profile = when {
+            storedProfile != null -> globalRuntimeOverride.applyTo(storedProfile)
+            globalRuntimeOverride.enabled -> AgentRuntimeProfile(
+                agentKey = agentKey,
+                backend = globalRuntimeOverride.backend,
+                model = globalRuntimeOverride.model,
+                endpointConfigId = globalRuntimeOverride.endpointConfigId,
+                managedLlamaServerId = globalRuntimeOverride.managedLlamaServerId,
+                liteRtModelId = globalRuntimeOverride.liteRtModelId
+            ).normalized()
+            else -> null
+        }
+        val runtime = resolveAgentRuntimeUi(
+            profile = profile,
+            endpointConfigs = runtimeEndpointConfigs,
+            managedServers = managedRuntimeServers
+        )
+        val backend = runtime.backendId ?: agentBackend
+        val baseUrl = when {
+            runtime.endpointConfig != null -> runtime.endpointConfig.baseUrl
+            runtime.managedServer != null -> runtime.managedServer.baseUrl
+            SettingsRepository.isLlamaServerBackend(backend) -> settingsRepository.llamaServerUrl.value
+            SettingsRepository.isLlamaSwapBackend(backend) -> settingsRepository.agentLlamaSwapUrl.value
+            SettingsRepository.isLiteRtBackend(backend) -> null
+            else -> ollamaService.baseUrl.value
+        }
+        agentService.probeAgentEndpoint(baseUrl, backend)
+    }
+
+    LaunchedEffect(activeEndpointKey) {
+        if (hasNamedRuntimeEndpoint || activeRuntime.hasManagedServerAssignment) {
+            delay(350)
+            retestActiveAgentEndpoint()
+        }
+    }
 
     var runtimeConversationId by rememberSaveable { mutableStateOf<Long?>(null) }
     var selectedConversationId by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -218,6 +380,9 @@ fun AgentScreen(navController: NavController) {
     var isConversationRestoring by remember { mutableStateOf(false) }
     var hydratingConversationTitle by remember { mutableStateOf<String?>(null) }
     var initialConversationRestorePending by remember { mutableStateOf(false) }
+    var initialConversationRestoreRequested by rememberSaveable(initialConversationId) {
+        mutableStateOf(false)
+    }
     var showConversations by remember { mutableStateOf(false) }
     val conversationSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var restoreToken by remember { mutableIntStateOf(0) }
@@ -228,7 +393,8 @@ fun AgentScreen(navController: NavController) {
         llamaSwapUrl,
         hasNamedRuntimeEndpoint,
         activeRuntime.hasManagedServerAssignment,
-        activeRuntime.endpointReferenceMissing
+        activeRuntime.endpointReferenceMissing,
+        isAgentGlobalLlamaServer
     ) {
         delay(350)
         if (
@@ -238,9 +404,19 @@ fun AgentScreen(navController: NavController) {
         ) {
             return@LaunchedEffect
         }
-        if (isAgentLlamaSwap) {
+        if (isAgentGlobalLlamaServer) {
+            agentService.refreshLlamaServerRuntimeState(
+                settingsRepository,
+                force = true,
+                backendOverride = effectiveAgentBackend
+            )
+        } else if (isAgentLlamaSwap) {
             if (llamaSwapUrl.isNotBlank()) {
-                agentService.refreshLlamaServerRuntimeState(settingsRepository, force = true)
+                agentService.refreshLlamaServerRuntimeState(
+                    settingsRepository,
+                    force = true,
+                    backendOverride = effectiveAgentBackend
+                )
             }
         } else if (!isAgentLlamaServer && !isAgentLiteRt) {
             ollamaService.checkConnection()
@@ -300,7 +476,7 @@ fun AgentScreen(navController: NavController) {
             settingsRepository.setShowExtraOutput(showAllOutput)
         }
     }
-    var showNewProjectDialog by remember { mutableStateOf(false) } // New project name dialog
+    var showNewProjectDialog by rememberSaveable { mutableStateOf(false) } // New project name dialog
     var showCustomTools by remember { mutableStateOf(false) } // Custom Tools screen
     var showCustomAgents by remember { mutableStateOf(false) } // Custom Agents screen
     var showSkillManager by remember { mutableStateOf(false) }
@@ -311,8 +487,8 @@ fun AgentScreen(navController: NavController) {
     var showDeleteConfirmation by remember { mutableStateOf<Long?>(null) } // Delete confirmation dialog
     var pendingDeleteFolder by remember { mutableStateOf<String?>(null) } // Folder to delete
     var pendingDeleteProject by remember { mutableStateOf<AgentConversationEntity?>(null) }
-    var newProjectName by remember { mutableStateOf("") }
-    var newProjectBackend by remember { mutableStateOf(AgentWorkspaceBackendType.REMOTE_SSH) }
+    var newProjectName by rememberSaveable { mutableStateOf("") }
+    var newProjectBackend by rememberSaveable { mutableStateOf(AgentWorkspaceBackendType.REMOTE_SSH) }
     var targetFolderForNewProject by rememberSaveable { mutableStateOf<Long?>(null) }
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var newFolderName by remember { mutableStateOf("") }
@@ -335,9 +511,11 @@ fun AgentScreen(navController: NavController) {
     // First-run popup - show once to remind user to create project
     val prefs = remember { context.getSharedPreferences("agent_prefs", Context.MODE_PRIVATE) }
     var showFirstRunPopup by remember { mutableStateOf(false) }
+    val walkthroughActive = LocalWalkthroughActive.current
+    val deferFirstRunPopupForVisit = remember { walkthroughActive }
     
     LaunchedEffect(Unit) {
-        if (!prefs.getBoolean("first_run_shown", false)) {
+        if (!deferFirstRunPopupForVisit && !prefs.getBoolean("first_run_shown", false)) {
             showFirstRunPopup = true
             prefs.edit().putBoolean("first_run_shown", true).apply()
         }
@@ -358,7 +536,6 @@ fun AgentScreen(navController: NavController) {
     var sshPort by remember { mutableStateOf("8023") }
     var sshUser by remember { mutableStateOf("root") }
     var sshPassword by remember { mutableStateOf("") }
-    val ollamaUrl by ollamaService.baseUrl.collectAsStateWithLifecycle()
     
     // Database and conversation management
     val conversations by db.agentChatDao().getAllConversations().collectAsState(initial = emptyList())
@@ -444,7 +621,7 @@ fun AgentScreen(navController: NavController) {
                 }.onFailure {
                     Toast.makeText(
                         context,
-                        context.getString(R.string.agent_attach_image_failed),
+                        attachImageFailedText,
                         Toast.LENGTH_SHORT
                     ).show()
                 }
@@ -473,8 +650,8 @@ fun AgentScreen(navController: NavController) {
                 Toast.makeText(
                     context,
                     result.fold(
-                        onSuccess = { context.getString(R.string.agent_skill_import_success, it.name) },
-                        onFailure = { context.getString(R.string.agent_skill_import_failed, it.message ?: it.javaClass.simpleName) }
+                        onSuccess = { formatAgentString(skillImportSuccessFormat, it.name) },
+                        onFailure = { formatAgentString(skillImportFailedFormat, it.message ?: it.javaClass.simpleName) }
                     ),
                     Toast.LENGTH_LONG
                 ).show()
@@ -549,7 +726,7 @@ fun AgentScreen(navController: NavController) {
 
     fun moveFolder(folder: AgentProjectFolderEntity, parentId: Long?) {
         if (folder.id == parentId || isFolderDescendant(folder.id, parentId)) {
-            Toast.makeText(context, context.getString(R.string.agent_folder_move_invalid), Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, folderMoveInvalidText, Toast.LENGTH_SHORT).show()
             return
         }
         scope.launch {
@@ -588,7 +765,7 @@ fun AgentScreen(navController: NavController) {
         val hasChildren = projectFolders.any { it.parentId == folder.id } ||
             conversations.any { it.projectFolderId == folder.id }
         if (hasChildren) {
-            Toast.makeText(context, context.getString(R.string.agent_folder_delete_not_empty), Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, folderDeleteNotEmptyText, Toast.LENGTH_SHORT).show()
             return
         }
         scope.launch {
@@ -613,6 +790,23 @@ fun AgentScreen(navController: NavController) {
         hydratingConversationTitle = conversations.firstOrNull { it.id == conversationId }?.title
         isConversationRestoring = false
         initialConversationRestorePending = false
+    }
+
+    fun applyConversationRuntimeMetadata(conversation: AgentConversationEntity) {
+        // The Room conversation is authoritative. Runtime snapshots are transient recovery data
+        // and older payloads may omit the backend (historically interpreted as REMOTE_SSH).
+        // Select the backend before the project folder so scaffold writes use the correct store.
+        AgentService.setCurrentWorkspaceBackend(
+            resolveRestoredWorkspaceBackend(
+                canonicalConversationBackend = conversation.workspaceBackend,
+                snapshotBackend = AgentService.currentWorkspaceBackend.value
+            )
+        )
+        AgentService.setCurrentProjectFolder(conversation.projectFolder)
+        AgentService.setCurrentRuntimeCapabilities(
+            AgentLocalRuntimeCapabilities.fromJson(conversation.runtimeCapabilitiesJson)
+        )
+        AgentService.setCurrentPlanningModeEnabled(conversation.planningModeEnabled)
     }
 
     suspend fun activateConversationRuntime(
@@ -667,8 +861,8 @@ fun AgentScreen(navController: NavController) {
         hydratingConversationTitle = conversationTitle
         AgentService.setPreferredConversationId(conversationId)
         AgentService.setActiveConversationId(conversationId)
-        AgentService.setCurrentProjectFolder(projectFolder)
         AgentService.setCurrentWorkspaceBackend(workspaceBackend)
+        AgentService.setCurrentProjectFolder(projectFolder)
         AgentService.setCurrentRuntimeCapabilities(runtimeCapabilities)
         AgentService.setCurrentPlanningModeEnabled(planningModeEnabled)
         AgentService.clearPlanningImplementationUnlock()
@@ -702,7 +896,11 @@ fun AgentScreen(navController: NavController) {
                 syncConversationUiFromRuntime(it)
                 settingsRepository.setLastAgentConversationId(it)
             }
-            if (liveMessages.isNotEmpty()) {
+            if (shouldSkipPersistedRuntimeRestore(
+                    isLoading = AgentService.isLoading.value,
+                    liveMessagesEmpty = liveMessages.isEmpty()
+                )
+            ) {
                 return
             }
         }
@@ -718,15 +916,23 @@ fun AgentScreen(navController: NavController) {
             (liveConversationId == null || liveMessages.isEmpty() || liveConversationId == jobConversationId)
         ) {
             agentService.restorePersistentState(activeJob.payloadJson)
-            val restoredConversationId = AgentService.activeConversationId.value ?: jobConversationId
+            // The runtime-job row and conversation row own identity/project metadata. A legacy
+            // checkpoint can contain an absent or stale backend and must never redirect local
+            // file tools to the SSH workspace during automatic continuation.
+            val restoredConversationId = jobConversationId
+            val restoredConversation = db.agentChatDao().getConversation(restoredConversationId)
+            if (restoredConversation != null) {
+                AgentService.setActiveConversationId(restoredConversation.id)
+                applyConversationRuntimeMetadata(restoredConversation)
+            }
             syncConversationUiFromRuntime(restoredConversationId)
             settingsRepository.setLastAgentConversationId(restoredConversationId)
         }
     }
 
     suspend fun restoreConversation(conversationId: Long, dismissPicker: Boolean, token: Int) {
-        if (isConversationRestoring && runtimeConversationId == conversationId && selectedConversationId == conversationId) return
-
+        // beginConversationRestore already marks loading. Let the live-runtime attach path
+        // handle an already selected project and the finally block settle that loading state.
         isConversationRestoring = true
         val conv = db.agentChatDao().getConversation(conversationId)
         if (token != restoreToken) return
@@ -776,7 +982,7 @@ fun AgentScreen(navController: NavController) {
             if (token != restoreToken) return
 
             if (restoredMessages.isNotEmpty()) {
-                AgentService.addDebugLog(context.getString(R.string.agent_restored_messages, restoredMessages.size))
+                AgentService.addDebugLog(formatAgentString(restoredMessagesFormat, restoredMessages.size))
             }
             AgentService.restoreQuestionWorkflow(
                 context = context,
@@ -808,6 +1014,24 @@ fun AgentScreen(navController: NavController) {
         hydratingConversationTitle = conversations.firstOrNull { it.id == conversationId }?.title
         isConversationRestoring = true
         restoreConversation(conversationId, dismissPicker = dismissPicker, token = token)
+    }
+
+    // Home can open a saved project directly. Reuse the picker restore path so the Room
+    // conversation remains authoritative and the existing live-runtime/continuation guards
+    // still decide whether to attach or rehydrate the singleton service.
+    LaunchedEffect(initialConversationId) {
+        val conversationId = initialConversationId ?: return@LaunchedEffect
+        if (initialConversationRestoreRequested) return@LaunchedEffect
+        // Read the canonical row directly. Keying this effect to the observed list would
+        // cancel an in-flight restore whenever Room publishes updated project metadata.
+        if (db.agentChatDao().getConversation(conversationId) == null) {
+            initialConversationRestoreRequested = true
+            showConversations = true
+            return@LaunchedEffect
+        }
+        initialConversationRestorePending = true
+        beginConversationRestore(conversationId, dismissPicker = true)
+        initialConversationRestoreRequested = true
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -877,6 +1101,43 @@ fun AgentScreen(navController: NavController) {
         }
     }
 
+    // Route Back is deliberately independent from the Projects dashboard action above. The
+    // dashboard action changes the selected project; leaving this route must preserve that
+    // selection and any active runtime continuation so re-entry can resume in place.
+    val hasBlockingAgentDialog = showSetupInfo ||
+        showConnectionSettings ||
+        showAgentSettings ||
+        showToolSettings ||
+        showNewProjectDialog ||
+        showCustomTools ||
+        showCustomAgents ||
+        showSkillManager ||
+        showCommands ||
+        showTodos ||
+        showBuildSwitchOffer ||
+        showProjectManagement ||
+        showDeleteConfirmation != null ||
+        showNewFolderDialog ||
+        renameFolderTarget != null ||
+        renameProjectTarget != null ||
+        moveProjectTarget != null ||
+        moveFolderTarget != null ||
+        moveProjectBatch.isNotEmpty() ||
+        pendingDenyMessage != null ||
+        pendingActiveUserMessage != null ||
+        showFirstRunPopup ||
+        showConversations ||
+        imagePreviewPath != null
+    val hasAgentEditor = editingMessageId != null || planEditSession != null
+    BackHandler(
+        enabled = shouldHandleAgentSystemBack(
+            hasBlockingDialog = hasBlockingAgentDialog,
+            hasEditor = hasAgentEditor
+        )
+    ) {
+        navController.navigateAgentBackToPreviousPage()
+    }
+
     fun handleApproval(approved: Boolean, msg: AgentService.Companion.ChatMessage, denyReason: String = "") {
         if (msg.isPlan) {
             if (approved) {
@@ -890,7 +1151,7 @@ fun AgentScreen(navController: NavController) {
                             if (result.approved) {
                                 result.message
                             } else {
-                                context.getString(R.string.agent_workflow_plan_approval_failed, result.message)
+                                formatAgentString(workflowPlanApprovalFailedFormat, result.message)
                             },
                             Toast.LENGTH_LONG
                         ).show()
@@ -946,11 +1207,11 @@ fun AgentScreen(navController: NavController) {
         } else {
             AgentService.updateMessage(msg.id) { it.copy(needsApproval = false, isApproved = false) }
             com.example.llamadroid.service.UnifiedNotificationManager.dismissAgentAttention()
-            val toolName = msg.toolName ?: context.getString(R.string.agent_generic_tool)
+            val toolName = msg.toolName ?: genericToolText
             val denialContent = if (denyReason.isNotBlank()) {
                 "DENIED by user: $toolName. Reason: $denyReason"
             } else {
-                context.getString(R.string.agent_denied_execution, toolName)
+                formatAgentString(deniedExecutionFormat, toolName)
             }
             AgentService.addMessage(AgentService.Companion.ChatMessage(
                 role = "user",
@@ -976,15 +1237,15 @@ fun AgentScreen(navController: NavController) {
             beginConversationRestore(conv.id, dismissPicker = true)
             val reason = conv.lastStopReason?.takeIf { it.isNotBlank() }
                 ?: when (conv.resumeState) {
-                    AgentService.RESUME_STATE_STOPPED_BY_USER -> context.getString(R.string.agent_resume_reason_stopped_by_user)
-                    AgentService.RESUME_STATE_INTERRUPTED -> context.getString(R.string.agent_resume_reason_interrupted)
-                    AgentService.RESUME_STATE_NEEDS_DIRECTION -> context.getString(R.string.agent_resume_reason_needs_direction)
-                    else -> context.getString(R.string.agent_resume_reason_generic)
+                    AgentService.RESUME_STATE_STOPPED_BY_USER -> resumeReasonStoppedByUserText
+                    AgentService.RESUME_STATE_INTERRUPTED -> resumeReasonInterruptedText
+                    AgentService.RESUME_STATE_NEEDS_DIRECTION -> resumeReasonNeedsDirectionText
+                    else -> resumeReasonGenericText
                 }
             AgentService.addMessage(
                 AgentService.Companion.ChatMessage(
                     role = "system",
-                    content = context.getString(R.string.agent_resume_system_note, reason)
+                    content = formatAgentString(resumeSystemNoteFormat, reason)
                 )
             )
             db.agentChatDao().updateResumeState(conv.id, AgentService.RESUME_STATE_IDLE, null)
@@ -993,12 +1254,12 @@ fun AgentScreen(navController: NavController) {
     }
 
     fun createNewConversation(
-        projectName: String = context.getString(R.string.agent_project_default_prefix) + System.currentTimeMillis(),
+        projectName: String = projectDefaultPrefixText + System.currentTimeMillis(),
         backend: AgentWorkspaceBackendType = AgentWorkspaceBackendType.REMOTE_SSH,
         parentFolderId: Long? = null
     ) {
         scope.launch {
-            val safeName = projectName.trim().replace(Regex("[^a-zA-Z0-9_-]"), "_").take(50).ifBlank { context.getString(R.string.agent_project_default_prefix) + System.currentTimeMillis() }
+            val safeName = projectName.trim().replace(Regex("[^a-zA-Z0-9_-]"), "_").take(50).ifBlank { projectDefaultPrefixText + System.currentTimeMillis() }
             val sortOrder = (conversations.filter { it.projectFolderId == parentFolderId }.maxOfOrNull { it.sortOrder } ?: -1) + 1
             val newId = db.agentChatDao().insertConversation(
                 AgentConversationEntity(
@@ -1038,7 +1299,7 @@ fun AgentScreen(navController: NavController) {
             val initialMessages = listOf(
                 AgentService.Companion.ChatMessage(
                     role = "system",
-                    content = context.getString(R.string.agent_ready_msg, projectName, safeName)
+                    content = formatAgentString(readyMessageFormat, projectName, safeName)
                 )
             )
             activateConversationRuntime(
@@ -1157,7 +1418,7 @@ fun AgentScreen(navController: NavController) {
         if (modifiedPlan.isBlank()) {
             Toast.makeText(
                 context,
-                "The plan cannot be blank.",
+                blankPlanText,
                 Toast.LENGTH_LONG
             ).show()
             return
@@ -1170,7 +1431,7 @@ fun AgentScreen(navController: NavController) {
         ) {
             Toast.makeText(
                 context,
-                "This plan belongs to another project. Reopen it before saving.",
+                wrongPlanProjectText,
                 Toast.LENGTH_LONG
             ).show()
             cancelPlanEdit()
@@ -1191,10 +1452,7 @@ fun AgentScreen(navController: NavController) {
                     if (result.approved) {
                         result.message
                     } else {
-                        context.getString(
-                            R.string.agent_workflow_plan_approval_failed,
-                            result.message
-                        )
+                        formatAgentString(workflowPlanApprovalFailedFormat, result.message)
                     },
                     Toast.LENGTH_LONG
                 ).show()
@@ -1354,7 +1612,7 @@ fun AgentScreen(navController: NavController) {
                 AgentService.addMessage(
                     AgentService.Companion.ChatMessage(
                         role = "system",
-                        content = context.getString(R.string.agent_compaction_requested)
+                        content = compactionRequestedText
                     )
                 )
                 inputText = ""
@@ -1494,11 +1752,17 @@ fun AgentScreen(navController: NavController) {
             )
         }
     }
+    val activeEndpointProbe = activeEndpointProbeResult?.takeIf { result ->
+        activeEndpointProbeKey == activeEndpointKey && result.backend == activeEndpointBackend
+    }
     val backendConnected = when {
         activeRuntime.endpointReferenceMissing -> false
-        hasNamedRuntimeEndpoint -> true
-        activeRuntime.hasManagedServerAssignment -> activeManagedRuntimeServer?.isReady == true
-        isAgentLlamaServer -> activeManagedRuntimeServer?.isReady == true
+        hasNamedRuntimeEndpoint -> activeEndpointProbe?.isConnected ?: true
+        activeRuntime.hasManagedServerAssignment ->
+            activeEndpointProbe?.isConnected ?: (activeManagedRuntimeServer?.isReady == true)
+        isAgentGlobalLlamaServer -> llamaServerRuntimeState.isConnected
+        isAgentLlamaServer -> activeEndpointProbe?.isConnected
+            ?: (activeManagedRuntimeServer?.isReady == true)
         isAgentLlamaSwap -> llamaServerRuntimeState.isConnected
         isAgentOpenAiBackend -> true
         isAgentLiteRt -> true
@@ -1511,6 +1775,7 @@ fun AgentScreen(navController: NavController) {
             ManagedLlamaServerState.STARTING,
             ManagedLlamaServerState.LOADING
         )
+        isAgentGlobalLlamaServer -> llamaServerRuntimeState.isRefreshing
         isAgentLlamaServer -> activeManagedRuntimeServer?.state in setOf(
             ManagedLlamaServerState.STARTING,
             ManagedLlamaServerState.LOADING
@@ -1524,6 +1789,7 @@ fun AgentScreen(navController: NavController) {
         activeRuntime.endpointReferenceMissing -> false
         hasNamedRuntimeEndpoint -> true
         activeRuntime.hasManagedServerAssignment -> activeManagedRuntimeServer != null
+        isAgentGlobalLlamaServer -> llamaServerRuntimeState.hasChecked
         isAgentLlamaServer -> activeManagedRuntimeServer != null
         isAgentLlamaSwap -> llamaServerRuntimeState.hasChecked
         isAgentOpenAiBackend -> true
@@ -1702,7 +1968,7 @@ fun AgentScreen(navController: NavController) {
         contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
         topBar = {
             AgentTopBar(
-                onShowDashboard = { returnToProjectDashboard() },
+                onNavigateBack = { navController.navigateAgentBackToPreviousPage() },
                 onShowAgentSettings = { showAgentSettings = true },
                 onShowToolSettings = { showToolSettings = true },
                 onShowSettings = { showConnectionSettings = true },
@@ -1794,7 +2060,9 @@ fun AgentScreen(navController: NavController) {
                                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                     )
                                 }
-                            }
+                            },
+                            walkthroughTargetId = "agent.workspace",
+                            walkthroughEventId = "agent.workspace"
                         )
                 }
             }
@@ -1884,23 +2152,13 @@ fun AgentScreen(navController: NavController) {
                 onRetry = {
                     scope.launch {
                         val backendName = backendLabel
-                        AgentService.addDebugLog(context.getString(R.string.agent_retry_debug_start, backendName))
-                        if (
-                            !hasNamedRuntimeEndpoint &&
-                            !activeRuntime.hasManagedServerAssignment &&
-                            !activeRuntime.endpointReferenceMissing
-                        ) {
-                            if (isAgentLlamaServer) {
-                                navController.navigate(Screen.Dashboard.route)
-                            } else if (isAgentLlamaSwap) {
-                                agentService.refreshLlamaServerRuntimeState(settingsRepository, force = true)
-                            } else if (!isAgentLiteRt && !isOllamaConnected) {
-                                ollamaService.checkConnection()
-                            }
+                        AgentService.addDebugLog(formatAgentString(retryDebugStartFormat, backendName))
+                        if (!activeRuntime.endpointReferenceMissing && !isAgentLiteRt) {
+                            retestActiveAgentEndpoint()
                         }
                         if (selectedProjectNeedsSsh && agentConnectionStatus == AgentService.Companion.ConnectionStatus.DISCONNECTED) {
                             val portInt = sshPort.toIntOrNull() ?: 8023
-                            AgentService.addDebugLog(context.getString(R.string.agent_retry_debug_ssh, sshHost, portInt))
+                            AgentService.addDebugLog(formatAgentString(retryDebugSshFormat, sshHost, portInt))
                             agentService.connect(
                                 host = sshHost,
                                 port = portInt,
@@ -1911,19 +2169,19 @@ fun AgentScreen(navController: NavController) {
                         val sshState = if (selectedProjectNeedsSsh) {
                             agentConnectionStatus.name
                         } else {
-                            context.getString(R.string.agent_retry_debug_ssh_not_required)
+                            retryDebugSshNotRequiredText
                         }
                         AgentService.addDebugLog(
-                            context.getString(
-                                R.string.agent_retry_debug_status,
+                            formatAgentString(
+                                retryDebugStatusFormat,
                                 backendName,
                                 backendConnected.toString(),
                                 selectedProjectNeedsSsh.toString(),
                                 sshState,
-                                retryMessage ?: context.getString(R.string.agent_retry_debug_no_detail)
+                                retryMessage ?: retryDebugNoDetailText
                             )
                         )
-                        AgentService.addDebugLog(context.getString(R.string.agent_retry_debug_done))
+                        AgentService.addDebugLog(retryDebugDoneText)
                     }
                 }
             )
@@ -1936,7 +2194,7 @@ fun AgentScreen(navController: NavController) {
                     onRetry = {
                         scope.launch {
                             val portInt = sshPort.toIntOrNull() ?: 8023
-                            AgentService.addDebugLog(context.getString(R.string.agent_retry_debug_ssh, sshHost, portInt))
+                            AgentService.addDebugLog(formatAgentString(retryDebugSshFormat, sshHost, portInt))
                             agentService.connect(
                                 host = sshHost,
                                 port = portInt,
@@ -1944,13 +2202,13 @@ fun AgentScreen(navController: NavController) {
                                 password = sshPassword.ifEmpty { "agent" }
                             )
                             AgentService.addDebugLog(
-                                context.getString(
-                                    R.string.agent_retry_debug_status,
+                                formatAgentString(
+                                    retryDebugStatusFormat,
                                     backendLabel,
                                     backendConnected.toString(),
                                     selectedProjectNeedsSsh.toString(),
                                     agentConnectionStatus.name,
-                                    retryMessage ?: context.getString(R.string.agent_retry_debug_no_detail)
+                                    retryMessage ?: retryDebugNoDetailText
                                 )
                             )
                         }
@@ -2081,6 +2339,12 @@ fun AgentScreen(navController: NavController) {
                         onOpenDelegation = { delegation ->
                             navController.navigate(Screen.AgentInvocation.createRoute(delegation.invocationId))
                         },
+                        onRetryNeedsDirection = {
+                            // The retry action is an explicit user turn. AgentService resets
+                            // the run epoch/loop counters and removes the stale pause card
+                            // before dispatching the new request.
+                            triggerAgent()
+                        },
                         modifier = Modifier
                             .weight(1f)
                     )
@@ -2092,66 +2356,13 @@ fun AgentScreen(navController: NavController) {
 
     // Dialogs
     planEditSession?.let { session ->
-        val savingPlan = resolvingPlanMessageId == session.messageId
-        AlertDialog(
-            onDismissRequest = {
-                if (!savingPlan) cancelPlanEdit()
-            },
-            title = { Text("Modify plan") },
-            text = {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Text(
-                        "Review the complete plan. Save approves the edited " +
-                            "version; Cancel discards the draft.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    OutlinedTextField(
-                        value = editingText,
-                        onValueChange = { editingText = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 280.dp, max = 520.dp),
-                        minLines = 12,
-                        maxLines = 24,
-                        enabled = !savingPlan,
-                        label = { Text("Implementation plan") }
-                    )
-                    if (editingText != session.originalPlan) {
-                        Text(
-                            "Edited draft",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = { savePlanEdit() },
-                    enabled = !savingPlan && editingText.isNotBlank()
-                ) {
-                    if (savingPlan) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                    }
-                    Text(if (savingPlan) "Saving…" else "Save and approve")
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = { cancelPlanEdit() },
-                    enabled = !savingPlan
-                ) {
-                    Text("Cancel")
-                }
-            }
+        AgentPlanEditorDialog(
+            text = editingText,
+            onTextChange = { editingText = it },
+            saving = resolvingPlanMessageId == session.messageId,
+            hasChanges = editingText != session.originalPlan,
+            onSave = { savePlanEdit() },
+            onDismiss = { cancelPlanEdit() }
         )
     }
 
@@ -2193,7 +2404,7 @@ fun AgentScreen(navController: NavController) {
                             inputText = ""
                             attachedImagePath = null
                             imagePreviewPath = null
-                            AgentService.addDebugLog(context.getString(R.string.agent_guidance_interrupting))
+                            AgentService.addDebugLog(guidanceInterruptingText)
                             AgentService.stopAllJobs()
                             AgentService.updateActiveConversationResumeState(AgentService.RESUME_STATE_IDLE, null)
                             AgentService.addMessage(pendingMessage)
@@ -2300,22 +2511,13 @@ fun AgentScreen(navController: NavController) {
                 ollamaService.setBaseUrl(it)
                 settingsRepository.setOllamaUrl(it)
             },
-            onConnect = {
+            onSave = {
                 scope.launch {
                     val portInt = sshPort.toIntOrNull() ?: 8023
-                    if (
-                        !hasNamedRuntimeEndpoint &&
-                        !activeRuntime.hasManagedServerAssignment &&
-                        !activeRuntime.endpointReferenceMissing
-                    ) {
-                        if (isAgentLlamaServer) {
-                            navController.navigate(Screen.Dashboard.route)
-                        } else if (isAgentLlamaSwap) {
-                            agentService.refreshLlamaServerRuntimeState(settingsRepository, force = true)
-                        } else if (!isAgentLiteRt) {
-                            ollamaService.initFromSettings()
-                            ollamaService.checkConnection()
-                        }
+                    if (!activeRuntime.endpointReferenceMissing && !isAgentLiteRt) {
+                        // Save both persists the edited fields in the dialog and retests the
+                        // exact endpoint selected by this agent. Keep the project/chat open.
+                        retestActiveAgentEndpoint()
                     }
                     agentService.connect(host = sshHost, port = portInt, username = sshUser, password = sshPassword.ifEmpty { "agent" })
                     showConnectionSettings = false
@@ -2332,8 +2534,10 @@ fun AgentScreen(navController: NavController) {
             activeRuntime.hasManagedServerAssignment,
             activeRuntime.endpointReferenceMissing,
             isAgentLlamaSwap,
-            isAgentLlamaServer,
-            isAgentLiteRt
+            isAgentGlobalLlamaServer,
+            isAgentLiteRt,
+            llamaServerUrl,
+            llamaSwapUrl
         ) {
             if (
                 hasNamedRuntimeEndpoint ||
@@ -2342,8 +2546,18 @@ fun AgentScreen(navController: NavController) {
             ) {
                 return@LaunchedEffect
             }
-            if (isAgentLlamaSwap) {
-                agentService.refreshLlamaServerRuntimeState(settingsRepository, force = true)
+            if (isAgentGlobalLlamaServer) {
+                agentService.refreshLlamaServerRuntimeState(
+                    settingsRepository,
+                    force = true,
+                    backendOverride = effectiveAgentBackend
+                )
+            } else if (isAgentLlamaSwap) {
+                agentService.refreshLlamaServerRuntimeState(
+                    settingsRepository,
+                    force = true,
+                    backendOverride = effectiveAgentBackend
+                )
             } else if (!isAgentLlamaServer && !isAgentLiteRt) {
                 ollamaService.checkConnection()
             }
@@ -2365,20 +2579,41 @@ fun AgentScreen(navController: NavController) {
             runtimeProfileStore = runtimeProfileStore,
             managedLlamaServers = managedRuntimeServers,
             onRuntimeContinue = { action ->
-                if (action.destination == "managed_llama_server") {
-                    showAgentSettings = false
-                    navController.navigate(Screen.Dashboard.route)
-                }
+                scope.launch { retestConfiguredAgentEndpoint(action.agentKey) }
             }
         )
     }
     
     if (showToolSettings) {
-        LaunchedEffect(Unit) {
-            if (isAgentLlamaSwap) {
+        LaunchedEffect(
+            hasNamedRuntimeEndpoint,
+            activeRuntime.hasManagedServerAssignment,
+            activeRuntime.endpointReferenceMissing,
+            isAgentGlobalLlamaServer,
+            isAgentLlamaSwap,
+            isAgentLlamaServer,
+            isAgentLiteRt,
+            llamaServerUrl,
+            llamaSwapUrl
+        ) {
+            if (
+                hasNamedRuntimeEndpoint ||
+                activeRuntime.hasManagedServerAssignment ||
+                activeRuntime.endpointReferenceMissing
+            ) {
+                return@LaunchedEffect
+            }
+            if (isAgentGlobalLlamaServer) {
                 agentService.refreshLlamaServerRuntimeState(
                     settingsRepository,
-                    force = true
+                    force = true,
+                    backendOverride = effectiveAgentBackend
+                )
+            } else if (isAgentLlamaSwap) {
+                agentService.refreshLlamaServerRuntimeState(
+                    settingsRepository,
+                    force = true,
+                    backendOverride = effectiveAgentBackend
                 )
             } else if (!isAgentLlamaServer && !isAgentLiteRt) {
                 ollamaService.checkConnection()
@@ -2403,10 +2638,7 @@ fun AgentScreen(navController: NavController) {
             runtimeProfileStore = runtimeProfileStore,
             managedLlamaServers = managedRuntimeServers,
             onRuntimeContinue = { action ->
-                if (action.destination == "managed_llama_server") {
-                    showToolSettings = false
-                    navController.navigate(Screen.Dashboard.route)
-                }
+                scope.launch { retestConfiguredAgentEndpoint(action.agentKey) }
             }
         )
     }
@@ -2434,10 +2666,7 @@ fun AgentScreen(navController: NavController) {
                 ollamaModels = availableModels,
                 llamaSwapModels = llamaServerRuntimeState.availableModels,
                 onRuntimeContinue = { action ->
-                    if (action.destination == "managed_llama_server") {
-                        showCustomAgents = false
-                        navController.navigate(Screen.Dashboard.route)
-                    }
+                    scope.launch { retestConfiguredAgentEndpoint(action.agentKey) }
                 }
             )
         }
@@ -2461,66 +2690,23 @@ fun AgentScreen(navController: NavController) {
     }
 
     if (showNewProjectDialog) {
-        AlertDialog(
-            onDismissRequest = {
+        AgentNewProjectDialog(
+            name = newProjectName,
+            onNameChange = { newProjectName = it },
+            backend = newProjectBackend,
+            onBackendChange = { newProjectBackend = it },
+            onCreate = {
+                createNewConversation(
+                    projectName = newProjectName.trim().ifBlank { defaultProjectName },
+                    backend = newProjectBackend,
+                    parentFolderId = targetFolderForNewProject
+                )
                 showNewProjectDialog = false
                 targetFolderForNewProject = null
             },
-            title = { Text(stringResource(R.string.agent_new_project_title)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(stringResource(R.string.agent_new_project_desc), fontSize = 12.sp)
-                    OutlinedTextField(
-                        value = newProjectName,
-                        onValueChange = { newProjectName = it },
-                        label = { Text(stringResource(R.string.agent_project_name_label)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Text(stringResource(R.string.agent_project_backend_label), fontWeight = FontWeight.SemiBold)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        FilterChip(
-                            selected = newProjectBackend == AgentWorkspaceBackendType.REMOTE_SSH,
-                            onClick = { newProjectBackend = AgentWorkspaceBackendType.REMOTE_SSH },
-                            label = { Text(stringResource(R.string.agent_project_backend_remote), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                            leadingIcon = { Icon(Icons.Default.Terminal, null, modifier = Modifier.size(18.dp)) },
-                            modifier = Modifier.weight(1f)
-                        )
-                        FilterChip(
-                            selected = newProjectBackend == AgentWorkspaceBackendType.LOCAL_SANDBOX,
-                            onClick = { newProjectBackend = AgentWorkspaceBackendType.LOCAL_SANDBOX },
-                            label = { Text(stringResource(R.string.agent_project_backend_local), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                            leadingIcon = { Icon(Icons.Default.Security, null, modifier = Modifier.size(18.dp)) },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                    Text(
-                        if (newProjectBackend == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
-                            stringResource(R.string.agent_project_backend_local_desc)
-                        } else {
-                            stringResource(R.string.agent_project_backend_remote_desc)
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    createNewConversation(
-                        projectName = if (newProjectName.isNotBlank()) newProjectName else "project",
-                        backend = newProjectBackend,
-                        parentFolderId = targetFolderForNewProject
-                    )
-                    showNewProjectDialog = false
-                    targetFolderForNewProject = null
-                }) { Text(stringResource(R.string.action_create)) }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showNewProjectDialog = false
-                    targetFolderForNewProject = null
-                }) { Text(stringResource(R.string.action_cancel)) }
+            onDismiss = {
+                showNewProjectDialog = false
+                targetFolderForNewProject = null
             }
         )
     }
@@ -2614,12 +2800,12 @@ fun AgentScreen(navController: NavController) {
     }
     
     // First-run popup dialog
-    if (showFirstRunPopup) {
+    if (showFirstRunPopup && !walkthroughActive) {
         AlertDialog(
             onDismissRequest = { showFirstRunPopup = false },
             title = { Text(stringResource(R.string.agent_welcome_title)) },
             text = {
-                Column {
+                Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
                     Text(stringResource(R.string.agent_welcome_desc), style = MaterialTheme.typography.bodyMedium)
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(stringResource(R.string.agent_welcome_step1), style = MaterialTheme.typography.bodySmall)
@@ -2950,6 +3136,7 @@ private fun AgentProjectDashboard(
     onDeleteProjects: (List<AgentConversationEntity>) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val walkthroughTargets = LocalWalkthroughTargets.current
     var currentFolderId by rememberSaveable { mutableStateOf<Long?>(null) }
     var actionTarget by remember { mutableStateOf<AgentDashboardActionTarget?>(null) }
     var selectionMode by rememberSaveable { mutableStateOf(false) }
@@ -3035,18 +3222,17 @@ private fun AgentProjectDashboard(
                         Text(stringResource(R.string.agent_folder_go_up), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    Button(onClick = { onCreateProject(currentFolderId) }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp)) {
-                        Icon(Icons.Default.Add, null)
-                        Spacer(Modifier.width(6.dp))
-                        Text(stringResource(R.string.agent_new_project_btn), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    OutlinedButton(onClick = { onCreateFolder(null) }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp)) {
-                        Icon(Icons.Default.CreateNewFolder, null)
-                        Spacer(Modifier.width(6.dp))
-                        Text(stringResource(R.string.agent_folder_create_short), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                }
+                com.example.llamadroid.ui.components.ResponsiveActionGroup(actions = listOf(
+                    com.example.llamadroid.ui.components.ResponsiveAction(
+                        label = stringResource(R.string.agent_new_project_btn),
+                        onClick = { onCreateProject(currentFolderId) }
+                    ),
+                    com.example.llamadroid.ui.components.ResponsiveAction(
+                        label = stringResource(R.string.agent_folder_create_short),
+                        onClick = { onCreateFolder(null) },
+                        style = com.example.llamadroid.ui.components.ResponsiveActionStyle.Secondary
+                    )
+                ))
                 OutlinedButton(
                     onClick = {
                         selectionMode = !selectionMode
@@ -3220,11 +3406,17 @@ private fun AgentProjectDashboard(
                 )
                 AgentDashboardActionItem(Icons.Default.Description, R.string.action_open) {
                     actionTarget = null
+                    walkthroughTargets?.recordEvent("agent.project")
                     onOpenProject(project)
                 }
                 if (resumable) {
-                    AgentDashboardActionItem(Icons.Default.PlayArrow, R.string.action_continue) {
+                    AgentDashboardActionItem(
+                        icon = Icons.Default.PlayArrow,
+                        labelRes = R.string.action_continue,
+                        targetId = "agent.continue"
+                    ) {
                         actionTarget = null
+                        walkthroughTargets?.recordEvent("agent.continue")
                         onContinueProject(project)
                     }
                 }
@@ -3288,12 +3480,16 @@ private fun AgentDashboardActionItem(
     icon: ImageVector,
     labelRes: Int,
     tint: Color = MaterialTheme.colorScheme.onSurface,
+    targetId: String? = null,
     onClick: () -> Unit
 ) {
     ListItem(
         headlineContent = { Text(stringResource(labelRes)) },
         leadingContent = { Icon(icon, contentDescription = null, tint = tint) },
-        modifier = Modifier.clickable(onClick = onClick)
+        modifier = Modifier
+            .heightIn(min = 48.dp)
+            .then(targetId?.let { Modifier.walkthroughTarget(it) } ?: Modifier)
+            .clickable(onClick = onClick)
     )
 }
 
@@ -3304,11 +3500,13 @@ private fun AgentDashboardFolderRow(
     onOpen: () -> Unit,
     onLongPress: () -> Unit
 ) {
-    ElevatedCard(
+    Card(
         modifier = Modifier
             .fillMaxWidth()
             .combinedClickable(onClick = onOpen, onLongClick = onLongPress),
-        shape = RoundedCornerShape(8.dp)
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier
@@ -3365,8 +3563,8 @@ private fun AgentDashboardProjectRow(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            if (localRunning) AgentStatusPill(stringResource(R.string.agent_dashboard_running), Color(0xFF2E7D32))
-            if (llmWorking) AgentStatusPill(stringResource(R.string.agent_dashboard_llm_working), Color(0xFFF57C00))
+            if (localRunning) AgentStatusPill(stringResource(R.string.agent_dashboard_running), MaterialTheme.colorScheme.primary)
+            if (llmWorking) AgentStatusPill(stringResource(R.string.agent_dashboard_llm_working), MaterialTheme.colorScheme.tertiary)
             Icon(Icons.Default.MoreVert, stringResource(R.string.agent_dashboard_item_options), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
@@ -3455,10 +3653,11 @@ private fun AgentConversationStatePanel(
             .padding(20.dp),
         contentAlignment = Alignment.Center
     ) {
-        ElevatedCard(
-            colors = CardDefaults.elevatedCardColors(
+        Card(
+            colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surfaceVariant
             ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(
@@ -3500,6 +3699,29 @@ fun AgentKnowledgeBaseSelector(
     onSelectionChange: (List<Long>) -> Unit,
     onManage: () -> Unit
 ) {
+    val stackHeader = shouldStackAgentKnowledgeHeader(LocalDensity.current.fontScale)
+    val titleBlock: @Composable () -> Unit = {
+        Column {
+            Text(
+                text = stringResource(R.string.agent_kb_selector_title),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = if (selectedIds.isEmpty()) {
+                    stringResource(R.string.agent_kb_selector_none)
+                } else {
+                    stringResource(R.string.agent_kb_selector_count, selectedIds.size)
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
@@ -3508,27 +3730,27 @@ fun AgentKnowledgeBaseSelector(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = stringResource(R.string.agent_kb_selector_title),
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        text = if (selectedIds.isEmpty()) {
-                            stringResource(R.string.agent_kb_selector_none)
-                        } else {
-                            stringResource(R.string.agent_kb_selector_count, selectedIds.size)
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+            if (stackHeader) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    titleBlock()
+                    TextButton(
+                        onClick = onManage,
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
+                        Text(stringResource(R.string.kb_manage_action))
+                    }
                 }
-                TextButton(onClick = onManage) {
-                    Text(stringResource(R.string.kb_manage_action))
+            } else {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Box(modifier = Modifier.weight(1f)) {
+                        titleBlock()
+                    }
+                    TextButton(onClick = onManage) {
+                        Text(stringResource(R.string.kb_manage_action))
+                    }
                 }
             }
             if (knowledgeBases.isNotEmpty()) {

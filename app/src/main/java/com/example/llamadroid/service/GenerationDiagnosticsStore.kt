@@ -1,12 +1,10 @@
 package com.example.llamadroid.service
 
 import android.app.ActivityManager
-import android.app.ApplicationExitInfo
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
 import com.example.llamadroid.BuildConfig
-import com.example.llamadroid.R
 import com.example.llamadroid.util.DebugLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -411,12 +409,11 @@ object GenerationDiagnosticsStore {
     }
 
     fun captureLatestExitReasonIfNeeded() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        if (!isApplicationExitInfoAvailable()) return
         val context = appContext ?: return
         val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val exitReasons = runCatching {
-            activityManager
-                .getHistoricalProcessExitReasons(context.packageName, 0, 30)
+            ApplicationExitInfoApi30.readRecords(context, activityManager, maxCount = 30)
         }.getOrNull().orEmpty()
         val latestExit = choosePrimaryExitForDiagnostics(exitReasons, context.packageName) ?: return
         val relatedProcessSummary = buildRelatedProcessSummary(exitReasons, latestExit, context.packageName)
@@ -454,10 +451,10 @@ object GenerationDiagnosticsStore {
             val snapshot = GenerationExitSnapshot(
                 timestamp = latestExit.timestamp,
                 reasonCode = latestExit.reason,
-                reasonLabel = exitReasonLabel(latestExit.reason),
+                reasonLabel = latestExit.reasonLabel,
                 status = latestExit.status,
                 importance = latestExit.importance,
-                processName = latestExit.processName.takeIf { it.isNotBlank() },
+                processName = latestExit.processName?.takeIf { it.isNotBlank() },
                 pid = latestExit.pid,
                 processPssKb = latestExit.pss.takeIf { it > 0L },
                 processRssKb = latestExit.rss.takeIf { it > 0L },
@@ -526,12 +523,11 @@ object GenerationDiagnosticsStore {
         processNameSuffix: String,
         sinceTimestamp: Long
     ): String? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        if (!isApplicationExitInfoAvailable()) return null
         val context = appContext ?: return null
         val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val exitInfo = runCatching {
-            activityManager
-                .getHistoricalProcessExitReasons(context.packageName, 0, 30)
+            ApplicationExitInfoApi30.readRecords(context, activityManager, maxCount = 30)
                 .filter { info ->
                     info.timestamp >= sinceTimestamp &&
                         info.processName.orEmpty().endsWith(processNameSuffix)
@@ -546,7 +542,7 @@ object GenerationDiagnosticsStore {
         return buildString {
             append(exitInfo.processName)
             append(": ")
-            append(exitReasonLabel(exitInfo.reason))
+            append(exitInfo.reasonLabel)
             append(" status=")
             append(exitInfo.status)
             exitInfo.description?.takeIf { it.isNotBlank() }?.let { description ->
@@ -673,25 +669,25 @@ object GenerationDiagnosticsStore {
         prefs?.edit()?.putString(KEY_ACTIVE_SESSIONS, jsonArray.toString())?.apply()
     }
 
-    private fun readTraceSnippet(exitInfo: ApplicationExitInfo): String? = runCatching {
-        exitInfo.traceInputStream?.use { input ->
+    private fun readTraceSnippet(exitInfo: ApplicationExitRecord): String? = runCatching {
+        exitInfo.openTrace()?.use { input ->
             val bytes = ByteArray(TRACE_SNIPPET_LIMIT)
             val read = input.read(bytes)
             if (read > 0) bytes.copyOf(read).toString(Charsets.UTF_8).trim() else null
         }
     }.getOrNull()
 
-    private fun readTraceCapture(exitInfo: ApplicationExitInfo, destination: File): ExitTraceCapture? =
+    private fun readTraceCapture(exitInfo: ApplicationExitRecord, destination: File): ExitTraceCapture? =
         runCatching {
-            exitInfo.traceInputStream?.use { input ->
+            exitInfo.openTrace()?.use { input ->
                 captureExitTraceForDiagnostics(input, destination, TRACE_CAPTURE_LIMIT)
             }
         }.getOrNull()
 
     private fun choosePrimaryExitForDiagnostics(
-        exits: List<ApplicationExitInfo>,
+        exits: List<ApplicationExitRecord>,
         packageName: String
-    ): ApplicationExitInfo? {
+    ): ApplicationExitRecord? {
         val sorted = exits.sortedByDescending { it.timestamp }
         val mainProcessExit = sorted.firstOrNull { info ->
             info.processName == packageName && !info.isBenignIsolatedProcessExit()
@@ -707,8 +703,8 @@ object GenerationDiagnosticsStore {
     }
 
     private fun buildRelatedProcessSummary(
-        exits: List<ApplicationExitInfo>,
-        primary: ApplicationExitInfo,
+        exits: List<ApplicationExitRecord>,
+        primary: ApplicationExitRecord,
         packageName: String
     ): String? {
         return exits
@@ -718,9 +714,9 @@ object GenerationDiagnosticsStore {
             .take(5)
             .map { info ->
                 buildString {
-                    append(info.processName.ifBlank { "unknown" })
+                    append(info.processName.orEmpty().ifBlank { "unknown" })
                     append(" ")
-                    append(exitReasonLabel(info.reason))
+                    append(info.reasonLabel)
                     append(" status=").append(info.status)
                     if (info.isWebViewSandboxProcess(packageName)) append(" secondary=webview_sandbox")
                     if (info.isBenignIsolatedProcessExit()) append(" benign=isolated_not_needed")
@@ -733,7 +729,7 @@ object GenerationDiagnosticsStore {
             .ifBlank { null }
     }
 
-    private fun ApplicationExitInfo.isWebViewSandboxProcess(packageName: String): Boolean {
+    private fun ApplicationExitRecord.isWebViewSandboxProcess(packageName: String): Boolean {
         val process = processName.orEmpty()
         return process.startsWith("$packageName:") &&
             (process.contains("webview", ignoreCase = true) ||
@@ -741,31 +737,10 @@ object GenerationDiagnosticsStore {
                 process.contains("isolated", ignoreCase = true))
     }
 
-    private fun ApplicationExitInfo.isBenignIsolatedProcessExit(): Boolean {
+    private fun ApplicationExitRecord.isBenignIsolatedProcessExit(): Boolean {
         val descriptionText = description.orEmpty()
-        return reason == ApplicationExitInfo.REASON_OTHER &&
+        return isOtherReason &&
             descriptionText.contains("isolated not needed", ignoreCase = true)
-    }
-
-    private fun exitReasonLabel(reason: Int): String {
-        val context = appContext
-        return when (reason) {
-            ApplicationExitInfo.REASON_ANR -> context?.getString(R.string.logs_exit_reason_anr) ?: "ANR"
-            ApplicationExitInfo.REASON_CRASH -> context?.getString(R.string.logs_exit_reason_crash) ?: "Crash"
-            ApplicationExitInfo.REASON_CRASH_NATIVE -> context?.getString(R.string.logs_exit_reason_native_crash) ?: "Native crash"
-            ApplicationExitInfo.REASON_DEPENDENCY_DIED -> context?.getString(R.string.logs_exit_reason_dependency_died) ?: "Dependency died"
-            ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> context?.getString(R.string.logs_exit_reason_excessive_resource_usage) ?: "Excessive resource usage"
-            ApplicationExitInfo.REASON_EXIT_SELF -> context?.getString(R.string.logs_exit_reason_exit_self) ?: "Exited normally"
-            ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> context?.getString(R.string.logs_exit_reason_initialization_failure) ?: "Initialization failure"
-            ApplicationExitInfo.REASON_LOW_MEMORY -> context?.getString(R.string.logs_exit_reason_low_memory) ?: "Low memory"
-            ApplicationExitInfo.REASON_OTHER -> context?.getString(R.string.logs_exit_reason_other) ?: "Other"
-            ApplicationExitInfo.REASON_PACKAGE_UPDATED -> context?.getString(R.string.logs_exit_reason_package_updated) ?: "Package updated"
-            ApplicationExitInfo.REASON_PERMISSION_CHANGE -> context?.getString(R.string.logs_exit_reason_permission_change) ?: "Permission change"
-            ApplicationExitInfo.REASON_SIGNALED -> context?.getString(R.string.logs_exit_reason_signaled) ?: "Signaled"
-            ApplicationExitInfo.REASON_USER_REQUESTED -> context?.getString(R.string.logs_exit_reason_user_requested) ?: "User requested"
-            ApplicationExitInfo.REASON_USER_STOPPED -> context?.getString(R.string.logs_exit_reason_user_stopped) ?: "User stopped"
-            else -> context?.getString(R.string.logs_exit_reason_unknown, reason) ?: "Reason $reason"
-        }
     }
 
     private fun breadcrumbsFileLocked(): File = File(diagnosticsDirLocked(), BREADCRUMBS_FILE)

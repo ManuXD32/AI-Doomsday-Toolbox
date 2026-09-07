@@ -32,6 +32,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
@@ -41,7 +42,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -74,6 +75,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -102,6 +104,8 @@ import com.example.llamadroid.ui.components.AppInsetDivider
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppSectionCard
 import com.example.llamadroid.ui.components.AppSectionTitle
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.Dispatchers
@@ -112,6 +116,8 @@ import kotlinx.coroutines.withContext
 @Composable
 fun AiServersHubScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
+    val resources = LocalResources.current
     val db = remember { AppDatabase.getDatabase(context) }
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
@@ -160,7 +166,7 @@ fun AiServersHubScreen(navController: NavController) {
 
     fun copy(text: String) {
         clipboard.setText(AnnotatedString(text))
-        statusMessage = context.getString(R.string.ai_servers_copied)
+        statusMessage = resources.getString(R.string.ai_servers_copied)
     }
 
     fun saveConfig(config: AiServerConfigEntity, startAfterSave: Boolean = false) {
@@ -170,7 +176,7 @@ fun AiServersHubScreen(navController: NavController) {
             !AiServerNetwork.isValidServerPort(port) ||
             AiServerNetwork.portConflict(configs, config.serverType, port)
         if (portError) {
-            statusMessage = context.getString(R.string.ai_servers_invalid_port)
+            statusMessage = resources.getString(R.string.ai_servers_invalid_port)
             return
         }
         val safePort = port ?: return
@@ -180,9 +186,9 @@ fun AiServersHubScreen(navController: NavController) {
             if (startAfterSave) {
                 val result = boundService?.startServer(updated)
                 statusMessage = result?.exceptionOrNull()?.message
-                    ?: context.getString(R.string.ai_servers_server_started)
+                    ?: resources.getString(R.string.ai_servers_server_started)
             } else {
-                statusMessage = context.getString(R.string.ai_servers_saved)
+                statusMessage = resources.getString(R.string.ai_servers_saved)
             }
         }
     }
@@ -200,18 +206,20 @@ fun AiServersHubScreen(navController: NavController) {
         subtitle = stringResource(R.string.ai_servers_hub_subtitle),
         onBack = { navController.popBackStack() },
         actions = {
-            TextButton(
+            IconButton(
                 onClick = {
                     AiServerType.entries.forEach { boundService?.stopServer(it.id) }
-                    statusMessage = context.getString(R.string.ai_servers_all_stopped)
+                    statusMessage = resources.getString(R.string.ai_servers_all_stopped)
                 }
             ) {
-                Text(stringResource(R.string.ai_servers_stop_all))
+                Icon(Icons.Default.Stop, contentDescription = stringResource(R.string.ai_servers_stop_all))
             }
         }
     ) {
         LazyColumn(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .walkthroughTarget("servers.cards"),
             contentPadding = PaddingValues(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -229,7 +237,9 @@ fun AiServersHubScreen(navController: NavController) {
                             MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
                             MaterialTheme.colorScheme.tertiary.copy(alpha = 0.12f),
                             MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)
-                        )
+                        ),
+                        icon = Icons.Default.Cloud,
+                        iconContentDescription = stringResource(R.string.ai_servers_hub_title)
                     ) {
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -312,11 +322,13 @@ fun AiServersHubScreen(navController: NavController) {
                         onSave = { saveConfig(config, startAfterSave = false) },
                         onStart = { saveConfig(config, startAfterSave = true) },
                         onStop = {
+                            walkthroughTargets?.recordEvent("servers.card")
                             boundService?.stopServer(config.serverType)
-                            statusMessage = context.getString(R.string.ai_servers_server_stopped)
+                            statusMessage = resources.getString(R.string.ai_servers_server_stopped)
                         },
                         onCopy = ::copy,
                         onToggleLogs = {
+                            walkthroughTargets?.recordEvent("servers.card")
                             logsExpanded[config.serverType] = logsExpanded[config.serverType] != true
                         },
                         onClearLogs = { AiServerLogStore.clear(config.serverType) }
@@ -349,7 +361,7 @@ fun AiServersHubScreen(navController: NavController) {
                         }
                     )
                     withContext(Dispatchers.Main) {
-                        statusMessage = context.getString(R.string.ai_servers_user_added)
+                        statusMessage = resources.getString(R.string.ai_servers_user_added)
                     }
                 }
             }
@@ -374,7 +386,7 @@ fun AiServersHubScreen(navController: NavController) {
                         )
                     )
                     withContext(Dispatchers.Main) {
-                        statusMessage = context.getString(R.string.ai_servers_password_updated)
+                        statusMessage = resources.getString(R.string.ai_servers_password_updated)
                     }
                 }
             }

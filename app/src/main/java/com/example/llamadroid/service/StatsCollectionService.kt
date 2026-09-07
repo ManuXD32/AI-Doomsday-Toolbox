@@ -108,7 +108,8 @@ class StatsCollectionService : Service() {
         }
 
         fun stop(context: Context) {
-            context.stopService(Intent(context, StatsCollectionService::class.java))
+            val serviceIntent = Intent(context, StatsCollectionService::class.java)
+            context.stopService(serviceIntent)
         }
     }
 }

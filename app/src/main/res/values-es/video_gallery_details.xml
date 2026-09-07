@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="video_detail_parameters">Ajustes de generación</string>
+    <string name="video_detail_reuse">Reutilizar generación</string>
+    <string name="video_detail_copy_prompt">Copiar %1$s</string>
+    <string name="video_detail_reuse_destination">¿Dónde quieres generar?</string>
+    <string name="video_detail_reuse_local">En este dispositivo</string>
+    <string name="video_detail_reuse_distributed">Distribuida</string>
+    <string name="video_detail_replace_title">¿Reemplazar el borrador actual?</string>
+    <string name="video_detail_replace_body">La generación guardada reemplazará las opciones de este formulario. Los trabajos en curso continuarán sin cambios.</string>
+    <string name="video_detail_replace">Reemplazar borrador</string>
+    <string name="video_detail_reuse_warning">Opciones guardadas cargadas. Revisa los modelos, las entradas y los ajustes del dispositivo antes de generar. Los resultados antiguos pueden no incluir todas las opciones.</string>
+    <string name="video_detail_delete_title">¿Eliminar esta generación?</string>
+    <string name="video_detail_delete_body">Se eliminarán el vídeo guardado, sus archivos de salida relacionados y los metadatos de generación.</string>
+    <string name="video_detail_lora_summary">Intensidad %1$s · %2$s · %3$s</string>
+    <string name="video_detail_positive_prompt">Prompt positivo</string>
+    <string name="video_detail_full_prompt">Leer el prompt completo</string>
+    <string name="video_detail_reuse_failed">No se pudo cargar esta generación. Puede que sus metadatos se hayan movido o eliminado. Vuelve a intentarlo.</string>
+    <string name="video_detail_saved_device_settings">Ajustes del dispositivo guardados</string>
+    <string name="video_detail_saved_device_settings_body">Estos ajustes proceden de la generación guardada. Revisa la distribución para este dispositivo o usa sus ajustes actuales de modelo y memoria.</string>
+    <string name="video_detail_params_mode">Modo de ubicación de parámetros</string>
+    <string name="video_detail_params_spec">Especificación de ubicación de parámetros</string>
+    <string name="video_detail_runtime_spec">Especificación de ubicación de ejecución</string>
+    <string name="video_detail_ram_limit">Límite de RAM de CPU (GiB, vacío para predeterminado)</string>
+    <string name="video_detail_use_device_settings">Usar los ajustes actuales del dispositivo</string>
+    <string name="video_detail_delete_failed">No se pudieron eliminar algunos archivos de salida. Actualiza la galería e inténtalo de nuevo.</string>
+</resources>

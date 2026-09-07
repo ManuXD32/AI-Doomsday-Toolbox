@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="model_library_bundle_source_identity">%1$s · %2$s</string>
+    <string name="model_library_bundle_source_role_for">Tipo de componente para %1$s</string>
+    <string name="model_library_bundle_source_path_for">Ruta del paquete para %1$s</string>
+    <string name="model_library_bundle_source_path_optional">Destino exacto o ruta de miembro instalado opcional</string>
+    <string name="model_library_bundle_source_path_invalid">Ruta de paquete no válida. Usa una ruta relativa sin segmentos vacíos, ., .., absolutos, letras de unidad ni caracteres de control.</string>
+    <string name="model_library_bundle_source_ambiguous">La ruta %1$s tiene varias coincidencias instaladas (%2$d). Introduce la ruta exacta del archivo del paquete para este enlace.</string>
+    <string name="model_library_bundle_source_collision">El destino del paquete entra en conflicto con otro componente: %1$s. Escribe otra ruta exacta.</string>
+    <string name="model_library_bundle_source_incompatible">La familia de esta fuente no se puede usar con la familia y el rol seleccionados.</string>
+    <string name="model_library_bundle_source_role_required">Elige un tipo de componente para esta fuente entre familias antes de guardar.</string>
+    <string name="model_library_bundle_duplicate_item_key">Dos componentes seleccionados tienen la misma identidad.</string>
+    <string name="model_library_bundle_duplicate_relative_path">Dos componentes se descargarían en %1$s.</string>
+</resources>

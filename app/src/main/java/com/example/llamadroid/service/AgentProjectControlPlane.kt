@@ -32,6 +32,28 @@ internal object AgentTodoStatus {
     const val BLOCKED = "BLOCKED"
     const val CANCELLED = "CANCELLED"
 
+    val all: Set<String> = setOf(
+        PENDING,
+        READY,
+        IN_PROGRESS,
+        READY_FOR_REVIEW,
+        NEEDS_FIX,
+        READY_FOR_VERIFICATION,
+        VERIFIED,
+        COMPLETED,
+        BLOCKED,
+        CANCELLED
+    )
+    val actionPriority: List<String> = listOf(
+        IN_PROGRESS,
+        NEEDS_FIX,
+        READY_FOR_REVIEW,
+        READY_FOR_VERIFICATION,
+        VERIFIED,
+        READY,
+        BLOCKED,
+        PENDING
+    )
     val terminal: Set<String> = setOf(COMPLETED, CANCELLED)
     val open: Set<String> = setOf(
         PENDING,
@@ -108,6 +130,8 @@ internal data class AgentWorkReportTransition(
             "delegate this TODO back to CODER with the report findings"
         AgentTodoStatus.BLOCKED ->
             "resolve the blocker or ask the user"
+        AgentTodoStatus.VERIFIED ->
+            "transition this verified TODO to COMPLETED"
         AgentTodoStatus.COMPLETED ->
             "read project_state and choose the next READY TODO"
         else ->
@@ -297,6 +321,7 @@ internal object AgentProjectControlPlane {
         return when (roleName) {
             "ORCHESTRATOR" -> commonState + setOf(
                 "question",
+                "todo_write",
                 "todo_transition",
                 "todo_reconcile",
                 "call_agent",
@@ -816,16 +841,7 @@ internal object AgentProjectControlPlane {
                 dao.upsertTodos(todos)
             }
 
-            val currentTodo = todos.firstOrNull {
-                it.status in setOf(
-                    AgentTodoStatus.READY,
-                    AgentTodoStatus.NEEDS_FIX,
-                    AgentTodoStatus.READY_FOR_REVIEW,
-                    AgentTodoStatus.READY_FOR_VERIFICATION,
-                    AgentTodoStatus.IN_PROGRESS,
-                    AgentTodoStatus.BLOCKED
-                )
-            } ?: todos.firstOrNull { it.status == AgentTodoStatus.PENDING }
+            val currentTodo = chooseNextTodo(todos)
 
             dao.activateApprovedPlanState(
                 conversationId = conversationId,
@@ -1325,6 +1341,7 @@ internal object AgentProjectControlPlane {
                 AgentTodoStatus.READY_FOR_REVIEW,
                 AgentTodoStatus.NEEDS_FIX,
                 AgentTodoStatus.READY_FOR_VERIFICATION,
+                AgentTodoStatus.VERIFIED,
                 AgentTodoStatus.BLOCKED,
                 AgentTodoStatus.COMPLETED,
                 AgentTodoStatus.CANCELLED
@@ -1769,20 +1786,11 @@ internal object AgentProjectControlPlane {
     private fun chooseNextTodo(
         todos: List<AgentTodoEntity>
     ): AgentTodoEntity? {
-        val order = listOf(
-            AgentTodoStatus.IN_PROGRESS,
-            AgentTodoStatus.NEEDS_FIX,
-            AgentTodoStatus.READY_FOR_REVIEW,
-            AgentTodoStatus.READY_FOR_VERIFICATION,
-            AgentTodoStatus.READY,
-            AgentTodoStatus.BLOCKED,
-            AgentTodoStatus.PENDING
-        )
         return todos
             .filter { it.status !in AgentTodoStatus.terminal }
             .minWithOrNull(
                 compareBy<AgentTodoEntity> {
-                    order.indexOf(it.status).takeIf { index -> index >= 0 }
+                    AgentTodoStatus.actionPriority.indexOf(it.status).takeIf { index -> index >= 0 }
                         ?: Int.MAX_VALUE
                 }.thenBy { it.position }
             )
@@ -1935,6 +1943,8 @@ internal object AgentProjectControlPlane {
                 } else {
                     listOf("enable EXECUTOR or ask the user how to verify the TODO")
                 }
+            AgentTodoStatus.VERIFIED ->
+                listOf("transition ${currentTodo.id} from VERIFIED to COMPLETED")
             AgentTodoStatus.BLOCKED ->
                 listOf(
                     "read the blocker evidence",
@@ -2014,7 +2024,8 @@ internal object AgentProjectControlPlane {
 
     private fun normalizeLegacyTodoStatus(status: String): String =
         when (status.uppercase(Locale.ROOT)) {
-            "DONE", "SUCCESS", "VERIFIED" -> AgentTodoStatus.COMPLETED
+            "DONE", "SUCCESS" -> AgentTodoStatus.COMPLETED
+            "VERIFIED" -> AgentTodoStatus.VERIFIED
             "IN_PROGRESS", "RUNNING" -> AgentTodoStatus.IN_PROGRESS
             "CANCELLED", "CANCELED" -> AgentTodoStatus.CANCELLED
             "BLOCKED" -> AgentTodoStatus.BLOCKED
@@ -2023,6 +2034,7 @@ internal object AgentProjectControlPlane {
             "READY_FOR_VERIFICATION" ->
                 AgentTodoStatus.READY_FOR_VERIFICATION
             "READY" -> AgentTodoStatus.READY
+            "PENDING" -> AgentTodoStatus.PENDING
             else -> AgentTodoStatus.PENDING
         }
 

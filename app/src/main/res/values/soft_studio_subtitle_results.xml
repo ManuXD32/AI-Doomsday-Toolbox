@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="studio_subtitle_starting">Starting…</string>
+    <string name="studio_subtitle_preparing">Preparing files…</string>
+    <string name="studio_subtitle_copy_video">Copying video…</string>
+    <string name="studio_subtitle_copy_text">Copying subtitles…</string>
+    <string name="studio_subtitle_converting">Preparing subtitles…</string>
+    <string name="studio_subtitle_convert_error">Could not read the subtitle file. Select a valid SRT, ASS or VTT file and try again.</string>
+    <string name="studio_subtitle_progress">Burning subtitles: %1$d%%</string>
+    <string name="studio_subtitle_saving">Saving video…</string>
+    <string name="studio_subtitle_runtime_missing">The media runtime is unavailable. Install it from Models and try again.</string>
+    <string name="studio_subtitle_process_error">Video processing failed (code %1$d). Check the files and try again.</string>
+    <string name="studio_subtitle_export_title">Video kept in the app</string>
+    <string name="studio_subtitle_export_error">The export folder is unavailable. Your video is safe in the app; open or share it here, or select a writable folder for future exports.</string>
+    <string name="studio_subtitle_output_settings">Output folder settings</string>
+    <string name="studio_subtitle_open_error">No app could open this video. Try Share to save it elsewhere.</string>
+    <string name="studio_subtitle_cancelled">Subtitle processing cancelled</string>
+    <string name="studio_subtitle_retry">Your inputs are still selected. Run the task again when ready.</string>
+</resources>

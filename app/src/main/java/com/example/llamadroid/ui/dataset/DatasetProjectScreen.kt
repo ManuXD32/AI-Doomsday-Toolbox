@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.dataset
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -24,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -48,6 +51,9 @@ import com.example.llamadroid.service.RemoteSummaryClientFactory
 import com.example.llamadroid.service.normalizeDatasetBackend
 import com.example.llamadroid.ui.components.SliderWithInput
 import com.example.llamadroid.ui.components.IntSliderWithInput
+import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -105,6 +111,8 @@ fun DatasetProjectScreen(
     projectId: Long
 ) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val db = remember { AppDatabase.getDatabase(context) }
     val dao = db.datasetDao()
@@ -144,14 +152,14 @@ fun DatasetProjectScreen(
     val pdfPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { pdfUri ->
             persistDatasetImportReadPermission(context, pdfUri)
-            val name = uri.lastPathSegment?.substringAfterLast("/") ?: context.getString(R.string.file_type_pdf)
+            val name = uri.lastPathSegment?.substringAfterLast("/") ?: resources.getString(R.string.file_type_pdf)
             DatasetForegroundService.enqueue(
                 context,
                 DatasetProcessor.Job.ImportPdf(
                     projectId = projectId,
                     sourceUri = pdfUri.toString(),
                     sourceName = name,
-                    name = context.getString(R.string.dataset_job_import_pdf)
+                    name = resources.getString(R.string.dataset_job_import_pdf)
                 )
             )
         }
@@ -160,14 +168,14 @@ fun DatasetProjectScreen(
     val txtPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { txtUri ->
             persistDatasetImportReadPermission(context, txtUri)
-            val name = uri.lastPathSegment?.substringAfterLast("/") ?: context.getString(R.string.file_type_text)
+            val name = uri.lastPathSegment?.substringAfterLast("/") ?: resources.getString(R.string.file_type_text)
             DatasetForegroundService.enqueue(
                 context,
                 DatasetProcessor.Job.ImportTxt(
                     projectId = projectId,
                     sourceUri = txtUri.toString(),
                     sourceName = name,
-                    name = context.getString(R.string.dataset_job_import_txt)
+                    name = resources.getString(R.string.dataset_job_import_txt)
                 )
             )
         }
@@ -188,38 +196,33 @@ fun DatasetProjectScreen(
         }
     }
     
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(project?.name ?: stringResource(R.string.dataset_tab_sources), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { showDatasetInfo = true }) {
-                        Icon(Icons.Default.Info, stringResource(R.string.dataset_info_title))
-                    }
-                }
-            )
+    AppScreenScaffold(
+        title = project?.name ?: stringResource(R.string.dataset_tab_sources),
+        onBack = { navController.popBackStack() },
+        actions = {
+            IconButton(onClick = { showDatasetInfo = true }) {
+                Icon(Icons.Default.Info, stringResource(R.string.dataset_info_title))
+            }
         }
-    ) { padding ->
+    ) { _ ->
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
+            modifier = Modifier.fillMaxSize()
         ) {
             // Scrollable Tab Row with icons and short labels
             ScrollableTabRow(
                 selectedTabIndex = selectedTab,
                 edgePadding = 8.dp,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .walkthroughTarget("documents.dataset.tabs")
             ) {
                 tabs.forEachIndexed { index, tab ->
                     Tab(
                         selected = selectedTab == index,
-                        onClick = { viewModel.setTab(index) },
+                        onClick = {
+                            walkthroughTargets?.recordEvent("documents.dataset.tabs")
+                            viewModel.setTab(index)
+                        },
                         icon = { Icon(tab.icon, contentDescription = tab.label) },
                         text = { Text(tab.label, fontSize = 11.sp, maxLines = 1) }
                     )
@@ -266,7 +269,7 @@ fun DatasetProjectScreen(
                                     chunkIds,
                                     proj.id,
                                     questionPrompt,
-                                    context.getString(R.string.dataset_regen_questions)
+                                    resources.getString(R.string.dataset_regen_questions)
                                 )
                             )
                         }
@@ -276,7 +279,7 @@ fun DatasetProjectScreen(
                             dao.deleteChunksByIds(chunkIds.toList())
                             android.widget.Toast.makeText(
                                 context,
-                                context.getString(R.string.dataset_chunks_removed_success, chunkIds.size),
+                                resources.getString(R.string.dataset_chunks_removed_success, chunkIds.size),
                                 android.widget.Toast.LENGTH_SHORT
                             ).show()
                         }
@@ -292,7 +295,7 @@ fun DatasetProjectScreen(
                         project?.let { proj ->
                             DatasetForegroundService.enqueue(
                                 context,
-                                DatasetProcessor.Job.Clean(proj.id, prompt, context.getString(R.string.dataset_job_clean))
+                                DatasetProcessor.Job.Clean(proj.id, prompt, resources.getString(R.string.dataset_job_clean))
                             )
                         }
                     },
@@ -300,7 +303,7 @@ fun DatasetProjectScreen(
                         project?.let { proj ->
                             DatasetForegroundService.enqueue(
                                 context,
-                                DatasetProcessor.Job.Questions(proj.id, prompt, context.getString(R.string.dataset_job_questions))
+                                DatasetProcessor.Job.Questions(proj.id, prompt, resources.getString(R.string.dataset_job_questions))
                             )
                         }
                     },
@@ -308,7 +311,7 @@ fun DatasetProjectScreen(
                         project?.let { proj ->
                             DatasetForegroundService.enqueue(
                                 context,
-                                DatasetProcessor.Job.Answers(proj.id, prompt, context.getString(R.string.dataset_job_answers))
+                                DatasetProcessor.Job.Answers(proj.id, prompt, resources.getString(R.string.dataset_job_answers))
                             )
                         }
                     },
@@ -316,7 +319,7 @@ fun DatasetProjectScreen(
                         project?.let { proj ->
                             DatasetForegroundService.enqueue(
                                 context,
-                                DatasetProcessor.Job.Rating(proj.id, prompt, context.getString(R.string.dataset_job_rating))
+                                DatasetProcessor.Job.Rating(proj.id, prompt, resources.getString(R.string.dataset_job_rating))
                             )
                         }
                     },
@@ -327,22 +330,22 @@ fun DatasetProjectScreen(
                                     DatasetProcessStage.CLEAN -> DatasetProcessor.Job.Clean(
                                         proj.id,
                                         cleanPrompt,
-                                        context.getString(R.string.dataset_job_clean)
+                                        resources.getString(R.string.dataset_job_clean)
                                     )
                                     DatasetProcessStage.QUESTIONS -> DatasetProcessor.Job.Questions(
                                         proj.id,
                                         questionPrompt,
-                                        context.getString(R.string.dataset_job_questions)
+                                        resources.getString(R.string.dataset_job_questions)
                                     )
                                     DatasetProcessStage.ANSWERS -> DatasetProcessor.Job.Answers(
                                         proj.id,
                                         answerPrompt,
-                                        context.getString(R.string.dataset_job_answers)
+                                        resources.getString(R.string.dataset_job_answers)
                                     )
                                     DatasetProcessStage.RATING -> DatasetProcessor.Job.Rating(
                                         proj.id,
                                         reviewPrompt,
-                                        context.getString(R.string.dataset_job_rating)
+                                        resources.getString(R.string.dataset_job_rating)
                                     )
                                 }
                             }
@@ -375,7 +378,7 @@ fun DatasetProjectScreen(
                                     qa.id,
                                     proj.id,
                                     answerPrompt,
-                                    context.getString(R.string.dataset_job_regen_answer)
+                                    resources.getString(R.string.dataset_job_regen_answer)
                                 )
                             )
                         }
@@ -389,7 +392,7 @@ fun DatasetProjectScreen(
                                     qa.id,
                                     proj.id,
                                     reviewPrompt,
-                                    context.getString(R.string.dataset_job_regen_rating)
+                                    resources.getString(R.string.dataset_job_regen_rating)
                                 )
                             )
                         }
@@ -403,7 +406,7 @@ fun DatasetProjectScreen(
                                     selectedIds,
                                     proj.id,
                                     answerPrompt,
-                                    context.getString(R.string.dataset_job_regen_answers_param, selectedIds.size)
+                                    resources.getString(R.string.dataset_job_regen_answers_param, selectedIds.size)
                                 )
                             )
                         }
@@ -417,7 +420,7 @@ fun DatasetProjectScreen(
                                     selectedIds,
                                     proj.id,
                                     reviewPrompt,
-                                    context.getString(R.string.dataset_job_regen_ratings_param, selectedIds.size)
+                                    resources.getString(R.string.dataset_job_regen_ratings_param, selectedIds.size)
                                 )
                             )
                         }
@@ -880,6 +883,7 @@ fun ChunksTab(
     isProcessing: Boolean = false
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val resources = LocalResources.current
     var editingChunk by remember { mutableStateOf<DatasetChunkEntity?>(null) }
     var selectedChunkIds by remember { mutableStateOf(setOf<Long>()) }
     var pendingDeleteChunkIds by remember { mutableStateOf<Set<Long>?>(null) }
@@ -1008,7 +1012,7 @@ fun ChunksTab(
                                     chunk.id,
                                     chunk.projectId,
                                     "",
-                                    context.getString(R.string.dataset_job_regen_clean)
+                                    resources.getString(R.string.dataset_job_regen_clean)
                                 )
                             )
                             editingChunk = null
@@ -1874,6 +1878,7 @@ fun SettingsTab(
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val resources = LocalResources.current
     
     var backend by remember(project) {
         mutableStateOf(normalizeDatasetBackend(project?.backend))
@@ -1931,24 +1936,24 @@ fun SettingsTab(
                     if (SettingsRepository.requiresSelectedRemoteModel(metadata.backend)) {
                         availableOllamaModels = mergeDatasetOllamaModels(ollamaModel, metadata.availableModels)
                         metadataMessage = if (SettingsRepository.isLlamaSwapBackend(metadata.backend)) {
-                            context.getString(R.string.pdf_metadata_llama_swap_loaded, metadata.availableModels.size)
+                            resources.getString(R.string.pdf_metadata_llama_swap_loaded, metadata.availableModels.size)
                         } else {
-                            context.getString(R.string.pdf_metadata_ollama_loaded, metadata.availableModels.size)
+                            resources.getString(R.string.pdf_metadata_ollama_loaded, metadata.availableModels.size)
                         }
                     } else {
                         llamaServerModelLabel = metadata.serverModelLabel
                         llamaServerContextLabel = metadata.serverContextLabel
-                        metadataMessage = context.getString(
+                        metadataMessage = resources.getString(
                             R.string.pdf_metadata_llama_loaded,
-                            metadata.serverModelLabel ?: context.getString(R.string.pdf_server_value_unavailable),
-                            metadata.serverContextLabel ?: context.getString(R.string.pdf_server_value_unavailable)
+                            metadata.serverModelLabel ?: resources.getString(R.string.pdf_server_value_unavailable),
+                            metadata.serverContextLabel ?: resources.getString(R.string.pdf_server_value_unavailable)
                         )
                     }
                 }
                 .onFailure {
-                    metadataMessage = context.getString(
+                    metadataMessage = resources.getString(
                         R.string.pdf_metadata_refresh_failed,
-                        it.message ?: context.getString(R.string.error_generic)
+                        it.message ?: resources.getString(R.string.error_generic)
                     )
                 }
             isRefreshingMetadata = false
@@ -2107,7 +2112,7 @@ fun SettingsTab(
                             ) {
                                 Text(
                                     text = ollamaModel.ifBlank {
-                                        context.getString(
+                                        resources.getString(
                                             if (normalizedBackend == SettingsRepository.PDF_BACKEND_LLAMA_SWAP) {
                                                 R.string.pdf_select_llama_swap_model
                                             } else {

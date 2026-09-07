@@ -21,6 +21,9 @@ import com.example.llamadroid.data.runtime.AgentRuntimeProfileRepositoryFactory
 import com.example.llamadroid.data.runtime.AgentRuntimeProfileRuntime
 import com.example.llamadroid.data.runtime.DurableLlamaServerCardCatalog
 import com.example.llamadroid.data.runtime.LegacyAgentRuntimeSettings
+import com.example.llamadroid.data.model.library.ModelLibraryRepositoryFactory
+import com.example.llamadroid.data.model.library.ModelLibraryQueueScope
+import com.example.llamadroid.data.model.library.PendingArtifactStatus
 import com.example.llamadroid.onnx.OnnxStorage
 import com.example.llamadroid.service.AiRuntimeJobStore
 import com.example.llamadroid.service.GenerationDiagnosticsStore
@@ -96,6 +99,40 @@ class LlamaApplication : Application() {
             }
             runCatching { OrganizerAlarmScheduler.rescheduleAll(this@LlamaApplication) }
             runCatching { LlamaScheduledTaskScheduler.rescheduleAll(this@LlamaApplication) }
+            runCatching {
+                val tokenPreferences = getSharedPreferences("litert_model_repository", Context.MODE_PRIVATE)
+                val repository = ModelLibraryRepositoryFactory.create(this@LlamaApplication)
+                val token = tokenPreferences.getString("hugging_face_token", "")
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                val pendingStatuses = listOf(
+                    PendingArtifactStatus.STAGED.storedValue,
+                    PendingArtifactStatus.INSPECTING.storedValue,
+                    PendingArtifactStatus.VALIDATED.storedValue
+                )
+                val pendingBundleIds = AppDatabase.getDatabase(this@LlamaApplication)
+                    .modelLibraryDao()
+                    .observeByStatuses(pendingStatuses)
+                    .first()
+                    .mapNotNull { it.bundleId }
+                    .distinct()
+                pendingBundleIds.forEach { bundleId ->
+                    ModelLibraryQueueScope.launch("bundle:$bundleId") {
+                        repository.resumePendingBundleQueue(this@LlamaApplication, bundleId, token)
+                            ?.onFailure { error ->
+                                DebugLog.log("[MODEL_LIBRARY] bundle $bundleId recovery skipped: ${error.message}")
+                            }
+                    }
+                }
+                ModelLibraryQueueScope.launch("custom-recovery") {
+                    repository.resumePendingCustomDownloads(this@LlamaApplication, token)
+                }
+                if (pendingBundleIds.isEmpty()) {
+                    DebugLog.log("[MODEL_LIBRARY] no pending bundle queues to recover")
+                }
+            }.onFailure { error ->
+                DebugLog.log("[MODEL_LIBRARY] pending bundle recovery skipped: ${error.message}")
+            }
         }
         
         // Request native libs installation immediately (Simulate Fast-Follow)

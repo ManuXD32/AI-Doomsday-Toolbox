@@ -1,5 +1,6 @@
 package com.example.llamadroid.data.runtime
 
+import com.example.llamadroid.data.HttpEndpointUrlSupport
 import com.example.llamadroid.data.db.AgentRuntimeBackend
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -23,18 +24,17 @@ object AgentRuntimeEndpointModelDiscovery {
         baseUrl: String
     ): Result<List<String>> = withContext(Dispatchers.IO) {
         runCatching {
-            val normalizedBaseUrl = baseUrl.trim().trimEnd('/').also {
-                require(it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true)) {
-                    "Remote endpoint URL must use HTTP(S)"
-                }
-            }
+            val normalizedBaseUrl = HttpEndpointUrlSupport.normalizeBaseUrl(baseUrl)
+                ?: error("Remote endpoint URL must use HTTP(S)")
             val path = when (backend) {
                 AgentRuntimeBackend.OLLAMA -> "/api/tags"
                 AgentRuntimeBackend.LLAMA_SERVER,
                 AgentRuntimeBackend.LLAMA_SWAP -> "/v1/models"
                 AgentRuntimeBackend.LITERT -> error("LiteRT does not expose remote model discovery")
             }
-            val connection = (URL("$normalizedBaseUrl$path").openConnection() as HttpURLConnection).apply {
+            val requestUrl = HttpEndpointUrlSupport.appendPath(normalizedBaseUrl, path)
+                ?: error("Remote endpoint URL must use HTTP(S)")
+            val connection = (URL(requestUrl).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = CONNECT_TIMEOUT_MS
                 readTimeout = READ_TIMEOUT_MS

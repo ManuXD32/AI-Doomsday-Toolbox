@@ -3,7 +3,7 @@ package com.example.llamadroid.data.db
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
-import java.net.URI
+import com.example.llamadroid.data.HttpEndpointUrlSupport
 
 /**
  * A reusable named endpoint for a remote agent engine.  Agent models stay on
@@ -69,7 +69,8 @@ data class AgentRuntimeEndpointConfig(
     fun normalized(): AgentRuntimeEndpointConfig = copy(
         name = name.trim(),
         backend = normalizedBackend.id,
-        baseUrl = baseUrl.trim().trimEnd('/'),
+        baseUrl = HttpEndpointUrlSupport.normalizeBaseUrl(baseUrl)
+            ?: baseUrl.trim().trimEnd('/'),
         defaultModel = defaultModel?.trim()?.takeIf { it.isNotEmpty() }
     )
 
@@ -80,15 +81,13 @@ data class AgentRuntimeEndpointConfig(
             "Endpoint configurations support Ollama, llama-server, and llama-swap only"
         }
         require(normalized.baseUrl.isNotBlank()) { "Endpoint URL must not be blank" }
-        val uri = runCatching { URI(normalized.baseUrl) }.getOrNull()
+        val normalizedBaseUrl = HttpEndpointUrlSupport.normalizeBaseUrl(normalized.baseUrl)
         require(
-            uri != null &&
-                (uri.scheme.equals("http", ignoreCase = true) || uri.scheme.equals("https", ignoreCase = true)) &&
-                !uri.host.isNullOrBlank()
+            normalizedBaseUrl != null
         ) {
             "Endpoint URL must start with http:// or https://"
         }
-        return normalized
+        return normalized.copy(baseUrl = normalizedBaseUrl)
     }
 }
 

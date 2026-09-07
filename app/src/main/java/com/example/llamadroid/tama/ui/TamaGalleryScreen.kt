@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -29,7 +30,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedAssistChip
@@ -58,6 +59,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -65,7 +67,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
@@ -76,6 +79,7 @@ import com.example.llamadroid.tama.data.TamaPet
 import com.example.llamadroid.tama.db.TamaArtworkEntity
 import com.example.llamadroid.tama.game.TamaDailyDreamManager
 import com.example.llamadroid.tama.game.TamaGameEngine
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import java.io.File
 import java.text.DateFormat
 import kotlinx.coroutines.launch
@@ -122,6 +126,7 @@ fun TamaGalleryScreen(
     pet: TamaPet
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val artworks by gameEngine.observeArtworks(pet.id).collectAsState(initial = emptyList())
     val galleryEntries = remember(artworks) { buildGalleryEntries(artworks) }
@@ -132,7 +137,7 @@ fun TamaGalleryScreen(
     fun shareArtwork(artwork: TamaArtworkEntity) {
         val imageFile = artwork.filePath?.let(::File)
         if (imageFile == null || !imageFile.exists()) {
-            Toast.makeText(context, context.getString(R.string.tama_gallery_share_missing), Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, resources.getString(R.string.tama_gallery_share_missing), Toast.LENGTH_SHORT).show()
             return
         }
         runCatching {
@@ -146,11 +151,11 @@ fun TamaGalleryScreen(
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(Intent.createChooser(shareIntent, context.getString(R.string.action_share)))
+            context.startActivity(Intent.createChooser(shareIntent, resources.getString(R.string.action_share)))
         }.onFailure { error ->
             Toast.makeText(
                 context,
-                context.getString(R.string.tama_gallery_share_failed, error.message ?: ""),
+                resources.getString(R.string.tama_gallery_share_failed, error.message ?: ""),
                 Toast.LENGTH_SHORT
             ).show()
         }
@@ -159,9 +164,13 @@ fun TamaGalleryScreen(
     Scaffold(
         topBar = {
             TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                 title = { Text(stringResource(R.string.tama_gallery_title)) },
                 navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
+                    IconButton(
+                        onClick = { navController.popBackStack() },
+                        modifier = Modifier.walkthroughTarget("back")
+                    ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
                     }
                 }
@@ -213,7 +222,7 @@ fun TamaGalleryScreen(
                                 onDelete = {
                                     pendingDelete = TamaGalleryDeleteTarget(
                                         title = dreamAlbumStoryText(entry.story)?.takeIf(String::isNotBlank)
-                                            ?: context.getString(R.string.tama_gallery_kind_daily_dream),
+                                            ?: resources.getString(R.string.tama_gallery_kind_daily_dream),
                                         artworks = entry.artworks
                                     )
                                 },
@@ -520,21 +529,31 @@ private fun SingleArtworkPreviewDialog(
     artwork: TamaArtworkEntity,
     onDismiss: () -> Unit
 ) {
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Card(
+            modifier = Modifier
+                .fillMaxWidth(0.96f)
+                .widthIn(max = 560.dp),
             shape = RoundedCornerShape(24.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .heightIn(max = 640.dp)
+                    .verticalScroll(rememberScrollState())
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
                     artwork.title,
                     style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
                 val imageFile = remember(artwork.filePath) { artwork.filePath?.let(::File) }
                 if (imageFile?.exists() == true) {
@@ -569,9 +588,14 @@ private fun DreamAlbumPreviewDialog(
     }
     var selectedIndex by rememberSaveable(entry.albumId) { mutableStateOf(0) }
     val selectedSlide = slides.getOrNull(selectedIndex)
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Card(
-            modifier = Modifier.fillMaxWidth(0.96f),
+            modifier = Modifier
+                .fillMaxWidth(0.96f)
+                .widthIn(max = 560.dp),
             shape = RoundedCornerShape(24.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {

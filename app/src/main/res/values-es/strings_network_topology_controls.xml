@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="worker_topology_cluster_memory_label">Capacidad del clúster</string>
+    <string name="worker_topology_master_memory_label">Asignación del maestro</string>
+    <string name="worker_topology_worker_memory_label">Asignación · Worker %1$d</string>
+</resources>

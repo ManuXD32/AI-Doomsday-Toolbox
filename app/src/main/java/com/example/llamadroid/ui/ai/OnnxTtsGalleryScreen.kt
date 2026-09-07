@@ -25,7 +25,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SelectAll
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -48,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -72,6 +73,7 @@ private data class OnnxTtsGalleryItem(
 @Composable
 fun OnnxTtsGalleryScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     var refreshKey by remember { mutableIntStateOf(0) }
     val items = remember(refreshKey) {
         OnnxTtsStorage.listGeneratedAudio(context).map { file ->
@@ -112,9 +114,9 @@ fun OnnxTtsGalleryScreen(navController: NavController) {
         Toast.makeText(
             context,
             if (success) {
-                context.getString(R.string.onnx_tts_gallery_deleted_count, files.size)
+                resources.getString(R.string.onnx_tts_gallery_deleted_count, files.size)
             } else {
-                context.getString(R.string.onnx_tts_gallery_delete_failed)
+                resources.getString(R.string.onnx_tts_gallery_delete_failed)
             },
             Toast.LENGTH_SHORT
         ).show()
@@ -142,7 +144,7 @@ fun OnnxTtsGalleryScreen(navController: NavController) {
         }.onFailure { error ->
             Toast.makeText(
                 context,
-                context.getString(R.string.onnx_tts_gallery_play_failed, error.message ?: context.getString(R.string.error_generic)),
+                resources.getString(R.string.onnx_tts_gallery_play_failed, error.message ?: resources.getString(R.string.error_generic)),
                 Toast.LENGTH_LONG
             ).show()
         }
@@ -192,6 +194,7 @@ fun OnnxTtsGalleryScreen(navController: NavController) {
                         }
                     },
                     actions = {
+                        com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                         if (selectionMode) {
                             IconButton(onClick = { selectedPaths = items.map { it.file.absolutePath }.toSet() }) {
                                 Icon(Icons.Default.SelectAll, contentDescription = stringResource(R.string.onnx_tts_gallery_select_all))
@@ -286,7 +289,10 @@ fun OnnxTtsGalleryScreen(navController: NavController) {
 
 @Composable
 private fun OnnxTtsGalleryEmptyCard() {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -347,9 +353,10 @@ private fun OnnxTtsGalleryRow(
             containerColor = if (selected) {
                 MaterialTheme.colorScheme.primaryContainer
             } else {
-                MaterialTheme.colorScheme.surface
+                MaterialTheme.colorScheme.surfaceContainerLow
             }
-        )
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier

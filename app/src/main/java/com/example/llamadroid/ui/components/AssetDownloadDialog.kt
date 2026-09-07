@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.components
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -60,6 +62,7 @@ fun AssetDownloadDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .heightIn(max = 480.dp)
                     .verticalScroll(rememberScrollState())
             ) {
                 if (isDownloading) {
@@ -151,6 +154,7 @@ fun AssetDownloadDialog(
         confirmButton = {
             if (!isDownloading) {
                 Button(
+                    modifier = Modifier.heightIn(min = 48.dp),
                     onClick = {
                         isDownloading = true
                         errorMessage = null
@@ -179,7 +183,13 @@ fun AssetDownloadDialog(
                 }
             }
         },
-        dismissButton = {},
+        dismissButton = {
+            if (!isDownloading) {
+                TextButton(onClick = onSkip) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        },
         properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false)
     )
 }

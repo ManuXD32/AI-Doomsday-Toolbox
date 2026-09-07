@@ -1,0 +1,7 @@
+<resources>
+    <string name="model_manager_shortcut_custom_download">Custom download</string>
+    <string name="model_manager_shortcut_saved_links">Saved links</string>
+    <string name="model_manager_shortcut_my_bundles">My bundles</string>
+    <string name="model_manager_shortcut_create_bundle">Create bundle</string>
+    <string name="model_manager_shortcut_unknown">Unknown</string>
+</resources>

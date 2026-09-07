@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.ai.llama
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.clickable
@@ -38,6 +40,8 @@ import com.example.llamadroid.data.model.LlamaChatPromptProfileEntity
 import com.example.llamadroid.data.model.LlamaServerEntity
 import com.example.llamadroid.data.repository.LlamaRepository
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import java.text.SimpleDateFormat
 import java.util.*
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -61,6 +65,9 @@ private const val WEAR_TOOL_PINNED_NOTE = "pinned_note"
 private const val WEAR_TOOL_WEB = "web_search"
 private const val WEAR_TOOL_IMAGES = "image_generation"
 
+private fun formatLlamaChatListString(template: String, vararg args: Any?): String =
+    String.format(Locale.getDefault(), template, *args)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LlamaChatListScreen(
@@ -68,6 +75,17 @@ fun LlamaChatListScreen(
     initialFolderId: Long? = null
 ) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
+    val importedChatTitleText = stringResource(R.string.llama_imported_chat_title)
+    val importedNotesChatTitleText = stringResource(R.string.llama_imported_notes_chat_title)
+    val notesImportDefaultTitleFormat = stringResource(R.string.notes_import_default_title)
+    val notesImportSourceLabelText = stringResource(R.string.notes_import_source_label)
+    val importedNoteChatTitleText = stringResource(R.string.llama_imported_note_chat_title)
+    val importErrorUnknownFormatText = stringResource(R.string.llama_import_error_unknown_format)
+    val importSuccessText = stringResource(R.string.llama_import_success)
+    val importErrorText = stringResource(R.string.llama_import_error)
+    val promptProfileSaveErrorText = stringResource(R.string.llama_prompt_profile_save_error)
+    val folderCreateErrorText = stringResource(R.string.llama_folder_create_error)
     val database = AppDatabase.getDatabase(context)
     val repository = remember { 
          LlamaRepository(
@@ -133,7 +151,7 @@ fun LlamaChatListScreen(
                         obj.has("messages") -> {
                             val payload = gson.fromJson(json, LlamaChatExportPayload::class.java)
                             Triple(
-                                payload.title.ifBlank { context.getString(R.string.llama_imported_chat_title) },
+                                payload.title.ifBlank { importedChatTitleText },
                                 payload.systemPrompt?.ifBlank { null },
                                 payload.messages
                             )
@@ -141,15 +159,15 @@ fun LlamaChatListScreen(
                         obj.has("notes") -> {
                             val payload = gson.fromJson(json, NotesExportPayload::class.java)
                             Triple(
-                                context.getString(R.string.llama_imported_notes_chat_title),
+                                importedNotesChatTitleText,
                                 null,
                                 payload.notes.mapIndexed { index, note ->
                                     note.toLlamaSerializedMessage(
-                                        fallbackTitle = context.getString(
-                                            R.string.notes_import_default_title,
+                                        fallbackTitle = formatLlamaChatListString(
+                                            notesImportDefaultTitleFormat,
                                             index + 1
                                         ),
-                                        sourceLabel = context.getString(R.string.notes_import_source_label)
+                                        sourceLabel = notesImportSourceLabelText
                                     )
                                 }
                             )
@@ -157,24 +175,24 @@ fun LlamaChatListScreen(
                         obj.has("content") -> {
                             val payload = gson.fromJson(json, NoteExportPayload::class.java)
                             Triple(
-                                payload.title.ifBlank { context.getString(R.string.llama_imported_note_chat_title) },
+                                payload.title.ifBlank { importedNoteChatTitleText },
                                 null,
                                 listOf(
                                     payload.toLlamaSerializedMessage(
-                                        fallbackTitle = context.getString(R.string.llama_imported_note_chat_title),
-                                        sourceLabel = context.getString(R.string.notes_import_source_label)
+                                        fallbackTitle = importedNoteChatTitleText,
+                                        sourceLabel = notesImportSourceLabelText
                                     )
                                 )
                             )
                         }
-                        else -> error(context.getString(R.string.llama_import_error_unknown_format))
+                        else -> error(importErrorUnknownFormatText)
                     }
                     viewModel.importChat(title, systemPrompt, messages) { newId ->
                         navController.navigate(Screen.LlamaChat.createRoute(newId, -1))
                     }
-                    Toast.makeText(context, context.getString(R.string.llama_import_success), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, importSuccessText, Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
-                    Toast.makeText(context, context.getString(R.string.llama_import_error) + ": ${e.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, importErrorText + ": ${e.message}", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -247,6 +265,7 @@ fun LlamaChatListScreen(
                     }
                 },
                 actions = {
+                    com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                     if (currentFolder != null) {
                         IconButton(
                             onClick = {
@@ -348,7 +367,9 @@ fun LlamaChatListScreen(
                 }
             } else {
                 LazyColumn(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .walkthroughTarget("llama.history"),
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -405,6 +426,7 @@ fun LlamaChatListScreen(
                             showFolderName = selectedFolderFilter == LLAMA_FOLDER_FILTER_ALL,
                             onClick = {
                                 // If we pass -1, LlamaChatScreen can look up "Last Used Server"
+                                walkthroughTargets?.recordEvent("llama.history")
                                 navController.navigate(Screen.LlamaChat.createRoute(chat.id, -1))
                             },
                             onEdit = { chatToEdit = chat },
@@ -471,7 +493,7 @@ fun LlamaChatListScreen(
                                 if (!success) {
                                     Toast.makeText(
                                         context,
-                                        context.getString(R.string.llama_prompt_profile_save_error),
+                                        promptProfileSaveErrorText,
                                         Toast.LENGTH_SHORT
                                     ).show()
                                 }
@@ -521,7 +543,7 @@ fun LlamaChatListScreen(
                         if (cleanName.isNotBlank()) {
                             viewModel.createFolder(cleanName) { success ->
                                 if (!success) {
-                                    Toast.makeText(context, context.getString(R.string.llama_folder_create_error), Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, folderCreateErrorText, Toast.LENGTH_SHORT).show()
                                 }
                             }
                             showNewFolderDialog = false
@@ -564,7 +586,7 @@ fun LlamaChatListScreen(
                     if (!success) {
                         Toast.makeText(
                             context,
-                            context.getString(R.string.llama_prompt_profile_save_error),
+                            promptProfileSaveErrorText,
                             Toast.LENGTH_SHORT
                         ).show()
                     }
@@ -575,7 +597,7 @@ fun LlamaChatListScreen(
                     if (!success) {
                         Toast.makeText(
                             context,
-                            context.getString(R.string.llama_prompt_profile_save_error),
+                            promptProfileSaveErrorText,
                             Toast.LENGTH_SHORT
                         ).show()
                     }
@@ -694,7 +716,7 @@ fun LlamaChatListScreen(
                                 if (!success) {
                                     Toast.makeText(
                                         context,
-                                        context.getString(R.string.llama_prompt_profile_save_error),
+                                        promptProfileSaveErrorText,
                                         Toast.LENGTH_SHORT
                                     ).show()
                                 }
@@ -912,9 +934,11 @@ fun LlamaChatCard(
     val dateFormat = SimpleDateFormat("MMM dd, HH:mm", Locale.getDefault())
     var menuExpanded by remember { mutableStateOf(false) }
 
-    ElevatedCard(
+    Card(
         modifier = Modifier.fillMaxWidth(),
-        onClick = onClick
+        onClick = onClick,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier.padding(16.dp).fillMaxWidth(),
@@ -993,12 +1017,13 @@ fun LlamaChatCard(
 private fun LlamaSchedulerFolderCard(
     onClick: () -> Unit
 ) {
-    ElevatedCard(
+    Card(
         modifier = Modifier.fillMaxWidth(),
         onClick = onClick,
-        colors = CardDefaults.elevatedCardColors(
+        colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.primaryContainer
-        )
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier
@@ -1049,12 +1074,13 @@ private fun WearQuickChatSettingsEntryCard(
         .getSharedPreferences(WEAR_QUICK_CHAT_PREFS, Context.MODE_PRIVATE)
         .getLong(WEAR_QUICK_CHAT_SELECTED_SERVER_ID, -1L)
     val selectedServer = servers.firstOrNull { it.id == selectedServerId }
-    ElevatedCard(
+    Card(
         modifier = Modifier.fillMaxWidth(),
         onClick = onClick,
-        colors = CardDefaults.elevatedCardColors(
+        colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.tertiaryContainer
-        )
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier
@@ -1115,9 +1141,11 @@ private fun LlamaFolderCard(
     onShortcut: () -> Unit,
     onDelete: () -> Unit
 ) {
-    ElevatedCard(
+    Card(
         modifier = Modifier.fillMaxWidth(),
-        onClick = onClick
+        onClick = onClick,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier

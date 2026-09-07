@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.agent
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.content.Context
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
@@ -28,7 +30,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import com.example.llamadroid.R
 import com.example.llamadroid.service.AgentService
 import com.example.llamadroid.service.OllamaService
@@ -46,6 +48,8 @@ import com.example.llamadroid.data.db.AgentRuntimeBackend
 import com.example.llamadroid.data.db.AgentRuntimeEndpointConfig
 import com.example.llamadroid.data.db.AgentRuntimeProfile
 import com.example.llamadroid.data.db.AgentRuntimeProfileKeys
+import com.example.llamadroid.data.db.normalizeAgentRuntimeBackend
+import com.example.llamadroid.data.runtime.AgentRuntimeGlobalOverride
 import com.example.llamadroid.data.runtime.AgentRuntimeContinueAction
 import com.example.llamadroid.data.runtime.AgentRuntimeProfileStore
 import com.example.llamadroid.data.runtime.EmptyAgentRuntimeProfileStore
@@ -62,11 +66,18 @@ import com.example.llamadroid.service.resolveAgentLiteRtMaxOutputTokens
 import com.example.llamadroid.ui.components.DraftFloatTextField
 import com.example.llamadroid.ui.components.DraftIntTextField
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 enum class AgentSettingsSection {
     AGENTS,
     TOOLS
 }
+
+/** UI-facing name for the persisted, dispatch-aware General override model. */
+typealias AgentGlobalOverrideState = AgentRuntimeGlobalOverride
+
+private const val GLOBAL_OVERRIDE_CONNECTION_KEY = "__global_override_connection__"
+private const val MANAGED_OVERRIDE_CONNECTION_KEY = "__managed_override_connection__"
 
 @Composable
 fun ModelSelectorDialog(
@@ -171,6 +182,10 @@ fun ModelSelectorDialog(
 fun SetupInfoDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
     val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+    val copySuccessFormat = stringResource(R.string.agent_copy_success)
+    val installCommandLabel = stringResource(R.string.agent_install_cmd_label)
+    val startCommandLabel = stringResource(R.string.agent_start_cmd_label)
+    val toolNameClipboardLabel = stringResource(R.string.soft_studio_conversations_tool_name_clipboard)
     
     // One-line install command - configures SSH on port 8023 (separate from Termux tools port 8025)
     val oneLineInstall = """pkg install proot-distro -y && proot-distro install ubuntu --override-alias ai-agent && proot-distro login ai-agent --isolated -- bash -c "apt update && apt install -y openssh-server git ripgrep python3 nodejs npm curl wget && mkdir -p /run/sshd && sed -i 's/#Port 22/Port 8023/' /etc/ssh/sshd_config && echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config && echo 'root:agent' | chpasswd && mkdir -p /workspace""""
@@ -181,7 +196,11 @@ fun SetupInfoDialog(onDismiss: () -> Unit) {
     fun copyToClipboard(text: String, label: String) {
         val clip = android.content.ClipData.newPlainText(label, text)
         clipboardManager.setPrimaryClip(clip)
-        Toast.makeText(context, context.getString(R.string.agent_copy_success, label), Toast.LENGTH_SHORT).show()
+        Toast.makeText(
+            context,
+            String.format(Locale.getDefault(), copySuccessFormat, label),
+            Toast.LENGTH_SHORT
+        ).show()
     }
 
     // Get available tools for Orchestrator
@@ -269,6 +288,7 @@ fun SetupInfoDialog(onDismiss: () -> Unit) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .heightIn(min = 48.dp)
                         .clickable { showTools = !showTools }
                         .padding(vertical = 4.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -314,8 +334,8 @@ fun SetupInfoDialog(onDismiss: () -> Unit) {
                                             color = MaterialTheme.colorScheme.primary
                                         )
                                         IconButton(
-                                            onClick = { copyToClipboard(tool.name, "Tool Name") },
-                                            modifier = Modifier.size(20.dp)
+                                            onClick = { copyToClipboard(tool.name, toolNameClipboardLabel) },
+                                            modifier = Modifier.size(48.dp)
                                         ) {
                                             Icon(
                                                 Icons.Default.ContentCopy, 
@@ -334,7 +354,10 @@ fun SetupInfoDialog(onDismiss: () -> Unit) {
                                     if (tool.requiredParams.isNotEmpty()) {
                                         Spacer(modifier = Modifier.height(4.dp))
                                         Text(
-                                            "Params: ${tool.requiredParams.joinToString(", ")}",
+                                            stringResource(
+                                                R.string.soft_studio_conversations_required_params,
+                                                tool.requiredParams.joinToString(", ")
+                                            ),
                                             fontSize = 10.sp,
                                             color = MaterialTheme.colorScheme.secondary,
                                             fontFamily = FontFamily.Monospace
@@ -371,8 +394,8 @@ fun SetupInfoDialog(onDismiss: () -> Unit) {
                             )
                         }
                         IconButton(
-                            onClick = { copyToClipboard(oneLineInstall, context.getString(R.string.agent_install_cmd_label)) },
-                            modifier = Modifier.size(32.dp)
+                            onClick = { copyToClipboard(oneLineInstall, installCommandLabel) },
+                            modifier = Modifier.size(48.dp)
                         ) {
                             Icon(
                                 Icons.Default.Share,
@@ -408,8 +431,8 @@ fun SetupInfoDialog(onDismiss: () -> Unit) {
                             )
                         }
                         IconButton(
-                            onClick = { copyToClipboard(startCommand, context.getString(R.string.agent_start_cmd_label)) },
-                            modifier = Modifier.size(32.dp)
+                            onClick = { copyToClipboard(startCommand, startCommandLabel) },
+                            modifier = Modifier.size(48.dp)
                         ) {
                             Icon(
                                 Icons.Default.Share,
@@ -465,10 +488,13 @@ fun ConnectionSettingsDialog(
     onOllamaUrlChange: (String) -> Unit,
     ollamaService: OllamaService,
     settingsRepository: SettingsRepository,
-    onConnect: () -> Unit,
-    onDismiss: () -> Unit
+    /** Legacy name retained for callers that have not migrated to the save contract. */
+    onConnect: () -> Unit = {},
+    onDismiss: () -> Unit,
+    /** Persist the edited connection and retest that exact connection. */
+    onSave: (() -> Unit)? = null
 ) {
-    var editedOllamaUrl by remember { mutableStateOf(ollamaUrl) }
+    var editedOllamaUrl by remember(ollamaUrl) { mutableStateOf(ollamaUrl) }
     val context = LocalContext.current
     val settingsRepo = settingsRepository
     val liteRtModels by remember(context) {
@@ -803,11 +829,11 @@ fun ConnectionSettingsDialog(
                     Button(
                         onClick = {
                             onOllamaUrlChange(editedOllamaUrl)
-                            onConnect()
+                            onSave?.invoke() ?: onConnect()
                         },
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text(stringResource(R.string.action_connect))
+                        Text(stringResource(R.string.action_save))
                     }
                 }
             }
@@ -835,7 +861,9 @@ fun AgentSettingsDialog(
     runtimeProfileStore: AgentRuntimeProfileStore = EmptyAgentRuntimeProfileStore,
     managedLlamaServers: List<ManagedLlamaServerDescriptor> = emptyList(),
     runtimeLiteRtModels: List<AgentLiteRtProfileOption>? = null,
-    onRuntimeContinue: ((AgentRuntimeContinueAction) -> Unit)? = null
+    onRuntimeContinue: ((AgentRuntimeContinueAction) -> Unit)? = null,
+    globalOverride: AgentGlobalOverrideState? = null,
+    onGlobalOverrideChange: (AgentGlobalOverrideState) -> Unit = {}
 ) {
     val showAgentConfiguration = section == AgentSettingsSection.AGENTS
     val showToolConfiguration = section == AgentSettingsSection.TOOLS
@@ -843,6 +871,13 @@ fun AgentSettingsDialog(
     val context = LocalContext.current
     val runtimeProfiles by runtimeProfileStore.observeProfiles().collectAsState(initial = emptyList())
     val runtimeEndpointConfigs by runtimeProfileStore.observeEndpointConfigs().collectAsState(initial = emptyList())
+    val persistedGlobalOverride by settingsRepository.agentGlobalRuntimeOverride.collectAsState()
+    val effectiveGlobalOverride = globalOverride ?: persistedGlobalOverride
+    val saveGlobalOverride: (AgentGlobalOverrideState) -> Unit = if (globalOverride == null) {
+        settingsRepository::setAgentGlobalRuntimeOverride
+    } else {
+        onGlobalOverrideChange
+    }
     val runtimeProfilesByKey = remember(runtimeProfiles) {
         runtimeProfiles.associateBy { it.agentKey }
     }
@@ -857,6 +892,9 @@ fun AgentSettingsDialog(
     }
     val llamaServerModelLabel by settingsRepository.agentLlamaServerModelLabel.collectAsState()
     val llamaServerContextLabel by settingsRepository.agentLlamaServerContextLabel.collectAsState()
+    val globalOllamaUrl by settingsRepository.ollamaUrl.collectAsState()
+    val globalLlamaServerUrl by settingsRepository.llamaServerUrl.collectAsState()
+    val globalLlamaSwapUrl by settingsRepository.agentLlamaSwapUrl.collectAsState()
     val agentLiteRtModelId by settingsRepository.agentLiteRtModelId.collectAsState()
     val agentLiteRtBackend by settingsRepository.agentLiteRtBackend.collectAsState()
     val agentLiteRtContextTokens by settingsRepository.agentLiteRtContextTokens.collectAsState()
@@ -1020,15 +1058,6 @@ fun AgentSettingsDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                if (showAgentConfiguration) {
-AgentKnowledgeBaseSelector(
-                    knowledgeBases = knowledgeBases,
-                    selectedIds = selectedKnowledgeBaseIds,
-                    onSelectionChange = onKnowledgeBaseSelectionChange,
-                    onManage = onManageKnowledgeBases
-                )
-                }
-                
                 // Load disabled agents state
                 val disabledAgents by AgentService.disabledBuiltInAgents.collectAsState()
                 val disabledStandardTools by AgentService.disabledStandardAgentTools.collectAsState()
@@ -1039,11 +1068,41 @@ AgentKnowledgeBaseSelector(
                 }
 
                 if (showAgentConfiguration) {
+                    AgentSettingsGroupHeader(
+                        title = stringResource(R.string.agent_settings_section_general)
+                    )
+                    AgentGlobalOverrideCard(
+                        state = effectiveGlobalOverride,
+                        availableModels = availableModels,
+                        llamaSwapModels = llamaSwapModels,
+                        endpointConfigs = runtimeEndpointConfigs,
+                        managedLlamaServers = managedLlamaServers,
+                        liteRtModels = runtimeLiteRtOptions,
+                        globalConnectionDescription = when (effectiveGlobalOverride.normalizedBackend) {
+                            AgentRuntimeBackend.OLLAMA -> globalOllamaUrl
+                            AgentRuntimeBackend.LLAMA_SERVER -> globalLlamaServerUrl
+                            AgentRuntimeBackend.LLAMA_SWAP -> globalLlamaSwapUrl
+                            AgentRuntimeBackend.LITERT -> null
+                        },
+                        onChange = saveGlobalOverride
+                    )
+                }
+
+                if (showAgentConfiguration) {
+                    AgentSettingsGroupHeader(
+                        title = stringResource(R.string.agent_settings_section_workflow)
+                    )
                     AgentWorkflowReadinessCard(
                         disabledAgents = disabledAgents,
                         researchBackendAvailable =
                             webSearchEnabledForReadiness ||
-                                kiwixEnabledForReadiness
+                            kiwixEnabledForReadiness
+                    )
+                    AgentKnowledgeBaseSelector(
+                        knowledgeBases = knowledgeBases,
+                        selectedIds = selectedKnowledgeBaseIds,
+                        onSelectionChange = onKnowledgeBaseSelectionChange,
+                        onManage = onManageKnowledgeBases
                     )
                 }
 
@@ -1065,6 +1124,9 @@ AgentKnowledgeBaseSelector(
                 if (showAgentConfiguration && (isAgentLiteRt || runtimeProfiles.any {
                         it.normalizedBackend == AgentRuntimeBackend.LITERT
                     })) {
+                    AgentSettingsGroupHeader(
+                        title = stringResource(R.string.agent_settings_section_runtime)
+                    )
                     AgentLiteRtBackendCard(
                         liteRtModels = liteRtModels,
                         selectedModel = selectedAgentLiteRtModel,
@@ -1085,6 +1147,12 @@ AgentKnowledgeBaseSelector(
                 }
                 
                 if (showAgentConfiguration) {
+                AgentSettingsGroupHeader(
+                    title = stringResource(R.string.agent_settings_section_roles)
+                )
+                AgentSettingsGroupHeader(
+                    title = stringResource(R.string.agent_settings_subsection_coordination)
+                )
 // Orchestrator (always enabled, cannot be disabled)
                 val orchestratorThinking by settingsRepository.agentOrchestratorThinkingEnabled.collectAsState()
                 AgentConfigCard(
@@ -1156,42 +1224,6 @@ AgentKnowledgeBaseSelector(
                 )
 
                 AgentTuningCard(
-                    emoji = "🌐",
-                    roleName = stringResource(R.string.agent_researcher_name),
-                    description = stringResource(R.string.agent_researcher_desc),
-                    selectedModel = researcherModel,
-                    availableModels = availableModels,
-                    llamaSwapModels = llamaSwapModels,
-                    backend = agentBackend,
-                    llamaServerModelLabel = llamaServerModelLabel,
-                    llamaServerContextLabel = llamaServerContextLabel,
-                    onModelChange = settingsRepository::setAgentResearcherModel,
-                    contextSize = researcherCtx,
-                    onContextSizeChange = settingsRepository::setAgentResearcherCtx,
-                    maxOutputTokens = researcherMaxOutputTokens,
-                    onMaxOutputTokensChange =
-                        settingsRepository::setAgentResearcherMaxOutputTokens,
-                    thinkingEnabled = researcherThinking,
-                    onThinkingChange =
-                        settingsRepository::setAgentResearcherThinkingEnabled,
-                    isEnabled = "RESEARCHER" !in disabledAgents,
-                    onEnabledChange = { enabled ->
-                        AgentService.setBuiltInAgentEnabled(
-                            "RESEARCHER",
-                            enabled
-                        )
-                    },
-                    runtimeProfile = storedRuntimeProfile(AgentRuntimeProfileKeys.RESEARCHER),
-                    managedLlamaServers = managedLlamaServers,
-                    runtimeLiteRtModels = runtimeLiteRtOptions,
-                    endpointConfigs = runtimeEndpointConfigs,
-                    onSaveEndpointConfig = ::saveRuntimeEndpointConfig,
-                    onDeleteEndpointConfig = ::deleteRuntimeEndpointConfig,
-                    onRuntimeProfileChange = { saveRuntimeProfile(it) },
-                    onRuntimeContinue = onRuntimeContinue
-                )
-
-                AgentTuningCard(
                     emoji = "🧭",
                     roleName = stringResource(R.string.agent_planner_name),
                     description = stringResource(R.string.agent_planner_desc),
@@ -1226,7 +1258,46 @@ AgentKnowledgeBaseSelector(
                     onRuntimeProfileChange = { saveRuntimeProfile(it) },
                     onRuntimeContinue = onRuntimeContinue
                 )
+
+                AgentTuningCard(
+                    emoji = "🌐",
+                    roleName = stringResource(R.string.agent_researcher_name),
+                    description = stringResource(R.string.agent_researcher_desc),
+                    selectedModel = researcherModel,
+                    availableModels = availableModels,
+                    llamaSwapModels = llamaSwapModels,
+                    backend = agentBackend,
+                    llamaServerModelLabel = llamaServerModelLabel,
+                    llamaServerContextLabel = llamaServerContextLabel,
+                    onModelChange = settingsRepository::setAgentResearcherModel,
+                    contextSize = researcherCtx,
+                    onContextSizeChange = settingsRepository::setAgentResearcherCtx,
+                    maxOutputTokens = researcherMaxOutputTokens,
+                    onMaxOutputTokensChange =
+                        settingsRepository::setAgentResearcherMaxOutputTokens,
+                    thinkingEnabled = researcherThinking,
+                    onThinkingChange =
+                        settingsRepository::setAgentResearcherThinkingEnabled,
+                    isEnabled = "RESEARCHER" !in disabledAgents,
+                    onEnabledChange = { enabled ->
+                        AgentService.setBuiltInAgentEnabled(
+                            "RESEARCHER",
+                            enabled
+                        )
+                    },
+                    runtimeProfile = storedRuntimeProfile(AgentRuntimeProfileKeys.RESEARCHER),
+                    managedLlamaServers = managedLlamaServers,
+                    runtimeLiteRtModels = runtimeLiteRtOptions,
+                    endpointConfigs = runtimeEndpointConfigs,
+                    onSaveEndpointConfig = ::saveRuntimeEndpointConfig,
+                    onDeleteEndpointConfig = ::deleteRuntimeEndpointConfig,
+                    onRuntimeProfileChange = { saveRuntimeProfile(it) },
+                    onRuntimeContinue = onRuntimeContinue
+                )
                 
+                AgentSettingsGroupHeader(
+                    title = stringResource(R.string.agent_settings_subsection_implementation)
+                )
                 val coderThinking by settingsRepository.agentCoderThinkingEnabled.collectAsState()
                 AgentConfigCard(
                     emoji = "👷",
@@ -1253,41 +1324,6 @@ AgentKnowledgeBaseSelector(
                     isEnabled = "CODER" !in disabledAgents,
                     onEnabledChange = { AgentService.setBuiltInAgentEnabled("CODER", it) },
                     runtimeProfile = storedRuntimeProfile(AgentRuntimeProfileKeys.CODER),
-                    managedLlamaServers = managedLlamaServers,
-                    runtimeLiteRtModels = runtimeLiteRtOptions,
-                    endpointConfigs = runtimeEndpointConfigs,
-                    onSaveEndpointConfig = ::saveRuntimeEndpointConfig,
-                    onDeleteEndpointConfig = ::deleteRuntimeEndpointConfig,
-                    onRuntimeProfileChange = { saveRuntimeProfile(it) },
-                    onRuntimeContinue = onRuntimeContinue
-                )
-                
-                val reviewerThinking by settingsRepository.agentReviewerThinkingEnabled.collectAsState()
-                AgentConfigCard(
-                    emoji = "🔍",
-                    roleName = stringResource(R.string.agent_reviewer_name),
-                    description = stringResource(R.string.agent_reviewer_desc),
-                    selectedModel = reviewerModel,
-                    availableModels = availableModels,
-                    llamaSwapModels = llamaSwapModels,
-                    backend = agentBackend,
-                    llamaServerModelLabel = llamaServerModelLabel,
-                    llamaServerContextLabel = llamaServerContextLabel,
-                    onModelChange = { settingsRepository.setAgentReviewerModel(it) },
-                    prompt = reviewerPrompt,
-                    onPromptChange = { settingsRepository.setAgentReviewerPrompt(it) },
-                    onResetPrompt = { settingsRepository.resetAgentPromptToDefault("REVIEWER") },
-                    contextSize = reviewerCtx,
-                    onContextSizeChange = { settingsRepository.setAgentReviewerCtx(it) },
-                    maxOutputTokens = reviewerMaxOutputTokens,
-                    onMaxOutputTokensChange = settingsRepository::setAgentReviewerMaxOutputTokens,
-                    thinkingEnabled = reviewerThinking,
-                    onThinkingChange = { settingsRepository.setAgentReviewerThinkingEnabled(it) },
-                    visionEnabled = reviewerVisionEnabled,
-                    onVisionChange = { settingsRepository.setAgentReviewerVisionEnabled(it) },
-                    isEnabled = "REVIEWER" !in disabledAgents,
-                    onEnabledChange = { AgentService.setBuiltInAgentEnabled("REVIEWER", it) },
-                    runtimeProfile = storedRuntimeProfile(AgentRuntimeProfileKeys.REVIEWER),
                     managedLlamaServers = managedLlamaServers,
                     runtimeLiteRtModels = runtimeLiteRtOptions,
                     endpointConfigs = runtimeEndpointConfigs,
@@ -1324,6 +1360,44 @@ AgentKnowledgeBaseSelector(
                     isEnabled = "EXECUTOR" !in disabledAgents,
                     onEnabledChange = { AgentService.setBuiltInAgentEnabled("EXECUTOR", it) },
                     runtimeProfile = storedRuntimeProfile(AgentRuntimeProfileKeys.EXECUTOR),
+                    managedLlamaServers = managedLlamaServers,
+                    runtimeLiteRtModels = runtimeLiteRtOptions,
+                    endpointConfigs = runtimeEndpointConfigs,
+                    onSaveEndpointConfig = ::saveRuntimeEndpointConfig,
+                    onDeleteEndpointConfig = ::deleteRuntimeEndpointConfig,
+                    onRuntimeProfileChange = { saveRuntimeProfile(it) },
+                    onRuntimeContinue = onRuntimeContinue
+                )
+
+                AgentSettingsGroupHeader(
+                    title = stringResource(R.string.agent_settings_subsection_validation)
+                )
+                val reviewerThinking by settingsRepository.agentReviewerThinkingEnabled.collectAsState()
+                AgentConfigCard(
+                    emoji = "🔍",
+                    roleName = stringResource(R.string.agent_reviewer_name),
+                    description = stringResource(R.string.agent_reviewer_desc),
+                    selectedModel = reviewerModel,
+                    availableModels = availableModels,
+                    llamaSwapModels = llamaSwapModels,
+                    backend = agentBackend,
+                    llamaServerModelLabel = llamaServerModelLabel,
+                    llamaServerContextLabel = llamaServerContextLabel,
+                    onModelChange = { settingsRepository.setAgentReviewerModel(it) },
+                    prompt = reviewerPrompt,
+                    onPromptChange = { settingsRepository.setAgentReviewerPrompt(it) },
+                    onResetPrompt = { settingsRepository.resetAgentPromptToDefault("REVIEWER") },
+                    contextSize = reviewerCtx,
+                    onContextSizeChange = { settingsRepository.setAgentReviewerCtx(it) },
+                    maxOutputTokens = reviewerMaxOutputTokens,
+                    onMaxOutputTokensChange = settingsRepository::setAgentReviewerMaxOutputTokens,
+                    thinkingEnabled = reviewerThinking,
+                    onThinkingChange = { settingsRepository.setAgentReviewerThinkingEnabled(it) },
+                    visionEnabled = reviewerVisionEnabled,
+                    onVisionChange = { settingsRepository.setAgentReviewerVisionEnabled(it) },
+                    isEnabled = "REVIEWER" !in disabledAgents,
+                    onEnabledChange = { AgentService.setBuiltInAgentEnabled("REVIEWER", it) },
+                    runtimeProfile = storedRuntimeProfile(AgentRuntimeProfileKeys.REVIEWER),
                     managedLlamaServers = managedLlamaServers,
                     runtimeLiteRtModels = runtimeLiteRtOptions,
                     endpointConfigs = runtimeEndpointConfigs,
@@ -2190,6 +2264,373 @@ Card(
     )
 }
 
+@Composable
+private fun AgentSettingsGroupHeader(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(top = 4.dp)
+    )
+}
+
+/**
+ * Shared runtime defaults for all configured roles.
+ *
+ * This card only edits the adapter state. The owner persists it and applies it
+ * when dispatching a role; the enabled switch is intentionally part of that
+ * state so a disabled card has no effect on per-role preferences.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AgentGlobalOverrideCard(
+    state: AgentGlobalOverrideState,
+    availableModels: List<String>,
+    llamaSwapModels: List<String> = emptyList(),
+    endpointConfigs: List<AgentRuntimeEndpointConfig> = emptyList(),
+    managedLlamaServers: List<ManagedLlamaServerDescriptor> = emptyList(),
+    liteRtModels: List<AgentLiteRtProfileOption> = emptyList(),
+    globalConnectionDescription: String? = null,
+    onChange: (AgentGlobalOverrideState) -> Unit
+) {
+    val backendOptions = AgentRuntimeBackend.entries.map { it.id }
+    val backend = state.normalizedBackend
+    val endpointOptions = endpointConfigs
+        .filter { it.normalizedBackend == backend }
+        .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+    val serverOptions = managedLlamaServers
+        .filter { normalizeAgentRuntimeBackend(it.backend) == backend.id }
+        .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.displayName })
+    val connectionSelection = when {
+        state.endpointConfigId != null -> state.endpointConfigId.toString()
+        state.managedLlamaServerId != null -> MANAGED_OVERRIDE_CONNECTION_KEY
+        else -> GLOBAL_OVERRIDE_CONNECTION_KEY
+    }
+    val connectionOptions = buildList {
+        add(GLOBAL_OVERRIDE_CONNECTION_KEY)
+        if (backend == AgentRuntimeBackend.LLAMA_SERVER || backend == AgentRuntimeBackend.LLAMA_SWAP) {
+            add(MANAGED_OVERRIDE_CONNECTION_KEY)
+        }
+        addAll(endpointOptions.map { it.id.toString() })
+    }
+    val modelOptions = buildList {
+        addAll(
+            if (backend == AgentRuntimeBackend.LLAMA_SWAP && llamaSwapModels.isNotEmpty()) {
+                llamaSwapModels
+            } else {
+                availableModels
+            }
+        )
+        state.model?.trim()?.takeIf { it.isNotBlank() }?.let(::add)
+    }.distinct()
+    val liteRtModelOptions = liteRtModels.map { it.id.toString() }
+
+    fun selectConnection(selection: String) {
+        when (selection) {
+            GLOBAL_OVERRIDE_CONNECTION_KEY -> onChange(
+                state.copy(endpointConfigId = null, managedLlamaServerId = null)
+            )
+            MANAGED_OVERRIDE_CONNECTION_KEY -> onChange(
+                state.copy(
+                    endpointConfigId = null,
+                    managedLlamaServerId = serverOptions.firstOrNull()?.id ?: 0L
+                )
+            )
+            else -> endpointConfigs.firstOrNull { it.id.toString() == selection }?.let { endpoint ->
+                onChange(
+                    state.copy(
+                        backend = endpoint.normalizedBackend.id,
+                        endpointConfigId = endpoint.id,
+                        managedLlamaServerId = null
+                    )
+                )
+            }
+        }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.32f)
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.agent_global_override_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = stringResource(R.string.agent_global_override_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = state.enabled,
+                    onCheckedChange = { onChange(state.copy(enabled = it)) },
+                    modifier = Modifier.scale(0.82f)
+                )
+            }
+
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp),
+                color = if (state.enabled) {
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                } else {
+                    MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
+                }
+            ) {
+                Text(
+                    text = stringResource(
+                        if (state.enabled) {
+                            R.string.agent_global_override_enabled_note
+                        } else {
+                            R.string.agent_global_override_disabled_note
+                        }
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                )
+            }
+
+            AgentStringDropdown(
+                label = stringResource(R.string.agent_global_override_backend_label),
+                selected = state.backend,
+                values = backendOptions,
+                labelFor = { backend ->
+                    when (AgentRuntimeBackend.from(backend)) {
+                        AgentRuntimeBackend.OLLAMA -> stringResource(R.string.agent_runtime_engine_ollama)
+                        AgentRuntimeBackend.LLAMA_SERVER -> stringResource(R.string.agent_runtime_engine_llama_server)
+                        AgentRuntimeBackend.LLAMA_SWAP -> stringResource(R.string.agent_runtime_engine_llama_swap)
+                        AgentRuntimeBackend.LITERT -> stringResource(R.string.agent_runtime_engine_litert)
+                    }
+                },
+                onSelected = {
+                    onChange(
+                        state.copy(
+                            backend = it,
+                            endpointConfigId = null,
+                            managedLlamaServerId = null,
+                            model = state.model
+                        )
+                    )
+                }
+            )
+
+            if (backend != AgentRuntimeBackend.LITERT) {
+                AgentStringDropdown(
+                    label = stringResource(R.string.agent_global_override_connection_label),
+                    selected = connectionSelection,
+                    values = connectionOptions,
+                    labelFor = { selection ->
+                        when (selection) {
+                            GLOBAL_OVERRIDE_CONNECTION_KEY -> stringResource(
+                                R.string.agent_runtime_connection_global
+                            )
+                            MANAGED_OVERRIDE_CONNECTION_KEY -> stringResource(
+                                R.string.agent_runtime_connection_managed
+                            )
+                            else -> endpointConfigs.firstOrNull {
+                                it.id.toString() == selection
+                            }?.name ?: selection
+                        }
+                    },
+                    descriptionFor = { selection ->
+                        when (selection) {
+                            GLOBAL_OVERRIDE_CONNECTION_KEY -> globalConnectionDescription
+                                ?.takeIf { it.isNotBlank() }
+                                ?: stringResource(R.string.agent_runtime_connection_not_configured)
+                            MANAGED_OVERRIDE_CONNECTION_KEY -> serverOptions.firstOrNull()?.let {
+                                "${it.host}:${it.port}"
+                            } ?: stringResource(R.string.agent_runtime_connection_choose_managed)
+                            else -> endpointConfigs.firstOrNull {
+                                it.id.toString() == selection
+                            }?.baseUrl.orEmpty()
+                        }
+                    },
+                    supportingText = stringResource(R.string.agent_global_override_connection_hint),
+                    onSelected = ::selectConnection
+                )
+            } else {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
+                ) {
+                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
+                        Text(
+                            stringResource(R.string.agent_global_override_connection_label),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(stringResource(R.string.agent_global_override_connection_litert))
+                    }
+                }
+            }
+
+            if (
+                backend == AgentRuntimeBackend.LLAMA_SERVER ||
+                    backend == AgentRuntimeBackend.LLAMA_SWAP
+            ) {
+                if (state.managedLlamaServerId != null) {
+                    AgentStringDropdown(
+                        label = stringResource(R.string.agent_runtime_managed_server_label),
+                        selected = state.managedLlamaServerId.toString(),
+                        values = serverOptions.map { it.id.toString() },
+                        labelFor = { id ->
+                            serverOptions.firstOrNull { it.id.toString() == id }?.displayName
+                                ?: id
+                        },
+                        descriptionFor = { id ->
+                            serverOptions.firstOrNull { it.id.toString() == id }?.let {
+                                "${it.host}:${it.port}"
+                            }
+                        },
+                        onSelected = { id ->
+                            onChange(state.copy(managedLlamaServerId = id.toLongOrNull()))
+                        }
+                    )
+                }
+            }
+
+            if (backend == AgentRuntimeBackend.LITERT) {
+                AgentStringDropdown(
+                    label = stringResource(R.string.agent_runtime_litert_model_label),
+                    selected = state.liteRtModelId?.toString().orEmpty(),
+                    values = liteRtModelOptions,
+                    labelFor = { id ->
+                        liteRtModels.firstOrNull { it.id.toString() == id }?.displayName ?: id
+                    },
+                    onSelected = {
+                        onChange(state.copy(liteRtModelId = it.toLongOrNull(), model = null))
+                    }
+                )
+            } else {
+                if (modelOptions.isNotEmpty()) {
+                    AgentStringDropdown(
+                        label = stringResource(R.string.agent_global_override_model_label),
+                        selected = state.model.orEmpty(),
+                        values = modelOptions,
+                        onSelected = { onChange(state.copy(model = it)) }
+                    )
+                } else {
+                    OutlinedTextField(
+                        value = state.model.orEmpty(),
+                        onValueChange = { onChange(state.copy(model = it)) },
+                        label = { Text(stringResource(R.string.agent_global_override_model_label)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+            }
+
+            if (backend == AgentRuntimeBackend.LITERT) {
+                Text(
+                    text = stringResource(R.string.litert_gallery_accelerator),
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 13.sp
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    listOf(
+                        LITERT_BACKEND_AUTO to R.string.general_acceleration_mode_auto,
+                        LITERT_BACKEND_CPU to R.string.general_acceleration_mode_cpu,
+                        LITERT_BACKEND_GPU to R.string.litert_backend_gpu
+                    ).forEach { (mode, labelRes) ->
+                        FilterChip(
+                            selected = normalizeLiteRtBackend(state.liteRtBackend) == mode,
+                            onClick = { onChange(state.copy(liteRtBackend = mode)) },
+                            modifier = Modifier.defaultMinSize(minWidth = 104.dp),
+                            label = { Text(stringResource(labelRes), maxLines = 1) }
+                        )
+                    }
+                }
+                AgentGlobalOverrideSwitchRow(
+                    title = stringResource(R.string.litert_gallery_mtp_title),
+                    description = stringResource(R.string.litert_gallery_mtp_desc),
+                    checked = state.liteRtMtpEnabled,
+                    onCheckedChange = { onChange(state.copy(liteRtMtpEnabled = it)) }
+                )
+            }
+
+            DraftIntTextField(
+                value = state.contextSize,
+                onValueChange = { onChange(state.copy(contextSize = it)) },
+                label = { Text(stringResource(R.string.agent_global_override_context_label)) },
+                modifier = Modifier.fillMaxWidth(),
+                blankValue = 0
+            )
+            DraftIntTextField(
+                value = state.maxOutputTokens,
+                onValueChange = { onChange(state.copy(maxOutputTokens = it)) },
+                valueRange = 1..1_048_576,
+                label = { Text(stringResource(R.string.agent_global_override_max_output_label)) },
+                modifier = Modifier.fillMaxWidth(),
+                blankValue = 8096
+            )
+
+            AgentGlobalOverrideSwitchRow(
+                title = stringResource(R.string.agent_thinking_enabled),
+                description = stringResource(R.string.agent_thinking_enabled_desc),
+                checked = state.thinkingEnabled,
+                onCheckedChange = { onChange(state.copy(thinkingEnabled = it)) }
+            )
+            AgentGlobalOverrideSwitchRow(
+                title = stringResource(R.string.agent_vision_enabled),
+                description = stringResource(R.string.agent_vision_enabled_desc),
+                checked = state.visionEnabled,
+                onCheckedChange = { onChange(state.copy(visionEnabled = it)) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun AgentGlobalOverrideSwitchRow(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                description,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = Modifier.scale(0.8f)
+        )
+    }
+}
+
 private data class AgentToolSettingGroup(
     val titleRes: Int,
     val tools: List<String>
@@ -2587,20 +3028,6 @@ private fun AgentTuningCard(
                             onContinue = onRuntimeContinue
                         )
                     }
-                    if (!isLiteRt) {
-                        AgentSwitchRow(
-                            title = stringResource(R.string.agent_thinking_enabled),
-                            checked = thinkingEnabled,
-                            onCheckedChange = onThinkingChange
-                        )
-                    }
-                    if (visionEnabled != null && onVisionChange != null) {
-                        AgentSwitchRow(
-                            title = stringResource(R.string.agent_vision_enabled),
-                            checked = visionEnabled,
-                            onCheckedChange = onVisionChange
-                        )
-                    }
                     when {
                         runtimeProfile != null -> Unit
                         isLiteRt -> Text(
@@ -2688,6 +3115,20 @@ private fun AgentTuningCard(
                             blankValue = 8096
                         )
                     }
+                    if (!isLiteRt) {
+                        AgentSwitchRow(
+                            title = stringResource(R.string.agent_thinking_enabled),
+                            checked = thinkingEnabled,
+                            onCheckedChange = onThinkingChange
+                        )
+                    }
+                    if (visionEnabled != null && onVisionChange != null) {
+                        AgentSwitchRow(
+                            title = stringResource(R.string.agent_vision_enabled),
+                            checked = visionEnabled,
+                            onCheckedChange = onVisionChange
+                        )
+                    }
                     Text(
                         stringResource(R.string.agent_runtime_contract_managed_note),
                         style = MaterialTheme.typography.labelSmall,
@@ -2705,45 +3146,81 @@ private fun AgentStringDropdown(
     selected: String,
     values: List<String>,
     labelFor: @Composable (String) -> String = { it },
+    descriptionFor: @Composable (String) -> String? = { null },
+    supportingText: String? = null,
     onSelected: (String) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
-    Box {
-        OutlinedButton(
-            onClick = { expanded = true },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = values.isNotEmpty()
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = if (selected.isBlank()) {
-                        stringResource(R.string.image_tool_component_none)
-                    } else {
-                        labelFor(selected)
-                    },
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            Icon(imageVector = Icons.Default.ExpandMore, contentDescription = label)
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            values.forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(labelFor(option), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    onClick = {
-                        onSelected(option)
-                        expanded = false
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Box {
+            OutlinedButton(
+                onClick = { expanded = true },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = values.isNotEmpty()
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = if (selected.isBlank()) {
+                            stringResource(R.string.image_tool_component_none)
+                        } else {
+                            labelFor(selected)
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    descriptionFor(selected)?.takeIf { it.isNotBlank() }?.let { description ->
+                        Text(
+                            text = description,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
-                )
+                }
+                Icon(imageVector = Icons.Default.ExpandMore, contentDescription = label)
             }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                values.forEach { option ->
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(labelFor(option), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                descriptionFor(option)?.takeIf { it.isNotBlank() }?.let { description ->
+                                    Text(
+                                        description,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        },
+                        onClick = {
+                            onSelected(option)
+                            expanded = false
+                        }
+                    )
+                }
+            }
+        }
+        supportingText?.let { text ->
+            Text(
+                text = text,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
@@ -3177,42 +3654,6 @@ fun AgentConfigCard(
                         Spacer(modifier = Modifier.height(8.dp))
                     }
 
-                    if (!isLiteRtBackend) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth().clickable { onThinkingChange(!thinkingEnabled) }.padding(vertical = 4.dp)
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(stringResource(R.string.agent_thinking_enabled), style = MaterialTheme.typography.bodyMedium)
-                                Text(stringResource(R.string.agent_thinking_enabled_desc), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            Switch(
-                                checked = thinkingEnabled,
-                                onCheckedChange = onThinkingChange,
-                                modifier = Modifier.scale(0.8f)
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(6.dp))
-                    }
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth().clickable { onVisionChange(!visionEnabled) }.padding(vertical = 4.dp)
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(stringResource(R.string.agent_vision_enabled), style = MaterialTheme.typography.bodyMedium)
-                            Text(stringResource(R.string.agent_vision_enabled_desc), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Switch(
-                            checked = visionEnabled,
-                            onCheckedChange = onVisionChange,
-                            modifier = Modifier.scale(0.8f)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
                     if (runtimeProfile == null && isLiteRtBackend) {
                         Text(
                             text = stringResource(R.string.pdf_backend_litert),
@@ -3325,6 +3766,58 @@ fun AgentConfigCard(
                         Spacer(modifier = Modifier.height(8.dp))
                     }
 
+                    if (!isLiteRtBackend) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onThinkingChange(!thinkingEnabled) }
+                                .padding(vertical = 4.dp)
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    stringResource(R.string.agent_thinking_enabled),
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Text(
+                                    stringResource(R.string.agent_thinking_enabled_desc),
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = thinkingEnabled,
+                                onCheckedChange = onThinkingChange,
+                                modifier = Modifier.scale(0.8f)
+                            )
+                        }
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onVisionChange(!visionEnabled) }
+                            .padding(vertical = 4.dp)
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                stringResource(R.string.agent_vision_enabled),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                stringResource(R.string.agent_vision_enabled_desc),
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = visionEnabled,
+                            onCheckedChange = onVisionChange,
+                            modifier = Modifier.scale(0.8f)
+                        )
+                    }
+
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -3362,7 +3855,7 @@ fun AgentConfigCard(
                             TextButton(
                                 onClick = onResetPrompt,
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                                modifier = Modifier.height(28.dp)
+                                modifier = Modifier.heightIn(min = 48.dp)
                             ) {
                                 Text(stringResource(R.string.agent_reset_default), fontSize = 11.sp)
                             }

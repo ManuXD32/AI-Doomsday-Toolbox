@@ -1,6 +1,7 @@
 package com.example.llamadroid.service
 
 import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.data.runtime.AgentRuntimeDispatchSettings
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -222,7 +223,15 @@ class AgentServiceToolVisibilityTest {
         every { repo.agentBackgroundRemovalToolEnabled } returns
             MutableStateFlow(backgroundRemovalEnabled)
         every { repo.agentVisualTestingEnabled } returns MutableStateFlow(false)
-        every { repo.getAgentVisionEnabledForRole(any()) } returns visionEnabled
+        every { repo.resolveAgentSettingsForDispatch(any(), any(), any(), any()) } returns
+            AgentRuntimeDispatchSettings(
+                backend = "ollama",
+                model = "test-model",
+                contextSize = 4096,
+                maxOutputTokens = 1024,
+                thinkingEnabled = false,
+                visionEnabled = visionEnabled
+            )
         return repo
     }
 }

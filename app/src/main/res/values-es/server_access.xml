@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_llama_servers_desc">Crea, configura, inicia o detén servidores locales de chat.</string>
+</resources>

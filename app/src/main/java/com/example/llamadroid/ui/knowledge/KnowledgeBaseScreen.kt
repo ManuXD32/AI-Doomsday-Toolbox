@@ -46,7 +46,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -76,8 +76,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -97,9 +100,13 @@ import com.example.llamadroid.data.repository.KnowledgeEmbeddingServerStatus
 import com.example.llamadroid.service.KnowledgeBaseDiagnostics
 import com.example.llamadroid.service.KnowledgeBaseIndexingService
 import com.example.llamadroid.ui.components.AppContentColumn
+import com.example.llamadroid.ui.components.AppAdvancedSection
+import com.example.llamadroid.ui.components.AppTextDetailsDialog
 import com.example.llamadroid.ui.components.AppPageBackground
-import com.example.llamadroid.ui.components.AppPageHeader
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.IntSliderWithInput
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.util.LogEntry
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.CancellationException
@@ -113,6 +120,8 @@ import java.util.Locale
 @Composable
 fun KnowledgeBaseScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val scope = rememberCoroutineScope()
     val database = remember { AppDatabase.getDatabase(context) }
     val repository = remember { KnowledgeBaseRepository(context, database) }
@@ -169,7 +178,7 @@ fun KnowledgeBaseScreen(navController: NavController) {
     val logDateFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
 
     fun showError(error: Throwable) {
-        Toast.makeText(context, error.message ?: context.getString(R.string.kb_action_failed), Toast.LENGTH_LONG).show()
+        Toast.makeText(context, error.message ?: resources.getString(R.string.kb_action_failed), Toast.LENGTH_LONG).show()
     }
 
     fun launchBusy(label: String, block: suspend () -> Unit) {
@@ -198,7 +207,8 @@ fun KnowledgeBaseScreen(navController: NavController) {
 
     LaunchedEffect(showDiagnostics, knowledgeLogs.size) {
         if (showDiagnostics && knowledgeLogs.isNotEmpty()) {
-            knowledgeLogListState.animateScrollToItem(1)
+            // Header and diagnostics controls occupy the first two stable list items.
+            knowledgeLogListState.animateScrollToItem(2)
         }
     }
 
@@ -220,7 +230,7 @@ fun KnowledgeBaseScreen(navController: NavController) {
                         repository.queueFile(baseId, uri, resolveDisplayName(context, uri))
                     }.onFailure { error ->
                         KnowledgeBaseDiagnostics.log(
-                            context.getString(
+                            resources.getString(
                                 R.string.kb_log_queue_file_failed,
                                 uri.lastPathSegment ?: uri.toString(),
                                 error.message ?: error::class.java.simpleName
@@ -234,7 +244,7 @@ fun KnowledgeBaseScreen(navController: NavController) {
                 if (queuedSourceIds.isNotEmpty()) {
                     Toast.makeText(
                         context,
-                        context.getString(R.string.kb_import_files_queued, queuedSourceIds.size),
+                        resources.getString(R.string.kb_import_files_queued, queuedSourceIds.size),
                         Toast.LENGTH_SHORT
                     ).show()
                 }
@@ -248,42 +258,27 @@ fun KnowledgeBaseScreen(navController: NavController) {
         }
     }
 
-    AppPageBackground {
+    AppScreenScaffold(
+        title = if (showDiagnostics) stringResource(R.string.kb_logs_title)
+            else selectedBase?.name ?: stringResource(R.string.kb_title),
+        onBack = {
+            if (showDiagnostics) showDiagnostics = false
+            else if (selectedBase != null) selectedBaseId = null
+            else navController.popBackStack()
+        }
+    ) {
         AppContentColumn(modifier = Modifier.fillMaxSize(), bottomPadding = 0.dp) {
-            AppPageHeader(
-                eyebrow = stringResource(R.string.kb_dashboard_eyebrow),
-                title = if (showDiagnostics) {
-                    stringResource(R.string.kb_logs_title)
-                } else {
-                    selectedBase?.name ?: stringResource(R.string.kb_title)
-                },
-                subtitle = if (showDiagnostics) {
-                    stringResource(R.string.kb_logs_subtitle)
-                } else if (selectedBase == null) {
-                    stringResource(R.string.kb_folder_subtitle)
-                } else {
-                    stringResource(R.string.kb_folder_detail_subtitle)
-                },
-                trailing = {
-                    IconButton(
-                        onClick = {
-                            if (showDiagnostics) {
-                                showDiagnostics = false
-                            } else if (selectedBase != null) {
-                                selectedBaseId = null
-                            } else {
-                                navController.popBackStack()
-                            }
-                        }
-                    ) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.action_back))
-                    }
-                }
-            )
-
             LazyColumn(
                 state = knowledgeLogListState,
-                modifier = Modifier.fillMaxSize(),
+                // Keep the header in the same scroll owner as the cards. At large text sizes a
+                // static header can otherwise consume the full viewport and measure this list at
+                // zero height, making the embedding prerequisite and actions unreachable.
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .walkthroughTarget("knowledge.sources")
+                    .walkthroughTarget("knowledge.search")
+                    .walkthroughTarget("knowledge.chunk"),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp)
             ) {
@@ -292,7 +287,7 @@ fun KnowledgeBaseScreen(navController: NavController) {
                         KnowledgeDiagnosticsControlCard(
                             status = embeddingServerStatus,
                             onStopServer = {
-                                launchBusy(context.getString(R.string.kb_stopping_embedding_server)) {
+                                launchBusy(resources.getString(R.string.kb_stopping_embedding_server)) {
                                     repository.stopManagedEmbeddingServer("user")
                                 }
                             },
@@ -301,11 +296,11 @@ fun KnowledgeBaseScreen(navController: NavController) {
                                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                                 clipboard.setPrimaryClip(
                                     ClipData.newPlainText(
-                                        context.getString(R.string.kb_logs_clip_label),
+                                        resources.getString(R.string.kb_logs_clip_label),
                                         buildKnowledgeLogExport(knowledgeLogs, logDateFormat)
                                     )
                                 )
-                                Toast.makeText(context, context.getString(R.string.kb_logs_copied), Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, resources.getString(R.string.kb_logs_copied), Toast.LENGTH_SHORT).show()
                             },
                             hasLogs = knowledgeLogs.isNotEmpty()
                         )
@@ -341,17 +336,17 @@ fun KnowledgeBaseScreen(navController: NavController) {
                         embeddingBatchSize = embeddingBatchSize,
                         embeddingThreads = embeddingThreads,
                         onStartServer = {
-                            launchBusy(context.getString(R.string.kb_testing_embedding)) {
+                            launchBusy(resources.getString(R.string.kb_testing_embedding)) {
                                 val port = repository.startManagedEmbeddingServer()
                                 Toast.makeText(
                                     context,
-                                    context.getString(R.string.kb_embedding_server_started, port),
+                                    resources.getString(R.string.kb_embedding_server_started, port),
                                     Toast.LENGTH_SHORT
                                 ).show()
                             }
                         },
                         onStopServer = {
-                            launchBusy(context.getString(R.string.kb_stopping_embedding_server)) {
+                            launchBusy(resources.getString(R.string.kb_stopping_embedding_server)) {
                                 repository.stopManagedEmbeddingServer("user")
                             }
                         },
@@ -421,7 +416,7 @@ fun KnowledgeBaseScreen(navController: NavController) {
                             onCreate = {
                                 val name = newBaseName.trim()
                                 if (name.isNotBlank()) {
-                                    launchBusy(context.getString(R.string.kb_creating_base)) {
+                                    launchBusy(resources.getString(R.string.kb_creating_base)) {
                                         selectedBaseId = repository.createKnowledgeBase(
                                             name = name,
                                             contentSummary = newBaseSummary
@@ -445,7 +440,10 @@ fun KnowledgeBaseScreen(navController: NavController) {
                         items(bases, key = { it.id }) { base ->
                             KnowledgeFolderCard(
                                 base = base,
-                                onOpen = { selectedBaseId = base.id }
+                                onOpen = {
+                                    selectedBaseId = base.id
+                                    walkthroughTargets?.recordEvent("knowledge.sources")
+                                }
                             )
                         }
                     }
@@ -468,7 +466,7 @@ fun KnowledgeBaseScreen(navController: NavController) {
                         KnowledgeBaseContentSummaryCard(
                             base = selectedBase,
                             onSave = { summary ->
-                                launchBusy(context.getString(R.string.kb_content_summary_saving)) {
+                                launchBusy(resources.getString(R.string.kb_content_summary_saving)) {
                                     repository.updateKnowledgeBaseContentSummary(selectedBase.id, summary)
                                 }
                             }
@@ -486,23 +484,34 @@ fun KnowledgeBaseScreen(navController: NavController) {
                         }
                     }
 
-                    item {
-                        SourcesCard(
-                            sources = sources,
-                            currentEmbeddingConfigHash = embeddingConfig.hash,
-                            onEnabledChange = { source, enabled ->
-                                launchBusy(context.getString(R.string.kb_updating_source)) {
-                                    repository.setSourceEnabled(source.id, enabled)
-                                }
-                            },
-                            onResume = { KnowledgeBaseIndexingService.enqueueResumeSource(context, it.id) },
-                            onReindex = { KnowledgeBaseIndexingService.enqueueReindexSource(context, it.id) },
-                            onDelete = {
-                                launchBusy(context.getString(R.string.kb_deleting_source)) {
-                                    repository.deleteSource(it.id)
-                                }
+                    item(key = "sources-heading") {
+                        Text(stringResource(R.string.kb_sources_title), style = MaterialTheme.typography.titleMedium)
+                        if (sources.isEmpty()) {
+                            Text(stringResource(R.string.kb_no_sources), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    items(sources, key = { "source-${it.id}" }) { source ->
+                        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+                            Column(Modifier.padding(16.dp)) {
+                                SourceRow(
+                                    source = source,
+                                    displayStatus = displayStatusFor(source, embeddingConfig.hash),
+                                    canResume = canContinueSource(source, embeddingConfig.hash),
+                                    onEnabledChange = { enabled ->
+                                        launchBusy(resources.getString(R.string.kb_updating_source)) {
+                                            repository.setSourceEnabled(source.id, enabled)
+                                        }
+                                    },
+                                    onResume = { KnowledgeBaseIndexingService.enqueueResumeSource(context, source.id) },
+                                    onReindex = { KnowledgeBaseIndexingService.enqueueReindexSource(context, source.id) },
+                                    onDelete = {
+                                        launchBusy(resources.getString(R.string.kb_deleting_source)) {
+                                            repository.deleteSource(source.id)
+                                        }
+                                    }
+                                )
                             }
-                        )
+                        }
                     }
 
                     item {
@@ -512,12 +521,13 @@ fun KnowledgeBaseScreen(navController: NavController) {
                             canSearch = embeddingConfig.isConfigured && sources.any { it.embeddedChunkCount > 0 },
                             onQueryChange = { query = it },
                             onSearch = {
-                                launchBusy(context.getString(R.string.kb_searching)) {
+                                walkthroughTargets?.recordEvent("knowledge.search")
+                                launchBusy(resources.getString(R.string.kb_searching)) {
                                     searchResult = repository.search(query, listOf(selectedBase.id))
                                         .joinToString("\n\n") { result ->
                                             "[${result.sourceTitle} #${result.chunkId}] ${result.text.take(500)}"
                                         }
-                                        .ifBlank { context.getString(R.string.kb_search_empty) }
+                                        .ifBlank { resources.getString(R.string.kb_search_empty) }
                                 }
                             }
                         )
@@ -542,7 +552,7 @@ fun KnowledgeBaseScreen(navController: NavController) {
             onConfirm = {
                 basePendingDelete = null
                 val deleteId = baseToDelete.id
-                launchBusy(context.getString(R.string.kb_deleting_base)) {
+                launchBusy(resources.getString(R.string.kb_deleting_base)) {
                     repository.deleteKnowledgeBase(deleteId)
                     if (selectedBaseId == deleteId) {
                         selectedBaseId = null
@@ -578,7 +588,7 @@ fun KnowledgeBaseScreen(navController: NavController) {
                     enabled = importUrl.isNotBlank(),
                     onClick = {
                         KnowledgeBaseIndexingService.enqueueWeb(context, baseForUrlImport.id, importUrl.trim())
-                        Toast.makeText(context, context.getString(R.string.kb_add_url_queued), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, resources.getString(R.string.kb_add_url_queued), Toast.LENGTH_SHORT).show()
                         importUrl = ""
                         showUrlImport = false
                     }
@@ -627,7 +637,7 @@ private fun KnowledgeBaseDeleteConfirmDialog(
 }
 
 @Composable
-private fun KnowledgeEmbeddingServerCard(
+internal fun KnowledgeEmbeddingServerCard(
     status: KnowledgeEmbeddingServerStatus,
     backend: String,
     modelLabel: String,
@@ -670,7 +680,7 @@ private fun KnowledgeEmbeddingServerCard(
             containerColor = if (isRunning) {
                 MaterialTheme.colorScheme.primaryContainer
             } else {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
+                MaterialTheme.colorScheme.surface
             }
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
@@ -704,18 +714,24 @@ private fun KnowledgeEmbeddingServerCard(
                 }
             }
 
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
-                ),
-                shape = RoundedCornerShape(12.dp)
+            HorizontalDivider(
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)
+            )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f))
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
+                Text(
+                    stringResource(R.string.responsive_kb_embedding_server_details),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     Text(
                         stringResource(R.string.kb_embedding_server_endpoint, endpointHost, status.port),
                         style = MaterialTheme.typography.bodyMedium,
@@ -734,19 +750,23 @@ private fun KnowledgeEmbeddingServerCard(
                         stringResource(R.string.kb_embedding_server_model_detail, modelLabel),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         stringResource(R.string.kb_embedding_server_runtime_detail, chunkSize, embeddingBatchSize),
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
                     if (isLocal) {
                         Text(
                             stringResource(R.string.kb_embedding_threads_value, embeddingThreads),
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -760,14 +780,22 @@ private fun KnowledgeEmbeddingServerCard(
                 )
             }
 
-            Row(
+            if (isLocal && !embeddingConfigReady && !isRunning && !isStarting) {
+                Text(
+                    stringResource(R.string.responsive_kb_embedding_server_prerequisite),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Button(
                     onClick = if (isRunning || isStarting) onStopServer else onStartServer,
                     enabled = isLocal && (embeddingConfigReady || isRunning || isStarting),
-                    modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     shape = RoundedCornerShape(12.dp),
                     colors = if (isRunning || isStarting) {
                         ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
@@ -783,16 +811,15 @@ private fun KnowledgeEmbeddingServerCard(
                     Text(
                         if (isRunning || isStarting) stringResource(R.string.kb_stop_embedding_server)
                         else stringResource(R.string.kb_test_embedding),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        maxLines = 2
                     )
                 }
                 OutlinedButton(
                     onClick = onOpenLogs,
-                    modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Text(stringResource(R.string.kb_open_logs), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(stringResource(R.string.kb_open_logs), maxLines = 2)
                 }
             }
         }
@@ -827,7 +854,12 @@ private fun KnowledgeEmbeddingPanel(
     onEmbeddingThreadsChange: (Int) -> Unit,
     onNetworkVisibleChange: (Boolean) -> Unit
 ) {
-    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(stringResource(R.string.kb_embedding_settings_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -889,95 +921,99 @@ private fun KnowledgeEmbeddingPanel(
                 }
             }
 
-            if (backend == SettingsRepository.KB_EMBED_BACKEND_LOCAL) {
-                HorizontalDivider()
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                stringResource(R.string.kb_embedding_network_visibility_title),
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Text(
-                                text = stringResource(
-                                    if (embeddingNetworkVisible) {
-                                        R.string.kb_embedding_network_visibility_lan_desc
-                                    } else {
-                                        R.string.kb_embedding_network_visibility_local_desc
-                                    }
-                                ),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+            AppAdvancedSection(
+                title = stringResource(R.string.soft_studio_review_knowledge_advanced),
+                initiallyExpanded = false
+            ) {
+                if (backend == SettingsRepository.KB_EMBED_BACKEND_LOCAL) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    stringResource(R.string.kb_embedding_network_visibility_title),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    text = stringResource(
+                                        if (embeddingNetworkVisible) {
+                                            R.string.kb_embedding_network_visibility_lan_desc
+                                        } else {
+                                            R.string.kb_embedding_network_visibility_local_desc
+                                        }
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = embeddingNetworkVisible,
+                                onCheckedChange = onNetworkVisibleChange
                             )
                         }
-                        Switch(
-                            checked = embeddingNetworkVisible,
-                            onCheckedChange = onNetworkVisibleChange
+                        Text(
+                            text = stringResource(R.string.kb_embedding_network_visibility_restart_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    Text(
-                        text = stringResource(R.string.kb_embedding_network_visibility_restart_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
-            }
 
-            HorizontalDivider()
-            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                IntSliderWithInput(
-                    value = chunkSize,
-                    onValueChange = onChunkSizeChange,
-                    valueRange = SettingsRepository.KB_CHUNK_SIZE_RANGE,
-                    label = stringResource(R.string.kb_chunk_size_label),
-                    suffix = stringResource(R.string.kb_chunk_size_suffix),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Text(
-                    text = stringResource(R.string.kb_chunk_size_desc),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                IntSliderWithInput(
-                    value = embeddingBatchSize,
-                    onValueChange = onEmbeddingBatchSizeChange,
-                    valueRange = SettingsRepository.KB_EMBED_BATCH_SIZE_RANGE,
-                    label = stringResource(R.string.kb_embedding_batch_size_label),
-                    suffix = stringResource(R.string.kb_embedding_batch_size_suffix),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Text(
-                    text = stringResource(R.string.kb_embedding_batch_size_desc),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = stringResource(
-                        R.string.kb_embedding_batch_size_hint,
-                        SettingsRepository.knowledgeEmbeddingBatchSizeForChunkSize(chunkSize)
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                if (backend == SettingsRepository.KB_EMBED_BACKEND_LOCAL) {
+                HorizontalDivider()
+                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     IntSliderWithInput(
-                        value = embeddingThreads,
-                        onValueChange = onEmbeddingThreadsChange,
-                        valueRange = SettingsRepository.KB_EMBED_THREADS_RANGE,
-                        label = stringResource(R.string.kb_embedding_threads_label),
-                        suffix = stringResource(R.string.kb_embedding_threads_suffix),
+                        value = chunkSize,
+                        onValueChange = onChunkSizeChange,
+                        valueRange = SettingsRepository.KB_CHUNK_SIZE_RANGE,
+                        label = stringResource(R.string.kb_chunk_size_label),
+                        suffix = stringResource(R.string.kb_chunk_size_suffix),
                         modifier = Modifier.fillMaxWidth()
                     )
                     Text(
-                        text = stringResource(R.string.kb_embedding_threads_desc),
+                        text = stringResource(R.string.kb_chunk_size_desc),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    IntSliderWithInput(
+                        value = embeddingBatchSize,
+                        onValueChange = onEmbeddingBatchSizeChange,
+                        valueRange = SettingsRepository.KB_EMBED_BATCH_SIZE_RANGE,
+                        label = stringResource(R.string.kb_embedding_batch_size_label),
+                        suffix = stringResource(R.string.kb_embedding_batch_size_suffix),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text(
+                        text = stringResource(R.string.kb_embedding_batch_size_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = stringResource(
+                            R.string.kb_embedding_batch_size_hint,
+                            SettingsRepository.knowledgeEmbeddingBatchSizeForChunkSize(chunkSize)
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (backend == SettingsRepository.KB_EMBED_BACKEND_LOCAL) {
+                        IntSliderWithInput(
+                            value = embeddingThreads,
+                            onValueChange = onEmbeddingThreadsChange,
+                            valueRange = SettingsRepository.KB_EMBED_THREADS_RANGE,
+                            label = stringResource(R.string.kb_embedding_threads_label),
+                            suffix = stringResource(R.string.kb_embedding_threads_suffix),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Text(
+                            text = stringResource(R.string.kb_embedding_threads_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
 
@@ -1010,7 +1046,12 @@ private fun KnowledgeDiagnosticsControlCard(
     onCopyLogs: () -> Unit,
     hasLogs: Boolean
 ) {
-    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(
                 stringResource(R.string.kb_embedding_server_status, embeddingServerStatusLabel(status)),
@@ -1071,6 +1112,11 @@ private fun KnowledgeDiagnosticsControlCard(
 
 @Composable
 private fun KnowledgeLogRow(entry: LogEntry) {
+    var showDetails by remember { mutableStateOf(false) }
+    if (showDetails) AppTextDetailsDialog(
+        title = stringResource(R.string.kb_logs_title), text = entry.message,
+        onDismiss = { showDetails = false }
+    )
     val formatter = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1084,12 +1130,16 @@ private fun KnowledgeLogRow(entry: LogEntry) {
                 color = MaterialTheme.colorScheme.primary
             )
             Text(
-                text = entry.message,
+                text = entry.message.take(4096),
                 style = MaterialTheme.typography.bodySmall,
                 fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurface,
-                overflow = TextOverflow.Visible
+                maxLines = 8,
+                overflow = TextOverflow.Ellipsis
             )
+            TextButton(onClick = { showDetails = true }) {
+                Text(stringResource(R.string.soft_studio_view_details))
+            }
         }
     }
 }
@@ -1132,7 +1182,12 @@ private fun KnowledgeSummaryCard(
     errors: Int,
     embeddingLabel: String
 ) {
-    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 KnowledgeMetric(stringResource(R.string.kb_metric_folders), bases.toString(), Modifier.weight(1f))
@@ -1156,7 +1211,12 @@ private fun CreateKnowledgeBaseCard(
     onContentSummaryChange: (String) -> Unit,
     onCreate: () -> Unit
 ) {
-    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(stringResource(R.string.kb_create_folder), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             OutlinedTextField(
@@ -1194,7 +1254,8 @@ private fun KnowledgeFolderCard(base: KnowledgeBaseEntity, onOpen: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier.padding(16.dp),
@@ -1223,7 +1284,12 @@ private fun KnowledgeBaseContentSummaryCard(
     onSave: (String) -> Unit
 ) {
     var summary by remember(base.id, base.contentSummary) { mutableStateOf(base.contentSummary) }
-    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(
                 text = stringResource(R.string.kb_content_summary_title),
@@ -1267,7 +1333,12 @@ private fun FolderActionsCard(
     onReindex: () -> Unit,
     onDelete: () -> Unit
 ) {
-    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
@@ -1319,7 +1390,12 @@ private fun NoteImportCard(
     notes: List<com.example.llamadroid.data.db.NoteEntity>,
     onImport: (com.example.llamadroid.data.db.NoteEntity) -> Unit
 ) {
-    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(R.string.kb_import_notes), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             if (notes.isEmpty()) {
@@ -1358,7 +1434,12 @@ private fun SourcesCard(
     onReindex: (KnowledgeSourceEntity) -> Unit,
     onDelete: (KnowledgeSourceEntity) -> Unit
 ) {
-    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(stringResource(R.string.kb_sources_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             if (sources.isEmpty()) {
@@ -1393,37 +1474,40 @@ private fun SourceRow(
 ) {
     val uriHandler = LocalUriHandler.current
     val openableSourceRef = source.sourceRef.takeIf(::isOpenableSourceReference)
+    var showDetails by remember { mutableStateOf(false) }
+    val enabledDescription = stringResource(R.string.soft_studio_source_enabled, source.title)
+    if (showDetails) AppTextDetailsDialog(
+        title = source.title,
+        text = listOfNotNull(source.sourceRef, source.errorMessage).joinToString("\n\n"),
+        onDismiss = { showDetails = false }
+    )
     Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(vertical = 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(source.title, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    KnowledgeSourceTypeBadge(source)
-                }
-                if (openableSourceRef != null) {
-                    Text(
-                        openableSourceRef,
-                        modifier = Modifier.clickable {
-                            runCatching { uriHandler.openUri(openableSourceRef) }
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                Text(
-                    knowledgeSourceProgressDetail(source, displayStatus),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    knowledgeSourceStatusLabel(displayStatus),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (displayStatus == KnowledgeBaseSourceStatus.ERROR) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
-                )
+        Text(source.title, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        KnowledgeSourceTypeBadge(source)
+        if (openableSourceRef != null) {
+            TextButton(onClick = { runCatching { uriHandler.openUri(openableSourceRef) } }) {
+                Text(openableSourceRef, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            Switch(checked = source.enabled, onCheckedChange = onEnabledChange)
+        }
+        Text(
+            knowledgeSourceProgressDetail(source, displayStatus),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            knowledgeSourceStatusLabel(displayStatus),
+            style = MaterialTheme.typography.bodySmall,
+            color = if (displayStatus == KnowledgeBaseSourceStatus.ERROR) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Switch(
+                checked = source.enabled, onCheckedChange = onEnabledChange,
+                modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = enabledDescription }
+            )
             if (canResume) {
                 IconButton(onClick = onResume) {
                     Icon(Icons.Default.PlayArrow, contentDescription = stringResource(R.string.kb_continue_embeddings))
@@ -1435,6 +1519,9 @@ private fun SourceRow(
             IconButton(onClick = onDelete) {
                 Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.action_delete))
             }
+            TextButton(onClick = { showDetails = true }) {
+                Text(stringResource(R.string.soft_studio_view_details))
+            }
         }
         val total = source.progressTotal.takeIf { it > 0 } ?: source.chunkCount
         if (displayStatus in listOf(KnowledgeBaseSourceStatus.QUEUED, KnowledgeBaseSourceStatus.EXTRACTING, KnowledgeBaseSourceStatus.CHUNKING, KnowledgeBaseSourceStatus.EMBEDDING) && total > 0) {
@@ -1444,7 +1531,8 @@ private fun SourceRow(
             )
         }
         source.errorMessage?.takeIf { it.isNotBlank() }?.let {
-            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            Text(it.take(2048), maxLines = 5, overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
     }
 }
@@ -1495,6 +1583,11 @@ private fun TestSearchCard(
     onQueryChange: (String) -> Unit,
     onSearch: () -> Unit
 ) {
+    var showDetails by remember { mutableStateOf(false) }
+    if (showDetails) AppTextDetailsDialog(
+        title = stringResource(R.string.kb_test_query), text = result,
+        onDismiss = { showDetails = false }
+    )
     Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(stringResource(R.string.kb_test_query), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -1508,7 +1601,15 @@ private fun TestSearchCard(
                 Text(stringResource(R.string.kb_search_needs_vectors), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (result.isNotBlank()) {
-                Text(result, style = MaterialTheme.typography.bodySmall)
+                Text(
+                    result.take(4096),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 12,
+                    overflow = TextOverflow.Ellipsis
+                )
+                TextButton(onClick = { showDetails = true }) {
+                    Text(stringResource(R.string.soft_studio_view_details))
+                }
             }
         }
     }

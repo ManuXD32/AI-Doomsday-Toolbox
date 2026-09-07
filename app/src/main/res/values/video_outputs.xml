@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="video_output_requires_two_frames">Use at least two frames to generate a video.</string>
+    <string name="video_output_summary">%1$d×%2$d • frames: %3$d • fps: %4$d • steps: %5$d</string>
+    <string name="video_output_open_preview">Open video preview</string>
+    <string name="video_output_animated_webp">Animated WebP</string>
+    <string name="video_output_audio_auto">Automatic audio</string>
+    <string name="video_output_retry_conversion">Retry video conversion</string>
+    <string name="video_output_retry_failed">Could not start conversion. Close other video work and try again.</string>
+</resources>

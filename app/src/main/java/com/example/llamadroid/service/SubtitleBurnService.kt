@@ -7,6 +7,12 @@ import android.net.Uri
 import android.os.Binder
 import android.os.IBinder
 import androidx.documentfile.provider.DocumentFile
+import androidx.core.content.FileProvider
+import androidx.core.content.edit
+import androidx.core.net.toUri
+import com.example.llamadroid.R
+import com.example.llamadroid.LlamaApplication
+import androidx.annotation.StringRes
 import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.util.DebugLog
 import kotlinx.coroutines.*
@@ -22,6 +28,11 @@ import java.io.InputStreamReader
  * Continues processing even when app is in background.
  */
 class SubtitleBurnService : Service() {
+    // Services do not inherit MainActivity's localized context. Resolve messages
+    // from the same persisted language setting, including after a language change.
+    private fun localizedString(@StringRes id: Int, vararg args: Any): String =
+        LlamaApplication.updateLocale(this).getString(id, *args)
+
     
     private val binder = SubtitleBurnBinder()
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -38,6 +49,16 @@ class SubtitleBurnService : Service() {
     override fun onCreate() {
         super.onCreate()
         setupFFmpegLibrarySymlinks()
+        serviceScope.launch {
+            val saved = getSharedPreferences("subtitle_results", MODE_PRIVATE)
+            val uri = saved.getString("last_uri", null)
+            val path = saved.getString("last_path", null)
+            if (uri != null && path != null) {
+                _state.compareAndSet(SubtitleBurnState.Idle,
+                    SubtitleBurnState.Complete(path, uri, if (saved.getBoolean("last_export_failed", false))
+                        localizedString(R.string.studio_subtitle_export_error) else null))
+            }
+        }
     }
     
     private fun setupFFmpegLibrarySymlinks() {
@@ -86,7 +107,7 @@ class SubtitleBurnService : Service() {
     private fun startForegroundWithNotification() {
         val (id, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.VIDEO_UPSCALE,
-            "Subtitle Burn"
+            localizedString(R.string.subtitle_burn_title)
         )
         taskId = id
         startForeground(id, notification)
@@ -102,36 +123,48 @@ class SubtitleBurnService : Service() {
      * Start burning subtitles into video
      */
     fun startBurn(config: SubtitleBurnConfig) {
-        if (currentJob?.isActive == true) {
+        if (currentJob?.isCompleted == false) {
             DebugLog.log("[SubtitleBurnService] Already processing")
             return
         }
         
-        _state.value = SubtitleBurnState.Processing(0f, "Starting...")
+        _state.value = SubtitleBurnState.Processing(0f, localizedString(R.string.studio_subtitle_starting))
         
         currentJob = serviceScope.launch {
             try {
                 burnSubtitles(config)
             } catch (e: CancellationException) {
-                _state.value = SubtitleBurnState.Idle
+                _state.value = SubtitleBurnState.Cancelled
                 if (taskId != -1) UnifiedNotificationManager.dismissTask(taskId)
             } catch (e: Exception) {
-                _state.value = SubtitleBurnState.Error(e.message ?: "Unknown error")
-                if (taskId != -1) UnifiedNotificationManager.failTask(taskId, e.message ?: "Error")
+                // Destroying FFmpeg can unblock readLine with IOException rather than
+                // CancellationException. Preserve the user's cancellation decision.
+                if (!currentCoroutineContext().isActive) {
+                    _state.value = SubtitleBurnState.Cancelled
+                    if (taskId != -1) UnifiedNotificationManager.dismissTask(taskId)
+                } else {
+                    _state.value = SubtitleBurnState.Error(e.message ?: localizedString(R.string.subtitle_error))
+                    if (taskId != -1) UnifiedNotificationManager.failTask(taskId, e.message ?: localizedString(R.string.subtitle_error))
+                }
+            } finally {
+                currentProcess?.destroy()
+                currentProcess = null
             }
         }
     }
     
     private suspend fun burnSubtitles(config: SubtitleBurnConfig) {
-        updateNotification("Preparing files...", 0.05f)
-        _state.value = SubtitleBurnState.Processing(0.05f, "Preparing files...")
+        val taskContext = currentCoroutineContext()
+        taskContext.ensureActive()
+        updateNotification(localizedString(R.string.studio_subtitle_preparing), 0.05f)
+        _state.value = SubtitleBurnState.Processing(0.05f, localizedString(R.string.studio_subtitle_preparing))
         
         val binaryRepo = BinaryRepository(this)
         val ffmpegFile: File? = binaryRepo.getFFmpegBinary()
         
         if (ffmpegFile == null || !ffmpegFile.exists()) {
-            _state.value = SubtitleBurnState.Error("ffmpeg not found")
-            if (taskId != -1) UnifiedNotificationManager.failTask(taskId, "ffmpeg not found")
+            _state.value = SubtitleBurnState.Error(localizedString(R.string.studio_subtitle_runtime_missing))
+            if (taskId != -1) UnifiedNotificationManager.failTask(taskId, localizedString(R.string.studio_subtitle_runtime_missing))
             return
         }
         
@@ -147,29 +180,33 @@ class SubtitleBurnService : Service() {
         
         try {
             // Copy video
-            updateNotification("Copying video...", 0.1f)
-            _state.value = SubtitleBurnState.Processing(0.1f, "Copying video...")
+            updateNotification(localizedString(R.string.studio_subtitle_copy_video), 0.1f)
+            _state.value = SubtitleBurnState.Processing(0.1f, localizedString(R.string.studio_subtitle_copy_video))
             contentResolver.openInputStream(config.videoUri)?.use { input ->
                 videoFile.outputStream().use { output ->
                     input.copyTo(output)
                 }
             }
             
+            taskContext.ensureActive()
             // Copy subtitle
-            updateNotification("Copying subtitle...", 0.15f)
-            _state.value = SubtitleBurnState.Processing(0.15f, "Copying subtitle...")
+            updateNotification(localizedString(R.string.studio_subtitle_copy_text), 0.15f)
+            _state.value = SubtitleBurnState.Processing(0.15f, localizedString(R.string.studio_subtitle_copy_text))
             contentResolver.openInputStream(config.subtitleUri)?.use { input ->
                 subtitleFile.outputStream().use { output ->
                     input.copyTo(output)
                 }
             }
             
+            taskContext.ensureActive()
             // Get video duration for progress calculation
             var videoDurationSecs = 0.0
             val probeCommand = listOf(ffmpegPath, "-i", videoFile.absolutePath)
             val probeProcess = ProcessBuilder(probeCommand).redirectErrorStream(true).start()
+            currentProcess = probeProcess
             BufferedReader(InputStreamReader(probeProcess.inputStream)).use { reader ->
                 reader.forEachLine { line ->
+                    taskContext.ensureActive()
                     // Parse "Duration: 00:02:29.84" format
                     if (line.contains("Duration:")) {
                         val durationMatch = Regex("Duration: (\\d+):(\\d+):(\\d+\\.\\d+)").find(line)
@@ -184,10 +221,12 @@ class SubtitleBurnService : Service() {
                 }
             }
             probeProcess.waitFor()
+            currentProcess = null
+            taskContext.ensureActive()
             
             // Step 1: Convert SRT to ASS format
-            updateNotification("Converting subtitles...", 0.2f)
-            _state.value = SubtitleBurnState.Processing(0.2f, "Converting subtitles to ASS...")
+            updateNotification(localizedString(R.string.studio_subtitle_converting), 0.2f)
+            _state.value = SubtitleBurnState.Processing(0.2f, localizedString(R.string.studio_subtitle_converting))
             
             val convertCommand = listOf(
                 ffmpegPath, "-y",
@@ -197,14 +236,18 @@ class SubtitleBurnService : Service() {
             DebugLog.log("[SubtitleBurnService] Convert: ${convertCommand.joinToString(" ")}")
             
             val convertProcess = ProcessBuilder(convertCommand).redirectErrorStream(true).start()
-            convertProcess.inputStream.bufferedReader().forEachLine { 
+            currentProcess = convertProcess
+            convertProcess.inputStream.bufferedReader().forEachLine {
+                taskContext.ensureActive()
                 DebugLog.log("[SubtitleBurnService] Convert: $it")
             }
             val convertExit = convertProcess.waitFor()
+            currentProcess = null
+            taskContext.ensureActive()
             
             if (convertExit != 0 || !assFile.exists()) {
-                _state.value = SubtitleBurnState.Error("Failed to convert subtitles")
-                if (taskId != -1) UnifiedNotificationManager.failTask(taskId, "Subtitle conversion failed")
+                _state.value = SubtitleBurnState.Error(localizedString(R.string.studio_subtitle_convert_error))
+                if (taskId != -1) UnifiedNotificationManager.failTask(taskId, localizedString(R.string.studio_subtitle_convert_error))
                 return
             }
             
@@ -297,8 +340,8 @@ class SubtitleBurnService : Service() {
             
             DebugLog.log("[SubtitleBurnService] Burn: ${command.joinToString(" ")}")
             
-            updateNotification("Burning subtitles: 0%", 0.25f)
-            _state.value = SubtitleBurnState.Processing(0.25f, "Burning subtitles: 0%")
+            updateNotification(localizedString(R.string.studio_subtitle_progress, 0), 0.25f)
+            _state.value = SubtitleBurnState.Processing(0.25f, localizedString(R.string.studio_subtitle_progress, 0))
             
             val processBuilder = ProcessBuilder(command)
             processBuilder.redirectErrorStream(true)
@@ -306,13 +349,16 @@ class SubtitleBurnService : Service() {
             processBuilder.environment()["FONTCONFIG_PATH"] = fontconfigDir.absolutePath
             processBuilder.environment()["FONTCONFIG_FILE"] = fontsConfFile.absolutePath
             
-            currentProcess = processBuilder.start()
+            taskContext.ensureActive()
+            val burnProcess = processBuilder.start()
+            currentProcess = burnProcess
             
             // Read output and parse progress (DebugLog handles sensitive info filtering)
-            val reader = BufferedReader(InputStreamReader(currentProcess!!.inputStream))
+            val reader = BufferedReader(InputStreamReader(burnProcess.inputStream))
             var line: String?
             
             while (reader.readLine().also { line = it } != null) {
+                taskContext.ensureActive()
                 DebugLog.log("[SubtitleBurnService] $line")
                 
                 // Parse "time=00:01:23.45" for progress
@@ -326,59 +372,58 @@ class SubtitleBurnService : Service() {
                         val percent = ((currentSecs / videoDurationSecs) * 100).toInt().coerceIn(0, 100)
                         val progress = 0.25f + (percent / 100f * 0.65f)  // 25% to 90%
                         
-                        updateNotification("Burning subtitles: $percent%", progress)
-                        _state.value = SubtitleBurnState.Processing(progress, "Burning subtitles: $percent%")
+                        updateNotification(localizedString(R.string.studio_subtitle_progress, percent), progress)
+                        _state.value = SubtitleBurnState.Processing(progress, localizedString(R.string.studio_subtitle_progress, percent))
                     }
                 }
             }
             
-            val exitCode = currentProcess!!.waitFor()
+            val exitCode = burnProcess.waitFor()
             currentProcess = null
+            taskContext.ensureActive()
             
             if (exitCode == 0 && outputFile.exists()) {
-                updateNotification("Saving to folder...", 0.9f)
-                _state.value = SubtitleBurnState.Processing(0.9f, "Saving to output folder...")
+                updateNotification(localizedString(R.string.studio_subtitle_saving), 0.9f)
+                _state.value = SubtitleBurnState.Processing(0.9f, localizedString(R.string.studio_subtitle_saving))
                 
-                // Copy to output folder (in SubtitleBurn subfolder)
-                var savedPath = "cache"
+                // Retain the successful result before exporting; a missing/revoked folder
+                // must never make a completed video disappear during cache cleanup.
+                val retained = preserveSubtitleOutput(outputFile, filesDir)
+                var savedPath = retained.name
+                var resultUri = FileProvider.getUriForFile(this, "$packageName.fileprovider", retained)
+                var exportWarning: String? = null
                 if (!config.outputFolderUri.isNullOrEmpty()) {
                     try {
-                        val rootFolder = DocumentFile.fromTreeUri(this, Uri.parse(config.outputFolderUri))
-                        
-                        // Create SubtitleBurn subfolder if it doesn't exist
-                        var subtitleFolder = rootFolder?.findFile("SubtitleBurn")
-                        if (subtitleFolder == null || !subtitleFolder.isDirectory) {
-                            subtitleFolder = rootFolder?.createDirectory("SubtitleBurn")
-                        }
-                        
-                        val targetFolder = subtitleFolder ?: rootFolder
-                        val timestamp = System.currentTimeMillis()
-                        val outputName = "subtitled_$timestamp.mp4"
-                        val newFile = targetFolder?.createFile("video/mp4", outputName)
-                        
-                        newFile?.uri?.let { destUri ->
-                            contentResolver.openOutputStream(destUri)?.use { output ->
-                                outputFile.inputStream().use { input ->
-                                    input.copyTo(output)
-                                }
-                            }
-                            savedPath = "SubtitleBurn/$outputName"
-                            DebugLog.log("[SubtitleBurnService] Saved to: $savedPath")
-                        }
-                    } catch (e: Exception) {
-                        DebugLog.log("[SubtitleBurnService] Save failed: ${e.message}")
+                        val root = DocumentFile.fromTreeUri(this, config.outputFolderUri.toUri())
+                            ?: error(localizedString(R.string.studio_subtitle_export_error))
+                        val folder = root.findFile("SubtitleBurn")?.takeIf { it.isDirectory }
+                            ?: root.createDirectory("SubtitleBurn")
+                            ?: error(localizedString(R.string.studio_subtitle_export_error))
+                        val target = folder.createFile("video/mp4", retained.name)
+                            ?: error(localizedString(R.string.studio_subtitle_export_error))
+                        val stream = contentResolver.openOutputStream(target.uri)
+                            ?: error(localizedString(R.string.studio_subtitle_export_error))
+                        stream.use { output -> retained.inputStream().use { it.copyTo(output) } }
+                        savedPath = "SubtitleBurn/${target.name ?: retained.name}"
+                        resultUri = target.uri
+                    } catch (error: Exception) {
+                        exportWarning = localizedString(R.string.studio_subtitle_export_error)
+                        DebugLog.log("[SubtitleBurnService] Export failed: ${error.javaClass.simpleName}")
                     }
                 }
-                
-                // Update notification to show "Saved" (not "Saving")
-                updateNotification("Saved: $savedPath", 1.0f)
+                updateNotification(localizedString(R.string.subtitle_saved_path, savedPath), 1f)
                 if (taskId != -1) {
-                    UnifiedNotificationManager.completeTask(taskId, "✓ Saved: $savedPath")
+                    UnifiedNotificationManager.completeTask(taskId, localizedString(R.string.subtitle_saved_path, savedPath))
                 }
-                _state.value = SubtitleBurnState.Complete(savedPath)
+                getSharedPreferences("subtitle_results", MODE_PRIVATE).edit(commit = true) {
+                    putString("last_path", savedPath)
+                    putString("last_uri", resultUri.toString())
+                    putBoolean("last_export_failed", exportWarning != null)
+                }
+                _state.value = SubtitleBurnState.Complete(savedPath, resultUri.toString(), exportWarning)
             } else {
-                _state.value = SubtitleBurnState.Error("ffmpeg failed with code $exitCode")
-                if (taskId != -1) UnifiedNotificationManager.failTask(taskId, "ffmpeg failed: $exitCode")
+                _state.value = SubtitleBurnState.Error(localizedString(R.string.studio_subtitle_process_error, exitCode))
+                if (taskId != -1) UnifiedNotificationManager.failTask(taskId, localizedString(R.string.studio_subtitle_process_error, exitCode))
             }
             
         } finally {
@@ -391,11 +436,11 @@ class SubtitleBurnService : Service() {
     }
     
     fun cancel() {
-        currentProcess?.destroyForcibly()
-        currentProcess = null
-        currentJob?.cancel()
-        currentJob = null
-        _state.value = SubtitleBurnState.Idle
+        if (currentJob?.isCompleted == false) {
+            _state.value = SubtitleBurnState.Cancelling
+            currentJob?.cancel()
+            currentProcess?.destroyForcibly()
+        }
     }
     
     companion object {
@@ -448,7 +493,10 @@ class SubtitleBurnService : Service() {
 sealed class SubtitleBurnState {
     object Idle : SubtitleBurnState()
     data class Processing(val progress: Float, val status: String) : SubtitleBurnState()
-    data class Complete(val outputPath: String) : SubtitleBurnState()
+    object Cancelling : SubtitleBurnState()
+    object Cancelled : SubtitleBurnState()
+    data class Complete(val outputPath: String, val outputUri: String? = null,
+        val exportWarning: String? = null) : SubtitleBurnState()
     data class Error(val message: String) : SubtitleBurnState()
 }
 
@@ -465,3 +513,10 @@ data class SubtitleBurnConfig(
     val fontName: String,
     val outputFolderUri: String?
 )
+
+/** Keep final media separate from disposable FFmpeg inputs, including when export fails. */
+internal fun preserveSubtitleOutput(output: File, filesDir: File): File {
+    val directory = File(filesDir, "subtitle_outputs")
+    check(directory.isDirectory || directory.mkdirs()) { "Cannot create subtitle output directory" }
+    return output.copyTo(File(directory, output.name), overwrite = false)
+}

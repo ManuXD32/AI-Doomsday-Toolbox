@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -41,7 +42,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -83,12 +84,13 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import androidx.documentfile.provider.DocumentFile
@@ -124,6 +126,13 @@ import com.example.llamadroid.service.OnnxImageGenerationService
 import com.example.llamadroid.service.OnnxImageGenerationState
 import com.example.llamadroid.service.OnnxImageGenerationStateStore
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.components.AppScrollableTabRow
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.WalkthroughScrollOwner
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.ui.components.AppStateKind
+import com.example.llamadroid.ui.components.AppStatePanel
+import com.example.llamadroid.ui.components.AppTaskActionFooter
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
@@ -138,6 +147,8 @@ import java.util.Locale
 @Composable
 fun OnnxImageGenScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
+    val resources = LocalResources.current
     val startupGuard = rememberAiJobStartupGuard()
     val db = remember { AppDatabase.getDatabase(context) }
     val settingsRepo = remember { SettingsRepository(context) }
@@ -234,8 +245,8 @@ fun OnnxImageGenScreen(navController: NavController) {
     val isBusy = generationState is OnnxImageGenerationState.Preparing ||
         generationState is OnnxImageGenerationState.Generating
     val backendLabel = when (backend) {
-        OnnxRuntimeBackend.CPU -> context.getString(R.string.onnx_image_gen_backend_cpu)
-        OnnxRuntimeBackend.NNAPI -> context.getString(R.string.onnx_image_gen_backend_nnapi)
+        OnnxRuntimeBackend.CPU -> resources.getString(R.string.onnx_image_gen_backend_cpu)
+        OnnxRuntimeBackend.NNAPI -> resources.getString(R.string.onnx_image_gen_backend_nnapi)
     }
     val normalizedCanvas = remember(selectedMode, widthText, heightText) {
         if (selectedMode == OnnxImageGenMode.IMG2IMG) {
@@ -286,9 +297,9 @@ fun OnnxImageGenScreen(navController: NavController) {
             }.onFailure { error ->
                 Toast.makeText(
                     context,
-                    context.getString(
+                    resources.getString(
                         R.string.onnx_image_gen_init_image_import_failed,
-                        error.message ?: context.getString(R.string.error_generic)
+                        error.message ?: resources.getString(R.string.error_generic)
                     ),
                     Toast.LENGTH_LONG
                 ).show()
@@ -324,27 +335,27 @@ fun OnnxImageGenScreen(navController: NavController) {
         }
         when {
             !isImg2Img && (width == null || width < 64) -> {
-                formError = context.getString(R.string.onnx_image_gen_error_invalid_width)
+                formError = resources.getString(R.string.onnx_image_gen_error_invalid_width)
                 return null
             }
             !isImg2Img && (height == null || height < 64) -> {
-                formError = context.getString(R.string.onnx_image_gen_error_invalid_height)
+                formError = resources.getString(R.string.onnx_image_gen_error_invalid_height)
                 return null
             }
             steps == null || steps !in 1..150 -> {
-                formError = context.getString(R.string.onnx_image_gen_error_invalid_steps)
+                formError = resources.getString(R.string.onnx_image_gen_error_invalid_steps)
                 return null
             }
             cfgScale == null || cfgScale <= 0f || cfgScale > 30f -> {
-                formError = context.getString(R.string.onnx_image_gen_error_invalid_cfg)
+                formError = resources.getString(R.string.onnx_image_gen_error_invalid_cfg)
                 return null
             }
             selectedMode == OnnxImageGenMode.IMG2IMG && !selectedModelSupportsImg2Img -> {
-                formError = context.getString(R.string.onnx_image_gen_error_model_no_img2img)
+                formError = resources.getString(R.string.onnx_image_gen_error_model_no_img2img)
                 return null
             }
             selectedMode == OnnxImageGenMode.IMG2IMG && initImagePath.isNullOrBlank() -> {
-                formError = context.getString(R.string.onnx_image_gen_error_missing_init_image)
+                formError = resources.getString(R.string.onnx_image_gen_error_missing_init_image)
                 return null
             }
         }
@@ -394,10 +405,11 @@ fun OnnxImageGenScreen(navController: NavController) {
         if (isBusy) return
         val config = parseAndValidateConfig() ?: return
         if (config.prompt.isBlank()) {
-            formError = context.getString(R.string.onnx_image_gen_error_empty_prompt)
+            formError = resources.getString(R.string.onnx_image_gen_error_empty_prompt)
             return
         }
-        holder.updateState(OnnxImageGenerationState.Preparing(context.getString(R.string.onnx_image_gen_status_preparing)))
+        walkthroughTargets?.recordEvent("image.onnx.input")
+        holder.updateState(OnnxImageGenerationState.Preparing(resources.getString(R.string.onnx_image_gen_status_preparing)))
         startupGuard.run("onnx_image_generation_start") {
             context.startForegroundService(OnnxImageGenerationService.createStartIntent(context, config))
         }
@@ -419,11 +431,11 @@ fun OnnxImageGenScreen(navController: NavController) {
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(Intent.createChooser(shareIntent, context.getString(R.string.imagegen_share_chooser)))
+            context.startActivity(Intent.createChooser(shareIntent, resources.getString(R.string.imagegen_share_chooser)))
         }.onFailure { error ->
             Toast.makeText(
                 context,
-                context.getString(R.string.onnx_image_gen_share_failed, error.message ?: context.getString(R.string.error_generic)),
+                resources.getString(R.string.onnx_image_gen_share_failed, error.message ?: resources.getString(R.string.error_generic)),
                 Toast.LENGTH_LONG
             ).show()
         }
@@ -443,7 +455,7 @@ fun OnnxImageGenScreen(navController: NavController) {
             }
             Toast.makeText(
                 context,
-                context.getString(
+                resources.getString(
                     if (deleted) R.string.imagegen_delete_confirm else R.string.imagegen_delete_fail
                 ),
                 Toast.LENGTH_SHORT
@@ -468,31 +480,31 @@ fun OnnxImageGenScreen(navController: NavController) {
         }
     }
 
+    WalkthroughScrollOwner(setOf("image.onnx.input")) { target ->
+        if (target == "image.onnx.input" && mainTab != 0) mainTab = 0
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.surface,
-                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f)
-                    )
-                )
-            )
+            .background(MaterialTheme.colorScheme.background)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 8.dp),
+                .padding(start = 20.dp, top = 12.dp, end = 20.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = { navController.popBackStack() }) {
+            IconButton(
+                onClick = { navController.popBackStack() },
+                modifier = Modifier.walkthroughTarget("back")
+            ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     stringResource(R.string.onnx_image_gen_title),
-                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -504,12 +516,13 @@ fun OnnxImageGenScreen(navController: NavController) {
                     overflow = TextOverflow.Ellipsis
                 )
             }
+            com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
             IconButton(onClick = { showInfoDialog = true }) {
                 Icon(Icons.Default.Info, contentDescription = stringResource(R.string.gen_help_open))
             }
         }
 
-        TabRow(selectedTabIndex = mainTab, modifier = Modifier.padding(horizontal = 16.dp)) {
+        AppScrollableTabRow(selectedTabIndex = mainTab, modifier = Modifier.padding(horizontal = 20.dp)) {
             Tab(
                 selected = mainTab == 0,
                 onClick = { mainTab = 0 },
@@ -526,7 +539,8 @@ fun OnnxImageGenScreen(navController: NavController) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(16.dp)
+                    .padding(horizontal = 20.dp)
+                    .weight(1f)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -787,7 +801,9 @@ fun OnnxImageGenScreen(navController: NavController) {
                                 prompt = it
                                 holder.updatePrompt(it)
                             },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .walkthroughTarget("image.onnx.input"),
                             minLines = 4,
                             label = { Text(stringResource(R.string.onnx_image_gen_prompt_label)) },
                             shape = RoundedCornerShape(14.dp)
@@ -1214,46 +1230,86 @@ fun OnnxImageGenScreen(navController: NavController) {
                         }
                     }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Button(
-                            onClick = { startGeneration() },
-                            enabled = !isBusy &&
-                                selectedModel != null &&
-                                prompt.isNotBlank() &&
-                                (selectedMode != OnnxImageGenMode.IMG2IMG ||
-                                    (selectedModelSupportsImg2Img && !initImagePath.isNullOrBlank())),
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(stringResource(R.string.imagegen_generate_btn))
+                }
+            }
+            AppTaskActionFooter(
+                modifier = Modifier
+                    .fillMaxWidth()
+            ) {
+                if (isBusy) {
+                    when (val runningState = generationState) {
+                        is OnnxImageGenerationState.Preparing -> {
+                            Text(
+                                text = runningState.status,
+                                modifier = Modifier.fillMaxWidth(),
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         }
-                        FilledTonalButton(
-                            onClick = { cancelGeneration() },
-                            enabled = isBusy,
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(16.dp)
-                        ) {
-                            Text(stringResource(R.string.action_cancel))
+                        is OnnxImageGenerationState.Generating -> {
+                            Text(
+                                text = runningState.status,
+                                modifier = Modifier.fillMaxWidth(),
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            LinearProgressIndicator(
+                                progress = { runningState.progress.coerceIn(0f, 1f) },
+                                modifier = Modifier.fillMaxWidth()
+                            )
                         }
+                        else -> Unit
+                    }
+                    FilledTonalButton(
+                        onClick = { cancelGeneration() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(stringResource(R.string.soft_studio_cancel))
+                    }
+                } else {
+                    Button(
+                        onClick = { startGeneration() },
+                        enabled = selectedModel != null &&
+                            prompt.isNotBlank() &&
+                            (selectedMode != OnnxImageGenMode.IMG2IMG ||
+                                (selectedModelSupportsImg2Img && !initImagePath.isNullOrBlank())),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 52.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(stringResource(R.string.soft_studio_generate))
                     }
                 }
             }
         } else {
             if (galleryImages.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        stringResource(R.string.onnx_image_gen_gallery_empty),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                AppStatePanel(
+                    kind = AppStateKind.Empty,
+                    title = stringResource(R.string.soft_studio_empty_title),
+                    message = stringResource(R.string.onnx_image_gen_gallery_empty),
+                    modifier = Modifier.fillMaxSize()
+                )
             } else {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(horizontal = 16.dp)
+                        .padding(horizontal = 20.dp)
                 ) {
                     SingleChoiceSegmentedButtonRow(
                         modifier = Modifier
@@ -1620,15 +1676,7 @@ private fun OnnxHeroCard(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(
-                    Brush.linearGradient(
-                        colors = listOf(
-                            MaterialTheme.colorScheme.primaryContainer,
-                            MaterialTheme.colorScheme.secondaryContainer,
-                            MaterialTheme.colorScheme.tertiaryContainer
-                        )
-                    )
-                )
+                .background(MaterialTheme.colorScheme.primaryContainer)
                 .padding(18.dp)
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {

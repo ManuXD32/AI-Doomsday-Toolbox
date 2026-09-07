@@ -1,5 +1,8 @@
 package com.example.llamadroid.ui.settings
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
+import android.os.Build
 import android.content.Intent
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -14,12 +17,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -27,6 +32,7 @@ import androidx.navigation.NavController
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.data.AppThemeMode
 import com.example.llamadroid.data.backup.NativeChatNotesBackupManager
 import com.example.llamadroid.data.binary.BinaryAvailability
 import com.example.llamadroid.data.binary.BinaryRepository
@@ -34,6 +40,9 @@ import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.DatabaseBackupManager
 import com.example.llamadroid.quadtrix.QuadtrixWorkspaceManager
 import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.components.AppChromeDefaults
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.util.AccelerationWorkload
 import com.example.llamadroid.util.CpuFeatures
 import com.example.llamadroid.util.CustomBinaryFamily
@@ -54,6 +63,8 @@ import kotlinx.coroutines.withContext
 @Composable
 fun GeneralSettingsScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val settingsRepo = remember { SettingsRepository(context) }
     val nativeModuleManager = remember { NativeFeatureModuleManager(context) }
@@ -89,11 +100,11 @@ fun GeneralSettingsScreen(navController: NavController) {
             }
             result.onSuccess { selection ->
                 settingsRepo.setQuadtrixWorkspace(selection.uri, selection.directPath)
-                Toast.makeText(context, context.getString(R.string.quadtrix_workspace_ready), Toast.LENGTH_LONG).show()
+                Toast.makeText(context, resources.getString(R.string.quadtrix_workspace_ready), Toast.LENGTH_LONG).show()
             }.onFailure { error ->
                 Toast.makeText(
                     context,
-                    context.getString(R.string.quadtrix_workspace_setup_failed, error.message ?: context.getString(R.string.error_generic)),
+                    resources.getString(R.string.quadtrix_workspace_setup_failed, error.message ?: resources.getString(R.string.error_generic)),
                     Toast.LENGTH_LONG
                 ).show()
             }
@@ -110,16 +121,16 @@ fun GeneralSettingsScreen(navController: NavController) {
                     customBinaryPackages = customBinaryManager.listPackages()
                     Toast.makeText(
                         context,
-                        context.getString(R.string.binary_catalog_custom_imported, imported.name),
+                        resources.getString(R.string.binary_catalog_custom_imported, imported.name),
                         Toast.LENGTH_LONG
                     ).show()
                 }
                 .onFailure { error ->
                     Toast.makeText(
                         context,
-                        context.getString(
+                        resources.getString(
                             R.string.binary_catalog_custom_import_failed,
-                            error.message ?: context.getString(R.string.error_generic)
+                            error.message ?: resources.getString(R.string.error_generic)
                         ),
                         Toast.LENGTH_LONG
                     ).show()
@@ -135,7 +146,8 @@ fun GeneralSettingsScreen(navController: NavController) {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+                .padding(horizontal = 20.dp, vertical = 12.dp)
+                .walkthroughTarget("settings.settings_general"),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // Output Folder
@@ -230,36 +242,109 @@ fun GeneralSettingsScreen(navController: NavController) {
                 }
             }
             
-            // Theme (placeholder for future)
+            // Soft Studio appearance
             item {
+                val themeMode by settingsRepo.themeMode.collectAsState()
+                val dynamicColor by settingsRepo.dynamicColor.collectAsState()
+                var themeMenuExpanded by remember { mutableStateOf(false) }
+                val themeOptions = listOf(
+                    AppThemeMode.SYSTEM to stringResource(R.string.soft_studio_theme_system),
+                    AppThemeMode.LIGHT to stringResource(R.string.soft_studio_theme_light),
+                    AppThemeMode.DARK to stringResource(R.string.soft_studio_theme_dark)
+                )
+                val selectedThemeLabel = themeOptions
+                    .firstOrNull { it.first == themeMode }
+                    ?.second
+                    ?: stringResource(R.string.soft_studio_theme_system)
+
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
+                    shape = AppChromeDefaults.CardShape,
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        containerColor = MaterialTheme.colorScheme.surface
                     )
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("🎨", style = MaterialTheme.typography.headlineSmall)
+                            Icon(
+                                imageVector = Icons.Default.Palette,
+                                contentDescription = stringResource(R.string.soft_studio_appearance_icon_desc),
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(28.dp)
+                            )
                             Spacer(modifier = Modifier.width(12.dp))
-                            Text(
-                                stringResource(R.string.general_theme),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    stringResource(R.string.soft_studio_appearance_title),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    stringResource(R.string.soft_studio_appearance_desc),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Box {
+                            OutlinedButton(
+                                onClick = {
+                                    walkthroughTargets?.recordEvent("settings.appearance")
+                                    themeMenuExpanded = true
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = selectedThemeLabel,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDropDown,
+                                    contentDescription = null
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = themeMenuExpanded,
+                                onDismissRequest = { themeMenuExpanded = false }
+                            ) {
+                                themeOptions.forEach { (mode, label) ->
+                                    DropdownMenuItem(
+                                        text = { Text(label) },
+                                        onClick = {
+                                            walkthroughTargets?.recordEvent("settings.appearance")
+                                            settingsRepo.setThemeMode(mode)
+                                            themeMenuExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    stringResource(R.string.soft_studio_dynamic_color_title),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    stringResource(R.string.soft_studio_dynamic_color_desc),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = dynamicColor,
+                                onCheckedChange = settingsRepo::setDynamicColor,
+                                enabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
                             )
                         }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            stringResource(R.string.general_theme_system),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            stringResource(R.string.general_theme_soon),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                        )
                     }
                 }
             }
@@ -294,7 +379,10 @@ fun GeneralSettingsScreen(navController: NavController) {
                         
                         Box {
                             OutlinedButton(
-                                onClick = { expanded = true },
+                                onClick = {
+                                    walkthroughTargets?.recordEvent("settings.language")
+                                    expanded = true
+                                },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(currentLanguageName)
@@ -310,6 +398,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                                     DropdownMenuItem(
                                         text = { Text(name) },
                                         onClick = {
+                                            walkthroughTargets?.recordEvent("settings.language")
                                             settingsRepo.setSelectedLanguage(code)
                                             expanded = false
                                             // Restart the app to apply the new locale
@@ -648,9 +737,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                         if (!isIgnoringBatteryOptimizations) {
                             Button(
                                 onClick = {
-                                    val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                                        data = android.net.Uri.parse("package:$packageName")
-                                    }
+                                    val intent = Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
                                     context.startActivity(intent)
                                     // Re-check after a delay (user might grant immediately)
                                     android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
@@ -746,9 +833,9 @@ fun GeneralSettingsScreen(navController: NavController) {
                             val result = DatabaseBackupManager.createBackup(context, it)
                             isBackingUp = false
                             result.onSuccess {
-                                Toast.makeText(context, context.getString(R.string.backup_success), Toast.LENGTH_LONG).show()
+                                Toast.makeText(context, resources.getString(R.string.backup_success), Toast.LENGTH_LONG).show()
                             }.onFailure { e ->
-                                Toast.makeText(context, context.getString(R.string.backup_error, e.message), Toast.LENGTH_LONG).show()
+                                Toast.makeText(context, resources.getString(R.string.backup_error, e.message), Toast.LENGTH_LONG).show()
                             }
                         }
                     }
@@ -775,7 +862,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                             result.onSuccess { stats ->
                                 Toast.makeText(
                                     context,
-                                    context.getString(
+                                    resources.getString(
                                         R.string.llama_backup_export_success,
                                         stats.chats,
                                         stats.notes,
@@ -788,9 +875,9 @@ fun GeneralSettingsScreen(navController: NavController) {
                             }.onFailure { error ->
                                 Toast.makeText(
                                     context,
-                                    context.getString(
+                                    resources.getString(
                                         R.string.llama_backup_export_failed,
-                                        error.message ?: context.getString(R.string.error_generic)
+                                        error.message ?: resources.getString(R.string.error_generic)
                                     ),
                                     Toast.LENGTH_LONG
                                 ).show()
@@ -825,7 +912,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                                         val result = DatabaseBackupManager.restoreBackup(context, uri)
                                         isRestoring = false
                                         result.onSuccess {
-                                            Toast.makeText(context, context.getString(R.string.backup_restore_success), Toast.LENGTH_LONG).show()
+                                            Toast.makeText(context, resources.getString(R.string.backup_restore_success), Toast.LENGTH_LONG).show()
                                             // Restart the app so Room picks up the new DB files
                                             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                                                 val pm = context.packageManager
@@ -835,7 +922,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                                                 Runtime.getRuntime().exit(0)
                                             }, 1500)
                                         }.onFailure { e ->
-                                            Toast.makeText(context, context.getString(R.string.backup_restore_error, e.message), Toast.LENGTH_LONG).show()
+                                            Toast.makeText(context, resources.getString(R.string.backup_restore_error, e.message), Toast.LENGTH_LONG).show()
                                         }
                                     }
                                 },
@@ -873,7 +960,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                                         result.onSuccess { stats ->
                                             Toast.makeText(
                                                 context,
-                                                context.getString(
+                                                resources.getString(
                                                     R.string.llama_backup_import_success,
                                                     stats.chats,
                                                     stats.notes,
@@ -886,9 +973,9 @@ fun GeneralSettingsScreen(navController: NavController) {
                                         }.onFailure { error ->
                                             Toast.makeText(
                                                 context,
-                                                context.getString(
+                                                resources.getString(
                                                     R.string.llama_backup_import_failed,
-                                                    error.message ?: context.getString(R.string.error_generic)
+                                                    error.message ?: resources.getString(R.string.error_generic)
                                                 ),
                                                 Toast.LENGTH_LONG
                                             ).show()
@@ -954,6 +1041,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                         ) {
                             Button(
                                 onClick = {
+                                    walkthroughTargets?.recordEvent("settings.backups")
                                     backupFilePicker.launch(DatabaseBackupManager.generateBackupFilename())
                                 },
                                 modifier = Modifier.weight(1f),
@@ -971,6 +1059,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                             }
                             OutlinedButton(
                                 onClick = {
+                                    walkthroughTargets?.recordEvent("settings.backups")
                                     restoreFilePicker.launch(arrayOf("application/zip"))
                                 },
                                 modifier = Modifier.weight(1f),
@@ -1006,6 +1095,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                         ) {
                             Button(
                                 onClick = {
+                                    walkthroughTargets?.recordEvent("settings.backups")
                                     nativeBackupExportPicker.launch(NativeChatNotesBackupManager.generateBackupFilename())
                                 },
                                 modifier = Modifier.weight(1f),
@@ -1023,6 +1113,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                             }
                             OutlinedButton(
                                 onClick = {
+                                    walkthroughTargets?.recordEvent("settings.backups")
                                     nativeBackupImportPicker.launch(
                                         arrayOf(
                                             "application/zip",

@@ -1,0 +1,9 @@
+<resources>
+    <string name="model_promote_onnx_image">Generación de imágenes</string>
+    <string name="model_promote_onnx_background">Eliminación de fondos</string>
+    <string name="model_promote_onnx_upscaler">Ampliación de imágenes</string>
+    <string name="model_promote_onnx_tts">Generación de voz</string>
+    <string name="model_promote_detect_family">Elige una familia compatible</string>
+    <string name="model_promote_cpu">CPU</string>
+    <string name="model_promote_auto">Automático</string>
+</resources>

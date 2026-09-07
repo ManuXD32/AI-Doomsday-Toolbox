@@ -1,14 +1,43 @@
 package com.example.llamadroid.ui
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
+import com.example.llamadroid.ui.walkthrough.*
+import com.example.llamadroid.ui.navigation.AppNavigationLayout
+import com.example.llamadroid.ui.navigation.appNavigationLayout
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.platform.LocalDensity
+import androidx.navigation.NavType
+
+import androidx.navigation.navArgument
+
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
+import com.example.llamadroid.ui.navigation.AppRootDestination
+import com.example.llamadroid.ui.navigation.AppRoutePresentations
+import com.example.llamadroid.ui.navigation.SoftStudioAppScaffold
+import com.example.llamadroid.ui.library.LibraryScreen
+import com.example.llamadroid.ui.library.AllMediaGalleryScreen
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.llamadroid.ui.dashboard.DashboardScreen
 import com.example.llamadroid.ui.models.ModelManagerScreen
 import com.example.llamadroid.ui.models.ModelHubScreen
+import com.example.llamadroid.ui.models.ModelLibraryScreen
 import com.example.llamadroid.ui.chat.ChatScreen
 import com.example.llamadroid.ui.chat.ChatWebViewHolder
+import com.example.llamadroid.ui.settings.DailySupportPrompt
 import com.example.llamadroid.ui.settings.SettingsHubScreen
 import com.example.llamadroid.ui.settings.GeneralSettingsScreen
 import com.example.llamadroid.ui.settings.LLMSettingsScreen
@@ -34,22 +63,24 @@ import com.example.llamadroid.ui.ai.VideoGenScreen
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.navigation.ExternalRouteResolution
+import com.example.llamadroid.ui.navigation.ImageGenUpscaleCompatibilityRedirect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.CoroutineScope
@@ -98,7 +129,10 @@ import com.example.llamadroid.ui.ai.TermuxFileManagerScreen
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.data.SharedFileHolder
+import com.example.llamadroid.data.SharedFileTarget
 import com.example.llamadroid.SharedFileData
 import com.example.llamadroid.tama.db.TamaDatabase
 import com.example.llamadroid.tama.game.TamaGameEngine
@@ -123,16 +157,29 @@ import com.example.llamadroid.tama.data.farmDroneIdForFuelUpgradeId
 import com.example.llamadroid.tama.ui.TamaChatScreen
 import com.example.llamadroid.service.OllamaService
 import com.example.llamadroid.ui.components.AssetDownloadDialog
+import com.example.llamadroid.ui.components.AdaptiveAppNavigation
+import com.example.llamadroid.ui.components.AppNavigationDestination
 import com.example.llamadroid.util.AssetPackManagerUtil
 import kotlinx.coroutines.launch
+
+private data class SharedFileDestination(
+    val label: String,
+    val route: String,
+    val target: SharedFileTarget,
+    val sourceTag: String = target.legacyId
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LlamaApp(
     sharedFileData: SharedFileData? = null,
     onSharedFileHandled: () -> Unit = {},
-    pendingNavigationRoute: String? = null,
-    onNavigationHandled: () -> Unit = {}
+    pendingNavigationRoute: ExternalRouteResolution = ExternalRouteResolution.NoRoute,
+    onNavigationHandled: () -> Unit = {},
+    allowDailySupportPrompt: Boolean = false,
+    allowAutomaticWalkthrough: Boolean = allowDailySupportPrompt,
+    normalLaunchId: Int = 0,
+    externalLaunchId: Int = 0
 ) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -140,7 +187,20 @@ fun LlamaApp(
     
     // Check for first run
     val context = LocalContext.current
+    val resources = LocalResources.current
+    val feedbackScope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
     val settingsRepo = remember { SettingsRepository(context) }
+    val tour: WalkthroughState = viewModel(factory = remember(settingsRepo) {
+        object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T = WalkthroughState(settingsRepo.walkthrough) as T
+        }
+    })
+    val tourTargets = remember { WalkthroughTargets() }
+    LaunchedEffect(normalLaunchId) { tour.beginLaunch(normalLaunchId) }
+    LaunchedEffect(externalLaunchId) { tour.interruptForExternalLaunch(externalLaunchId) }
+
     val hasCompletedWelcome by settingsRepo.hasCompletedWelcome.collectAsState()
     var showWelcome by remember { mutableStateOf(!hasCompletedWelcome) }
     
@@ -194,11 +254,16 @@ fun LlamaApp(
     
     // Share intent chooser dialog
     var showShareChooser by remember { mutableStateOf(false) }
-    var shareOptions by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var shareOptions by remember { mutableStateOf<List<SharedFileDestination>>(emptyList()) }
     var pendingShareData by remember { mutableStateOf<SharedFileData?>(null) }
     
     // Handle shared file
     LaunchedEffect(sharedFileData) {
+        // A new launch supersedes a pending chooser. Do not clear the holder here: a chosen
+        // destination may still be consuming the file after onSharedFileHandled clears input.
+        showShareChooser = false
+        pendingShareData = null
+        shareOptions = emptyList()
         sharedFileData?.let { data ->
             pendingShareData = data  // Store for later use by chooser
             val mimeType = data.mimeType
@@ -206,34 +271,84 @@ fun LlamaApp(
                 // Audio -> User chooses Whisper or Workflow
                 mimeType.startsWith("audio/") -> {
                     shareOptions = listOf(
-                        context.getString(R.string.share_transcribe) to Screen.AudioTranscription.route,
-                        context.getString(R.string.share_workflow) to Screen.Workflows.route
+                        SharedFileDestination(
+                            resources.getString(R.string.share_transcribe),
+                            Screen.AudioTranscription.route,
+                            SharedFileTarget.AUDIO_TRANSCRIPTION
+                        ),
+                        SharedFileDestination(
+                            resources.getString(R.string.share_workflow),
+                            Screen.Workflows.route,
+                            SharedFileTarget.WORKFLOWS
+                        )
                     )
                     showShareChooser = true
                 }
                 // Video -> User chooses Whisper, Video Upscaler, or Workflow
                 mimeType.startsWith("video/") -> {
                     shareOptions = listOf(
-                        context.getString(R.string.share_interpolation) to Screen.VideoInterpolation.route,
-                        context.getString(R.string.share_upscaler) to Screen.VideoUpscaler.route,
-                        context.getString(R.string.share_transcribe) to Screen.AudioTranscription.route,
-                        context.getString(R.string.share_workflow) to Screen.Workflows.route
+                        SharedFileDestination(
+                            resources.getString(R.string.share_interpolation),
+                            Screen.VideoInterpolation.route,
+                            SharedFileTarget.VIDEO_INTERPOLATION
+                        ),
+                        SharedFileDestination(
+                            resources.getString(R.string.share_upscaler),
+                            Screen.VideoUpscaler.route,
+                            SharedFileTarget.VIDEO_UPSCALER
+                        ),
+                        SharedFileDestination(
+                            resources.getString(R.string.share_transcribe),
+                            Screen.AudioTranscription.route,
+                            SharedFileTarget.AUDIO_TRANSCRIPTION
+                        ),
+                        SharedFileDestination(
+                            resources.getString(R.string.share_workflow),
+                            Screen.Workflows.route,
+                            SharedFileTarget.WORKFLOWS
+                        )
                     )
                     showShareChooser = true
                 }
                 // Image -> User chooses SD img2img or upscale
                 mimeType.startsWith("image/") -> {
                     shareOptions = listOf(
-                        context.getString(R.string.share_img2img) to "imagegen_img2img",
-                        context.getString(R.string.share_img2vid) to "videogen_img2vid",
-                        context.getString(R.string.share_upscale_sd) to "imagegen_upscale"
+                        SharedFileDestination(
+                            resources.getString(R.string.share_img2img),
+                            Screen.ImageGen.createRoute(startMode = 1),
+                            SharedFileTarget.IMAGE_GENERATION,
+                            sourceTag = SharedFileHolder.Target.IMAGE_GEN_IMG2IMG
+                        ),
+                        SharedFileDestination(
+                            resources.getString(R.string.share_img2vid),
+                            Screen.VideoGen.route,
+                            SharedFileTarget.VIDEO_GENERATION,
+                            sourceTag = SharedFileHolder.Target.VIDEO_GEN_IMG2VID
+                        ),
+                        SharedFileDestination(
+                            resources.getString(R.string.share_upscale_sd),
+                            Screen.ImageGen.createRoute(startMode = 2),
+                            SharedFileTarget.IMAGE_GENERATION,
+                            sourceTag = SharedFileHolder.Target.IMAGE_GEN_UPSCALE
+                        )
                     )
                     showShareChooser = true
                 }
-                // PDF -> PDF Toolbox (future)
+                // PDF -> choose the document tool instead of silently consuming the share.
                 mimeType == "application/pdf" -> {
-                    // TODO: Navigate to PDF Toolbox when implemented
-                    onSharedFileHandled()
+                    shareOptions = listOf(
+                        SharedFileDestination(
+                            resources.getString(R.string.share_pdf_toolbox),
+                            Screen.PDFToolbox.route,
+                            SharedFileTarget.PDF_TOOLBOX
+                        ),
+                        SharedFileDestination(
+                            resources.getString(R.string.share_pdf_summary),
+                            Screen.PDFSummary.route,
+                            SharedFileTarget.PDF_SUMMARY
+                        )
+                    )
+                    showShareChooser = true
                 }
             }
         }
@@ -245,32 +360,40 @@ fun LlamaApp(
             onDismissRequest = { 
                 showShareChooser = false
                 pendingShareData = null
+                SharedFileHolder.clear()
                 onSharedFileHandled()
             },
             title = { Text(stringResource(R.string.action_open_with)) },
             text = {
-                Column {
-                    shareOptions.forEach { (label, targetId) ->
+                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                    shareOptions.forEach { destination ->
                         TextButton(
                             onClick = {
                                 showShareChooser = false
                                 pendingShareData?.let { data: SharedFileData ->
-                                    // Determine actual navigation route
-                                    val route = when (targetId) {
-                                        "imagegen_img2img" -> "${Screen.ImageGen.route}?startMode=1"
-                                        "imagegen_upscale" -> Screen.ImageGenUpscale.route
-                                        "videogen_img2vid" -> Screen.VideoGen.route
-                                        else -> targetId
+                                    SharedFileHolder.setPendingFile(
+                                        uri = data.uri,
+                                        mimeType = data.mimeType,
+                                        target = destination.target,
+                                        sourceTag = destination.sourceTag
+                                    )
+                                    try {
+                                        navController.navigate(destination.route)
+                                    } catch (_: IllegalArgumentException) {
+                                        SharedFileHolder.clear()
+                                        feedbackScope.launch {
+                                            snackbarHostState.showSnackbar(
+                                                resources.getString(R.string.navigation_destination_unavailable)
+                                            )
+                                        }
                                     }
-                                    com.example.llamadroid.data.SharedFileHolder.setPendingFile(data.uri, data.mimeType, targetId)
-                                    navController.navigate(route)
                                 }
                                 pendingShareData = null
                                 onSharedFileHandled()
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(label, modifier = Modifier.fillMaxWidth())
+                            Text(destination.label, modifier = Modifier.fillMaxWidth())
                         }
                     }
                 }
@@ -280,6 +403,7 @@ fun LlamaApp(
                 TextButton(onClick = { 
                     showShareChooser = false
                     pendingShareData = null
+                    SharedFileHolder.clear()
                     onSharedFileHandled()
                 }) {
                     Text(stringResource(R.string.action_cancel))
@@ -288,31 +412,67 @@ fun LlamaApp(
         )
     }
 
-    LaunchedEffect(pendingNavigationRoute) {
-        pendingNavigationRoute?.let { route ->
-            if (route.isNotBlank() && currentRoute != route) {
-                navController.navigate(route) {
-                    popUpTo(navController.graph.startDestinationId) {
-                        saveState = true
-                    }
-                    launchSingleTop = true
-                    restoreState = true
+    LaunchedEffect(pendingNavigationRoute, currentRoute) {
+        when (val resolution = pendingNavigationRoute) {
+            ExternalRouteResolution.NoRoute -> Unit
+            ExternalRouteResolution.Rejected -> {
+                feedbackScope.launch {
+                    snackbarHostState.showSnackbar(
+                        resources.getString(R.string.navigation_destination_unavailable)
+                    )
                 }
+                onNavigationHandled()
             }
-            onNavigationHandled()
+            is ExternalRouteResolution.Navigate -> {
+                // The external intent is available before NavHost has installed its graph on a
+                // cold launch. Wait for the first back-stack entry instead of reading graph early.
+                if (currentRoute == null) return@LaunchedEffect
+                if (currentRoute != resolution.route) {
+                    try {
+                        navController.navigate(resolution.route) {
+                            popUpTo(navController.graph.startDestinationId) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    } catch (_: IllegalArgumentException) {
+                        feedbackScope.launch {
+                            snackbarHostState.showSnackbar(
+                                resources.getString(R.string.navigation_destination_unavailable)
+                            )
+                        }
+                        return@LaunchedEffect
+                    }
+                }
+                onNavigationHandled()
+            }
         }
     }
     
-    // Bottom navigation items
-    val items = listOf(
-        Screen.Dashboard,
-        Screen.AIHub,
-        Screen.NotesManager,
-        Screen.Tama,  // Virtual pet tab
-        Screen.ModelManager,
-        Screen.Settings
-    )
-    
+    fun navigateFromAppNavigation(root: AppRootDestination) {
+        navController.navigate(root.route) {
+            popUpTo(navController.graph.startDestinationId) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
+
+    val directNavigationDestinations = listOf(
+        Triple(AppRootDestination.Home, R.string.studio_nav_home, Icons.Default.Home),
+        Triple(AppRootDestination.Tools, R.string.studio_nav_tools, Icons.Default.GridView),
+        Triple(AppRootDestination.Library, R.string.studio_nav_library, Icons.Default.FolderOpen),
+        Triple(AppRootDestination.Tama, R.string.studio_nav_tama, Icons.Default.FavoriteBorder)
+    ).map { (root, labelRes, icon) ->
+        AppNavigationDestination(
+            route = root.route,
+            label = stringResource(labelRes),
+            icon = icon,
+            isSelected = { route -> AppRoutePresentations.forRoute(route).parent == root },
+            onClick = { navigateFromAppNavigation(root) }
+        )
+    }
+
     // Show welcome screen on first run
     if (showWelcome && !hasCompletedWelcome) {
         WelcomeScreen(
@@ -323,98 +483,109 @@ fun LlamaApp(
         return
     }
 
-    Scaffold(
-        bottomBar = {
-            NavigationBar(
-                containerColor = MaterialTheme.colorScheme.surface,
-                tonalElevation = 0.dp
-            ) {
-                items.forEach { screen ->
-                    // For AI Hub, highlight any route owned by the centralized tool catalog.
-                    val isAIRoute = screen == Screen.AIHub && ToolCatalog.matchesRoute(currentRoute)
-                    
-                    // For Model Hub, also highlight when on LLMModels or SDModels screens
-                    val isModelRoute = screen == Screen.ModelManager && 
-                        currentRoute in listOf(
-                            Screen.ModelManager.route, Screen.ModelHub.route,
-                            Screen.LLMModels.route, Screen.SDModels.route,
-                            Screen.OnnxModels.route, Screen.WhisperModels.route,
-                            Screen.LiteRtModels.route
-                        )
-                    
-                    NavigationBarItem(
-                        icon = { 
-                            when(screen) {
-                                Screen.Dashboard -> Icon(Icons.Default.Home, null)
-                                Screen.AIHub -> Icon(Icons.Default.PlayArrow, null)
-                                Screen.NotesManager -> Icon(Icons.Default.Edit, null)
-                                Screen.Tama -> Icon(Icons.Default.Favorite, null)  // Heart for pet
-                                Screen.ModelManager -> Icon(Icons.Default.Star, null)
-                                Screen.Settings -> Icon(Icons.Default.Settings, null)
-                                Screen.Logs -> Icon(Icons.Default.Info, null)
-                                else -> Icon(Icons.Default.Home, null)
-                            }
-                        },
-                        label = { 
-                            Text(
-                                when(screen) {
-                                    Screen.Dashboard -> stringResource(R.string.nav_home)
-                                    Screen.AIHub -> stringResource(R.string.nav_ai)
-                                    Screen.NotesManager -> stringResource(R.string.nav_notes)
-                                    Screen.Tama -> stringResource(R.string.nav_tama)
-                                    Screen.ModelManager -> stringResource(R.string.nav_models)
-                                    Screen.Settings -> stringResource(R.string.nav_settings)
-                                    Screen.Logs -> stringResource(R.string.nav_logs)
-                                    else -> ""
-                                }
-                            )
-                        },
-                        selected = currentRoute == screen.route || isAIRoute || isModelRoute,
-                        onClick = {
-                            // For hub screens, don't restore state - always go to hub
-                            // This lets users switch between sub-screens
-                            val isHubScreen = screen == Screen.AIHub || screen == Screen.ModelManager
-                            val shouldRestoreState = !isHubScreen
-                            
-                            // ModelManager tab now goes to ModelHub
-                            val targetRoute = if (screen == Screen.ModelManager) {
-                                Screen.ModelHub.route
-                            } else {
-                                screen.route
-                            }
-                            
-                            navController.navigate(targetRoute) {
-                                popUpTo(navController.graph.startDestinationId) {
-                                    saveState = true
-                                }
-                                launchSingleTop = true
-                                restoreState = shouldRestoreState
-                            }
-                        },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = MaterialTheme.colorScheme.primary,
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
-                            indicatorColor = MaterialTheme.colorScheme.primaryContainer
-                        )
-                    )
-                }
-            }
+    val tourEligible = allowAutomaticWalkthrough && currentRoute == Screen.Dashboard.route &&
+        sharedFileData == null && !showShareChooser && pendingNavigationRoute == ExternalRouteResolution.NoRoute
+    LaunchedEffect(tourEligible) { tour.observeEligibility(tourEligible) }
+    LaunchedEffect(sharedFileData, pendingNavigationRoute) {
+        if (sharedFileData != null || pendingNavigationRoute != ExternalRouteResolution.NoRoute) tour.dismiss()
+    }
+    val tourDensity = LocalDensity.current
+    val tourWindow = LocalWindowInfo.current.containerSize
+    val tourNavigationLayout = appNavigationLayout((tourWindow.width / tourDensity.density).toInt(),
+        (tourWindow.height / tourDensity.density).toInt(), tourDensity.fontScale)
+    val tourSession = tour.session
+    val tourRequestedTarget = tour.step?.let {
+        tourTarget(it, currentRoute, tourNavigationLayout == AppNavigationLayout.Drawer, tourTargets.drawerOpen)
+    }
+    SideEffect {
+        tourTargets.active = tourSession != null
+        tourTargets.requestedId = tourRequestedTarget
+    }
+
+    DailySupportPrompt(
+        settings = settingsRepo,
+        launchId = normalLaunchId,
+        eligible = allowDailySupportPrompt && !tour.awaitingAutomaticPresentation &&
+            (tour.automaticCheckFinished || !settingsRepo.walkthrough.automaticEligible) &&
+            !tour.suppressSupportForLaunch && currentRoute != null &&
+            AppRoutePresentations.forRoute(currentRoute).isRoot &&
+            sharedFileData == null && !showShareChooser &&
+            pendingNavigationRoute == ExternalRouteResolution.NoRoute
+    )
+
+    val featureGuide = FeatureGuideCatalog.forRoute(currentRoute)
+    val openTourRoute: (String) -> Unit = { route ->
+        val root = AppRootDestination.entries.firstOrNull { it.route == route }
+        if (root != null) navigateFromAppNavigation(root)
+        else if ('{' !in route && '}' !in route) {
+            navController.navigate(if (route == Screen.Chat.route) Screen.LlamaServers.route else route) { launchSingleTop = true }
+        }
+    }
+    CompositionLocalProvider(LocalWalkthroughTargets provides tourTargets,
+        LocalWalkthroughActive provides (tourSession != null),
+        LocalWalkthroughPresentation provides WalkthroughPresentation(tour, tourTargets, currentRoute, openTourRoute),
+        LocalFeatureGuideEntry provides featureGuide?.let { FeatureGuideEntry(it.id, tour::openFeatureGuide) }) {
+    FeatureGuideChooser(tour, currentRoute)
+    WalkthroughHighlight(tourTargets) {
+    SoftStudioAppScaffold(
+        currentRoute = currentRoute,
+        destinations = directNavigationDestinations,
+        snackbarHostState = snackbarHostState,
+        onSettings = { navController.navigate(Screen.Settings.route) { launchSingleTop = true } },
+        onTour = {
+            tour.openGuide()
+            navController.navigate(Screen.Walkthrough.route) { launchSingleTop = true }
+        },
+        onCloseTour = if (tour.session != null) ({ tour.dismiss() }) else null,
+        walkthroughBar = {
+            if (tourTargets.modalOwners.isEmpty()) WalkthroughCoach(tour, tourTargets, currentRoute, onOpen = openTourRoute)
         }
     ) { innerPadding ->
         NavHost(
             navController = navController, 
             startDestination = Screen.Dashboard.route,
-            modifier = Modifier.padding(innerPadding)
+            modifier = Modifier.padding(innerPadding),
+            enterTransition = { fadeIn(tween(240)) },
+            exitTransition = { fadeOut(tween(180)) },
+            popEnterTransition = { fadeIn(tween(240)) },
+            popExitTransition = { fadeOut(tween(180)) }
         ) {
             composable(Screen.Dashboard.route) { DashboardScreen(navController) }
+            composable(Screen.Walkthrough.route) {
+                WalkthroughGuide(tour, onBack = { navController.popBackStack() }, onStart = { chapterId, resume ->
+                    val root = when (chapterId) {
+                        CoreTour.ID, "settings_help" -> AppRootDestination.Home
+                        "tama" -> AppRootDestination.Tama
+                        else -> AppRootDestination.Tools
+                    }
+                    // The guide belongs to Home. Remove it before saving/restoring a root,
+                    // otherwise navigating Home restores the guide we just saved above it.
+                    navController.popBackStack(Screen.Dashboard.route, inclusive = false)
+                    if (root != AppRootDestination.Home) {
+                        navigateFromAppNavigation(root)
+                        navController.popBackStack(root.route, inclusive = false)
+                    }
+                    tour.start(chapterId, resume)
+                })
+            }
             composable(Screen.Settings.route) { SettingsHubScreen(navController) }
             composable(Screen.Stats.route) { StatsScreen(navController) }
             composable(Screen.Logs.route) { LogsScreen(navController) }
             // AI screens
             composable(Screen.AIHub.route) { AIHubScreen(navController) }
+            composable(Screen.Library.route) { LibraryScreen(navController) }
+            composable(Screen.AllMediaGallery.route) { AllMediaGalleryScreen(navController) }
             composable(Screen.AiServersHub.route) { AiServersHubScreen(navController) }
+            composable(Screen.FileServer.route) {
+                com.example.llamadroid.ui.components.AppScreenScaffold(
+                    title = stringResource(R.string.dashboard_file_server),
+                    onBack = { navController.popBackStack() }
+                ) {
+                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
+                        com.example.llamadroid.ui.dashboard.DashboardFileServerCard()
+                    }
+                }
+            }
             composable(
                 route = "${Screen.Chat.route}?port={serverPort}",
                 arguments = listOf(
@@ -431,28 +602,41 @@ fun LlamaApp(
                 com.example.llamadroid.ui.ai.llama.LlamaServerCardsScreen(navController)
             }
             composable(
-                route = "${Screen.ImageGen.route}?startMode={startMode}",
+                route = "${Screen.ImageGen.route}?startMode={startMode}&tab={tab}",
                 arguments = listOf(
                     androidx.navigation.navArgument("startMode") {
                         type = androidx.navigation.NavType.IntType
                         defaultValue = 0
+                    },
+                    androidx.navigation.navArgument("tab") {
+                        type = androidx.navigation.NavType.StringType
+                        defaultValue = "create"
                     }
                 )
             ) { backStackEntry ->
                 val startMode = backStackEntry.arguments?.getInt("startMode") ?: 0
-                ImageGenScreen(navController, initialMode = startMode)
+                ImageGenScreen(navController, initialMode = startMode,
+                    initialTab = backStackEntry.arguments?.getString("tab") ?: "create")
             }
             // Keep the historical route for shortcuts and saved navigation state, but render the
             // same curated workspace and task selector as every other image operation.
             composable(Screen.ImageGenUpscale.route) {
-                ImageGenScreen(navController, initialMode = com.example.llamadroid.ui.ai.IMAGE_GEN_MODE_UPSCALE)
+                ImageGenUpscaleCompatibilityRedirect(navController)
             }
             composable(Screen.OnnxImageGen.route) { OnnxImageGenScreen(navController) }
             composable(Screen.OnnxBackgroundRemoval.route) { OnnxBackgroundRemovalScreen(navController) }
             composable(Screen.OnnxTts.route) { OnnxTtsScreen(navController) }
             composable(Screen.OnnxTtsGallery.route) { OnnxTtsGalleryScreen(navController) }
             composable(Screen.LiveTranslator.route) { LiveTranslatorScreen(navController) }
-            composable(Screen.VideoGen.route) { VideoGenScreen(navController) }
+            composable(
+                route = "${Screen.VideoGen.route}?tab={tab}",
+                arguments = listOf(androidx.navigation.navArgument("tab") {
+                    type = androidx.navigation.NavType.StringType
+                    defaultValue = "create"
+                })
+            ) { entry ->
+                VideoGenScreen(navController, initialTab = entry.arguments?.getString("tab") ?: "create")
+            }
             composable(Screen.AudioTranscription.route) { AudioTranscriptionScreen(navController) }
             composable(Screen.VideoUpscaler.route) { VideoUpscalerScreen(navController) }
             composable(Screen.VideoInterpolation.route) { VideoInterpolationScreen(navController) }
@@ -471,6 +655,10 @@ fun LlamaApp(
             composable(Screen.Workflows.route) { WorkflowsScreen(navController) }
             // Model screens
             composable(Screen.ModelHub.route) { ModelHubScreen(navController) }
+            composable("${Screen.ModelSources.route}?family={family}&tab={tab}", arguments = listOf(
+                navArgument("family") { type = NavType.StringType; nullable = true; defaultValue = null },
+                navArgument("tab") { type = NavType.StringType; nullable = true; defaultValue = null }
+            )) { entry -> ModelLibraryScreen(navController, entry.arguments?.getString("family"), entry.arguments?.getString("tab")) }
             composable(Screen.LLMModels.route) { ModelManagerScreen(navController) }
             composable(Screen.SDModels.route) { SDModelsScreen(navController) }
             composable(Screen.OnnxModels.route) { OnnxModelsScreen(navController) }
@@ -486,9 +674,9 @@ fun LlamaApp(
             composable("settings_prompts") { SystemPromptsSettingsScreen(navController) }
             composable("settings_logs") { LogsScreen(navController) }
             // PDF screens
-            composable("pdf_toolbox") { PDFToolboxScreen(navController) }
-            composable("pdf_summary") { PDFSummaryScreen(navController) }
-            composable("settings_pdf") { PDFSettingsScreen(navController) }
+            composable(Screen.PDFToolbox.route) { PDFToolboxScreen(navController) }
+            composable(Screen.PDFSummary.route) { PDFSummaryScreen(navController) }
+            composable(Screen.PDFSettings.route) { PDFSettingsScreen(navController) }
             composable("video_sumup") { VideoSumupScreen(navController) }
             composable("about") { AboutScreen(navController) }
             // Kiwix screens
@@ -569,22 +757,29 @@ fun LlamaApp(
             }
             
             // AI Agent
-            composable(Screen.Agent.route) {
-                com.example.llamadroid.ui.agent.AgentScreen(navController)
+            composable(
+                "${Screen.Agent.route}?conversationId={conversationId}",
+                arguments = listOf(navArgument("conversationId") {
+                    type = NavType.LongType
+                    defaultValue = -1L
+                })
+            ) { backStackEntry ->
+                com.example.llamadroid.ui.agent.AgentScreen(
+                    navController,
+                    initialConversationId = backStackEntry.arguments?.getLong("conversationId")?.takeIf { it > 0L }
+                )
             }
             
             // Tama Farming
             composable(Screen.Farm.route) {
                 val pet by tamaGameEngine.pet.collectAsState()
                 
-                // Show loading state instead of auto-navigating back to prevent navigation loop
+                // A missing pet must offer a usable way back and setup, including during a tour.
                 if (pet == null) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator()
-                    }
+                    com.example.llamadroid.ui.walkthrough.TamaSetupState(
+                        onBack = { navController.popBackStack() },
+                        onOpenTama = { navigateFromAppNavigation(AppRootDestination.Tama) }
+                    )
                     return@composable
                 }
                 
@@ -662,6 +857,12 @@ fun LlamaApp(
             
             composable(Screen.Store.route) {
                 val petState by tamaGameEngine.pet.collectAsState()
+                if (petState == null) {
+                    com.example.llamadroid.ui.walkthrough.TamaSetupState(
+                        onBack = { navController.popBackStack() },
+                        onOpenTama = { navigateFromAppNavigation(AppRootDestination.Tama) }
+                    )
+                }
                 petState?.let { activePet ->
                     val farmUpgrades by farmRepository.observeUpgrades(activePet.id).collectAsState(initial = emptyList())
                     val livestock by farmRepository.observeLivestock(activePet.id).collectAsState(initial = emptyList())
@@ -691,17 +892,17 @@ fun LlamaApp(
                             val isFarmland = type == FARMLAND_UPGRADE_ID
                             val droneFuelTarget = farmDroneIdForFuelUpgradeId(type)
                             val displayName = when (type) {
-                                FARMLAND_UPGRADE_ID -> context.getString(R.string.tama_farm_upgrade_farmland)
-                                "well" -> context.getString(R.string.tama_farm_upgrade_well)
-                                "composter" -> context.getString(R.string.tama_farm_upgrade_composter)
-                                FARM_PLANTING_DRONE_FUEL_UPGRADE_ID -> context.getString(R.string.tama_farm_drone_fuel_upgrade_name, context.getString(R.string.tama_farm_planting_drone))
-                                FARM_HARVESTING_DRONE_FUEL_UPGRADE_ID -> context.getString(R.string.tama_farm_drone_fuel_upgrade_name, context.getString(R.string.tama_farm_harvesting_drone))
+                                FARMLAND_UPGRADE_ID -> resources.getString(R.string.tama_farm_upgrade_farmland)
+                                "well" -> resources.getString(R.string.tama_farm_upgrade_well)
+                                "composter" -> resources.getString(R.string.tama_farm_upgrade_composter)
+                                FARM_PLANTING_DRONE_FUEL_UPGRADE_ID -> resources.getString(R.string.tama_farm_drone_fuel_upgrade_name, resources.getString(R.string.tama_farm_planting_drone))
+                                FARM_HARVESTING_DRONE_FUEL_UPGRADE_ID -> resources.getString(R.string.tama_farm_drone_fuel_upgrade_name, resources.getString(R.string.tama_farm_harvesting_drone))
                                 else -> type.replaceFirstChar { it.uppercase() }
                             }
                             if (droneFuelTarget != null) {
                                 val droneUpgrade = farmRepository.getUpgrade(activePet.id, droneFuelTarget)
                                 if (droneUpgrade?.isPurchased != true) {
-                                    TamaGameEngine.ActionResult(false, context.getString(R.string.tama_upgrade_already_owned))
+                                    TamaGameEngine.ActionResult(false, resources.getString(R.string.tama_upgrade_already_owned))
                                 } else {
                                     val now = System.currentTimeMillis()
                                     val cost = if (droneFuelTarget == FARM_PLANTING_DRONE_ID) {
@@ -712,9 +913,9 @@ fun LlamaApp(
                                         farmDroneFuelUpgradeCostForLevel(state.fuelUpgradeLevel)
                                     }
                                     if (cost == null) {
-                                        TamaGameEngine.ActionResult(false, context.getString(R.string.tama_farm_upgrade_maxed))
+                                        TamaGameEngine.ActionResult(false, resources.getString(R.string.tama_farm_upgrade_maxed))
                                     } else if (!tamaGameEngine.spendMoney(cost.toLong())) {
-                                        TamaGameEngine.ActionResult(false, context.getString(R.string.tama_action_not_enough_money))
+                                        TamaGameEngine.ActionResult(false, resources.getString(R.string.tama_action_not_enough_money))
                                     } else {
                                         if (droneFuelTarget == FARM_PLANTING_DRONE_ID) {
                                             val state = farmRepository.decodePlantingDroneState(droneUpgrade, now)
@@ -729,12 +930,12 @@ fun LlamaApp(
                                                 state.copy(fuelUpgradeLevel = state.fuelUpgradeLevel + 1, lastUpdatedAt = now)
                                             )
                                         }
-                                        tamaGameEngine.logEvent(activePet.id, EventType.OTHER, context.getString(R.string.event_purchased_upgrade, displayName))
-                                        TamaGameEngine.ActionResult(true, context.getString(R.string.tama_action_bought_item, 1, displayName))
+                                        tamaGameEngine.logEvent(activePet.id, EventType.OTHER, resources.getString(R.string.event_purchased_upgrade, displayName))
+                                        TamaGameEngine.ActionResult(true, resources.getString(R.string.tama_action_bought_item, 1, displayName))
                                     }
                                 }
                             } else if (!isFarmland && existingUpgrade?.isPurchased == true) {
-                                TamaGameEngine.ActionResult(false, context.getString(R.string.tama_upgrade_already_owned))
+                                TamaGameEngine.ActionResult(false, resources.getString(R.string.tama_upgrade_already_owned))
                             } else if (tamaGameEngine.spendMoney(price.toLong())) {
                                 val upgraded = if (isFarmland) {
                                     farmRepository.upgradeFarmland(activePet.id)
@@ -743,24 +944,24 @@ fun LlamaApp(
                                     true
                                 }
                                 if (upgraded) {
-                                    tamaGameEngine.logEvent(activePet.id, EventType.OTHER, context.getString(R.string.event_purchased_upgrade, displayName))
-                                    TamaGameEngine.ActionResult(true, context.getString(R.string.tama_action_bought_item, 1, displayName))
+                                    tamaGameEngine.logEvent(activePet.id, EventType.OTHER, resources.getString(R.string.event_purchased_upgrade, displayName))
+                                    TamaGameEngine.ActionResult(true, resources.getString(R.string.tama_action_bought_item, 1, displayName))
                                 } else {
                                     tamaGameEngine.awardMoney(price.toLong())
-                                    TamaGameEngine.ActionResult(false, context.getString(R.string.tama_farm_upgrade_maxed))
+                                    TamaGameEngine.ActionResult(false, resources.getString(R.string.tama_farm_upgrade_maxed))
                                 }
                             } else {
-                                TamaGameEngine.ActionResult(false, context.getString(R.string.tama_action_not_enough_money))
+                                TamaGameEngine.ActionResult(false, resources.getString(R.string.tama_action_not_enough_money))
                             }
                         },
                         onBuyDrone = { type, price ->
-                            val displayName = context.getString(
+                            val displayName = resources.getString(
                                 if (type == FARM_PLANTING_DRONE_ID) R.string.tama_farm_planting_drone else R.string.tama_farm_harvesting_drone
                             )
                             val existingUpgrade = farmRepository.getUpgrade(activePet.id, type)
                             val alreadyInInventory = activePet.inventory.any { it.id == type }
                             if (existingUpgrade?.isPurchased == true || alreadyInInventory) {
-                                TamaGameEngine.ActionResult(false, context.getString(R.string.tama_upgrade_already_owned))
+                                TamaGameEngine.ActionResult(false, resources.getString(R.string.tama_upgrade_already_owned))
                             } else {
                                 val result = tamaGameEngine.buyItem(
                                     InventoryItem(
@@ -776,7 +977,7 @@ fun LlamaApp(
                                     tamaGameEngine.logEvent(
                                         activePet.id,
                                         EventType.OTHER,
-                                        context.getString(R.string.event_purchased_upgrade, displayName)
+                                        resources.getString(R.string.event_purchased_upgrade, displayName)
                                     )
                                 }
                                 result
@@ -788,25 +989,25 @@ fun LlamaApp(
                                 type
                             ).count { it.occupied }
                             if (occupied >= type.maxAnimals) {
-                                TamaGameEngine.ActionResult(false, context.getString(R.string.tama_farm_livestock_limit_reached))
+                                TamaGameEngine.ActionResult(false, resources.getString(R.string.tama_farm_livestock_limit_reached))
                             } else if (!tamaGameEngine.spendMoney(type.buyPrice.toLong())) {
-                                TamaGameEngine.ActionResult(false, context.getString(R.string.tama_action_not_enough_money))
+                                TamaGameEngine.ActionResult(false, resources.getString(R.string.tama_action_not_enough_money))
                             } else if (farmRepository.buyLivestockAnimal(activePet.id, type)) {
                                 tamaGameEngine.logEvent(
                                     activePet.id,
                                     EventType.OTHER,
-                                    context.getString(
+                                    resources.getString(
                                         if (type == FarmLivestockType.BARN) R.string.tama_event_bought_cow else R.string.tama_event_bought_chicken
                                     )
                                 )
                                 TamaGameEngine.ActionResult(
                                     true,
-                                    context.getString(
+                                    resources.getString(
                                         if (type == FarmLivestockType.BARN) R.string.tama_farm_livestock_bought_cow else R.string.tama_farm_livestock_bought_chicken
                                     )
                                 )
                             } else {
-                                TamaGameEngine.ActionResult(false, context.getString(R.string.tama_farm_livestock_limit_reached))
+                                TamaGameEngine.ActionResult(false, resources.getString(R.string.tama_farm_livestock_limit_reached))
                             }
                         },
                         onBack = { navController.popBackStack() }
@@ -844,12 +1045,10 @@ fun LlamaApp(
             composable(Screen.TamaGallery.route) {
                 val pet by tamaGameEngine.pet.collectAsState()
                 if (pet == null) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator()
-                    }
+                    com.example.llamadroid.ui.walkthrough.TamaSetupState(
+                        onBack = { navController.popBackStack() },
+                        onOpenTama = { navigateFromAppNavigation(AppRootDestination.Tama) }
+                    )
                     return@composable
                 }
                 com.example.llamadroid.tama.ui.TamaGalleryScreen(
@@ -862,12 +1061,10 @@ fun LlamaApp(
             composable(Screen.Arcade.route) {
                 val pet by tamaGameEngine.pet.collectAsState()
                 if (pet == null) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator()
-                    }
+                    com.example.llamadroid.ui.walkthrough.TamaSetupState(
+                        onBack = { navController.popBackStack() },
+                        onOpenTama = { navigateFromAppNavigation(AppRootDestination.Tama) }
+                    )
                     return@composable
                 }
                 com.example.llamadroid.tama.ui.ArcadeScreen(
@@ -925,5 +1122,7 @@ fun LlamaApp(
                 )
             }
         }
+    }
+    }
     }
 }

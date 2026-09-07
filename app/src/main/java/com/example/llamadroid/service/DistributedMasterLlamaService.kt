@@ -5,8 +5,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.os.Build
 import android.os.IBinder
+import androidx.core.content.ContextCompat
 import com.example.llamadroid.R
 import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.util.DebugLog
@@ -156,12 +156,12 @@ object DistributedMasterRuntimeState {
             }
         }
         val filter = IntentFilter(ACTION_EVENT)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.applicationContext.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("DEPRECATION")
-            context.applicationContext.registerReceiver(receiver, filter)
-        }
+        ContextCompat.registerReceiver(
+            context.applicationContext,
+            receiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
     }
 
     fun prepare(launch: ResolvedDistributedLaunch) {

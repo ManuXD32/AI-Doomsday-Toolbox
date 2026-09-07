@@ -123,6 +123,12 @@ android {
         compose = true
         buildConfig = true
     }
+    lint {
+        baseline = file("lint-baseline.xml")
+        abortOnError = true
+        checkReleaseBuilds = true
+        warningsAsErrors = true
+    }
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.10"
     }
@@ -196,6 +202,7 @@ val generateTamaDialogCatalog by tasks.registering(Exec::class) {
 }
 
 android.sourceSets["main"].assets.srcDir(tamaDialogGeneratedAssets)
+android.sourceSets["androidTest"].assets.srcDir("$projectDir/schemas")
 
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
     dependsOn(generateTamaDialogCatalog)
@@ -320,6 +327,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation("io.mockk:mockk:1.13.11")
     testImplementation("org.json:json:20240303")
+    testImplementation("org.robolectric:robolectric:4.16.1")
     testImplementation(libs.androidx.work.testing)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
@@ -351,6 +359,9 @@ val releaseFeatureModules = listOf(
     ":feature_media_baseline",
     ":feature_media_dotprod",
     ":feature_media_armv9",
+    ":feature_media_i8mm",
+    ":feature_media_snapdragon_vulkan",
+    ":feature_media_snapdragon_opencl",
     ":feature_upscaler"
 )
 

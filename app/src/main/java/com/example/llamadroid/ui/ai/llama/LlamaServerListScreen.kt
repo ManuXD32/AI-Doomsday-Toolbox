@@ -28,9 +28,10 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -85,7 +86,11 @@ import com.example.llamadroid.service.LlamaServerLaunchProfile
 import com.example.llamadroid.service.WhisperLanguages
 import com.example.llamadroid.service.isNativeChatLoopbackHost
 import com.example.llamadroid.ui.components.DraftIntTextField
+import com.example.llamadroid.ui.components.AppAdvancedSection
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.google.gson.Gson
 import java.io.File
 
@@ -95,6 +100,7 @@ fun LlamaServerListScreen(
     navController: NavController
 ) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val settingsRepository = remember { SettingsRepository(context.applicationContext) }
     val database = AppDatabase.getDatabase(context)
     val knowledgeBaseRepository = remember { KnowledgeBaseRepository(context, database) }
@@ -125,21 +131,13 @@ fun LlamaServerListScreen(
     var showAddDialog by remember { mutableStateOf(false) }
     var serverToEdit by remember { mutableStateOf<LlamaServerEntity?>(null) }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.llama_servers_title)) },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.action_back))
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { showAddDialog = true }) {
-                        Icon(Icons.Default.Add, contentDescription = stringResource(R.string.llama_add_server))
-                    }
-                }
-            )
+    AppScreenScaffold(
+        title = stringResource(R.string.llama_servers_title),
+        onBack = { navController.popBackStack() },
+        actions = {
+            IconButton(onClick = { showAddDialog = true }) {
+                Icon(Icons.Default.Add, contentDescription = stringResource(R.string.llama_add_server))
+            }
         }
     ) { padding ->
         if (servers.isEmpty()) {
@@ -156,7 +154,11 @@ fun LlamaServerListScreen(
             }
         } else {
             LazyColumn(
-                modifier = Modifier.padding(padding),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .walkthroughTarget("llama.servers")
+                    .walkthroughTarget("llama.server_selection"),
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -165,6 +167,8 @@ fun LlamaServerListScreen(
                         server = server,
                         onConnect = {
                             viewModel.selectServer(server)
+                            walkthroughTargets?.recordEvent("llama.server_card")
+                            walkthroughTargets?.recordEvent("llama.server_selection")
                             navController.navigate(Screen.LlamaChatList.route)
                         },
                         onEdit = { serverToEdit = server },
@@ -1159,25 +1163,24 @@ private fun NativeServerToolDefaultsSection(
     maxToolRounds: Int,
     onMaxToolRoundsChange: (Int) -> Unit
 ) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+    AppAdvancedSection(
+        title = stringResource(R.string.llama_server_default_tools_title),
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.medium,
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
         ) {
-            Text(
-                text = stringResource(R.string.llama_server_default_tools_title),
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = stringResource(R.string.llama_server_default_tools_desc),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = stringResource(R.string.llama_server_default_tools_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             ServerToolDefaultSwitchRow(
                 title = stringResource(R.string.llama_tools_master_switch),
                 checked = toolsEnabled,
@@ -1362,6 +1365,8 @@ private fun NativeServerToolDefaultsSection(
     }
 }
 
+}
+
 @Composable
 private fun ServerToolDefaultSwitchRow(
     title: String,
@@ -1454,9 +1459,11 @@ fun LlamaServerCard(
     onDelete: () -> Unit,
     onReload: () -> Unit
 ) {
-    ElevatedCard(
+    Card(
         modifier = Modifier.fillMaxWidth(),
-        onClick = onConnect
+        onClick = onConnect,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -1486,7 +1493,7 @@ fun LlamaServerCard(
 
                 Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     IconButton(
-                        modifier = Modifier.size(36.dp),
+                        modifier = Modifier.size(48.dp),
                         onClick = onReload
                     ) {
                         Icon(
@@ -1496,7 +1503,7 @@ fun LlamaServerCard(
                         )
                     }
                     IconButton(
-                        modifier = Modifier.size(36.dp),
+                        modifier = Modifier.size(48.dp),
                         onClick = onConnect
                     ) {
                         Icon(
@@ -1506,13 +1513,13 @@ fun LlamaServerCard(
                         )
                     }
                     IconButton(
-                        modifier = Modifier.size(36.dp),
+                        modifier = Modifier.size(48.dp),
                         onClick = onEdit
                     ) {
                         Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.llama_edit_server))
                     }
                     IconButton(
-                        modifier = Modifier.size(36.dp),
+                        modifier = Modifier.size(48.dp),
                         onClick = onDelete
                     ) {
                         Icon(

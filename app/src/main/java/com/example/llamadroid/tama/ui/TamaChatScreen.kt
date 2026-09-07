@@ -31,6 +31,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -38,7 +39,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import coil.compose.AsyncImage
 import androidx.navigation.NavController
 import com.example.llamadroid.R
@@ -56,6 +57,8 @@ import com.example.llamadroid.tama.game.TamaGameEngine
 import com.example.llamadroid.tama.game.TamaTranscriptionStatus
 import com.example.llamadroid.tama.db.TamaSummaryEntity
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.PickVisualMediaRequest
@@ -90,6 +93,8 @@ fun TamaChatScreen(
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val resources = LocalResources.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val pet by gameEngine.pet.collectAsState()
     val messages by agentService.messages.collectAsState()
     val isLoading by agentService.isLoading.collectAsState()
@@ -171,7 +176,7 @@ fun TamaChatScreen(
             voiceRecorder = recorder
             voiceRecording = true
         } catch (e: Exception) {
-            voiceError = context.getString(R.string.whisper_error_start_recording, e.message ?: context.getString(R.string.error_generic))
+            voiceError = resources.getString(R.string.whisper_error_start_recording, e.message ?: resources.getString(R.string.error_generic))
             voiceRecording = false
             voiceRecorder?.release()
             voiceRecorder = null
@@ -248,7 +253,7 @@ fun TamaChatScreen(
             startVoiceRecording()
             voiceError = null
         } else {
-            voiceError = context.getString(R.string.whisper_error_permission)
+            voiceError = resources.getString(R.string.whisper_error_permission)
         }
     }
 
@@ -265,7 +270,7 @@ fun TamaChatScreen(
         val text = inputText.trim()
 
         if (!imageInputEnabled && attachedImagePath != null) {
-            voiceError = context.getString(R.string.tama_chat_image_input_disabled_error)
+            voiceError = resources.getString(R.string.tama_chat_image_input_disabled_error)
             return
         }
         if (text.isBlank() && imagePath == null && audioPath == null) {
@@ -326,6 +331,7 @@ fun TamaChatScreen(
                 }
             },
             actions = {
+                        com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                 // Retry Connection
                 IconButton(onClick = {
                     agentService.retryConnection()
@@ -416,6 +422,24 @@ fun TamaChatScreen(
                     )
                 }
 
+                OutlinedTextField(
+                    value = inputText,
+                    onValueChange = { inputText = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                        .walkthroughTarget("tama.chat"),
+                    placeholder = { Text(stringResource(R.string.tama_chat_placeholder), color = TamaMutedText, fontSize = 14.sp) },
+                    colors = tamaOutlinedFieldColors(containerColor = Color.Transparent),
+                    maxLines = 4,
+                    textStyle = TextStyle(
+                        fontFamily = FontFamily.Monospace,
+                        color = TamaDark,
+                        fontSize = 14.sp
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                )
+
                 Row(
                     verticalAlignment = Alignment.Bottom,
                     modifier = Modifier.fillMaxWidth()
@@ -430,6 +454,7 @@ fun TamaChatScreen(
                         },
                         enabled = !isLoading && imageInputEnabled,
                         modifier = Modifier
+                            .size(48.dp)
                             .padding(bottom = 4.dp)
                     ) {
                         Icon(
@@ -449,6 +474,7 @@ fun TamaChatScreen(
                         },
                         enabled = !isLoading,
                         modifier = Modifier
+                            .size(48.dp)
                             .padding(bottom = 4.dp)
                     ) {
                         Icon(
@@ -458,27 +484,13 @@ fun TamaChatScreen(
                         )
                     }
 
-                    OutlinedTextField(
-                        value = inputText,
-                        onValueChange = { inputText = it },
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(horizontal = 8.dp),
-                        placeholder = { Text(stringResource(R.string.tama_chat_placeholder), color = TamaMutedText, fontSize = 14.sp) },
-                        colors = tamaOutlinedFieldColors(containerColor = Color.Transparent),
-                        maxLines = 4,
-                        textStyle = TextStyle(
-                            fontFamily = FontFamily.Monospace,
-                            color = TamaDark,
-                            fontSize = 14.sp
-                        ),
-                        shape = RoundedCornerShape(8.dp)
-                    )
+                    Spacer(Modifier.weight(1f))
 
                     IconButton(
                         onClick = {
                             scope.launch {
                                 sendCurrentMessage()
+                                walkthroughTargets?.recordEvent("tama.chat")
                             }
                         },
                         modifier = Modifier
@@ -1216,6 +1228,7 @@ fun TamaChatSettingsDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val appContext = context.applicationContext
     val scope = rememberCoroutineScope()
     val backend by settingsRepo.tamaBackend.collectAsState()
@@ -1564,15 +1577,15 @@ fun TamaChatSettingsDialog(
                                         onSuccess = { metadata ->
                                             if (SettingsRepository.isLlamaSwapBackend(metadata.backend)) {
                                                 availableLlamaSwapModels = metadata.availableModels
-                                                context.getString(R.string.pdf_metadata_llama_swap_loaded, metadata.availableModels.size)
+                                                resources.getString(R.string.pdf_metadata_llama_swap_loaded, metadata.availableModels.size)
                                             } else {
-                                                context.getString(R.string.tama_chat_backend_info_loaded)
+                                                resources.getString(R.string.tama_chat_backend_info_loaded)
                                             }
                                         },
                                         onFailure = {
-                                            context.getString(
+                                            resources.getString(
                                                 R.string.tama_chat_backend_info_failed,
-                                                it.message ?: context.getString(R.string.error_generic)
+                                                it.message ?: resources.getString(R.string.error_generic)
                                             )
                                         }
                                     )

@@ -15,15 +15,19 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.coroutineScope
+import com.example.llamadroid.util.AppVersionCodeCompat
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import com.example.llamadroid.ui.theme.LlamaDroidTheme
 import com.example.llamadroid.ui.LlamaApp
+import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.service.AgentService
 import com.example.llamadroid.service.AiRuntimeJobStore
@@ -32,6 +36,9 @@ import com.example.llamadroid.service.DatasetForegroundService
 import com.example.llamadroid.tama.notifications.TamaNotificationScheduler
 import com.example.llamadroid.util.UpscalerAssetPackSupport
 import com.example.llamadroid.util.getParcelableExtraCompat
+import com.example.llamadroid.ui.navigation.appLaunchIdentity
+import com.example.llamadroid.ui.navigation.ExternalRouteResolver
+import com.example.llamadroid.ui.navigation.ExternalRouteResolution
 
 /**
  * Shared file data from intent
@@ -49,7 +56,12 @@ class MainActivity : ComponentActivity() {
     
     // Share intent data
     private val sharedFileData = mutableStateOf<SharedFileData?>(null)
-    private val pendingNavigationRoute = mutableStateOf<String?>(null)
+    private val pendingNavigationRoute = mutableStateOf<ExternalRouteResolution>(
+        ExternalRouteResolution.NoRoute
+    )
+    private val supportPromptAllowed = mutableStateOf(false)
+    private val normalLaunchId = mutableStateOf(0)
+    private val externalLaunchId = mutableStateOf(0)
     private val isDeployingBinaries = mutableStateOf(true)
     private val deploymentStatusId = mutableStateOf(R.string.deployment_adjusting)
     
@@ -98,6 +110,8 @@ class MainActivity : ComponentActivity() {
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        normalLaunchId.value = savedInstanceState?.getInt("walkthrough_normal_launch_id") ?: 0
+        externalLaunchId.value = savedInstanceState?.getInt("walkthrough_external_launch_id") ?: 0
 
         enableEdgeToEdge()
 
@@ -191,9 +205,16 @@ class MainActivity : ComponentActivity() {
             preferences.edit().putLong(KEY_LAST_SEEN_VERSION_CODE, currentVersionCode).apply()
         }
         
-        // Handle share intent
-        handleShareIntent(intent)
-        pendingNavigationRoute.value = extractNavigationRoute(intent)
+        // Recreated activities restore navigation; they must not replay an already handled
+        // external intent or dismiss a retained walkthrough. Unhandled requests still retry.
+        val restoredLaunch = savedInstanceState?.takeIf {
+            it.getString("launch_identity") == appLaunchIdentity(intent)
+        }
+        supportPromptAllowed.value = restoredLaunch?.getBoolean("launch_was_normal") ?: isNormalAppLaunch(intent)
+        if (restoredLaunch?.getBoolean("launch_share_handled") != true) handleShareIntent(intent)
+        if (restoredLaunch?.getBoolean("launch_route_handled") != true) {
+            pendingNavigationRoute.value = extractNavigationRoute(intent)
+        }
 
         GenerationDiagnosticsStore.consumePendingRelaunchWarning()?.let { exitSnapshot ->
             reconcileAgentJobsAfterCrash(exitSnapshot.hadActiveGeneration)
@@ -205,24 +226,55 @@ class MainActivity : ComponentActivity() {
         }
         
         setContent {
-            LlamaDroidTheme {
+            val appearanceSettings = remember { SettingsRepository(applicationContext) }
+            val themeMode = appearanceSettings.themeMode.collectAsState().value
+            val dynamicColor = appearanceSettings.dynamicColor.collectAsState().value
+            LlamaDroidTheme(
+                themeMode = themeMode,
+                dynamicColor = dynamicColor
+            ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
                     LlamaApp(
+                        allowDailySupportPrompt = supportPromptAllowed.value,
+                        allowAutomaticWalkthrough = supportPromptAllowed.value,
+                        normalLaunchId = normalLaunchId.value,
+                        externalLaunchId = externalLaunchId.value,
                         sharedFileData = sharedFileData.value,
                         onSharedFileHandled = { sharedFileData.value = null },
                         pendingNavigationRoute = pendingNavigationRoute.value,
-                        onNavigationHandled = { pendingNavigationRoute.value = null }
+                        onNavigationHandled = {
+                            pendingNavigationRoute.value = ExternalRouteResolution.NoRoute
+                        }
                     )
                 }
             }
         }
     }
     
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putInt("walkthrough_normal_launch_id", normalLaunchId.value)
+        outState.putInt("walkthrough_external_launch_id", externalLaunchId.value)
+        outState.putString("launch_identity", appLaunchIdentity(intent))
+        outState.putBoolean("launch_was_normal", supportPromptAllowed.value)
+        outState.putBoolean("launch_share_handled", sharedFileData.value == null)
+        outState.putBoolean("launch_route_handled", pendingNavigationRoute.value == ExternalRouteResolution.NoRoute)
+        super.onSaveInstanceState(outState)
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
+        val normalLaunch = isNormalAppLaunch(intent)
+        if (normalLaunch) {
+            normalLaunchId.value += 1
+        } else {
+            externalLaunchId.value += 1
+        }
+        supportPromptAllowed.value = normalLaunch
+        sharedFileData.value = null
         handleShareIntent(intent)
         pendingNavigationRoute.value = extractNavigationRoute(intent)
     }
@@ -243,24 +295,45 @@ class MainActivity : ComponentActivity() {
         }
     }
     
+    private fun isNormalAppLaunch(intent: Intent?): Boolean = try {
+        (intent?.action == null || intent.action == Intent.ACTION_MAIN) &&
+            intent?.hasExtra(EXTRA_OPEN_ROUTE) != true
+    } catch (_: RuntimeException) {
+        false
+    }
+
     private fun handleShareIntent(intent: Intent?) {
-        if (intent?.action == Intent.ACTION_SEND) {
-            val uri = intent.getParcelableExtraCompat<Uri>(Intent.EXTRA_STREAM)
-            val mimeType = intent.type ?: ""
-            
-            if (uri != null && mimeType.isNotEmpty()) {
-                sharedFileData.value = SharedFileData(uri, mimeType)
+        try {
+            if (intent?.action == Intent.ACTION_SEND) {
+                val uri = intent.getParcelableExtraCompat<Uri>(Intent.EXTRA_STREAM)
+                val mimeType = intent.type ?: ""
+
+                if (uri != null && mimeType.isNotEmpty()) {
+                    sharedFileData.value = SharedFileData(uri, mimeType)
+                }
             }
+        } catch (_: RuntimeException) {
+            return
         }
     }
 
-    private fun extractNavigationRoute(intent: Intent?): String? {
-        return intent?.getStringExtra(EXTRA_OPEN_ROUTE)
+    private fun extractNavigationRoute(intent: Intent?): ExternalRouteResolution {
+        // External launchers (widgets, notifications and old shortcuts) can outlive the
+        // destination they were created for. Resolve at the Activity boundary so malformed or
+        // stale values never reach NavController.navigate().
+        return try {
+            if (intent?.hasExtra(EXTRA_OPEN_ROUTE) != true) {
+                ExternalRouteResolution.NoRoute
+            } else {
+                ExternalRouteResolver.resolve(intent.getStringExtra(EXTRA_OPEN_ROUTE))
+            }
+        } catch (_: RuntimeException) {
+            ExternalRouteResolution.Rejected
+        }
     }
 
-    @Suppress("DEPRECATION")
     private fun appVersionCode(): Long {
-        return packageManager.getPackageInfo(packageName, 0).longVersionCode
+        return AppVersionCodeCompat.read(packageManager.getPackageInfo(packageName, 0))
     }
 
 }

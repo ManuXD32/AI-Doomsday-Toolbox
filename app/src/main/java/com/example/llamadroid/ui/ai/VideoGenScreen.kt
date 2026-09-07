@@ -1,19 +1,19 @@
 package com.example.llamadroid.ui.ai
 
+import androidx.core.graphics.drawable.toDrawable
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.widget.Toast
 import android.widget.VideoView
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,11 +24,12 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -46,7 +47,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -63,6 +64,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
@@ -84,6 +86,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -94,6 +99,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -105,12 +111,19 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.navigation.NavController
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SharedFileHolder
+import com.example.llamadroid.data.SharedFileTarget
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
-import com.example.llamadroid.data.db.SD_CAPABILITY_VID_GEN
 import com.example.llamadroid.data.db.hasSdCapability
+import com.example.llamadroid.data.model.SdCuratedBundleCatalog
+import com.example.llamadroid.data.model.installedSdCuratedModel
+import com.example.llamadroid.service.resolveVideoReuseSources
+import com.example.llamadroid.service.VideoReuseDraftAdapter
+import com.example.llamadroid.service.VideoReusePayload
+import com.example.llamadroid.service.VideoReuseHandoffStore
+import com.example.llamadroid.service.VideoReuseTarget
 import com.example.llamadroid.service.GeneratedVideoMetadata
 import com.example.llamadroid.service.SamplingMethod
 import com.example.llamadroid.service.SdCacheMode
@@ -121,65 +134,187 @@ import com.example.llamadroid.service.VideoGenerationMode
 import com.example.llamadroid.service.VideoGenerationService
 import com.example.llamadroid.service.VideoGenerationState
 import com.example.llamadroid.service.VideoGenerationStateHolder
+import com.example.llamadroid.service.VideoRuntimeOptions
+import com.example.llamadroid.service.parseVideoRuntimeOptions
+import com.example.llamadroid.service.toJsonString
 import com.example.llamadroid.service.loadGeneratedVideoMetadata
 import com.example.llamadroid.sd.SdLoraApplyMode
 import com.example.llamadroid.sd.SdLoraSpec
 import com.example.llamadroid.sd.SdParamsBackendMode
 import com.example.llamadroid.sd.SdRuntimeBackendMode
-import com.example.llamadroid.sd.matchesSdFamily
-import com.example.llamadroid.sd.resolvedSdFamily
+import com.example.llamadroid.sd.SdVideoComponentRole
+import com.example.llamadroid.sd.SdVideoFamily
+import com.example.llamadroid.sd.SdVideoFamilyProfiles
+import com.example.llamadroid.sd.SdVideoInputs
+import com.example.llamadroid.sd.SdVideoMainModelLayout
+import com.example.llamadroid.sd.SdVideoWorkflow
+import com.example.llamadroid.sd.pathFor
+import com.example.llamadroid.sd.isSdVideoMainModel
+import com.example.llamadroid.sd.matchesSdVideoFamily
+import com.example.llamadroid.sd.resolvedSdVideoFamily
 import com.example.llamadroid.sd.toJsonArray
 import com.example.llamadroid.sd.toSdLoraSpecs
 import com.example.llamadroid.sd.validateSdLoras
 import com.example.llamadroid.ui.components.SdSchedulerPicker
+import com.example.llamadroid.ui.components.AppAdvancedSection
+import com.example.llamadroid.ui.components.AppScrollableTabRow
+import com.example.llamadroid.ui.components.AppStateKind
+import com.example.llamadroid.ui.components.AppStatePanel
+import com.example.llamadroid.ui.components.AppTaskActionFooter
+import com.example.llamadroid.ui.components.VideoRuntimeOptionsEditor
+import com.example.llamadroid.ui.components.ImportedVideoImage
+import com.example.llamadroid.ui.components.importVideoImage
+import com.example.llamadroid.ui.components.videoComponentLabel
+import com.example.llamadroid.ui.components.videoGenerationReadiness
+import com.example.llamadroid.ui.components.videoInputLabel
+import com.example.llamadroid.ui.components.videoLorasForValidation
+import com.example.llamadroid.ui.walkthrough.FeatureGuideAction
+import com.example.llamadroid.ui.walkthrough.WalkthroughScrollOwner
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.ui.navigation.Screen
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun VideoGenScreen(navController: NavController) {
+fun VideoGenScreen(navController: NavController, initialTab: String = "create") {
     val context = LocalContext.current
+    val resources = LocalResources.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val scope = rememberCoroutineScope()
     val batteryGateState = rememberBatteryOptimizationGateState()
     val settingsRepo = remember { SettingsRepository(context) }
     val restoredDraft = remember { settingsRepo.videoGenerationDraft() }
+    val externalVideoInputPending = remember {
+        SharedFileHolder.pendingFile.value?.target == SharedFileTarget.VIDEO_GENERATION
+    }
+    var reuseBackendOverrides by remember { mutableStateOf(restoredDraft?.takeIf { it.has("reuseSdParamsBackendMode") }?.let { org.json.JSONObject(it.toString()) }) }
     val keepScreenAwakeDuringGeneration by settingsRepo.keepScreenAwakeDuringGeneration.collectAsState()
     val sdMaxCpuRamEnabled by settingsRepo.sdMaxCpuRamEnabled.collectAsState()
     val sdMaxCpuRamGiB by settingsRepo.sdMaxCpuRamGiB.collectAsState()
     val selectedSdNativeBinary by settingsRepo.stableDiffusionNativeBinarySelection.collectAsState()
+    val videoBinaryRepository = remember { com.example.llamadroid.data.binary.BinaryRepository(context) }
+    var videoBinaryCapabilities by remember { mutableStateOf<com.example.llamadroid.service.SdBinaryCapabilities?>(null) }
+    var videoBinaryProbePending by remember { mutableStateOf(true) }
+    var videoBinaryProbeUnavailable by remember { mutableStateOf(false) }
+    var videoBinaryProbeRequest by remember { mutableIntStateOf(0) }
+    LaunchedEffect(selectedSdNativeBinary, videoBinaryProbeRequest) {
+        videoBinaryProbePending = true
+        videoBinaryProbeUnavailable = false
+        videoBinaryCapabilities = null
+        val capabilities = withContext(Dispatchers.IO) {
+            try {
+                videoBinaryRepository.getSdBinary()
+                    ?.takeIf { it.exists() && it.isFile }
+                    ?.let {
+                        com.example.llamadroid.service.probeSdBinaryCapabilities(
+                            context,
+                            it,
+                            videoBinaryRepository
+                        )
+                    }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                null
+            }
+        }
+        videoBinaryCapabilities = capabilities
+        videoBinaryProbeUnavailable = capabilities == null
+        videoBinaryProbePending = false
+    }
+    val videoBinaryReady = !videoBinaryProbePending && !videoBinaryProbeUnavailable
     val db = remember { AppDatabase.getDatabase(context) }
 
-    val videoGenModels by db.modelDao().getModelsByType(ModelType.SD_DIFFUSION)
+    val videoGenModels by db.modelDao().getModelsByTypes(
+        listOf(ModelType.SD_DIFFUSION, ModelType.SD_CHECKPOINT)
+    )
         .collectAsState(initial = emptyList())
     val vaeModels by db.modelDao().getModelsByType(ModelType.SD_VAE)
         .collectAsState(initial = emptyList())
     val t5xxlModels by db.modelDao().getModelsByType(ModelType.SD_T5XXL)
         .collectAsState(initial = emptyList())
+    val taeModels by db.modelDao().getModelsByType(ModelType.SD_TAE)
+        .collectAsState(initial = emptyList())
+    val llmModels by db.modelDao().getModelsByType(ModelType.LLM)
+        .collectAsState(initial = emptyList())
+    val llmVisionModels by db.modelDao().getModelsByTypes(listOf(ModelType.VISION_PROJECTOR, ModelType.MMPROJ))
+        .collectAsState(initial = emptyList())
+    val audioVaeModels by db.modelDao().getModelsByType(ModelType.SD_AUDIO_VAE)
+        .collectAsState(initial = emptyList())
+    val embeddingsConnectorModels by db.modelDao().getModelsByType(ModelType.SD_EMBEDDINGS_CONNECTORS)
+        .collectAsState(initial = emptyList())
+    val motionModuleModels by db.modelDao().getModelsByType(ModelType.SD_MOTION_MODULE)
+        .collectAsState(initial = emptyList())
+    val controlNetModels by db.modelDao().getModelsByType(ModelType.SD_CONTROLNET)
+        .collectAsState(initial = emptyList())
+    val clipVisionModels by db.modelDao().getModelsByType(ModelType.SD_CLIP_VISION)
+        .collectAsState(initial = emptyList())
+    val ipAdapterModels by db.modelDao().getModelsByType(ModelType.SD_IP_ADAPTER)
+        .collectAsState(initial = emptyList())
     val loraModels by db.modelDao().getModelsByType(ModelType.SD_LORA)
+        .collectAsState(initial = emptyList())
+    val upscalerModels by db.modelDao().getModelsByType(ModelType.SD_UPSCALER)
         .collectAsState(initial = emptyList())
 
     val availableVideoModels = remember(videoGenModels) {
-        videoGenModels.filter { it.hasSdCapability(SD_CAPABILITY_VID_GEN) }
+        videoGenModels.filter { it.isSdVideoMainModel() }
     }
-    var mainTab by remember { mutableIntStateOf(0) }
+    val mainTabStateHolder = rememberSaveableStateHolder()
+    var mainTab by rememberSaveable(initialTab) {
+        mutableIntStateOf(if (initialTab.equals("gallery", ignoreCase = true)) 1 else 0)
+    }
     var selectedMode by remember { mutableIntStateOf(restoredDraft?.optInt("mode", 0) ?: 0) }
     var galleryFilter by remember { mutableIntStateOf(0) }
 
     var selectedVideoModelPath by remember { mutableStateOf(restoredDraft?.optString("model").orEmpty().ifBlank { null }) }
     val selectedVideoModel = availableVideoModels.firstOrNull { it.path == selectedVideoModelPath }
     val compatibleVideoLoraModels = remember(loraModels, selectedVideoModel) {
-        val (family, variant) = selectedVideoModel?.resolvedSdFamily() ?: (null to null)
+        val (family, variant) = selectedVideoModel?.resolvedSdVideoFamily() ?: (null to null)
         family?.let { selectedFamily ->
-            loraModels.filter { it.matchesSdFamily(selectedFamily, variant) }
+            loraModels.filter { it.matchesSdVideoFamily(selectedFamily, variant) }
         }.orEmpty()
     }
+    val videoComponentModels = remember(videoGenModels, vaeModels, taeModels, t5xxlModels, llmModels, llmVisionModels, audioVaeModels, embeddingsConnectorModels, motionModuleModels, upscalerModels, controlNetModels, clipVisionModels) {
+        mapOf(
+            SdVideoComponentRole.DIFFUSION_MODEL to availableVideoModels,
+            SdVideoComponentRole.FULL_MODEL to availableVideoModels,
+            SdVideoComponentRole.HIGH_NOISE_DIFFUSION_MODEL to availableVideoModels,
+            SdVideoComponentRole.VAE to vaeModels,
+            SdVideoComponentRole.TAE to taeModels,
+            SdVideoComponentRole.T5XXL to t5xxlModels,
+            SdVideoComponentRole.LLM to llmModels,
+            SdVideoComponentRole.LLM_VISION to llmVisionModels,
+            SdVideoComponentRole.AUDIO_VAE to audioVaeModels,
+            SdVideoComponentRole.EMBEDDINGS_CONNECTORS to embeddingsConnectorModels,
+            SdVideoComponentRole.MOTION_MODULE to motionModuleModels,
+            SdVideoComponentRole.HIRES_UPSCALER to upscalerModels,
+            SdVideoComponentRole.CONTROL_NET to controlNetModels,
+            SdVideoComponentRole.CLIP_VISION to clipVisionModels
+        )
+    }
+    val lingBotBundle = remember { SdCuratedBundleCatalog.byId("lingbot-phone") }
+    val lingBotInstalledModels = remember(
+        availableVideoModels,
+        taeModels,
+        llmModels
+    ) {
+        lingBotBundle?.let { bundle ->
+            val installed = availableVideoModels + taeModels + llmModels
+            bundle.files.mapNotNull { file -> file.installedSdCuratedModel(bundle, installed) }
+        }.orEmpty()
+    }
+    val lingBotReady = lingBotBundle != null && lingBotInstalledModels.size == lingBotBundle.files.size
     var prompt by remember { mutableStateOf(restoredDraft?.optString("prompt").orEmpty()) }
     var negativePrompt by remember { mutableStateOf(restoredDraft?.optString("negativePrompt").orEmpty()) }
     var selectedSampler by remember { mutableStateOf(SamplingMethod.entries.firstOrNull { it.name == restoredDraft?.optString("sampler") } ?: SamplingMethod.EULER) }
@@ -200,9 +335,37 @@ fun VideoGenScreen(navController: NavController) {
     var videoLoraApplyMode by remember(restoredDraft) {
         mutableStateOf(SdLoraApplyMode.fromStoredValue(restoredDraft?.optString("loraApplyMode")))
     }
+    var videoRuntimeOptions by remember(restoredDraft) {
+        mutableStateOf(
+            parseVideoRuntimeOptions(restoredDraft?.optString("videoAdvancedJson").orEmpty())
+                ?.takeIf {
+                    val raw = restoredDraft?.optString("videoAdvancedJson").orEmpty().trim()
+                    raw.isNotBlank() && raw != "{}"
+                }
+                ?: VideoRuntimeOptions(
+                    workflow = if ((restoredDraft?.optInt("mode", 0) ?: 0) == 1) {
+                        SdVideoWorkflow.IMAGE_TO_VIDEO
+                    } else {
+                        SdVideoWorkflow.TEXT_TO_VIDEO
+                    },
+                    videoComponents = com.example.llamadroid.sd.SdVideoComponentPaths(
+                        diffusionModelPath = restoredDraft?.optString("model").orEmpty().ifBlank { null },
+                        vaePath = restoredDraft?.optString("vae").orEmpty().ifBlank { null },
+                        t5xxlPath = restoredDraft?.optString("t5").orEmpty().ifBlank { null }
+                    ),
+                    videoInputs = SdVideoInputs(
+                        initImagePath = restoredDraft?.optString("input").orEmpty().ifBlank { null }
+                    ),
+                    seed = restoredDraft?.optLong("seed", -1L) ?: -1L,
+                    useTae = false
+                )
+        )
+    }
 
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
-    var selectedImagePath by remember { mutableStateOf(restoredDraft?.optString("input").orEmpty().takeIf { it.isNotBlank() && File(it).canRead() }) }
+    // Keep an unavailable saved path visible so the picker can explain or replace it; the
+    // generation gate below performs the asynchronous readability check.
+    var selectedImagePath by remember { mutableStateOf(restoredDraft?.optString("input").orEmpty().ifBlank { null }) }
     var imageResolution by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
     var videoFramesText by remember { mutableStateOf(restoredDraft?.optString("frames", "8") ?: "8") }
@@ -229,7 +392,7 @@ fun VideoGenScreen(navController: NavController) {
     var diffusionPlacement by remember { mutableStateOf(restoredDraft?.optString("diffusionPlacement").orEmpty().ifBlank { acceleratorPlacement ?: "cpu" }) }
     var vaePlacement by remember { mutableStateOf(restoredDraft?.optString("vaePlacement").orEmpty().ifBlank { "cpu" }) }
     LaunchedEffect(acceleratorPlacement) {
-        if (acceleratorPlacement != null && diffusionPlacement !in listOf("vulkan0", "opencl0")) {
+        if (reuseBackendOverrides == null && acceleratorPlacement != null && diffusionPlacement !in listOf("vulkan0", "opencl0")) {
             diffusionPlacement = acceleratorPlacement
         }
     }
@@ -244,17 +407,36 @@ fun VideoGenScreen(navController: NavController) {
     var scmPolicy by remember { mutableStateOf(SdCacheScmPolicy.fromStoredValue(restoredDraft?.optString("scmPolicy").orEmpty().ifBlank { null })) }
     var manualCommandFlags by remember { mutableStateOf(restoredDraft?.optString("flags").orEmpty()) }
 
-    DisposableEffect(Unit) {
-        onDispose {
-            settingsRepo.setVideoGenerationDraft(org.json.JSONObject().apply {
+    fun captureVideoDraft(): org.json.JSONObject = org.json.JSONObject().apply {
                 put("mode", selectedMode); put("model", selectedVideoModelPath); put("prompt", prompt); put("negativePrompt", negativePrompt)
                 put("useVae", useVae); put("vae", selectedVaePath); put("useT5", useT5xxl); put("t5", selectedT5xxlPath); put("input", selectedImagePath)
                 put("frames", videoFramesText); put("fps", fpsText); put("width", widthText); put("height", heightText); put("steps", stepsText); put("cfg", cfgScaleText); put("threads", threadsText); put("sampler", selectedSampler.name); put("scheduler", selectedScheduler?.cliName)
                 put("flowShiftEnabled", flowShiftEnabled); put("flowShift", flowShiftText); put("vaeTileSize", vaeTileSize); put("vaeTiling", vaeTiling); put("diffusionFa", diffusionFa); put("mmap", mmap); put("cacheMode", cacheMode?.cliName); put("cacheOption", cacheOption); put("scmMask", scmMask); put("scmPolicy", scmPolicy?.cliName); put("diffConv", diffusionConvDirect); put("vaeConv", vaeConvDirect); put("flags", manualCommandFlags)
                 put("loras", videoLoras.toJsonArray()); put("highNoiseLoras", videoHighNoiseLoras.toJsonArray()); put("loraApplyMode", videoLoraApplyMode?.cliName)
                 put("tePlacement", textEncoderPlacement); put("diffusionPlacement", diffusionPlacement); put("vaePlacement", vaePlacement)
-            })
-        }
+                put("videoAdvancedJson", videoRuntimeOptions.toJsonString())
+                reuseBackendOverrides?.let { overrides ->
+                    listOf("reuseSdParamsBackendMode", "reuseSdParamsBackendSpec", "reuseSdRuntimeBackendMode", "reuseMaxVramCpuGiB").forEach { key ->
+                        if (overrides.has(key)) put(key, overrides.optString(key))
+                    }
+                }
+            }
+
+    DisposableEffect(Unit) {
+        onDispose { settingsRepo.setVideoGenerationDraft(captureVideoDraft()) }
+    }
+
+    // Persist edits while the screen remains open, while retaining the disposal write as a
+    // final synchronous snapshot for navigation and process teardown.
+    LaunchedEffect(settingsRepo) {
+        snapshotFlow { captureVideoDraft().toString() }
+            .distinctUntilChanged()
+            .collectLatest { draftJson ->
+                delay(VIDEO_DRAFT_PERSIST_DEBOUNCE_MS)
+                withContext(Dispatchers.IO) {
+                    settingsRepo.setVideoGenerationDraft(org.json.JSONObject(draftJson))
+                }
+            }
     }
 
     val outputDir = remember {
@@ -281,45 +463,29 @@ fun VideoGenScreen(navController: NavController) {
     }
 
     fun loadImageInput(uri: Uri) {
-        try {
-            selectedImageUri = uri
-            val inputStream = context.contentResolver.openInputStream(uri)
-            val bitmap = android.graphics.BitmapFactory.decodeStream(inputStream)
-            inputStream?.close()
-            bitmap?.let { bmp ->
-                imageResolution = Pair(bmp.width, bmp.height)
-                val processedBitmap = if (bmp.width != bmp.height) {
-                    val size = maxOf(bmp.width, bmp.height)
-                    val squareBitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-                    val canvas = android.graphics.Canvas(squareBitmap)
-                    canvas.drawColor(android.graphics.Color.BLACK)
-                    val left = (size - bmp.width) / 2f
-                    val top = (size - bmp.height) / 2f
-                    canvas.drawBitmap(bmp, left, top, null)
-                    squareBitmap
-                } else {
-                    bmp
-                }
-                val tempFile = File(context.cacheDir, "video_gen_input_image.png")
-                FileOutputStream(tempFile).use { out ->
-                    processedBitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-                }
-                selectedImagePath = tempFile.absolutePath
+        scope.launch {
+            var imported: ImportedVideoImage? = null
+            try {
+                imported = importVideoImage(context, uri)
+                selectedImageUri = uri
+                imageResolution = imported.width to imported.height
+                selectedImagePath = imported.file.absolutePath
+                videoRuntimeOptions = videoRuntimeOptions.copy(
+                    videoInputs = videoRuntimeOptions.videoInputs.copy(initImagePath = imported.file.absolutePath)
+                )
+            } catch (cancelled: CancellationException) {
+                imported?.file?.delete()
+                throw cancelled
+            } catch (_: Exception) {
+                imported?.file?.delete()
+                errorMessage = resources.getString(R.string.video_input_import_failed)
             }
-        } catch (e: Exception) {
-            errorMessage = context.getString(R.string.video_gen_error_shared_image, e.message ?: "")
         }
-    }
-
-    val imagePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri ->
-        uri?.let { loadImageInput(it) }
     }
 
     LaunchedEffect(Unit) {
         reloadGallery()
-        val pendingFile = SharedFileHolder.consumePendingFile()
+        val pendingFile = SharedFileHolder.consumeFor(SharedFileTarget.VIDEO_GENERATION)
         if (pendingFile != null && pendingFile.mimeType.startsWith("image/")) {
             selectedMode = 1
             mainTab = 0
@@ -351,6 +517,56 @@ fun VideoGenScreen(navController: NavController) {
         }
     }
 
+    // Legacy scalar drafts and the typed editor share one effective prerequisite view. The
+    // typed paths win, while old saved fields keep existing drafts launchable after migration.
+    val videoEditorOptions = videoRuntimeOptions.copy(
+        workflow = videoRuntimeOptions.workflow ?: if (selectedMode == 1) {
+            SdVideoWorkflow.IMAGE_TO_VIDEO
+        } else {
+            SdVideoWorkflow.TEXT_TO_VIDEO
+        },
+        videoComponents = videoRuntimeOptions.videoComponents.copy(
+            diffusionModelPath = videoRuntimeOptions.videoComponents.diffusionModelPath
+                ?: selectedVideoModelPath.takeIf {
+                    videoRuntimeOptions.videoComponents.fullModelPath == null && selectedVideoModel?.type != ModelType.SD_CHECKPOINT
+                },
+            fullModelPath = videoRuntimeOptions.videoComponents.fullModelPath
+                ?: selectedVideoModelPath.takeIf {
+                    videoRuntimeOptions.videoComponents.diffusionModelPath == null && selectedVideoModel?.type == ModelType.SD_CHECKPOINT
+                },
+            vaePath = videoRuntimeOptions.videoComponents.vaePath ?: selectedVaePath.takeIf { useVae },
+            t5xxlPath = videoRuntimeOptions.videoComponents.t5xxlPath ?: selectedT5xxlPath.takeIf { useT5xxl }
+        ),
+        videoInputs = videoRuntimeOptions.videoInputs.copy(
+            initImagePath = videoRuntimeOptions.videoInputs.initImagePath ?: selectedImagePath
+        )
+    )
+    val videoReadiness = videoGenerationReadiness(videoEditorOptions)
+    val effectiveVideoInputPath = videoEditorOptions.videoInputs.initImagePath
+    val videoPathReferences = remember(
+        videoEditorOptions,
+        selectedVideoModelPath,
+        videoLoras,
+        videoHighNoiseLoras
+    ) {
+        videoGenerationPathReferences(
+            options = videoEditorOptions,
+            selectedModelPath = selectedVideoModelPath,
+            loras = videoLoras,
+            highNoiseLoras = videoHighNoiseLoras
+        )
+    }
+    val videoPathsAvailable by produceState<Boolean?>(
+        initialValue = null,
+        videoPathReferences,
+        availableVideoModels
+    ) {
+        value = null
+        value = withContext(Dispatchers.IO) {
+            videoPathReferences.all(::videoPathReferenceAvailable)
+        }
+    }
+
     val generateVideo = generation@ fun() {
         val mode = if (selectedMode == 1) VideoGenerationMode.IMG2VID else VideoGenerationMode.TXT2VID
         val frames = videoFramesText.toIntOrNull()
@@ -362,64 +578,98 @@ fun VideoGenScreen(navController: NavController) {
         val threads = threadsText.toIntOrNull()
         val flowShift = if (flowShiftEnabled) flowShiftText.toFloatOrNull() else null
 
-        val loraError = runCatching { validateSdLoras(videoLoras + videoHighNoiseLoras) }.exceptionOrNull()
+        val loraError = runCatching { validateSdLoras(videoLorasForValidation(videoLoras, videoHighNoiseLoras)) }.exceptionOrNull()
         if (loraError != null) {
-            errorMessage = loraError.message ?: context.getString(R.string.sd_workflow_gate_missing)
+            errorMessage = loraError.message ?: resources.getString(R.string.sd_workflow_gate_missing)
             return@generation
         }
 
         when {
             selectedVideoModelPath == null -> {
-                errorMessage = context.getString(R.string.video_gen_error_model_required)
+                errorMessage = resources.getString(R.string.video_gen_error_model_required)
                 return
             }
             prompt.isBlank() -> {
-                errorMessage = context.getString(R.string.video_gen_error_prompt_required)
+                errorMessage = resources.getString(R.string.video_gen_error_prompt_required)
                 return
             }
-            mode == VideoGenerationMode.IMG2VID && selectedImagePath == null -> {
-                errorMessage = context.getString(R.string.video_gen_error_input_image_required)
+            !videoReadiness.isSatisfied -> {
+                errorMessage = when {
+                    videoReadiness.unsupportedWorkflow -> resources.getString(
+                        R.string.video_controls_profile_unsupported_workflow
+                    )
+                    videoReadiness.missingComponents.isNotEmpty() -> resources.getString(
+                        R.string.video_controls_profile_missing_components,
+                        videoReadiness.missingComponents.map { videoComponentLabel(resources, it) }.joinToString()
+                    )
+                    else -> resources.getString(
+                        R.string.video_controls_profile_missing_inputs,
+                        videoReadiness.missingInputs.map { videoInputLabel(resources, it) }.joinToString()
+                    )
+                }
+                return
+            }
+            videoPathsAvailable != true -> {
+                errorMessage = resources.getString(R.string.video_controls_unavailable_values_hint)
+                return
+            }
+            mode == VideoGenerationMode.IMG2VID && effectiveVideoInputPath == null -> {
+                errorMessage = resources.getString(R.string.video_gen_error_input_image_required)
                 return
             }
             useVae && selectedVaePath == null -> {
-                errorMessage = context.getString(R.string.video_gen_error_vae_required)
+                errorMessage = resources.getString(R.string.video_gen_error_vae_required)
                 return
             }
             useT5xxl && selectedT5xxlPath == null -> {
-                errorMessage = context.getString(R.string.video_gen_error_t5xxl_required)
+                errorMessage = resources.getString(R.string.video_gen_error_t5xxl_required)
                 return
             }
-            frames == null || frames <= 0 -> {
-                errorMessage = context.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_frames_label))
+            frames == null || frames < 2 -> {
+                errorMessage = resources.getString(R.string.video_output_requires_two_frames)
                 return
             }
             fps == null || fps <= 0 -> {
-                errorMessage = context.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_fps_label))
+                errorMessage = resources.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_fps_label))
                 return
             }
             width == null || width <= 0 -> {
-                errorMessage = context.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_width_label))
+                errorMessage = resources.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_width_label))
                 return
             }
             height == null || height <= 0 -> {
-                errorMessage = context.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_height_label))
+                errorMessage = resources.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_height_label))
                 return
             }
             steps == null || steps <= 0 -> {
-                errorMessage = context.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_steps_label))
+                errorMessage = resources.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_steps_label))
                 return
             }
-            cfgScale == null || cfgScale <= 0f -> {
-                errorMessage = context.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_cfg_scale_label))
+            cfgScale == null || !cfgScale.isFinite() || cfgScale <= 0f -> {
+                errorMessage = resources.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_cfg_scale_label))
                 return
             }
             threads == null -> {
-                errorMessage = context.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_threads_label))
+                errorMessage = resources.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_threads_label))
                 return
             }
-            flowShiftEnabled && flowShift == null -> {
-                errorMessage = context.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_flow_shift_label))
+            flowShiftEnabled && (flowShift == null || !flowShift.isFinite()) -> {
+                errorMessage = resources.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_flow_shift_label))
                 return
+            }
+        }
+
+        val selectedVideoFamily = selectedVideoModel?.resolvedSdVideoFamily()?.first
+        if (selectedVideoFamily != null) {
+            val incompatibleLoras = (videoLoras + videoHighNoiseLoras).filter { spec ->
+                spec.enabled && compatibleVideoLoraModels.none { model -> model.path == spec.path }
+            }
+            if (incompatibleLoras.isNotEmpty()) {
+                errorMessage = resources.getString(
+                    R.string.video_controls_lora_missing_or_incompatible,
+                    incompatibleLoras.joinToString { it.path.substringAfterLast('/').ifBlank { it.path } }
+                )
+                return@generation
             }
         }
 
@@ -430,6 +680,8 @@ fun VideoGenScreen(navController: NavController) {
         val baseName = "video_$timestamp"
         val modeDir = File(outputDir, mode.folderName).apply { mkdirs() }
 
+        val effectiveVideoOptions = videoEditorOptions
+
         val config = VideoGenerationConfig(
             mode = mode,
             prompt = prompt,
@@ -438,7 +690,7 @@ fun VideoGenScreen(navController: NavController) {
             outputAviPath = File(modeDir, "$baseName.avi").absolutePath,
             outputMp4Path = File(modeDir, "$baseName.mp4").absolutePath,
             metadataPath = File(modeDir, "$baseName.json").absolutePath,
-            initImagePath = if (mode == VideoGenerationMode.IMG2VID) selectedImagePath else null,
+            initImagePath = if (mode == VideoGenerationMode.IMG2VID) effectiveVideoInputPath else null,
             useVae = useVae,
             vaePath = if (useVae) selectedVaePath else null,
             useT5xxl = useT5xxl,
@@ -466,13 +718,63 @@ fun VideoGenScreen(navController: NavController) {
             loras = videoLoras,
             highNoiseLoras = videoHighNoiseLoras,
             loraApplyMode = videoLoraApplyMode,
-            sdParamsBackendSpec = selectedVideoModel?.sdParamsBackendSpec ?: "auto",
-            sdParamsBackendMode = selectedVideoModel?.sdParamsBackendMode ?: "auto",
-            sdRuntimeBackendMode = acceleratorPlacement?.let {
+            sdParamsBackendSpec = reuseBackendOverrides?.optString("reuseSdParamsBackendSpec") ?: selectedVideoModel?.sdParamsBackendSpec ?: "auto",
+            sdParamsBackendMode = reuseBackendOverrides?.optString("reuseSdParamsBackendMode") ?: selectedVideoModel?.sdParamsBackendMode ?: "auto",
+            sdRuntimeBackendMode = reuseBackendOverrides?.optString("reuseSdRuntimeBackendMode") ?: acceleratorPlacement?.let {
                 "te=$textEncoderPlacement,diffusion=$diffusionPlacement,vae=$vaePlacement"
             } ?: selectedVideoModel?.sdRuntimeBackendMode ?: "auto",
-            maxVramCpuGiB = if (sdMaxCpuRamEnabled) sdMaxCpuRamGiB else "",
-            customFlags = manualCommandFlags
+            maxVramCpuGiB = reuseBackendOverrides?.optString("reuseMaxVramCpuGiB") ?: if (sdMaxCpuRamEnabled) sdMaxCpuRamGiB else "",
+            customFlags = manualCommandFlags,
+            videoFamily = effectiveVideoOptions.videoFamily,
+            videoVariant = effectiveVideoOptions.videoVariant,
+            workflow = effectiveVideoOptions.workflow,
+            videoComponents = effectiveVideoOptions.videoComponents,
+            videoInputs = effectiveVideoOptions.videoInputs,
+            useTae = effectiveVideoOptions.useTae,
+            seed = effectiveVideoOptions.seed,
+            highNoiseSteps = effectiveVideoOptions.highNoiseSteps,
+            highNoiseCfgScale = effectiveVideoOptions.highNoiseCfgScale,
+            highNoiseSamplingMethod = effectiveVideoOptions.highNoiseSamplingMethod,
+            controlStrength = effectiveVideoOptions.controlStrength,
+            vaeTileOverlap = effectiveVideoOptions.vaeTileOverlap,
+            vaeRelativeTileSize = effectiveVideoOptions.vaeRelativeTileSize,
+            hires = effectiveVideoOptions.hires,
+            outputFormat = effectiveVideoOptions.outputFormat,
+            nativeOutputFormat = effectiveVideoOptions.nativeOutputFormat,
+            nativeOutputPath = File(modeDir, "$baseName.${effectiveVideoOptions.nativeOutputFormat.extension}").absolutePath,
+            audioCodec = effectiveVideoOptions.audioCodec,
+            conversionRecoveryEnabled = effectiveVideoOptions.conversionRecoveryEnabled,
+            imgCfgScale = effectiveVideoOptions.imgCfgScale,
+            guidance = effectiveVideoOptions.guidance,
+            slgScale = effectiveVideoOptions.slgScale,
+            skipLayerStart = effectiveVideoOptions.skipLayerStart,
+            skipLayerEnd = effectiveVideoOptions.skipLayerEnd,
+            skipLayers = effectiveVideoOptions.skipLayers,
+            eta = effectiveVideoOptions.eta,
+            strength = effectiveVideoOptions.strength,
+            highNoiseImgCfgScale = effectiveVideoOptions.highNoiseImgCfgScale,
+            highNoiseGuidance = effectiveVideoOptions.highNoiseGuidance,
+            highNoiseSlgScale = effectiveVideoOptions.highNoiseSlgScale,
+            highNoiseSkipLayerStart = effectiveVideoOptions.highNoiseSkipLayerStart,
+            highNoiseSkipLayerEnd = effectiveVideoOptions.highNoiseSkipLayerEnd,
+            highNoiseSkipLayers = effectiveVideoOptions.highNoiseSkipLayers,
+            highNoiseEta = effectiveVideoOptions.highNoiseEta,
+            moeBoundary = effectiveVideoOptions.moeBoundary,
+            vaceStrength = effectiveVideoOptions.vaceStrength,
+            ipAdapterStrength = effectiveVideoOptions.ipAdapterStrength,
+            vaeFormat = effectiveVideoOptions.vaeFormat,
+            sigmas = effectiveVideoOptions.sigmas,
+            refImageArgs = effectiveVideoOptions.refImageArgs,
+            extraSampleArgs = effectiveVideoOptions.extraSampleArgs,
+            extraTilingArgs = effectiveVideoOptions.extraTilingArgs,
+            increaseRefIndex = effectiveVideoOptions.increaseRefIndex,
+            disableAutoResizeRefImage = effectiveVideoOptions.disableAutoResizeRefImage,
+            circular = effectiveVideoOptions.circular,
+            circularX = effectiveVideoOptions.circularX,
+            circularY = effectiveVideoOptions.circularY,
+            temporalTiling = effectiveVideoOptions.temporalTiling,
+            promptFormat = effectiveVideoOptions.promptFormat,
+            lingBotPromptJson = effectiveVideoOptions.lingBotPromptJson
         )
 
         batteryGateState.runAfterCheck {
@@ -488,62 +790,136 @@ fun VideoGenScreen(navController: NavController) {
 
     BatteryOptimizationWarningDialog(state = batteryGateState)
 
-    fun shareVideo(metadata: GeneratedVideoMetadata) {
-        try {
-            val file = File(metadata.mp4Path)
-            if (!file.exists()) {
-                Toast.makeText(context, context.getString(R.string.video_gen_share_failed_missing), Toast.LENGTH_SHORT).show()
-                return
-            }
-            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                type = "video/mp4"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            context.startActivity(Intent.createChooser(shareIntent, context.getString(R.string.video_gen_share_chooser)))
-        } catch (e: Exception) {
-            Toast.makeText(
-                context,
-                context.getString(R.string.video_gen_share_failed, e.message ?: ""),
-                Toast.LENGTH_LONG
-            ).show()
-        }
+    fun applyLingBotProfile() {
+        val bundle = lingBotBundle ?: return
+        val installedById = bundle.files.mapNotNull { file ->
+            file.installedSdCuratedModel(bundle, lingBotInstalledModels)?.let { file.id to it.path }
+        }.toMap()
+        if (installedById.size != bundle.files.size) return
+        reuseBackendOverrides = null
+        val components = com.example.llamadroid.sd.SdVideoComponentPaths(
+            diffusionModelPath = installedById["lingbot-dense-13b"],
+            llmPath = installedById["lingbot-qwen3-vl-4b-q4"],
+            taePath = installedById["lingbot-taew21"],
+            vaePath = null
+        )
+        val examplePrompt = resources.getString(R.string.video_lingbot_example_prompt)
+        // Mode restoration must observe the preset prompt, including when switching from I2V.
+        VideoGenerationStateHolder.txt2vid.updatePrompt(examplePrompt)
+        selectedMode = 0
+        selectedImageUri = null
+        selectedImagePath = null
+        imageResolution = null
+        prompt = examplePrompt
+        negativePrompt = resources.getString(R.string.video_lingbot_example_negative)
+        selectedVideoModelPath = components.diffusionModelPath
+        useVae = false
+        selectedVaePath = null
+        useT5xxl = false
+        selectedT5xxlPath = null
+        videoFramesText = "9"
+        fpsText = "4"
+        widthText = "256"
+        heightText = "144"
+        stepsText = "12"
+        cfgScaleText = "3"
+        flowShiftEnabled = true
+        flowShiftText = "3"
+        threadsText = "4"
+        mmap = true
+        diffusionFa = true
+        selectedSampler = SamplingMethod.EULER
+        selectedScheduler = null
+        videoLoras = emptyList()
+        videoHighNoiseLoras = emptyList()
+        videoLoraApplyMode = SdLoraApplyMode.fromStoredValue(null)
+        cacheMode = SdCacheMode.fromStoredValue(null)
+        cacheOption = ""
+        manualCommandFlags = ""
+        errorMessage = null
+        warningMessage = null
+        videoRuntimeOptions = VideoRuntimeOptions(
+            videoFamily = SdVideoFamily.LINGBOT_VIDEO,
+            videoVariant = "dense_1.3b",
+            workflow = SdVideoWorkflow.TEXT_TO_VIDEO,
+            videoComponents = components,
+            videoInputs = SdVideoInputs(),
+            useTae = true,
+            seed = 42L,
+            promptFormat = com.example.llamadroid.sd.SdVideoPromptFormat.LINGBOT_CAPTION_JSON
+        )
     }
 
-    fun copyGenerationInfo(metadata: GeneratedVideoMetadata) {
-        try {
-            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            val clip = ClipData.newPlainText(
-                context.getString(R.string.video_gen_copy_info),
-                buildVideoGenerationInfoText(context, metadata)
-            )
-            clipboard.setPrimaryClip(clip)
-            Toast.makeText(context, context.getString(R.string.video_gen_copy_info_success), Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(
-                context,
-                context.getString(R.string.video_gen_copy_info_failed, e.message ?: ""),
-                Toast.LENGTH_LONG
-            ).show()
-        }
+    fun applyVideoReuse(payload: VideoReusePayload, verifiedSources: Map<String, String> = emptyMap()) {
+        val draft = VideoReuseDraftAdapter.toLocalDraftJson(payload, verifiedSources = verifiedSources)
+        fun text(key: String): String = draft.optString(key).takeUnless { it == "null" }.orEmpty()
+        fun path(key: String): String? = text(key).takeIf(String::isNotBlank)
+        val nextMode = draft.optInt("mode", 0)
+        VideoGenerationStateHolder.getForModeIndex(nextMode).updatePrompt(text("prompt"))
+        selectedMode = nextMode
+        prompt = text("prompt")
+        negativePrompt = text("negativePrompt")
+        selectedVideoModelPath = path("model")
+        useVae = draft.optBoolean("useVae")
+        selectedVaePath = path("vae")
+        useT5xxl = draft.optBoolean("useT5")
+        selectedT5xxlPath = path("t5")
+        selectedImageUri = null
+        selectedImagePath = path("input")
+        imageResolution = null
+        videoFramesText = text("frames")
+        fpsText = text("fps")
+        widthText = text("width")
+        heightText = text("height")
+        stepsText = text("steps")
+        cfgScaleText = text("cfg")
+        threadsText = text("threads")
+        selectedSampler = SamplingMethod.entries.firstOrNull { it.name == text("sampler") } ?: SamplingMethod.EULER
+        selectedScheduler = SdScheduler.fromCliName(text("scheduler"))
+        flowShiftEnabled = draft.optBoolean("flowShiftEnabled")
+        flowShiftText = text("flowShift")
+        vaeTileSize = text("vaeTileSize")
+        vaeTiling = draft.optBoolean("vaeTiling")
+        diffusionFa = draft.optBoolean("diffusionFa")
+        diffusionConvDirect = draft.optBoolean("diffConv")
+        vaeConvDirect = draft.optBoolean("vaeConv")
+        mmap = draft.optBoolean("mmap")
+        cacheMode = SdCacheMode.fromStoredValue(path("cacheMode"))
+        cacheOption = text("cacheOption")
+        scmMask = text("scmMask")
+        scmPolicy = SdCacheScmPolicy.fromStoredValue(path("scmPolicy"))
+        manualCommandFlags = text("flags")
+        videoLoras = draft.optJSONArray("loras")?.toSdLoraSpecs().orEmpty()
+        videoHighNoiseLoras = draft.optJSONArray("highNoiseLoras")?.toSdLoraSpecs().orEmpty()
+        videoLoraApplyMode = SdLoraApplyMode.fromStoredValue(path("loraApplyMode"))
+        videoRuntimeOptions = parseVideoRuntimeOptions(text("videoAdvancedJson")) ?: VideoRuntimeOptions()
+        textEncoderPlacement = text("tePlacement")
+        diffusionPlacement = text("diffusionPlacement")
+        vaePlacement = text("vaePlacement")
+        reuseBackendOverrides = draft
+        mainTab = 0
+        errorMessage = null
+        warningMessage = resources.getString(R.string.video_detail_reuse_warning)
+        settingsRepo.setVideoGenerationDraft(captureVideoDraft())
     }
 
-    fun deleteVideo(metadata: GeneratedVideoMetadata) {
-        scope.launch(Dispatchers.IO) {
-            runCatching { metadata.exportedAviUri?.let { deleteDocumentUri(context, it) } }
-            runCatching { metadata.exportedMp4Uri?.let { deleteDocumentUri(context, it) } }
-            runCatching { metadata.exportedMetadataUri?.let { deleteDocumentUri(context, it) } }
-            File(metadata.aviPath).delete()
-            File(metadata.mp4Path).delete()
-            File(metadata.metadataPath).delete()
-            withContext(Dispatchers.Main) {
-                selectedGalleryVideo = null
-                reloadGallery()
-                VideoGenerationStateHolder.txt2vid.removeVideo(metadata)
-                VideoGenerationStateHolder.img2vid.removeVideo(metadata)
-                Toast.makeText(context, context.getString(R.string.video_gen_delete_success), Toast.LENGTH_SHORT).show()
+    LaunchedEffect(Unit) {
+        try {
+            val handoff = withContext(Dispatchers.IO) { VideoReuseHandoffStore.peek(context) }
+            if (handoff?.target == VideoReuseTarget.LOCAL && externalVideoInputPending) {
+                // A new share is a newer explicit intent than an undelivered gallery selection.
+                withContext(Dispatchers.IO) { VideoReuseHandoffStore.complete(context, handoff) }
+            } else if (handoff?.target == VideoReuseTarget.LOCAL) {
+                val result = withContext(Dispatchers.IO) { VideoReuseHandoffStore.readPayload(context, handoff) }
+                result?.payload?.let { payload ->
+                    applyVideoReuse(payload, resolveVideoReuseSources(context, payload))
+                    withContext(Dispatchers.IO) { VideoReuseHandoffStore.complete(context, handoff) }
+                } ?: run { errorMessage = resources.getString(R.string.video_detail_reuse_failed) }
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            errorMessage = resources.getString(R.string.video_detail_reuse_failed)
         }
     }
 
@@ -558,37 +934,37 @@ fun VideoGenScreen(navController: NavController) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.surface,
-                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-                    )
-                )
-            )
+            .background(MaterialTheme.colorScheme.background)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = { navController.popBackStack() }) {
+            IconButton(
+                onClick = { navController.popBackStack() },
+                modifier = Modifier.walkthroughTarget("back")
+            ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
             }
             Text(
-                "🎥 " + stringResource(R.string.video_gen_title),
-                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold)
+                stringResource(R.string.video_gen_title),
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
-            Spacer(modifier = Modifier.weight(1f))
+            FeatureGuideAction()
             IconButton(onClick = { showInfoDialog = true }) {
                 Icon(Icons.Default.Info, contentDescription = stringResource(R.string.gen_help_open))
             }
         }
 
-        TabRow(
+        AppScrollableTabRow(
             selectedTabIndex = mainTab,
-            modifier = Modifier.padding(horizontal = 16.dp)
+            modifier = Modifier.padding(horizontal = 20.dp),
+            edgePadding = 12.dp
         ) {
             listOf(
                 stringResource(R.string.video_gen_tab_generate),
@@ -596,535 +972,566 @@ fun VideoGenScreen(navController: NavController) {
             ).forEachIndexed { index, label ->
                 Tab(
                     selected = mainTab == index,
-                    onClick = { mainTab = index },
+                    modifier = Modifier.walkthroughTarget(
+                        if (index == 0) "video.create_tab" else "video.gallery_tab"
+                    ),
+                    onClick = {
+                        mainTab = index
+                        if (index == 0) {
+                            walkthroughTargets?.recordEvent("video.create_tab")
+                        } else {
+                            walkthroughTargets?.recordEvent("video.gallery_tab")
+                            walkthroughTargets?.recordEvent("video.gallery")
+                        }
+                    },
                     text = { Text(label) }
                 )
             }
         }
 
-        if (mainTab == 0) {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(bottom = 16.dp)
-            ) {
-                item(key = "mode") {
-                    val modes = listOf(
-                        stringResource(R.string.video_gen_mode_txt2vid),
-                        stringResource(R.string.video_gen_mode_img2vid)
-                    )
-                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                        modes.forEachIndexed { index, label ->
-                            SegmentedButton(
-                                selected = selectedMode == index,
-                                onClick = { selectedMode = index },
-                                shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size)
-                            ) {
-                                Text(label)
+        mainTabStateHolder.SaveableStateProvider(mainTab) {
+            if (mainTab == 0) {
+                val formScroll = rememberLazyListState()
+                WalkthroughScrollOwner(setOf("video.prompt", "video.models", "video.profile", "video.inputs", "video.advanced", "video.loras")) { target ->
+                    formScroll.animateScrollToItem(if (target == "video.prompt") 0 else if (availableVideoModels.isEmpty()) 2 else 1)
+                }
+                LazyColumn(
+                    state = formScroll,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(bottom = 16.dp)
+                ) {
+                    item(key = "prompts") { Card(
+                        modifier = Modifier.fillMaxWidth().walkthroughTarget("video.prompt"),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                stringResource(R.string.video_gen_prompt_label),
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = prompt,
+                                onValueChange = { prompt = it },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(120.dp),
+                                placeholder = { Text(stringResource(R.string.video_gen_prompt_placeholder)) },
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = negativePrompt,
+                                onValueChange = { negativePrompt = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text(stringResource(R.string.video_gen_negative_prompt_label)) },
+                                placeholder = { Text(stringResource(R.string.video_gen_negative_prompt_placeholder)) },
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                        }
+                    } }
+
+                    if (availableVideoModels.isEmpty()) item(key = "get-models") {
+                        OutlinedButton(
+                            onClick = { navController.navigate(Screen.SDModels.route) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text(stringResource(R.string.video_gen_get_models)) }
+                    }
+
+                    reuseBackendOverrides?.let { overrides ->
+                        item(key = "reused-device-settings") {
+                            VideoReuseBackendCard(overrides) { next ->
+                                reuseBackendOverrides = next
+                                if (next == null) {
+                                    textEncoderPlacement = "cpu"
+                                    diffusionPlacement = acceleratorPlacement ?: "cpu"
+                                    vaePlacement = "cpu"
+                                }
                             }
                         }
                     }
-                }
-
-                if (selectedMode == 1) {
-                    item(key = "input-image") {
-                        Card(
+                    item(key = "typed-video-options") {
+                            Card(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(16.dp),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
-                            Text(
-                                stringResource(R.string.video_gen_input_image_title),
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            if (selectedImagePath != null && imageResolution != null) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    val bitmap by rememberVideoPreviewBitmap(selectedImagePath)
-                                    bitmap?.let {
-                                        Image(
-                                            bitmap = it,
-                                            contentDescription = null,
-                                            modifier = Modifier
-                                                .size(80.dp)
-                                                .clip(RoundedCornerShape(10.dp)),
-                                            contentScale = ContentScale.Crop
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.width(12.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            "${imageResolution!!.first} × ${imageResolution!!.second}",
-                                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                                        )
-                                        Text(
-                                            stringResource(R.string.video_gen_input_image_ready),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                    IconButton(onClick = { imagePicker.launch("image/*") }) {
-                                        Icon(Icons.Default.Image, contentDescription = stringResource(R.string.action_change))
-                                    }
-                                }
-                            } else {
-                                OutlinedButton(
-                                    onClick = { imagePicker.launch("image/*") },
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Icon(Icons.Default.Add, contentDescription = null)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(stringResource(R.string.video_gen_select_image))
-                                }
-                            }
+                                VideoRuntimeOptionsEditor(
+                                    options = videoEditorOptions,
+                                    modifier = Modifier.walkthroughTarget("video.models"),
+                                    onOptionsChange = { next ->
+                                        videoRuntimeOptions = next
+                                        selectedVideoModelPath = videoMainModelPathForSelection(next)
+                                        selectedVaePath = next.videoComponents.vaePath
+                                        useVae = selectedVaePath != null && !next.useTae
+                                        selectedT5xxlPath = next.videoComponents.t5xxlPath
+                                        useT5xxl = selectedT5xxlPath != null
+                                        selectedImagePath = next.videoInputs.initImagePath
+                                        selectedMode = if (next.workflow in setOf(SdVideoWorkflow.IMAGE_TO_VIDEO,
+                                            SdVideoWorkflow.FIRST_LAST_FRAME, SdVideoWorkflow.IMAGE_TO_AUDIO_VIDEO,
+                                            SdVideoWorkflow.FIRST_LAST_TO_AUDIO_VIDEO)) 1 else 0
+                                    },
+                                    componentModels = videoComponentModels,
+                                    loraModels = compatibleVideoLoraModels,
+                                    loras = videoLoras,
+                                    highNoiseLoras = videoHighNoiseLoras,
+                                    onLorasChange = { videoLoras = it },
+                                    onHighNoiseLorasChange = { videoHighNoiseLoras = it },
+                                    loraApplyMode = videoLoraApplyMode,
+                                    onLoraApplyModeChange = { videoLoraApplyMode = it },
+                                    onApplyLingBot = { if (lingBotReady) applyLingBotProfile() },
+                                    lingBotReady = lingBotReady,
+                                    binaryCapabilities = videoBinaryCapabilities,
+                                    binaryProbePending = videoBinaryProbePending,
+                                    binaryProbeUnavailable = videoBinaryProbeUnavailable,
+                                    onRetryBinaryProbe = { videoBinaryProbeRequest++ },
+                                    onOpenBinarySettings = {
+                                        navController.navigate("settings_imagegen")
+                                    },
+                                    uncondDiffusionModels = availableVideoModels,
+                                    ipAdapterModels = ipAdapterModels
+                                )
                             }
                         }
                     }
-                }
 
-                item(key = "model") { Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            stringResource(R.string.video_gen_model_label),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        if (availableVideoModels.isEmpty()) {
-                            Text(
-                                stringResource(R.string.video_gen_no_models_installed),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            OutlinedButton(onClick = { navController.navigate(Screen.SDModels.route) }) {
-                                Icon(Icons.Default.Add, contentDescription = null)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(stringResource(R.string.video_gen_get_models))
-                            }
-                        } else {
-                            ModelDropdown(
-                                value = selectedVideoModelPath,
-                                placeholder = stringResource(R.string.video_gen_select_model),
-                                models = availableVideoModels,
-                                onSelected = { selectedVideoModelPath = it.path }
-                            )
-                        }
-                    }
-                } }
-
-                item(key = "vae") { OptionalModelCard(
-                    title = stringResource(R.string.video_gen_vae_toggle_label),
-                    enabled = useVae,
-                    onEnabledChange = { enabled ->
-                        useVae = enabled
-                        if (!enabled) {
-                            selectedVaePath = null
-                        }
-                    },
-                    models = vaeModels,
-                    selectedPath = selectedVaePath,
-                    emptyText = stringResource(R.string.video_gen_no_vae_installed),
-                    placeholder = stringResource(R.string.video_gen_select_vae),
-                    onSelected = { selectedVaePath = it.path },
-                    onGetModels = { navController.navigate(Screen.SDModels.route) }
-                ) }
-
-                item(key = "t5") { OptionalModelCard(
-                    title = stringResource(R.string.video_gen_t5_toggle_label),
-                    enabled = useT5xxl,
-                    onEnabledChange = { enabled ->
-                        useT5xxl = enabled
-                        if (!enabled) {
-                            selectedT5xxlPath = null
-                        }
-                    },
-                    models = t5xxlModels,
-                    selectedPath = selectedT5xxlPath,
-                    emptyText = stringResource(R.string.video_gen_no_t5xxl_installed),
-                    placeholder = stringResource(R.string.video_gen_select_t5xxl),
-                    onSelected = { selectedT5xxlPath = it.path },
-                    onGetModels = { navController.navigate(Screen.SDModels.route) }
-                ) }
-
-                item(key = "prompts") { Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            stringResource(R.string.video_gen_prompt_label),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = prompt,
-                            onValueChange = { prompt = it },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(120.dp),
-                            placeholder = { Text(stringResource(R.string.video_gen_prompt_placeholder)) },
-                            shape = RoundedCornerShape(12.dp)
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        OutlinedTextField(
-                            value = negativePrompt,
-                            onValueChange = { negativePrompt = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text(stringResource(R.string.video_gen_negative_prompt_label)) },
-                            placeholder = { Text(stringResource(R.string.video_gen_negative_prompt_placeholder)) },
-                            shape = RoundedCornerShape(12.dp)
-                        )
-                    }
-                } }
-
-                item(key = "loras") {
-                    VideoLoraStackCard(
-                        models = compatibleVideoLoraModels,
-                        loras = videoLoras,
-                        highNoiseLoras = videoHighNoiseLoras,
-                        applyMode = videoLoraApplyMode,
-                        onLorasChange = { videoLoras = it },
-                        onHighNoiseLorasChange = { videoHighNoiseLoras = it },
-                        onApplyModeChange = { videoLoraApplyMode = it }
-                    )
-                }
-
-                item(key = "parameters") { Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            stringResource(R.string.video_gen_parameters_title),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            VideoNumberField(
-                                modifier = Modifier.weight(1f),
-                                label = stringResource(R.string.video_gen_frames_label),
-                                value = videoFramesText,
-                                onValueChange = { videoFramesText = it }
-                            )
-                            VideoNumberField(
-                                modifier = Modifier.weight(1f),
-                                label = stringResource(R.string.video_gen_fps_label),
-                                value = fpsText,
-                                onValueChange = { fpsText = it }
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            VideoNumberField(
-                                modifier = Modifier.weight(1f),
-                                label = stringResource(R.string.video_gen_width_label),
-                                value = widthText,
-                                onValueChange = { widthText = it }
-                            )
-                            VideoNumberField(
-                                modifier = Modifier.weight(1f),
-                                label = stringResource(R.string.video_gen_height_label),
-                                value = heightText,
-                                onValueChange = { heightText = it }
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            VideoNumberField(
-                                modifier = Modifier.weight(1f),
-                                label = stringResource(R.string.video_gen_steps_label),
-                                value = stepsText,
-                                onValueChange = { stepsText = it }
-                            )
-                            VideoTextField(
-                                modifier = Modifier.weight(1f),
-                                label = stringResource(R.string.video_gen_cfg_scale_label),
-                                value = cfgScaleText,
-                                keyboardType = KeyboardType.Decimal,
-                                onValueChange = { cfgScaleText = it }
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            VideoTextField(
-                                modifier = Modifier.weight(1f),
-                                label = stringResource(R.string.video_gen_threads_label),
-                                value = threadsText,
-                                keyboardType = KeyboardType.Number,
-                                onValueChange = { threadsText = it }
-                            )
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.Center
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Checkbox(
-                                        checked = flowShiftEnabled,
-                                        onCheckedChange = {
-                                            flowShiftEnabled = it
-                                            if (!it) {
-                                                flowShiftText = ""
-                                            }
-                                        }
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(stringResource(R.string.video_gen_flow_shift_toggle_label))
-                                }
-                            }
-                        }
-                        if (flowShiftEnabled) {
-                            Spacer(modifier = Modifier.height(12.dp))
-                            VideoTextField(
-                                modifier = Modifier.fillMaxWidth(),
-                                label = stringResource(R.string.video_gen_flow_shift_label),
-                                value = flowShiftText,
-                                keyboardType = KeyboardType.Decimal,
-                                onValueChange = { flowShiftText = it }
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            stringResource(R.string.video_gen_sampler_label),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        var samplerExpanded by remember { mutableStateOf(false) }
-                        ExposedDropdownMenuBox(
-                            expanded = samplerExpanded,
-                            onExpandedChange = { samplerExpanded = !samplerExpanded }
-                        ) {
-                            OutlinedTextField(
-                                value = selectedSampler.cliName,
-                                onValueChange = {},
-                                readOnly = true,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .menuAnchor(),
-                                trailingIcon = {
-                                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = samplerExpanded)
-                                },
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            ExposedDropdownMenu(
-                                expanded = samplerExpanded,
-                                onDismissRequest = { samplerExpanded = false }
-                            ) {
-                                SamplingMethod.entries.forEach { sampler ->
-                                    DropdownMenuItem(
-                                        text = { Text(sampler.cliName) },
-                                        onClick = {
-                                            selectedSampler = sampler
-                                            samplerExpanded = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        SdSchedulerPicker(
-                            value = selectedScheduler,
-                            onValueChange = { selectedScheduler = it }
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(
-                                checked = vaeTiling,
-                                onCheckedChange = { vaeTiling = it }
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(stringResource(R.string.video_gen_vae_tiling_label))
-                        }
-                        if (vaeTiling) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            VideoTextField(
-                                modifier = Modifier.fillMaxWidth(),
-                                label = stringResource(R.string.video_gen_vae_tile_size_label),
-                                value = vaeTileSize,
-                                onValueChange = { vaeTileSize = it }
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            FilterChip(
-                                selected = diffusionFa,
-                                onClick = { diffusionFa = !diffusionFa },
-                                label = { Text(stringResource(R.string.video_gen_diffusion_fa_label)) }
-                            )
-                            FilterChip(
-                                selected = mmap,
-                                onClick = { mmap = !mmap },
-                                label = { Text(stringResource(R.string.video_gen_mmap_label)) }
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            FilterChip(
-                                selected = diffusionConvDirect,
-                                onClick = { diffusionConvDirect = !diffusionConvDirect },
-                                label = { Text(stringResource(R.string.imagegen_diffusion_conv_direct_label)) }
-                            )
-                            FilterChip(
-                                selected = vaeConvDirect,
-                                onClick = { vaeConvDirect = !vaeConvDirect },
-                                label = { Text(stringResource(R.string.imagegen_vae_conv_direct_label)) }
-                            )
-                        }
-                        acceleratorPlacement?.let { accelerator ->
-                            Spacer(modifier = Modifier.height(12.dp))
-                            SdBackendPlacementControls(
-                                accelerator = accelerator,
-                                textEncoder = textEncoderPlacement,
-                                diffusion = diffusionPlacement,
-                                vae = vaePlacement,
-                                onTextEncoderChange = { textEncoderPlacement = it },
-                                onDiffusionChange = { diffusionPlacement = it },
-                                onVaeChange = { vaePlacement = it }
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(16.dp))
-                        VideoLocalSdCliMemoryControls(
-                            selectedModel = selectedVideoModel,
-                            maxRamEnabled = sdMaxCpuRamEnabled,
-                            maxRamGiB = sdMaxCpuRamGiB,
-                            onParamsBackendChange = { mode ->
-                                selectedVideoModel?.let { model ->
-                                    scope.launch {
-                                        db.modelDao().insertModel(
-                                            model.copy(sdParamsBackendMode = mode.storedValue)
-                                        )
-                                    }
-                                }
-                            },
-                            onRuntimeBackendChange = { mode ->
-                                selectedVideoModel?.let { model ->
-                                    scope.launch {
-                                        db.modelDao().insertModel(
-                                            model.copy(sdRuntimeBackendMode = mode.storedValue)
-                                        )
-                                    }
-                                }
-                            },
-                            onMaxRamEnabledChange = { settingsRepo.setSdMaxCpuRamEnabled(it) },
-                            onMaxRamGiBChange = { settingsRepo.setSdMaxCpuRamGiB(it) }
-                        )
-                    }
-                } }
-
-                item(key = "cache") { GenerationCachingCard(
-                    title = stringResource(R.string.gen_cache_title),
-                    cacheMode = cacheMode,
-                    onCacheModeChange = { cacheMode = it },
-                    cacheOption = cacheOption,
-                    onCacheOptionChange = { cacheOption = it },
-                    scmPolicy = scmPolicy,
-                    onScmPolicyChange = { scmPolicy = it },
-                    scmMask = scmMask,
-                    onScmMaskChange = { scmMask = it },
-                    guidanceFamily = GenerationCacheGuidanceFamily.VIDEO_DIT,
-                    enabled = true,
-                    disabledMessage = null
-                ) }
-
-                item(key = "manual-flags") { Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            stringResource(R.string.sd_manual_flags_label),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                        )
-                        Text(
-                            stringResource(R.string.sd_manual_flags_desc),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        OutlinedTextField(
-                            value = manualCommandFlags,
-                            onValueChange = { manualCommandFlags = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text(stringResource(R.string.sd_manual_flags_label)) },
-                            placeholder = { Text(stringResource(R.string.sd_manual_flags_hint)) },
-                            minLines = 2,
-                            shape = RoundedCornerShape(12.dp)
-                        )
-                    }
-                } }
-
-                item(key = "run-state") { if (isBusy) {
-                    Card(
+                    item(key = "parameters") { Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                     ) {
-                        Column(
-                            modifier = Modifier.padding(16.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
                             Text(
-                                stringResource(R.string.video_gen_running_title),
+                                stringResource(R.string.video_gen_parameters_title),
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
                             )
                             Spacer(modifier = Modifier.height(12.dp))
-                            Text(status.ifBlank { stringResource(R.string.video_gen_status_starting) })
-                            Spacer(modifier = Modifier.height(8.dp))
-                            androidx.compose.material3.LinearProgressIndicator(
-                                progress = { progress.coerceIn(0f, 1f) },
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Spacer(modifier = Modifier.height(16.dp))
-                            OutlinedButton(
-                                onClick = cancelVideo,
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                Icon(Icons.Default.Close, contentDescription = null)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(stringResource(R.string.action_cancel))
+                                VideoNumberField(
+                                    modifier = Modifier.weight(1f),
+                                    label = stringResource(R.string.video_gen_frames_label),
+                                    value = videoFramesText,
+                                    onValueChange = { videoFramesText = it }
+                                )
+                                VideoNumberField(
+                                    modifier = Modifier.weight(1f),
+                                    label = stringResource(R.string.video_gen_fps_label),
+                                    value = fpsText,
+                                    onValueChange = { fpsText = it }
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                VideoNumberField(
+                                    modifier = Modifier.weight(1f),
+                                    label = stringResource(R.string.video_gen_width_label),
+                                    value = widthText,
+                                    onValueChange = { widthText = it }
+                                )
+                                VideoNumberField(
+                                    modifier = Modifier.weight(1f),
+                                    label = stringResource(R.string.video_gen_height_label),
+                                    value = heightText,
+                                    onValueChange = { heightText = it }
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                VideoNumberField(
+                                    modifier = Modifier.weight(1f),
+                                    label = stringResource(R.string.video_gen_steps_label),
+                                    value = stepsText,
+                                    onValueChange = { stepsText = it }
+                                )
+                                VideoTextField(
+                                    modifier = Modifier.weight(1f),
+                                    label = stringResource(R.string.video_gen_cfg_scale_label),
+                                    value = cfgScaleText,
+                                    keyboardType = KeyboardType.Decimal,
+                                    onValueChange = { cfgScaleText = it }
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                VideoTextField(
+                                    modifier = Modifier.weight(1f),
+                                    label = stringResource(R.string.video_gen_threads_label),
+                                    value = threadsText,
+                                    keyboardType = KeyboardType.Number,
+                                    onValueChange = { threadsText = it }
+                                )
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Checkbox(
+                                            checked = flowShiftEnabled,
+                                            onCheckedChange = {
+                                                flowShiftEnabled = it
+                                                if (!it) {
+                                                    flowShiftText = ""
+                                                }
+                                            }
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(stringResource(R.string.video_gen_flow_shift_toggle_label))
+                                    }
+                                }
+                            }
+                            if (flowShiftEnabled) {
+                                Spacer(modifier = Modifier.height(12.dp))
+                                VideoTextField(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = stringResource(R.string.video_gen_flow_shift_label),
+                                    value = flowShiftText,
+                                    keyboardType = KeyboardType.Decimal,
+                                    onValueChange = { flowShiftText = it }
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                stringResource(R.string.video_gen_sampler_label),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            var samplerExpanded by remember { mutableStateOf(false) }
+                            ExposedDropdownMenuBox(
+                                expanded = samplerExpanded,
+                                onExpandedChange = { samplerExpanded = !samplerExpanded }
+                            ) {
+                                OutlinedTextField(
+                                    value = selectedSampler.cliName,
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .menuAnchor(),
+                                    trailingIcon = {
+                                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = samplerExpanded)
+                                    },
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                ExposedDropdownMenu(
+                                    expanded = samplerExpanded,
+                                    onDismissRequest = { samplerExpanded = false }
+                                ) {
+                                    SamplingMethod.entries.forEach { sampler ->
+                                        DropdownMenuItem(
+                                            text = { Text(sampler.cliName) },
+                                            onClick = {
+                                                selectedSampler = sampler
+                                                samplerExpanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                            SdSchedulerPicker(
+                                value = selectedScheduler,
+                                onValueChange = { selectedScheduler = it }
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = vaeTiling,
+                                    onCheckedChange = { vaeTiling = it }
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(stringResource(R.string.video_gen_vae_tiling_label))
+                            }
+                            if (vaeTiling) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                VideoTextField(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = stringResource(R.string.video_gen_vae_tile_size_label),
+                                    value = vaeTileSize,
+                                    onValueChange = { vaeTileSize = it }
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                            VideoBooleanOption(stringResource(R.string.video_gen_diffusion_fa_label), diffusionFa) { diffusionFa = it }
+                            VideoBooleanOption(stringResource(R.string.video_gen_mmap_label), mmap) { mmap = it }
+                            VideoBooleanOption(stringResource(R.string.imagegen_diffusion_conv_direct_label), diffusionConvDirect) { diffusionConvDirect = it }
+                            VideoBooleanOption(stringResource(R.string.imagegen_vae_conv_direct_label), vaeConvDirect) { vaeConvDirect = it }
+                            acceleratorPlacement?.let { accelerator ->
+                                Spacer(modifier = Modifier.height(12.dp))
+                                SdBackendPlacementControls(
+                                    accelerator = accelerator,
+                                    textEncoder = textEncoderPlacement,
+                                    diffusion = diffusionPlacement,
+                                    vae = vaePlacement,
+                                    onTextEncoderChange = { textEncoderPlacement = it },
+                                    onDiffusionChange = { diffusionPlacement = it },
+                                    onVaeChange = { vaePlacement = it }
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(16.dp))
+                            VideoLocalSdCliMemoryControls(
+                                selectedModel = selectedVideoModel,
+                                maxRamEnabled = sdMaxCpuRamEnabled,
+                                maxRamGiB = sdMaxCpuRamGiB,
+                                onParamsBackendChange = { mode ->
+                                    selectedVideoModel?.let { model ->
+                                        scope.launch {
+                                            db.modelDao().insertModel(
+                                                model.copy(sdParamsBackendMode = mode.storedValue)
+                                            )
+                                        }
+                                    }
+                                },
+                                onRuntimeBackendChange = { mode ->
+                                    selectedVideoModel?.let { model ->
+                                        scope.launch {
+                                            db.modelDao().insertModel(
+                                                model.copy(sdRuntimeBackendMode = mode.storedValue)
+                                            )
+                                        }
+                                    }
+                                },
+                                onMaxRamEnabledChange = { settingsRepo.setSdMaxCpuRamEnabled(it) },
+                                onMaxRamGiBChange = { settingsRepo.setSdMaxCpuRamGiB(it) }
+                            )
+                        }
+                    } }
+
+                    item(key = "cache") { GenerationCachingCard(
+                        title = stringResource(R.string.gen_cache_title),
+                        cacheMode = cacheMode,
+                        onCacheModeChange = { cacheMode = it },
+                        cacheOption = cacheOption,
+                        onCacheOptionChange = { cacheOption = it },
+                        scmPolicy = scmPolicy,
+                        onScmPolicyChange = { scmPolicy = it },
+                        scmMask = scmMask,
+                        onScmMaskChange = { scmMask = it },
+                        guidanceFamily = GenerationCacheGuidanceFamily.VIDEO_DIT,
+                        enabled = true,
+                        disabledMessage = null
+                    ) }
+
+                    item(key = "manual-flags") {
+                        AppAdvancedSection(title = stringResource(R.string.soft_studio_advanced)) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    Text(
+                                        stringResource(R.string.sd_manual_flags_label),
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                                    )
+                                    Text(
+                                        stringResource(R.string.sd_manual_flags_desc),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    OutlinedTextField(
+                                        value = manualCommandFlags,
+                                        onValueChange = { manualCommandFlags = it },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        label = { Text(stringResource(R.string.sd_manual_flags_label)) },
+                                        placeholder = { Text(stringResource(R.string.sd_manual_flags_hint)) },
+                                        minLines = 2,
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                }
                             }
                         }
+                    }
+
+                    item(key = "run-state") { if (isBusy) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    stringResource(R.string.video_gen_running_title),
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(status.ifBlank { stringResource(R.string.video_gen_status_starting) })
+                                Spacer(modifier = Modifier.height(8.dp))
+                                androidx.compose.material3.LinearProgressIndicator(
+                                    progress = { progress.coerceIn(0f, 1f) },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+                    } else {
+                    } }
+
+                    warningMessage?.let { warning ->
+                        item(key = "warning") { Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.75f)
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Warning, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(warning, color = MaterialTheme.colorScheme.onTertiaryContainer)
+                            }
+                        } }
+                    }
+
+                    errorMessage?.let { error ->
+                        item(key = "error") { Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(
+                                error,
+                                modifier = Modifier.padding(12.dp),
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        } }
+                    }
+
+                    if (generationState is VideoGenerationState.Complete) {
+                        item(key = "complete") { Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    stringResource(R.string.video_gen_success),
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                        } }
+                    }
+                }
+            } else {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp)
+                ) {
+                    val filters = listOf(
+                        stringResource(R.string.video_gen_gallery_all),
+                        stringResource(R.string.video_gen_mode_txt2vid),
+                        stringResource(R.string.video_gen_mode_img2vid)
+                    )
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(filters.size) { index ->
+                            FilterChip(selected = galleryFilter == index,
+                                onClick = { galleryFilter = index },
+                                label = { Text(filters[index], maxLines = 1) },
+                                modifier = Modifier.heightIn(min = 48.dp))
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    if (filteredGalleryVideos.isEmpty()) {
+                        AppStatePanel(
+                            kind = AppStateKind.Empty,
+                            title = stringResource(R.string.soft_studio_empty_title),
+                            message = if (galleryFilter == 0) {
+                                stringResource(R.string.video_gen_gallery_empty)
+                            } else {
+                                stringResource(R.string.video_gen_gallery_empty_filter, filters[galleryFilter])
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.fillMaxSize().walkthroughTarget("video.gallery")
+                        ) {
+                            items(filteredGalleryVideos, key = { it.preferredArtifactPath }) { video ->
+                                VideoGalleryCard(
+                                    metadata = video,
+                                    onClick = { selectedGalleryVideo = video }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (mainTab == 0 || isBusy) {
+            AppTaskActionFooter(
+                modifier = Modifier
+                    .fillMaxWidth()
+            ) {
+                if (isBusy) {
+                    Text(
+                        text = status.ifBlank { stringResource(R.string.video_gen_status_starting) },
+                        modifier = Modifier.fillMaxWidth(),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    LinearProgressIndicator(
+                        progress = { progress.coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedButton(
+                        onClick = cancelVideo,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(stringResource(R.string.soft_studio_cancel))
                     }
                 } else {
                     Button(
                         onClick = generateVideo,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(56.dp),
-                        shape = RoundedCornerShape(16.dp),
+                            .heightIn(min = 52.dp)
+                            .walkthroughTarget("video.generate"),
+                        shape = RoundedCornerShape(14.dp),
                         enabled = selectedVideoModelPath != null &&
                             prompt.isNotBlank() &&
-                            (selectedMode == 0 || selectedImagePath != null)
+                            videoReadiness.isSatisfied &&
+                            videoPathsAvailable == true &&
+                            videoBinaryReady &&
+                            (selectedMode == 0 || effectiveVideoInputPath != null)
                     ) {
                         Icon(Icons.Default.PlayArrow, contentDescription = null)
                         Spacer(modifier = Modifier.width(12.dp))
@@ -1137,141 +1544,22 @@ fun VideoGenScreen(navController: NavController) {
                             fontWeight = FontWeight.Bold
                         )
                     }
-                } }
-
-                warningMessage?.let { warning ->
-                    item(key = "warning") { Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.75f)
-                        ),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Default.Warning, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(warning, color = MaterialTheme.colorScheme.onTertiaryContainer)
-                        }
-                    } }
-                }
-
-                errorMessage?.let { error ->
-                    item(key = "error") { Card(
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text(
-                            error,
-                            modifier = Modifier.padding(12.dp),
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                    } }
-                }
-
-                if (generationState is VideoGenerationState.Complete) {
-                    item(key = "complete") { Card(
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                stringResource(R.string.video_gen_success),
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        }
-                    } }
-                }
-            }
-        } else {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp)
-            ) {
-                val filters = listOf(
-                    stringResource(R.string.video_gen_gallery_all),
-                    stringResource(R.string.video_gen_mode_txt2vid),
-                    stringResource(R.string.video_gen_mode_img2vid)
-                )
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    filters.forEachIndexed { index, label ->
-                        SegmentedButton(
-                            selected = galleryFilter == index,
-                            onClick = { galleryFilter = index },
-                            shape = SegmentedButtonDefaults.itemShape(index = index, count = filters.size)
-                        ) {
-                            Text(label, style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                if (filteredGalleryVideos.isEmpty()) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("🎞️", style = MaterialTheme.typography.displayLarge)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                if (galleryFilter == 0) {
-                                    stringResource(R.string.video_gen_gallery_empty)
-                                } else {
-                                    stringResource(R.string.video_gen_gallery_empty_filter, filters[galleryFilter])
-                                },
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                } else {
-                    LazyColumn(
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        items(filteredGalleryVideos, key = { it.mp4Path }) { video ->
-                            VideoGalleryCard(
-                                metadata = video,
-                                onClick = { selectedGalleryVideo = video }
-                            )
-                        }
-                    }
                 }
             }
         }
     }
 
     selectedGalleryVideo?.let { metadata ->
-        VideoDetailDialog(
-            metadata = metadata,
+        VideoGalleryDetail(metadata, navController,
             onDismiss = { selectedGalleryVideo = null },
-            onShare = { shareVideo(metadata) },
-            onInterpolate = {
-                SharedFileHolder.setPendingFile(Uri.fromFile(File(metadata.mp4Path)), "video/mp4", Screen.VideoInterpolation.route)
-                selectedGalleryVideo = null
-                navController.navigate(Screen.VideoInterpolation.route)
+            onDeleted = { reloadGallery() },
+            onReuseLocal = { payload, sources ->
+                applyVideoReuse(payload, sources)
+                scope.launch(Dispatchers.IO) { VideoReuseHandoffStore.peek(context)?.let { handoff ->
+                    if (handoff.target == VideoReuseTarget.LOCAL && handoff.metadataPath == metadata.metadataPath) VideoReuseHandoffStore.complete(context, handoff)
+                } }
             },
-            onUpscale = {
-                SharedFileHolder.setPendingFile(Uri.fromFile(File(metadata.mp4Path)), "video/mp4", Screen.VideoUpscaler.route)
-                selectedGalleryVideo = null
-                navController.navigate(Screen.VideoUpscaler.route)
-            },
-            onInterpolateAndUpscale = {
-                SharedFileHolder.setPendingFile(Uri.fromFile(File(metadata.mp4Path)), "video/mp4", "interpolate_then_upscale")
-                selectedGalleryVideo = null
-                navController.navigate(Screen.Workflows.route)
-            },
-            onCopyInfo = { copyGenerationInfo(metadata) },
-            onDelete = { deleteVideo(metadata) }
-        )
+            localDraftEdited = VideoReuseDraftAdapter.hasMeaningfulLocalDraft(captureVideoDraft()))
     }
 
     if (showInfoDialog) {
@@ -1771,14 +2059,16 @@ private fun rememberVideoPreviewBitmap(path: String?): androidx.compose.runtime.
     }
 
 @Composable
-private fun VideoGalleryCard(
+fun VideoGalleryCard(
     metadata: GeneratedVideoMetadata,
     onClick: () -> Unit
 ) {
-    val thumbnail by produceState<ImageBitmap?>(initialValue = null, metadata.mp4Path) {
+    var thumbnailLoaded by remember(metadata.preferredArtifactPath) { mutableStateOf(false) }
+    val thumbnail by produceState<ImageBitmap?>(initialValue = null, metadata.preferredArtifactPath) {
         value = withContext(Dispatchers.IO) {
-            createVideoThumbnail(metadata.mp4Path)
+            createVideoThumbnail(metadata.preferredArtifactPath)
         }
+        thumbnailLoaded = true
     }
 
     Card(
@@ -1788,11 +2078,11 @@ private fun VideoGalleryCard(
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Row(modifier = Modifier.padding(12.dp)) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Box(
                 modifier = Modifier
-                    .width(128.dp)
-                    .aspectRatio(1.2f)
+                    .fillMaxWidth()
+                    .aspectRatio((metadata.width.toFloat() / metadata.height.coerceAtLeast(1)).coerceIn(1.2f, 2.4f))
                     .clip(RoundedCornerShape(12.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
@@ -1800,16 +2090,21 @@ private fun VideoGalleryCard(
                 if (thumbnail != null) {
                     Image(
                         bitmap = thumbnail!!,
-                        contentDescription = null,
+                        contentDescription = stringResource(
+                            R.string.soft_studio_generated_video_description,
+                            File(metadata.preferredArtifactPath).name
+                        ),
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )
-                } else {
+                } else if (!thumbnailLoaded) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Default.PlayArrow, contentDescription = stringResource(R.string.video_output_open_preview))
                 }
             }
             Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 VideoModeBadge(metadata.modeEnum)
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
@@ -1820,12 +2115,12 @@ private fun VideoGalleryCard(
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    "${metadata.width}×${metadata.height} • ${metadata.videoFrames}f • ${metadata.fps} fps • ${metadata.steps} steps",
+                    stringResource(R.string.video_output_summary, metadata.width, metadata.height, metadata.videoFrames, metadata.fps, metadata.steps),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    metadata.diffusionModelName,
+                    File(metadata.diffusionModelName).name,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -1838,7 +2133,7 @@ private fun VideoGalleryCard(
 
 @Composable
 private fun VideoModeBadge(mode: VideoGenerationMode) {
-    val color = if (mode == VideoGenerationMode.TXT2VID) Color(0xFF1976D2) else Color(0xFF2E7D32)
+    val color = if (mode == VideoGenerationMode.TXT2VID) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
     Surface(
         shape = RoundedCornerShape(6.dp),
         color = color.copy(alpha = 0.12f)
@@ -1857,7 +2152,7 @@ private fun VideoModeBadge(mode: VideoGenerationMode) {
 }
 
 @Composable
-private fun VideoDetailDialog(
+internal fun VideoDetailDialog(
     metadata: GeneratedVideoMetadata,
     onDismiss: () -> Unit,
     onShare: () -> Unit,
@@ -1865,10 +2160,12 @@ private fun VideoDetailDialog(
     onUpscale: () -> Unit,
     onInterpolateAndUpscale: () -> Unit,
     onCopyInfo: () -> Unit,
-    onDelete: () -> Unit
+    onRetryConversion: () -> Unit,
+    onDelete: () -> Unit,
+    onReuse: () -> Unit
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
+    VideoDetailSurface(
+        onDismiss = onDismiss,
         title = {
             Column {
                 VideoModeBadge(metadata.modeEnum)
@@ -1880,43 +2177,57 @@ private fun VideoDetailDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 520.dp)
-                    .verticalScroll(rememberScrollState())
+
             ) {
+                if (File(metadata.preferredArtifactPath).extension.equals("webp", true)) {
+                    NativeAnimatedVideoPreview(metadata.preferredArtifactPath)
+                } else {
                 AndroidView(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(220.dp)
+                        .aspectRatio((metadata.width.toFloat() / metadata.height.coerceAtLeast(1)).coerceIn(0.6f, 2.4f))
                         .clip(RoundedCornerShape(12.dp)),
                     factory = { ctx ->
                         VideoView(ctx).apply {
-                            setVideoURI(Uri.fromFile(File(metadata.mp4Path)))
+                            tag = metadata.preferredArtifactPath
+                            setVideoURI(Uri.fromFile(File(metadata.preferredArtifactPath)))
                             setOnPreparedListener { player ->
                                 player.isLooping = true
                                 start()
                             }
                         }
                     },
+                    onRelease = { view -> view.stopPlayback() },
                     update = { view ->
-                        view.setVideoURI(Uri.fromFile(File(metadata.mp4Path)))
+                        if (view.tag != metadata.preferredArtifactPath) {
+                            view.tag = metadata.preferredArtifactPath
+                            view.setVideoURI(Uri.fromFile(File(metadata.preferredArtifactPath)))
+                        }
                     }
                 )
+                }
                 Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    metadata.prompt,
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                VideoPromptBlock(stringResource(R.string.video_detail_positive_prompt), metadata.prompt)
                 if (metadata.negativePrompt.isNotBlank()) {
                     Spacer(modifier = Modifier.height(8.dp))
-                    ParameterLine(
-                        stringResource(R.string.video_gen_negative_prompt_label),
-                        metadata.negativePrompt
-                    )
+                    VideoPromptBlock(stringResource(R.string.video_gen_negative_prompt_label), metadata.negativePrompt)
                 }
                 Spacer(modifier = Modifier.height(12.dp))
                 HorizontalDivider()
                 Spacer(modifier = Modifier.height(12.dp))
-                ParameterLine(stringResource(R.string.video_gen_model_label), metadata.diffusionModelName)
+                AppAdvancedSection(title = stringResource(R.string.video_detail_parameters)) {
+                ParameterLine(stringResource(R.string.video_gen_model_label), File(metadata.diffusionModelName).name)
+                ParameterLine(stringResource(R.string.video_controls_seed), metadata.seed.toString())
+                SdVideoComponentRole.entries.filter { it != SdVideoComponentRole.LORA }.forEach { role ->
+                    metadata.videoComponents.pathFor(role)?.takeIf(String::isNotBlank)?.let { path ->
+                        ParameterLine(videoComponentLabel(role), File(path).name)
+                    }
+                }
+                (metadata.loras + metadata.highNoiseLoras).forEach { lora ->
+                    ParameterLine(lora.filename, stringResource(R.string.video_detail_lora_summary,
+                        lora.strength.toString(), stringResource(if (lora.enabled) R.string.video_gen_enabled else R.string.video_gen_disabled),
+                        stringResource(if (lora.highNoiseOnly || lora in metadata.highNoiseLoras) R.string.video_controls_lora_high_noise else R.string.video_controls_lora_regular)))
+                }
                 ParameterLine(stringResource(R.string.video_gen_frames_label), metadata.videoFrames.toString())
                 ParameterLine(stringResource(R.string.video_gen_fps_label), metadata.fps.toString())
                 ParameterLine(stringResource(R.string.video_gen_width_label), metadata.width.toString())
@@ -1971,11 +2282,21 @@ private fun VideoDetailDialog(
                 metadata.initImagePath?.let {
                     ParameterLine(stringResource(R.string.video_gen_input_image_title), File(it).name)
                 }
+                }
             }
         },
         confirmButton = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onReuse, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.video_detail_reuse))
+                }
+                if (metadata.conversionRecoveredNative) {
+                    OutlinedButton(onClick = onRetryConversion, modifier = Modifier.fillMaxWidth()) {
+                        Text(stringResource(R.string.video_output_retry_conversion))
+                    }
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = onInterpolate) {
                         Icon(Icons.Default.PlayArrow, contentDescription = null)
                         Spacer(modifier = Modifier.width(4.dp))
@@ -1992,7 +2313,7 @@ private fun VideoDetailDialog(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(stringResource(R.string.video_gen_action_interpolate_upscale))
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = onCopyInfo) {
                         Icon(Icons.Default.ContentCopy, contentDescription = null)
                         Spacer(modifier = Modifier.width(4.dp))
@@ -2042,6 +2363,9 @@ private fun ParameterLine(label: String, value: String) {
 }
 
 private fun createVideoThumbnail(path: String): ImageBitmap? {
+    if (File(path).extension.equals("webp", ignoreCase = true)) {
+        return decodeBoundedVideoImage(path)?.asImageBitmap()
+    }
     val retriever = MediaMetadataRetriever()
     return try {
         retriever.setDataSource(path)
@@ -2053,7 +2377,7 @@ private fun createVideoThumbnail(path: String): ImageBitmap? {
     }
 }
 
-private fun deleteDocumentUri(context: Context, uriString: String) {
+internal fun deleteDocumentUri(context: Context, uriString: String) {
     val uri = Uri.parse(uriString)
     val document = DocumentFile.fromSingleUri(context, uri)
     if (document?.delete() != true) {
@@ -2063,7 +2387,14 @@ private fun deleteDocumentUri(context: Context, uriString: String) {
 
 private fun stringResourceSafe(context: Context, resId: Int): String = context.getString(resId)
 
-private fun buildVideoGenerationInfoText(context: Context, metadata: GeneratedVideoMetadata): String {
+internal fun videoMimeType(file: File): String = when (file.extension.lowercase(Locale.US)) {
+    "avi" -> "video/x-msvideo"
+    "webm" -> "video/webm"
+    "webp" -> "image/webp"
+    else -> "video/mp4"
+}
+
+internal fun buildVideoGenerationInfoText(context: Context, metadata: GeneratedVideoMetadata): String {
     val lines = mutableListOf(
         "${context.getString(R.string.video_gen_mode_label)}: ${formatVideoModeLabel(context, metadata.modeEnum)}",
         "${context.getString(R.string.video_gen_prompt_label)}: ${metadata.prompt}",
@@ -2137,6 +2468,108 @@ private fun formatGenerationDuration(durationMs: Long): String {
 
 private fun formatVideoGalleryDate(timestampMs: Long): String =
     SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(timestampMs))
+
+private const val VIDEO_DRAFT_PERSIST_DEBOUNCE_MS = 400L
+
+private data class VideoPathReference(
+    val path: String,
+    val directory: Boolean = false
+)
+
+/**
+ * Return the main model path in the same order used by the typed video command.
+ * Full-model families must keep their checkpoint path ahead of any legacy scalar.
+ */
+private fun videoMainModelPathForSelection(options: VideoRuntimeOptions): String? {
+    val profile = options.videoFamily?.let { family ->
+        runCatching { SdVideoFamilyProfiles.resolve(family, options.videoVariant) }.getOrNull()
+    }
+    return when (profile?.mainModelLayout ?: SdVideoMainModelLayout.STANDALONE_DIFFUSION) {
+        SdVideoMainModelLayout.FULL_MODEL -> options.videoComponents.fullModelPath
+            ?: options.videoComponents.diffusionModelPath
+        SdVideoMainModelLayout.STANDALONE_DIFFUSION -> options.videoComponents.diffusionModelPath
+            ?: options.videoComponents.fullModelPath
+    }
+}
+
+/** Match the paths emitted by VideoCommandBuilder before starting generation. */
+private fun videoGenerationPathReferences(
+    options: VideoRuntimeOptions,
+    selectedModelPath: String?,
+    loras: List<SdLoraSpec>,
+    highNoiseLoras: List<SdLoraSpec>
+): List<VideoPathReference> {
+    val profile = options.videoFamily?.let { family ->
+        runCatching { SdVideoFamilyProfiles.resolve(family, options.videoVariant) }.getOrNull()
+    }
+    val components = options.videoComponents
+    val inputs = options.videoInputs
+
+    return buildList {
+        fun addFile(path: String?) {
+            path?.takeIf(String::isNotBlank)?.let { add(VideoPathReference(it)) }
+        }
+
+        fun addDirectory(path: String?) {
+            path?.takeIf(String::isNotBlank)?.let { add(VideoPathReference(it, directory = true)) }
+        }
+
+        val mainModelPath = when (profile?.mainModelLayout ?: SdVideoMainModelLayout.STANDALONE_DIFFUSION) {
+            SdVideoMainModelLayout.FULL_MODEL -> components.fullModelPath
+                ?: components.diffusionModelPath
+                ?: selectedModelPath
+            SdVideoMainModelLayout.STANDALONE_DIFFUSION -> components.diffusionModelPath
+                ?: selectedModelPath
+        }
+        addFile(mainModelPath)
+        addFile(components.highNoiseDiffusionModelPath)
+        addFile(components.uncondDiffusionModelPath)
+
+        // The command emits one decoder. Check only the selected branch so an old,
+        // unused alternate path cannot block a valid run.
+        val decoderTae = components.taePath?.takeIf {
+            options.useTae || components.vaePath.isNullOrBlank()
+        }
+        if (decoderTae != null) addFile(decoderTae) else addFile(components.vaePath)
+
+        addFile(components.t5xxlPath)
+        addFile(components.llmPath)
+        addFile(components.llmVisionPath)
+        addFile(components.audioVaePath)
+        addFile(components.embeddingsConnectorsPath)
+        addFile(components.motionModulePath)
+        addFile(components.clipVisionPath)
+        addFile(components.ipAdapterPath)
+        addFile(inputs.ipAdapterImagePath)
+        addFile(components.controlNetPath)
+
+        if (options.hires.enabled) {
+            addDirectory(components.hiresUpscalersDir)
+            addFile(components.hiresUpscaler)
+        }
+
+        loras.filter { it.enabled }.forEach { addFile(it.path) }
+        highNoiseLoras.filter { it.enabled }.forEach { addFile(it.path) }
+
+        addFile(inputs.initImagePath)
+        addFile(inputs.endImagePath)
+        addFile(inputs.controlImagePath)
+        addDirectory(inputs.controlVideoPath)
+        inputs.referenceImages.forEach(::addFile)
+        inputs.referenceVideos.forEach(::addDirectory)
+        inputs.referenceVideoAudios.forEach(::addFile)
+        inputs.referenceAudios.forEach(::addFile)
+    }.distinct()
+}
+
+private fun videoPathReferenceAvailable(reference: VideoPathReference): Boolean =
+    File(reference.path).let { file ->
+        if (reference.directory) {
+            file.isDirectory && file.canRead()
+        } else {
+            file.isFile && file.canRead()
+        }
+    }
 
 private fun formatVideoModeLabel(context: Context, mode: VideoGenerationMode): String {
     return when (mode) {
@@ -2254,4 +2687,58 @@ private fun buildVideoGenerationHelpSections(selectedMode: Int): List<Generation
     )
 
     return sections
+}
+
+@Composable
+private fun NativeAnimatedVideoPreview(path: String) {
+    val resources = androidx.compose.ui.platform.LocalResources.current
+    val description = stringResource(R.string.soft_studio_generated_video_description, File(path).name)
+    val drawable by produceState<android.graphics.drawable.Drawable?>(null, path) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                if (android.os.Build.VERSION.SDK_INT >= 28) {
+                    android.graphics.ImageDecoder.decodeDrawable(android.graphics.ImageDecoder.createSource(File(path))) { decoder, info, _ ->
+                        val scale = minOf(1f, 1080f / info.size.width, 660f / info.size.height)
+                        decoder.setTargetSize((info.size.width * scale).toInt().coerceAtLeast(1),
+                            (info.size.height * scale).toInt().coerceAtLeast(1))
+                    }
+                } else decodeBoundedVideoImage(path)?.let { it.toDrawable(resources) }
+            }.getOrNull()
+        }
+    }
+    AndroidView(
+        modifier = Modifier.fillMaxWidth().height(220.dp),
+        factory = { android.widget.ImageView(it).apply { scaleType = android.widget.ImageView.ScaleType.FIT_CENTER } },
+        update = { view ->
+            view.contentDescription = description
+            if (view.drawable !== drawable) {
+                view.setImageDrawable(drawable)
+                (drawable as? android.graphics.drawable.Animatable)?.start()
+            }
+        },
+        onRelease = { view -> (view.drawable as? android.graphics.drawable.Animatable)?.stop() }
+    )
+}
+
+/** Bound still previews on API 26/27 and thumbnails to avoid decoding full-size frames. */
+private fun decodeBoundedVideoImage(path: String): android.graphics.Bitmap? = runCatching {
+    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    android.graphics.BitmapFactory.decodeFile(path, bounds)
+    var sample = 1
+    while (bounds.outWidth / sample > 1080 || bounds.outHeight / sample > 660) sample *= 2
+    android.graphics.BitmapFactory.decodeFile(path, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+}.getOrNull()
+
+@Composable
+private fun VideoBooleanOption(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .toggleable(checked, role = androidx.compose.ui.semantics.Role.Switch, onValueChange = onCheckedChange)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        Switch(checked = checked, onCheckedChange = null)
+    }
 }

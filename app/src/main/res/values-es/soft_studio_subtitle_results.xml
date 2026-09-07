@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="studio_subtitle_starting">Iniciando…</string>
+    <string name="studio_subtitle_preparing">Preparando archivos…</string>
+    <string name="studio_subtitle_copy_video">Copiando vídeo…</string>
+    <string name="studio_subtitle_copy_text">Copiando subtítulos…</string>
+    <string name="studio_subtitle_converting">Preparando subtítulos…</string>
+    <string name="studio_subtitle_convert_error">No se pudo leer el archivo de subtítulos. Selecciona un archivo SRT, ASS o VTT válido y vuelve a intentarlo.</string>
+    <string name="studio_subtitle_progress">Incrustando subtítulos: %1$d%%</string>
+    <string name="studio_subtitle_saving">Guardando vídeo…</string>
+    <string name="studio_subtitle_runtime_missing">El entorno multimedia no está disponible. Instálalo desde Modelos y vuelve a intentarlo.</string>
+    <string name="studio_subtitle_process_error">El procesamiento del vídeo falló (código %1$d). Revisa los archivos y vuelve a intentarlo.</string>
+    <string name="studio_subtitle_export_title">Vídeo guardado en la aplicación</string>
+    <string name="studio_subtitle_export_error">La carpeta de exportación no está disponible. El vídeo está guardado en la aplicación; ábrelo o compártelo aquí, o elige una carpeta con permiso de escritura para futuras exportaciones.</string>
+    <string name="studio_subtitle_output_settings">Ajustes de la carpeta de salida</string>
+    <string name="studio_subtitle_open_error">Ninguna aplicación pudo abrir este vídeo. Prueba Compartir para guardarlo en otro lugar.</string>
+    <string name="studio_subtitle_cancelled">Procesamiento de subtítulos cancelado</string>
+    <string name="studio_subtitle_retry">Los archivos siguen seleccionados. Vuelve a ejecutar la tarea cuando quieras.</string>
+</resources>

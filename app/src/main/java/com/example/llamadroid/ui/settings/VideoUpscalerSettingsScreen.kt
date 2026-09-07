@@ -63,10 +63,10 @@ fun VideoUpscalerSettingsContent(
                     Column(modifier = Modifier.padding(16.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(stringResource(R.string.video_upscaler_load_threads), fontWeight = FontWeight.Bold)
+                            Text(stringResource(R.string.video_upscaler_load_threads), modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
                             Text("$loadThreads", color = MaterialTheme.colorScheme.primary)
                         }
                         Spacer(modifier = Modifier.height(8.dp))
@@ -94,10 +94,10 @@ fun VideoUpscalerSettingsContent(
                     Column(modifier = Modifier.padding(16.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(stringResource(R.string.video_upscaler_proc_threads), fontWeight = FontWeight.Bold)
+                            Text(stringResource(R.string.video_upscaler_proc_threads), modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
                             Text("$procThreads", color = MaterialTheme.colorScheme.primary)
                         }
                         Spacer(modifier = Modifier.height(8.dp))
@@ -125,10 +125,10 @@ fun VideoUpscalerSettingsContent(
                     Column(modifier = Modifier.padding(16.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(stringResource(R.string.video_upscaler_save_threads), fontWeight = FontWeight.Bold)
+                            Text(stringResource(R.string.video_upscaler_save_threads), modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
                             Text("$saveThreads", color = MaterialTheme.colorScheme.primary)
                         }
                         Spacer(modifier = Modifier.height(8.dp))

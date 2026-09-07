@@ -78,7 +78,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.llamadroid.R
 import com.example.llamadroid.service.MangaPaintedOcrSupport
@@ -334,6 +334,7 @@ private fun PaintedMaskEditorContent(
                     }
                 },
                 actions = {
+                    com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                     TextButton(onClick = ::saveMask, enabled = !saving && canSaveMask) {
                         Icon(Icons.Default.Save, contentDescription = null)
                         Text(stringResource(R.string.workflow_manga_painted_editor_save))

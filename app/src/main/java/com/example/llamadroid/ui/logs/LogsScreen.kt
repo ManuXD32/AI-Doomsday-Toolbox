@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -34,9 +35,10 @@ import com.example.llamadroid.service.GenerationDiagnosticsStore
 import com.example.llamadroid.service.GenerationExitSnapshot
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
-import com.example.llamadroid.ui.components.AppContentColumn
-import com.example.llamadroid.ui.components.AppPageBackground
-import com.example.llamadroid.ui.components.AppPageHeader
+import com.example.llamadroid.ui.components.AppScrollableTabRow
+import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import kotlinx.coroutines.delay
 import java.io.File
 import java.text.SimpleDateFormat
@@ -49,12 +51,14 @@ private enum class LogTab { APP, GENERATION_DIAGNOSTICS, RPC }
 
 @Composable
 fun LogsScreen(navController: NavController) {
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val appLogs by DebugLog.logs.collectAsState()
     val rpcLogs by DistributedService.rpcLogs.collectAsState()
     val generationBreadcrumbs by GenerationDiagnosticsStore.recentBreadcrumbs.collectAsState()
     val latestExitSnapshot by GenerationDiagnosticsStore.latestExitSnapshot.collectAsState()
     val dateFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
     val context = LocalContext.current
+    val resources = LocalResources.current
     val appListState = rememberLazyListState()
     val rpcListState = rememberLazyListState()
     val generationDiagnosticsAvailable = latestExitSnapshot != null || generationBreadcrumbs.isNotEmpty()
@@ -76,34 +80,36 @@ fun LogsScreen(navController: NavController) {
         }
     }
 
-    AppPageBackground {
+    AppScreenScaffold(
+        title = stringResource(R.string.logs_title),
+        subtitle = stringResource(R.string.settings_debug_desc),
+        onBack = { navController.popBackStack() }
+    ) { _ ->
         Column(modifier = Modifier.fillMaxSize()) {
-            AppContentColumn(
-                modifier = Modifier.fillMaxWidth(),
-                bottomPadding = 0.dp,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                AppPageHeader(
-                    eyebrow = "DEBUG",
-                    title = stringResource(R.string.logs_title),
-                    subtitle = stringResource(R.string.settings_debug_desc)
-                )
-            }
         
         // Tab Row
-        TabRow(
+        AppScrollableTabRow(
             selectedTabIndex = selectedTab.ordinal,
-            modifier = Modifier.padding(horizontal = 20.dp),
+            modifier = Modifier
+                .padding(horizontal = 20.dp)
+                .walkthroughTarget("settings.settings_logs"),
+            edgePadding = 0.dp,
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-            contentColor = MaterialTheme.colorScheme.onSurface,
-            indicator = { _ -> }
+            contentColor = MaterialTheme.colorScheme.onSurface
         ) {
             Tab(
                 selected = selectedTab == LogTab.APP,
-                onClick = { selectedTab = LogTab.APP },
+                onClick = {
+                    walkthroughTargets?.recordEvent("settings.diagnostics")
+                    selectedTab = LogTab.APP
+                },
                 text = { 
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("📱 " + stringResource(R.string.logs_tab_app))
+                        Text(
+                            "📱 " + stringResource(R.string.logs_tab_app),
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
                         if (appLogs.isNotEmpty()) {
                             Spacer(Modifier.width(4.dp))
                             Badge { Text("${appLogs.size}") }
@@ -113,10 +119,17 @@ fun LogsScreen(navController: NavController) {
             )
             Tab(
                 selected = selectedTab == LogTab.GENERATION_DIAGNOSTICS,
-                onClick = { selectedTab = LogTab.GENERATION_DIAGNOSTICS },
+                onClick = {
+                    walkthroughTargets?.recordEvent("settings.diagnostics")
+                    selectedTab = LogTab.GENERATION_DIAGNOSTICS
+                },
                 text = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("🧪 " + stringResource(R.string.logs_tab_generation_diag))
+                        Text(
+                            "🧪 " + stringResource(R.string.logs_tab_generation_diag),
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
                         if (generationDiagnosticsAvailable) {
                             Spacer(Modifier.width(4.dp))
                             Badge(
@@ -131,10 +144,17 @@ fun LogsScreen(navController: NavController) {
             )
             Tab(
                 selected = selectedTab == LogTab.RPC,
-                onClick = { selectedTab = LogTab.RPC },
+                onClick = {
+                    walkthroughTargets?.recordEvent("settings.diagnostics")
+                    selectedTab = LogTab.RPC
+                },
                 text = { 
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("🌐 " + stringResource(R.string.logs_tab_rpc))
+                        Text(
+                            "🌐 " + stringResource(R.string.logs_tab_rpc),
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
                         if (rpcLogs.isNotEmpty()) {
                             Spacer(Modifier.width(4.dp))
                             Badge(
@@ -175,8 +195,8 @@ fun LogsScreen(navController: NavController) {
             FilledTonalButton(
                 onClick = {
                     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    clipboard.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.logs_clip_label), logText))
-                    Toast.makeText(context, context.getString(R.string.logs_copied), Toast.LENGTH_SHORT).show()
+                    clipboard.setPrimaryClip(ClipData.newPlainText(resources.getString(R.string.logs_clip_label), logText))
+                    Toast.makeText(context, resources.getString(R.string.logs_copied), Toast.LENGTH_SHORT).show()
                 },
                 enabled = canCopyOrClear,
                 modifier = Modifier.fillMaxWidth(),
@@ -602,6 +622,7 @@ private fun RpcLogsContent(
                 }
                 
                 LazyColumn(
+                    modifier = Modifier.weight(1f),
                     state = listState,
                     contentPadding = PaddingValues(12.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp),

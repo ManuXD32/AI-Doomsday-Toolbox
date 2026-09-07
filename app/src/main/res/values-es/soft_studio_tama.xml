@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="soft_studio_tama_room">Habitación de la mascota</string>
+    <string name="soft_studio_tama_map">Mapa del mundo</string>
+    <string name="soft_studio_farm_plot">Parcela %1$d: %2$s</string>
+    <string name="soft_studio_farm_soil">Tierra, lista para arar</string>
+    <string name="soft_studio_farm_tilled">Arada, necesita agua antes de plantar</string>
+    <string name="soft_studio_farm_watered">Regada, lista para plantar</string>
+    <string name="soft_studio_farm_crop">%1$s, etapa de crecimiento %2$d de 4</string>
+    <string name="soft_studio_farm_decayed">%1$s, marchita</string>
+    <string name="soft_studio_farm_inspect">Inspeccionar cultivo</string>
+    <string name="soft_studio_farm_tool">%1$s, durabilidad %2$d de %3$d</string>
+    <string name="soft_studio_farm_supply">%1$s, cantidad %2$d</string>
+    <string name="soft_studio_tama_store_subtitle">Suministros, mejoras, animales y ventas</string>
+    <string name="soft_studio_tama_actions_hint">Desliza para ver más acciones de Tama</string>
+</resources>

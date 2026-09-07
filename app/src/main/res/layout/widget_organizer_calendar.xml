@@ -31,7 +31,7 @@
             android:clickable="true"
             android:contentDescription="@string/organizer_calendar_previous_month"
             android:gravity="center"
-            android:text="&lt;"
+            android:text="@string/widget_navigation_previous_symbol"
             android:textColor="#F5F7FF"
             android:textSize="13sp"
             android:textStyle="bold" />
@@ -57,7 +57,7 @@
             android:clickable="true"
             android:contentDescription="@string/organizer_calendar_next_month"
             android:gravity="center"
-            android:text="&gt;"
+            android:text="@string/widget_navigation_next_symbol"
             android:textColor="#F5F7FF"
             android:textSize="13sp"
             android:textStyle="bold" />

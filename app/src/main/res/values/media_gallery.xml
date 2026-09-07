@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="media_gallery_title">All media</string>
+    <string name="media_gallery_subtitle">Saved images and videos from this app</string>
+    <string name="media_gallery_filter_title">Filters</string>
+    <string name="media_gallery_type_all">All</string>
+    <string name="media_gallery_type_images">Images</string>
+    <string name="media_gallery_type_videos">Videos</string>
+    <string name="media_gallery_type_image">Image</string>
+    <string name="media_gallery_type_video">Video</string>
+    <string name="media_gallery_source_all">All sources</string>
+    <string name="media_gallery_source_sd">Stable Diffusion</string>
+    <string name="media_gallery_source_fast_sd">FastSD</string>
+    <string name="media_gallery_source_onnx">ONNX</string>
+    <string name="media_gallery_source_tama">Tama</string>
+    <string name="media_gallery_source_workflow">Workflow</string>
+    <string name="media_gallery_source_processing">Processing</string>
+    <string name="media_gallery_source_unknown">Unknown source</string>
+    <string name="media_gallery_location_all">All locations</string>
+    <string name="media_gallery_location_local">Local</string>
+    <string name="media_gallery_location_distributed">Distributed</string>
+    <string name="media_gallery_location_unknown">Unknown</string>
+    <string name="media_gallery_count">Shown: %1$d / %2$d</string>
+    <string name="media_gallery_empty">No saved images or videos yet.</string>
+    <string name="media_gallery_item_meta">%1$s • %2$s</string>
+    <string name="media_gallery_open">Open</string>
+    <string name="media_gallery_details_title">Media details</string>
+    <string name="media_gallery_source_label">Source</string>
+    <string name="media_gallery_location_label">Location</string>
+    <string name="media_gallery_created_label">Created</string>
+    <string name="media_gallery_prompt_label">Prompt</string>
+    <string name="media_gallery_file_label">File</string>
+    <string name="media_gallery_generation_settings_label">Generation settings</string>
+    <string name="media_gallery_generation_settings_unavailable">Generation settings are unavailable for this legacy output.</string>
+    <string name="media_gallery_open_with">Open with</string>
+    <string name="media_gallery_open_failed">Could not open this media: %1$s</string>
+    <string name="media_gallery_fastsd_link_title">Open FastSD gallery</string>
+    <string name="media_gallery_fastsd_link_desc">Remote FastSD results appear after its connection is opened.</string>
+    <string name="soft_studio_library_open_all_media">All media</string>
+    <string name="feature_guide_media_gallery_title">All media gallery</string>
+    <string name="feature_recipe_media_gallery_browse_title">Browse saved media</string>
+    <string name="feature_step_media_gallery_purpose">Open All media from Library to review saved images and videos across the app. Start with the type, source, and location filters, then open an item for details or the owning tool.</string>
+    <string name="feature_step_media_gallery_result">Check that the newest saved outputs appear first, thumbnails load as cards become visible, and image and video details remain readable in the scrollable view.</string>
+    <string name="feature_step_media_gallery_recover">Refresh after a generation or deletion. Use the FastSD gallery link for remote results, and return to the owning generator when a legacy output has no generation settings.</string>
+</resources>

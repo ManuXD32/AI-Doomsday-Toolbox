@@ -1,0 +1,225 @@
+{
+  "description": "README screenshot copies. Source sets retain their original capture/build identity; images are not represented as captures from the newly signed release.",
+  "images": [
+    {
+      "file": "home.png",
+      "source": "docs/play-store/soft-studio/phone/en/01-home.png",
+      "sha256": "9341231e49c87ad6a0cd866e81d2d99a1ed063a138bdcd17bd110916d310928f",
+      "dimensions_px": [
+        1080,
+        1920
+      ],
+      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+    },
+    {
+      "file": "tools.png",
+      "source": "docs/play-store/soft-studio/phone/en/02-tools.png",
+      "sha256": "2f6846c6ed68a22776ce201264d123fb6cf77922fc1b1302db6c899c8cb5d609",
+      "dimensions_px": [
+        1080,
+        1920
+      ],
+      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+    },
+    {
+      "file": "library.png",
+      "source": "docs/play-store/soft-studio/phone/en/03-library.png",
+      "sha256": "2083450d811b39b18d233a0e6dab2d7761547f5a7e6a2774732ff7b3afd5aa60",
+      "dimensions_px": [
+        1080,
+        1920
+      ],
+      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+    },
+    {
+      "file": "image-generation.png",
+      "source": "docs/play-store/soft-studio/phone/en/04-create-images.png",
+      "sha256": "93d726c18db36afb026d7d1a7b5a95ed74bdd2a34307ffffc2538446d7c75ee4",
+      "dimensions_px": [
+        1080,
+        1920
+      ],
+      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+    },
+    {
+      "file": "tama.png",
+      "source": "docs/play-store/soft-studio/phone/en/05-tama.png",
+      "sha256": "8d46098f58a92d38ec53380a3b86ce0dd15a400fbde4d39acdba7cc96cb38012",
+      "dimensions_px": [
+        1080,
+        1920
+      ],
+      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+    },
+    {
+      "file": "farm.png",
+      "source": "docs/play-store/soft-studio/phone/en/06-farm.png",
+      "sha256": "6fb11aca3407b630033f7baf810af802a4a54d712f743b28733f696e4f0db750",
+      "dimensions_px": [
+        1080,
+        1920
+      ],
+      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+    },
+    {
+      "file": "app-tour.png",
+      "source": "docs/play-store/walkthrough/phone/en/01-guide.png",
+      "sha256": "7d71a8ae074767a6d3602db9338330e3a94171f44dadb84b79504c2b793570a0",
+      "dimensions_px": [
+        1080,
+        1920
+      ],
+      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+    },
+    {
+      "file": "tools-tour.png",
+      "source": "docs/play-store/walkthrough/phone/en/03-tools-coach.png",
+      "sha256": "c09d48099fe29d8f53a1e210bc5a6c24c1ddf1b033f2a2205548815e5096d809",
+      "dimensions_px": [
+        1080,
+        1920
+      ],
+      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+    },
+    {
+      "file": "tablet-library.png",
+      "source": "docs/play-store/soft-studio/tablet/en/03-library.png",
+      "sha256": "1339303fad5ed79c973bbe10f6ae5e3c2d454023607dba25c971b56ce9a5be00",
+      "dimensions_px": [
+        2560,
+        1440
+      ],
+      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+    },
+    {
+      "file": "distributed.webp",
+      "source": "app/src/main/res/drawable-nodpi/tour_lesson_distributed_roles.webp",
+      "sha256": "006227109e08476797b038dfb23822cf2bd9fd19701f50fd1303a677b66aa5f1",
+      "dimensions_px": [
+        819,
+        1280
+      ],
+      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+    },
+    {
+      "file": "llama-servers.webp",
+      "source": "app/src/main/res/drawable-nodpi/tour_lesson_conversations_native_management.webp",
+      "sha256": "b102688d775ed677cb1fccedf8d212d63894d7af449d8ffc00b3c3cf3446a185",
+      "dimensions_px": [
+        819,
+        1280
+      ],
+      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+    },
+    {
+      "file": "server-selection.webp",
+      "source": "app/src/main/res/drawable-nodpi/tour_lesson_conversations_server_selection.webp",
+      "sha256": "271856790795be5c5b616f40bc72eee110d0894619aed8860a5cbf0d2de8328e",
+      "dimensions_px": [
+        819,
+        1280
+      ],
+      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+    },
+    {
+      "file": "scheduler.webp",
+      "source": "app/src/main/res/drawable-nodpi/tour_lesson_conversations_scheduler.webp",
+      "sha256": "d427e3d53fca508b950c807674d5a228c8ab224d9e83e86b08b12f8d39b03091",
+      "dimensions_px": [
+        819,
+        1280
+      ],
+      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+    },
+    {
+      "file": "ollama.webp",
+      "source": "app/src/main/res/drawable-nodpi/tour_lesson_ollama.webp",
+      "sha256": "eb8403cdc22034761373507bb46c7747dd4d6406d0256d70d6da28d8dcedfc6d",
+      "dimensions_px": [
+        1080,
+        1920
+      ],
+      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+    },
+    {
+      "file": "benchmark.webp",
+      "source": "app/src/main/res/drawable-nodpi/tour_lesson_benchmark.webp",
+      "sha256": "f8f014c9745d8b70b192e9d459e14d407d9cf22a099439b3961983e4632745dd",
+      "dimensions_px": [
+        1080,
+        1920
+      ],
+      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+    },
+    {
+      "file": "termux.webp",
+      "source": "app/src/main/res/drawable-nodpi/tour_lesson_termux.webp",
+      "sha256": "7ff3109a47fad1ee88aade5ac292dbb84ac773958b96dbec3a85d52e4dd3c474",
+      "dimensions_px": [
+        1080,
+        1920
+      ],
+      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+    },
+    {
+      "file": "agent.webp",
+      "source": "app/src/main/res/drawable-nodpi/tour_lesson_agent.webp",
+      "sha256": "3495bdb0c21ec23e5444f6eaa736a6d33563fc5f265c4cedff53d418f058d896",
+      "dimensions_px": [
+        1080,
+        1920
+      ],
+      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+    },
+    {
+      "file": "pdf-tools.webp",
+      "source": "app/src/main/res/drawable-nodpi/tour_lesson_pdf_tools.webp",
+      "sha256": "31b7b3aacc4e419f6271cda98c92469234485a89a4b187d9c3c4fe9578b2ba5d",
+      "dimensions_px": [
+        1080,
+        1920
+      ],
+      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+    },
+    {
+      "file": "video-summary.webp",
+      "source": "app/src/main/res/drawable-nodpi/tour_lesson_video_summary.webp",
+      "sha256": "32ba27f40970bd733d62158a37e2f121e35888e767f410240283f819cf4efcb9",
+      "dimensions_px": [
+        1080,
+        1920
+      ],
+      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+    },
+    {
+      "file": "custom-download.webp",
+      "source": "app/src/main/res/drawable-nodpi/tour_lesson_models_custom_url.webp",
+      "sha256": "d3bcf269c7d5a681efb59ec923adcca8de48e89d13366f41ae4388adfa6a37f5",
+      "dimensions_px": [
+        819,
+        1280
+      ],
+      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+    },
+    {
+      "file": "model-bundles.webp",
+      "source": "app/src/main/res/drawable-nodpi/tour_lesson_models_bundles.webp",
+      "sha256": "c0185dc60b3c672d3a474160207cdd366b4171d0ada2f5a0615502f1a57c90a7",
+      "dimensions_px": [
+        819,
+        1280
+      ],
+      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+    },
+    {
+      "file": "repository-browser.webp",
+      "source": "app/src/main/res/drawable-nodpi/tour_lesson_models_hf_folder.webp",
+      "sha256": "f13e7d3e8ec28d80f89c1fe5adc8fe4cb2f4b53ba498263a989c814b65ee1b24",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+    }
+  ]
+}

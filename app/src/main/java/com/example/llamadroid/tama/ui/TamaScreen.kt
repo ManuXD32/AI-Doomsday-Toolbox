@@ -1,5 +1,9 @@
 package com.example.llamadroid.tama.ui
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughActive
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -24,13 +28,20 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
@@ -43,6 +54,7 @@ import com.example.llamadroid.service.RemoteSummaryBackendConfig
 import com.example.llamadroid.service.RemoteSummaryClientFactory
 import com.example.llamadroid.service.RemoteSummaryMetadata
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -74,6 +86,7 @@ import com.example.llamadroid.ui.components.pressAndHoldRepeat
 import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.ui.components.rememberPressAndHoldRepeatState
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import androidx.navigation.NavController
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.flowOf
@@ -164,6 +177,7 @@ fun TamaScreen(
     val questChecklist by questChecklistFeed.collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val resources = LocalResources.current
     var queuedPaintingArtworkId by rememberSaveable { mutableStateOf<String?>(null) }
     var artworkAwaitingRevealId by rememberSaveable { mutableStateOf<String?>(null) }
     var dreamAlbumAwaitingRevealId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -178,6 +192,9 @@ fun TamaScreen(
     }
 
     var showNameDialog by remember { mutableStateOf(false) }
+    val activeWalkthrough = LocalWalkthroughActive.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
+    val guidedVisit = remember { activeWalkthrough }
     var showMenu by remember { mutableStateOf(false) }
 
     // File picker for export
@@ -189,18 +206,18 @@ fun TamaScreen(
                 try {
                     val outputStream = context.contentResolver.openOutputStream(uri)
                     if (outputStream == null) {
-                        Toast.makeText(context, context.getString(R.string.tama_export_failed, context.getString(R.string.error_generic)), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, resources.getString(R.string.tama_export_failed, resources.getString(R.string.error_generic)), Toast.LENGTH_SHORT).show()
                     } else {
                         outputStream.use { stream ->
                             if (gameEngine.exportToBackupZip(stream)) {
-                                Toast.makeText(context, context.getString(R.string.tama_export_success), Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, resources.getString(R.string.tama_export_success), Toast.LENGTH_SHORT).show()
                             } else {
-                                Toast.makeText(context, context.getString(R.string.tama_export_failed, context.getString(R.string.error_generic)), Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, resources.getString(R.string.tama_export_failed, resources.getString(R.string.error_generic)), Toast.LENGTH_SHORT).show()
                             }
                         }
                     }
                 } catch (e: Exception) {
-                    Toast.makeText(context, context.getString(R.string.tama_export_failed, e.message ?: ""), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, resources.getString(R.string.tama_export_failed, e.message ?: ""), Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -215,20 +232,20 @@ fun TamaScreen(
                 scope.launch {
                     val inputStream = context.contentResolver.openInputStream(uri)
                     if (inputStream == null) {
-                        Toast.makeText(context, context.getString(R.string.tama_import_failed, context.getString(R.string.error_generic)), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, resources.getString(R.string.tama_import_failed, resources.getString(R.string.error_generic)), Toast.LENGTH_SHORT).show()
                     } else {
                         inputStream.use { stream ->
                             val success = gameEngine.importFromBackup(stream)
                             if (success) {
-                                Toast.makeText(context, context.getString(R.string.tama_import_success), Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, resources.getString(R.string.tama_import_success), Toast.LENGTH_SHORT).show()
                             } else {
-                                Toast.makeText(context, context.getString(R.string.tama_import_invalid), Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, resources.getString(R.string.tama_import_invalid), Toast.LENGTH_SHORT).show()
                             }
                         }
                     }
                 }
             } catch (e: Exception) {
-                Toast.makeText(context, context.getString(R.string.tama_import_failed, e.message ?: ""), Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, resources.getString(R.string.tama_import_failed, e.message ?: ""), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -236,7 +253,7 @@ fun TamaScreen(
     // Load pet on first composition
     LaunchedEffect(Unit) {
         val loadedPet = gameEngine.loadPet()
-        if (loadedPet == null) {
+        if (loadedPet == null && !guidedVisit) {
             showNameDialog = true
         }
     }
@@ -434,7 +451,7 @@ fun TamaScreen(
             TamaArtworkStatus.FAILED.name -> {
                 Toast.makeText(
                     context,
-                    artwork.errorMessage ?: context.getString(R.string.error_generic),
+                    artwork.errorMessage ?: resources.getString(R.string.error_generic),
                     Toast.LENGTH_SHORT
                 ).show()
                 artworkAwaitingRevealId = null
@@ -450,7 +467,7 @@ fun TamaScreen(
             .onFailure { error ->
                 Toast.makeText(
                     context,
-                    error.message ?: context.getString(R.string.error_generic),
+                    error.message ?: resources.getString(R.string.error_generic),
                     Toast.LENGTH_SHORT
                 ).show()
             }
@@ -469,7 +486,7 @@ fun TamaScreen(
                 Toast.makeText(
                     context,
                     albumArtworks.firstOrNull { it.status == TamaArtworkStatus.FAILED.name }?.errorMessage
-                        ?: context.getString(R.string.error_generic),
+                        ?: resources.getString(R.string.error_generic),
                     Toast.LENGTH_SHORT
                 ).show()
                 gameEngine.clearPendingDreamAlbum(albumId)
@@ -510,11 +527,16 @@ fun TamaScreen(
         }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(TamaBackground)
-    ) {
+    BoxWithConstraints(modifier = modifier.fillMaxSize().background(TamaBackground)) {
+        // Reserve the pet header before sizing the scene on short tablet windows.
+        val roomMaxSize = minOf(560.dp, (maxHeight - 64.dp).coerceAtLeast(240.dp))
+        Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        if (pet == null && guidedVisit) {
+            Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(stringResource(R.string.tour_tama_missing_body))
+                Button(onClick = { showNameDialog = true }) { Text(stringResource(R.string.tour_tama_setup)) }
+            }
+        }
         // Header with view toggle
         Row(
             modifier = Modifier
@@ -544,18 +566,34 @@ fun TamaScreen(
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // View toggle buttons
-                    TextButton(onClick = { showMap = false }) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            TamaEmojiIcon(TAMA_PET_VIEW_EMOJI, fontSize = 16.sp)
-                            if (!showMap) TamaEmojiIcon("✓", fontSize = 14.sp)
+                    val roomLabel = stringResource(R.string.soft_studio_tama_room)
+                    val mapLabel = stringResource(R.string.soft_studio_tama_map)
+                    IconButton(
+                        onClick = {
+                            showMap = false
+                            walkthroughTargets?.recordEvent("tama.room")
+                        },
+                        modifier = Modifier.size(48.dp).semantics {
+                            contentDescription = roomLabel
+                            selected = !showMap
                         }
+                    ) {
+                        TamaEmojiIcon(TAMA_PET_VIEW_EMOJI, fontSize = 16.sp)
                     }
-                    TextButton(onClick = { showMap = true }) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            TamaEmojiIcon(TAMA_MAP_VIEW_EMOJI, fontSize = 16.sp)
-                            if (showMap) TamaEmojiIcon("✓", fontSize = 14.sp)
+                    IconButton(
+                        onClick = {
+                            showMap = true
+                            walkthroughTargets?.recordEvent("tama.room")
+                        },
+                        modifier = Modifier.size(48.dp).semantics {
+                            contentDescription = mapLabel
+                            selected = showMap
                         }
+                    ) {
+                        TamaEmojiIcon(TAMA_MAP_VIEW_EMOJI, fontSize = 16.sp)
+                    }
+                    IconButton(onClick = { showMenu = true }, modifier = Modifier.size(48.dp)) {
+                        Icon(Icons.Default.MoreVert, stringResource(R.string.tama_btn_menu), tint = TamaLight)
                     }
                 }
             } else {
@@ -569,12 +607,16 @@ fun TamaScreen(
             }
         }
 
-        // Main display area (LCD screen style)
+        // Keep the original square room proportions; surrounding chrome must not crop the art.
         Box(
             modifier = Modifier
+                .widthIn(max = roomMaxSize)
                 .fillMaxWidth()
-                .weight(1f)
+                .align(Alignment.CenterHorizontally)
+                .aspectRatio(1f)
                 .padding(16.dp)
+                .testTag("soft_studio_tama_room_viewport")
+                .walkthroughTarget("tama.room")
                 .clip(RoundedCornerShape(8.dp))
                 .background(TamaLight)
                 .border(4.dp, TamaDark, RoundedCornerShape(8.dp))
@@ -665,7 +707,7 @@ fun TamaScreen(
                         if (dreamAlbumAwaitingRevealId == null && petId != null && sleepStartTime != null) {
                             artworkAwaitingRevealId = gameEngine.getLatestSleepDreamArtwork(petId, sleepStartTime)?.id
                         }
-                        Toast.makeText(context, context.getString(R.string.tama_woke_up, pet?.name ?: ""), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, resources.getString(R.string.tama_woke_up, pet?.name ?: ""), Toast.LENGTH_SHORT).show()
                     }
                 } else {
                     if (actionCooldown) return@TamaControls
@@ -767,6 +809,7 @@ fun TamaScreen(
 
         // Event log
         TamaEventLog(events = events.take(5))
+        }
     }
 
     // Name dialog for new pet
@@ -776,9 +819,9 @@ fun TamaScreen(
                 scope.launch {
                     try {
                         gameEngine.createPet(name, speciesLine.id)
-                        Toast.makeText(context, context.getString(R.string.tama_welcome_new, name), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, resources.getString(R.string.tama_welcome_new, name), Toast.LENGTH_SHORT).show()
                     } catch (e: Exception) {
-                        Toast.makeText(context, context.getString(R.string.tama_hatch_failed, e.message ?: ""), Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, resources.getString(R.string.tama_hatch_failed, e.message ?: ""), Toast.LENGTH_LONG).show()
                     }
                 }
                 showNameDialog = false
@@ -802,6 +845,10 @@ fun TamaScreen(
             onGallery = {
                 showMenu = false
                 navController.navigate(Screen.TamaGallery.route)
+            },
+            onStore = {
+                showMenu = false
+                navController.navigate(Screen.Store.route)
             },
             onExport = {
                 val petName = pet?.name ?: "tama"
@@ -840,7 +887,7 @@ fun TamaScreen(
             onConfirm = {
                 scope.launch {
                     gameEngine.resetPet()
-                    Toast.makeText(context, context.getString(R.string.tama_deleted), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, resources.getString(R.string.tama_deleted), Toast.LENGTH_SHORT).show()
                 }
                 showSecondResetDialog = false
             },
@@ -946,9 +993,9 @@ fun TamaScreen(
                             Text(stringResource(R.string.tama_avail_jobs), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                             TamaWorkCatalog.jobs.take(3).forEach { job ->
                                 Text(
-                                    context.getString(
+                                    resources.getString(
                                         R.string.tama_work_job_summary,
-                                        context.getString(job.titleRes),
+                                        resources.getString(job.titleRes),
                                         job.requiredEducation,
                                         job.hourlyPay.toInt()
                                     ),
@@ -999,7 +1046,7 @@ fun TamaScreen(
                                 val result = gameEngine.travelTo(loc)
                                 if (result.success) {
                                     if (!alreadyDiscovered) {
-                                        Toast.makeText(context, context.getString(R.string.tama_discovered, loc.name, loc.description), Toast.LENGTH_LONG).show()
+                                        Toast.makeText(context, resources.getString(R.string.tama_discovered, loc.name, loc.description), Toast.LENGTH_LONG).show()
                                     }
                                     showMap = false  // Switch to pet view
                                 } else {
@@ -1018,7 +1065,7 @@ fun TamaScreen(
                             TextButton(onClick = {
                                 if (pet!!.money >= 10) {
                                     scope.launch {
-                                        Toast.makeText(context, context.getString(R.string.tama_bought_apple), Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, resources.getString(R.string.tama_bought_apple), Toast.LENGTH_SHORT).show()
                                     }
                                 }
                                 selectedLocation = null
@@ -1469,7 +1516,9 @@ private fun TamaParkEncounterDialog(
     marketQuotes: List<TamaMarketQuote> = emptyList()
 ) {
     val context = LocalContext.current
-    val locale = context.resources.configuration.locales[0]
+    val resources = LocalResources.current
+    val configuration = LocalConfiguration.current
+    val locale = configuration.locales[0]
     val npc = remember(encounter.npcId) { TamaParkSocialCatalog.npcById(encounter.npcId) }
     val sellableItems = remember(pet.inventory) {
         pet.inventory.filter { item ->
@@ -1493,9 +1542,9 @@ private fun TamaParkEncounterDialog(
     val speechText = remember(encounter, npc, locale) {
         when {
             encounter.type == TamaParkEncounterType.RECYCLER && encounter.phase == TamaParkEncounterPhase.CLEANUP ->
-                context.getString(R.string.tama_park_recycler_cleanup_body, pet.name)
+                resources.getString(R.string.tama_park_recycler_cleanup_body, pet.name)
             marketMode ->
-                context.getString(R.string.tama_park_seller_market_body)
+                resources.getString(R.string.tama_park_seller_market_body)
             else -> TamaParkSocialCatalog.localizedLine(context, encounter)
         }
     }
@@ -2100,7 +2149,8 @@ private fun ParkQuestCard(
     onPrimaryAction: () -> Unit
 ) {
     val context = LocalContext.current
-    val locale = context.resources.configuration.locales[0]
+    val configuration = LocalConfiguration.current
+    val locale = configuration.locales[0]
     val npc = remember(quest.npcId) { TamaParkSocialCatalog.npcById(quest.npcId) }
     val cropLines = remember(quest.requests, locale) {
         quest.requests.joinToString(separator = "\n") { request ->
@@ -2233,7 +2283,8 @@ private fun ParkMarketBoardDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    val locale = context.resources.configuration.locales[0]
+    val configuration = LocalConfiguration.current
+    val locale = configuration.locales[0]
     TamaPopupDialog(
         title = stringResource(R.string.tama_market_board_title),
         backgroundAsset = PARK_MARKET_BACKGROUND_ASSET,
@@ -2357,7 +2408,8 @@ private fun TamaQuestChecklistDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    val locale = context.resources.configuration.locales[0]
+    val configuration = LocalConfiguration.current
+    val locale = configuration.locales[0]
     var showPicker by remember { mutableStateOf(false) }
     val requestableItems = remember {
         FarmTradeItemCatalog.allDefinitions()
@@ -2578,9 +2630,9 @@ private fun formatQuestCountdown(remainingMs: Long): String {
     val minutes = (totalSeconds % 3600L) / 60L
     val seconds = totalSeconds % 60L
     return if (hours > 0) {
-        String.format("%02d:%02d:%02d", hours, minutes, seconds)
+        String.format(java.util.Locale.getDefault(), "%02d:%02d:%02d", hours, minutes, seconds)
     } else {
-        String.format("%02d:%02d", minutes, seconds)
+        String.format(java.util.Locale.getDefault(), "%02d:%02d", minutes, seconds)
     }
 }
 
@@ -3220,7 +3272,9 @@ private fun AlchemistPotionKitchenTab(
     onBrew: () -> Unit
 ) {
     val context = LocalContext.current
-    val locale = context.resources.configuration.locales[0]
+    val resources = LocalResources.current
+    val configuration = LocalConfiguration.current
+    val locale = configuration.locales[0]
     val cropItems = pet.inventory
         .filter { it.id.startsWith("crop_") && FarmTradeItemCatalog.isTradeItem(it.id) && it.quantity > 0 }
         .sortedBy { FarmTradeItemCatalog.displayName(it.id, locale) }
@@ -3562,12 +3616,16 @@ fun TamaPopupDialog(
     bodyContent: @Composable ColumnScope.() -> Unit,
     footerContent: @Composable RowScope.() -> Unit
 ) {
-    Dialog(onDismissRequest = onDismissRequest) {
+    Dialog(
+        onDismissRequest = onDismissRequest,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         BoxWithConstraints {
             val dialogMaxHeight = if (compact) maxHeight * 0.72f else maxHeight * 0.9f
             val compactBodyMaxHeight = maxHeight * 0.46f
             Card(
                 modifier = modifier
+                    .widthIn(max = 560.dp)
                     .fillMaxWidth(0.96f)
                     .heightIn(max = dialogMaxHeight),
                 shape = RoundedCornerShape(24.dp),
@@ -3578,7 +3636,7 @@ fun TamaPopupDialog(
                     AsyncImage(
                         model = "file:///android_asset/$backgroundAsset",
                         contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.matchParentSize(),
                         contentScale = ContentScale.Crop,
                         filterQuality = FilterQuality.None
                     )
@@ -3616,7 +3674,7 @@ fun TamaPopupDialog(
                                     if (compact) {
                                         Modifier.heightIn(max = compactBodyMaxHeight)
                                     } else {
-                                        Modifier.weight(1f)
+                                        Modifier.weight(1f, fill = false)
                                     }
                                 ),
                             shape = RoundedCornerShape(18.dp),
@@ -3653,6 +3711,7 @@ fun TamaPopupDialog(
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
+                                            .heightIn(min = 48.dp)
                                             .padding(horizontal = 6.dp, vertical = 4.dp),
                                         horizontalArrangement = Arrangement.End,
                                         verticalAlignment = Alignment.CenterVertically
@@ -4363,13 +4422,15 @@ fun TamaInventoryDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
+    val configuration = LocalConfiguration.current
     val currentRoom = remember(pet.homeRoomId) {
         TamaRoomCatalog.roomById(pet.homeRoomId) ?: TamaRoomCatalog.roomById(TamaRoomCatalog.PRINCIPAL_ROOM_ID)
     }
     val ownedRooms = remember(pet.inventory, pet.homeRoomId) {
         pet.inventory.filter { TamaRoomCatalog.isRoomId(it.id) }
     }
-    val otherItems = remember(pet.inventory, context.resources.configuration.locales[0]) {
+    val otherItems = remember(pet.inventory, configuration.locales[0]) {
         pet.inventory.filterNot { TamaRoomCatalog.isRoomId(it.id) || TamaDecorCatalog.isDecorId(it.id) }
             .groupBy { it.id }
             .map { (_, items) ->
@@ -5063,6 +5124,7 @@ fun TamaPetDisplay(
     onMarketBoard: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val speciesName = remember(pet.species, pet.genetics.bodyStyle) {
         speciesDisplayName(context, pet.species, pet.genetics.bodyStyle)
     }
@@ -5143,16 +5205,22 @@ fun TamaPetDisplay(
                 val displaySecRem = durationSec % 60
 
                 val timeText = if (displayHours > 0) {
-                    String.format("%d:%02d:%02d", displayHours, displayMin, displaySecRem)
+                    String.format(
+                        java.util.Locale.getDefault(),
+                        "%d:%02d:%02d",
+                        displayHours,
+                        displayMin,
+                        displaySecRem
+                    )
                 } else {
-                    String.format("%02d:%02d", displayMin, displaySecRem)
+                    String.format(java.util.Locale.getDefault(), "%02d:%02d", displayMin, displaySecRem)
                 }
 
                 val activePomodoro = activeStudySession
                     ?.takeIf { it.mode == TamaStudyMode.POMODORO.name && it.status == TamaStudyStatus.ACTIVE.name }
                 Text(
                     if (activePomodoro != null) {
-                        context.getString(
+                        resources.getString(
                             R.string.tama_study_round_status,
                             activePomodoro.currentRound,
                             activePomodoro.roundsPlanned.coerceAtLeast(1)
@@ -5170,7 +5238,7 @@ fun TamaPetDisplay(
 
                 val hoursPassed = durationMs / (1000 * 60 * 60f)
                 val gainText = if (activePomodoro != null) {
-                    context.getString(
+                    resources.getString(
                         R.string.tama_study_timer_remaining,
                         TamaStudySessionSupport.localizedPhase(context, activePomodoro.currentPhase),
                         formatStudyDurationForUi(context, TamaStudySessionSupport.currentPhaseRemainingMs(activePomodoro, currentTime))
@@ -5178,25 +5246,25 @@ fun TamaPetDisplay(
                 } else when (pet.currentActivity) {
                     com.example.llamadroid.tama.data.ActivityType.WORKING -> {
                         val hourlyPay = TamaWorkCatalog.jobById(pet.currentWorkJobId)?.hourlyPay ?: 4
-                        context.getString(
+                        resources.getString(
                             R.string.tama_activity_gain_money,
                             (hoursPassed * hourlyPay).toInt()
                         )
                     }
-                    com.example.llamadroid.tama.data.ActivityType.STUDYING -> context.getString(
+                    com.example.llamadroid.tama.data.ActivityType.STUDYING -> resources.getString(
                         R.string.tama_activity_gain_education,
                         (hoursPassed * 5).toInt()
                     )
                     com.example.llamadroid.tama.data.ActivityType.TRAINING -> {
                         val hourlyPay = TamaTrainingCatalog.tierById(pet.currentWorkJobId)?.hourlyPay ?: 8
-                        context.getString(
+                        resources.getString(
                             R.string.tama_activity_gain_training,
                             (hoursPassed * TAMA_TRAINING_EXERCISE_PER_HOUR).toInt(),
                             (hoursPassed * TAMA_TRAINING_HAPPINESS_PER_HOUR).toInt(),
                             (hoursPassed * hourlyPay).toInt()
                         )
                     }
-                    com.example.llamadroid.tama.data.ActivityType.RELAXING -> context.getString(
+                    com.example.llamadroid.tama.data.ActivityType.RELAXING -> resources.getString(
                         R.string.tama_activity_gain_happiness,
                         (hoursPassed * 40).toInt(),
                         (hoursPassed * TAMA_RELAX_INTROSPECTION_PER_HOUR).toInt()
@@ -5574,42 +5642,32 @@ private fun SleepyFairyOverlay(
 
 @Composable
 fun TamaStatsBar(pet: TamaPet) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(TamaDark)
-            .padding(8.dp)
+    Row(
+        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).padding(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
-            StatIndicator(TAMA_HUNGER_EMOJI, pet.stats.hunger)
-            StatIndicator(TAMA_HAPPINESS_EMOJI, pet.stats.happiness)
-            StatIndicator(TAMA_HEALTH_EMOJI, pet.stats.health)
-            StatIndicator(TAMA_ENERGY_EMOJI, pet.stats.energy)
-            StatIndicator(TAMA_HYGIENE_EMOJI, pet.stats.hygiene)
-        }
+        StatIndicator(TAMA_HUNGER_EMOJI, stringResource(R.string.tama_status_hunger), pet.stats.hunger, Modifier.weight(1f))
+        StatIndicator(TAMA_HAPPINESS_EMOJI, stringResource(R.string.tama_status_happy), pet.stats.happiness, Modifier.weight(1f))
+        StatIndicator(TAMA_HEALTH_EMOJI, stringResource(R.string.tama_status_health), pet.stats.health, Modifier.weight(1f))
+        StatIndicator(TAMA_ENERGY_EMOJI, stringResource(R.string.tama_status_energy), pet.stats.energy, Modifier.weight(1f))
+        StatIndicator(TAMA_HYGIENE_EMOJI, stringResource(R.string.tama_status_hygiene), pet.stats.hygiene, Modifier.weight(1f))
     }
 }
 
 @Composable
-fun StatIndicator(icon: String, value: Float) {
-    val intValue = value.toInt()
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        TamaEmojiIcon(icon, fontSize = 18.sp)
-        // ASCII-style bar
-        val filled = (intValue / 20).coerceIn(0, 5)
-        val bar = "▓".repeat(filled) + "░".repeat(5 - filled)
-        Text(
-            text = bar,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 10.sp,
-            color = when {
-                intValue < 20 -> Color.Red
-                intValue < 50 -> Color.Yellow
-                else -> TamaLight
-            }
+private fun StatIndicator(icon: String, label: String, value: Float, modifier: Modifier = Modifier) {
+    val description = stringResource(R.string.soft_studio_tama_stat_value, label, value.toInt())
+    Column(
+        modifier = modifier.heightIn(min = 48.dp).clearAndSetSemantics { contentDescription = description },
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        TamaEmojiIcon(icon, modifier = Modifier.size(28.dp), fontSize = 18.sp)
+        LinearProgressIndicator(
+            progress = { (value / 100f).coerceIn(0f, 1f) },
+            modifier = Modifier.fillMaxWidth().height(6.dp),
+            color = if (value < 20f) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary,
+            trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
         )
     }
 }
@@ -5651,6 +5709,7 @@ fun TamaControls(
     onFreezeToggle: () -> Unit = {},
     onMenu: () -> Unit
 ) {
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val isFrozen = pet?.cycleFrozen == true
     val canAct = pet != null && pet.stage != GrowthStage.EGG && !isSleeping && !isBusy && !isFrozen
     val isDoingActivity = pet?.currentActivity != ActivityType.NONE
@@ -5672,7 +5731,7 @@ fun TamaControls(
             if (pet != null) {
                 add(TamaControlConfig(icon = "❄", label = stringResource(R.string.tama_btn_freeze), enabled = !isBusy, onClick = onFreezeToggle))
             }
-            add(TamaControlConfig(icon = TAMA_FEED_EMOJI, label = stringResource(R.string.tama_btn_feed), enabled = canAct, onClick = onFeed))
+            add(TamaControlConfig(icon = TAMA_FEED_EMOJI, label = stringResource(R.string.tama_btn_feed), enabled = canAct, onClick = onFeed, targetId = "tama.care", eventId = "tama.care"))
             add(TamaControlConfig(icon = "🧽", label = stringResource(R.string.tama_btn_clean), enabled = canAct, onClick = onClean))
             add(TamaControlConfig(icon = "🎾", label = stringResource(R.string.tama_btn_play), enabled = canAct, onClick = onPlay))
             add(TamaControlConfig(icon = TAMA_CHAT_EMOJI, label = stringResource(R.string.tama_btn_chat), enabled = canAct, onClick = onChat))
@@ -5735,63 +5794,90 @@ fun TamaControls(
         add(TamaControlConfig(icon = TAMA_MENU_EMOJI, label = stringResource(R.string.tama_btn_menu), enabled = true, onClick = onMenu))
     }
 
-    LazyRow(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        contentPadding = PaddingValues(end = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        items(actions.size) { index ->
-            val action = actions[index]
-            TamaButton(
-                icon = action.icon,
-                assetPath = action.assetPath,
-                label = action.label,
-                enabled = action.enabled,
-                onClick = action.onClick
-            )
+    Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
+        Text(
+            text = stringResource(R.string.soft_studio_tama_actions_hint),
+            modifier = Modifier.padding(start = 12.dp, top = 4.dp, end = 12.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        LazyRow(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            contentPadding = PaddingValues(end = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(actions.size) { index ->
+                val action = actions[index]
+                TamaButton(
+                    icon = action.icon,
+                    assetPath = action.assetPath,
+                    label = action.label,
+                    enabled = action.enabled,
+                    onClick = {
+                        action.onClick()
+                        action.eventId?.let { eventId -> walkthroughTargets?.recordEvent(eventId) }
+                    },
+                    modifier = action.targetId?.let { Modifier.walkthroughTarget(it) } ?: Modifier
+                )
+            }
         }
     }
 }
 
 @Composable
 fun TamaButton(
-    icon: String? = null,
-    assetPath: String? = null,
     label: String,
     enabled: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    icon: String? = null,
+    assetPath: String? = null
 ) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
-            .width(108.dp)
-            .height(106.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(if (enabled) TamaDark else TamaAccent)
+    Surface(
+        modifier = modifier
+            .width(if (LocalDensity.current.fontScale >= 1.3f) 144.dp else 100.dp)
+            .heightIn(min = 76.dp)
             .clickable(enabled = enabled) { onClick() }
             .padding(horizontal = 8.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.Center
-    ) {
-        if (assetPath != null) {
-            TamaActionAsset(assetPath = assetPath, size = 30.dp)
+        shape = RoundedCornerShape(12.dp),
+        color = if (enabled) {
+            MaterialTheme.colorScheme.primaryContainer
         } else {
-            TamaEmojiIcon(icon.orEmpty(), fontSize = 22.sp)
+            MaterialTheme.colorScheme.surfaceVariant
+        },
+        contentColor = if (enabled) {
+            MaterialTheme.colorScheme.onPrimaryContainer
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        tonalElevation = 0.dp,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f))
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            if (assetPath != null) {
+                TamaActionAsset(assetPath = assetPath, size = 30.dp)
+            } else {
+                TamaEmojiIcon(icon.orEmpty(), fontSize = 22.sp)
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                label,
+                color = LocalContentColor.current,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                lineHeight = 13.sp,
+                textAlign = TextAlign.Center,
+                softWrap = true,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(
-            label,
-            color = TamaLight,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 11.sp,
-            lineHeight = 13.sp,
-            textAlign = TextAlign.Center,
-            maxLines = 2,
-            softWrap = true,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth()
-        )
     }
 }
 
@@ -5800,7 +5886,9 @@ private data class TamaControlConfig(
     val assetPath: String? = null,
     val label: String,
     val enabled: Boolean,
-    val onClick: () -> Unit
+    val onClick: () -> Unit,
+    val targetId: String? = null,
+    val eventId: String? = null
 )
 
 @Composable
@@ -6505,13 +6593,13 @@ fun TamaEventLog(events: List<TamaEvent>) {
         modifier = Modifier
             .fillMaxWidth()
             .height(100.dp)
-            .background(TamaDark.copy(alpha = 0.8f))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
             .padding(8.dp)
             .verticalScroll(rememberScrollState())
     ) {
         Text(
             stringResource(R.string.tama_recent_events),
-            color = TamaLight,
+            color = MaterialTheme.colorScheme.onSurface,
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Bold,
             fontSize = 12.sp
@@ -6520,7 +6608,7 @@ fun TamaEventLog(events: List<TamaEvent>) {
         events.forEach { event ->
             Text(
                 text = event.toLogString(),
-                color = TamaLight.copy(alpha = 0.8f),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 10.sp
             )
@@ -6529,7 +6617,7 @@ fun TamaEventLog(events: List<TamaEvent>) {
         if (events.isEmpty()) {
             Text(
                 stringResource(R.string.tama_no_events_yet),
-                color = TamaAccent,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 10.sp
             )
@@ -6642,6 +6730,7 @@ fun TamaMenuDialog(
     onStatus: () -> Unit,
     onSettings: () -> Unit,
     onGallery: () -> Unit,
+    onStore: () -> Unit,
     onExport: () -> Unit,
     onImport: () -> Unit,
     onReset: () -> Unit
@@ -6660,6 +6749,9 @@ fun TamaMenuDialog(
                 }
                 TextButton(onClick = onGallery, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.tama_menu_gallery))
+                }
+                TextButton(onClick = onStore, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.tama_btn_store))
                 }
                 TextButton(onClick = onExport, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.tama_menu_export))

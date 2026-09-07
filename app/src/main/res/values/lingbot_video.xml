@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sd_bundle_lingbot_phone_title">LingBot · Phone video starter</string>
+    <string name="sd_bundle_lingbot_phone_desc">Dense 1.3B transformer, Qwen3-VL 4B Q4 text encoder, and taew2_1 tiny autoencoder. Includes the components for the LingBot phone example in Video Generation. The tiny decoder trades image detail for lower memory use.</string>
+    <string name="video_lingbot_example_prompt">A small orange cat turns its head slowly beside a sunny window. Fixed camera, soft daylight, gentle natural motion.</string>
+    <string name="video_lingbot_example_negative">Blurry, flickering, distorted anatomy, sudden camera movement, text, watermark.</string>
+</resources>

@@ -3,6 +3,7 @@ package com.example.llamadroid.util
 import android.content.Context
 import android.os.PowerManager
 import com.example.llamadroid.data.model.DownloadProgressHolder
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
@@ -36,7 +37,9 @@ object Downloader {
         destFile: File,
         context: Context? = null,
         bearerToken: String? = null,
-        downloadId: String = destFile.absolutePath
+        downloadId: String = destFile.absolutePath,
+        /** Keep the resumable staging file when a stage-only artifact is cancelled. */
+        preservePartialOnCancel: Boolean = false
     ): Flow<Float> = flow {
         // Acquire WakeLock to prevent CPU sleep during download
         val wakeLock = context?.let {
@@ -47,7 +50,7 @@ object Downloader {
         val partFile = File(destFile.parentFile, "${destFile.name}.part")
         
         try {
-            wakeLock?.acquire()
+            wakeLock?.acquire(DOWNLOAD_WAKE_LOCK_TIMEOUT_MS)
             DebugLog.log("Downloader: Starting download of $url")
 
             var attempt = 0
@@ -96,9 +99,11 @@ object Downloader {
                             coroutineContext.ensureActive()
                             if (call.isCanceled()) {
                                 DebugLog.log("Downloader: Download cancelled for ${destFile.name}")
-                                partFile.delete()
-                                destFile.delete()
-                                throw Exception("Download cancelled")
+                                if (!preservePartialOnCancel) {
+                                    partFile.delete()
+                                    destFile.delete()
+                                }
+                                throw CancellationException("Download cancelled")
                             }
 
                             outputStream.write(buffer, 0, bytesRead)
@@ -127,6 +132,12 @@ object Downloader {
                     completed = true
                     DebugLog.log("Downloader: Completed download of ${destFile.name}")
                 } catch (e: InterruptedIOException) {
+                    if (call.isCanceled()) {
+                        // OkHttp reports cancellation as an interrupted I/O
+                        // operation while a response is being read. It is a
+                        // terminal control path, never a transient retry.
+                        throw CancellationException("Download cancelled")
+                    }
                     lastError = e
                     attempt += 1
                     DebugLog.log("Downloader: idle/read timeout for ${destFile.name}; retry $attempt/$MAX_DOWNLOAD_ATTEMPTS")
@@ -166,7 +177,7 @@ object Downloader {
         }
         
         try {
-            wakeLock?.acquire()
+            wakeLock?.acquire(DOWNLOAD_WAKE_LOCK_TIMEOUT_MS)
             DebugLog.log("Downloader: Starting SAF download of $url")
             
             val request = Request.Builder().url(url).build()
@@ -248,4 +259,5 @@ object Downloader {
     }
 
     private const val MAX_DOWNLOAD_ATTEMPTS = 4
+    private const val DOWNLOAD_WAKE_LOCK_TIMEOUT_MS = 24 * 60 * 60 * 1_000L
 }

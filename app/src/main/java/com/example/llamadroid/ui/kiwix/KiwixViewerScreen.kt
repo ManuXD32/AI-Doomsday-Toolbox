@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.kiwix
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.annotation.SuppressLint
 import android.content.ComponentName
 import android.content.Context
@@ -32,6 +34,9 @@ import com.example.llamadroid.data.db.ZimEntity
 import com.example.llamadroid.service.KiwixService
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
+import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 
 /**
  * WebView-based viewer for Kiwix content served by kiwix-serve.
@@ -42,6 +47,7 @@ import com.example.llamadroid.R
 @Composable
 fun KiwixViewerScreen(navController: NavController, zimPath: String? = null) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val db = remember { AppDatabase.getDatabase(context) }
     
@@ -144,34 +150,26 @@ fun KiwixViewerScreen(navController: NavController, zimPath: String? = null) {
         }
     }
     
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(currentTitle, maxLines = 1) },
-                navigationIcon = {
-                    IconButton(onClick = { 
-                        // Stop server before leaving
-                        kiwixService?.stopServer()
-                        navController.popBackStack() 
-                    }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.kiwix_back))
+    AppScreenScaffold(
+        title = currentTitle,
+        onBack = {
+            // Stop server before leaving
+            kiwixService?.stopServer()
+            navController.popBackStack()
+        },
+        actions = {
+            // Stop server and exit button
+            if (isRunning) {
+                IconButton(onClick = {
+                    kiwixService?.stopServer()
+                    // Navigate to Dashboard Home
+                    navController.navigate("dashboard") {
+                        popUpTo(navController.graph.startDestinationId) { inclusive = false }
                     }
-                },
-                actions = {
-                    // Stop server and exit button
-                    if (isRunning) {
-                        IconButton(onClick = { 
-                            kiwixService?.stopServer()
-                            // Navigate to Dashboard Home
-                            navController.navigate("dashboard") {
-                                popUpTo(navController.graph.startDestinationId) { inclusive = false }
-                            }
-                        }) {
-                            Icon(Icons.Default.Close, stringResource(R.string.agent_action_stop))
-                        }
-                    }
+                }) {
+                    Icon(Icons.Default.Close, stringResource(R.string.agent_action_stop))
                 }
-            )
+            }
         },
         bottomBar = {
             // Navigation controls
@@ -182,35 +180,47 @@ fun KiwixViewerScreen(navController: NavController, zimPath: String? = null) {
                         label = { Text(stringResource(R.string.kiwix_back)) },
                         selected = false,
                         enabled = canGoBack,
-                        onClick = { webView?.goBack() }
+                        onClick = {
+                            webView?.goBack()
+                            walkthroughTargets?.recordEvent("kiwix.reader")
+                        }
                     )
                     NavigationBarItem(
                         icon = { Icon(Icons.AutoMirrored.Filled.ArrowForward, stringResource(R.string.kiwix_forward)) },
                         label = { Text(stringResource(R.string.kiwix_forward)) },
                         selected = false,
                         enabled = canGoForward,
-                        onClick = { webView?.goForward() }
+                        onClick = {
+                            webView?.goForward()
+                            walkthroughTargets?.recordEvent("kiwix.reader")
+                        }
                     )
                     NavigationBarItem(
                         icon = { Icon(Icons.Default.Home, stringResource(R.string.kiwix_home_btn)) },
                         label = { Text(stringResource(R.string.kiwix_home_btn)) },
                         selected = false,
-                        onClick = { webView?.loadUrl(serverUrl!!) }
+                        onClick = {
+                            webView?.loadUrl(serverUrl!!)
+                            walkthroughTargets?.recordEvent("kiwix.reader")
+                        }
                     )
                     NavigationBarItem(
                         icon = { Icon(Icons.Default.Refresh, stringResource(R.string.kiwix_reload_btn)) },
                         label = { Text(stringResource(R.string.kiwix_reload_btn)) },
                         selected = false,
-                        onClick = { webView?.reload() }
+                        onClick = {
+                            webView?.reload()
+                            walkthroughTargets?.recordEvent("kiwix.reader")
+                        }
                     )
                 }
             }
         }
-    ) { padding ->
+    ) { _ ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
+                .walkthroughTarget("kiwix.reader")
         ) {
             when {
                 installedZims.isEmpty() -> {

@@ -31,6 +31,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.service.ModelShareService
@@ -43,11 +45,13 @@ import kotlinx.coroutines.withContext
 import com.example.llamadroid.util.FormatUtils
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
+import com.example.llamadroid.ui.components.AppPageBackground
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModelShareScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val db = remember { AppDatabase.getDatabase(context) }
@@ -148,8 +152,10 @@ fun ModelShareScreen(navController: NavController) {
     }
     
     Scaffold(
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                 title = { Text(stringResource(R.string.model_share_title)) },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
@@ -159,17 +165,17 @@ fun ModelShareScreen(navController: NavController) {
             )
         }
     ) { padding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
+        AppPageBackground(modifier = Modifier.padding(padding)) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
             // Server Control Card
             item {
                 Card(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().walkthroughTarget("models.share"),
                     colors = CardDefaults.cardColors(
                         containerColor = if (isRunning) 
                             MaterialTheme.colorScheme.primaryContainer
@@ -254,6 +260,7 @@ fun ModelShareScreen(navController: NavController) {
                         // Start/Stop Button
                         Button(
                             onClick = {
+                                walkthroughTargets?.recordEvent("models.share")
                                 if (isRunning) {
                                     service?.stopServer()
                                 } else {
@@ -281,10 +288,9 @@ fun ModelShareScreen(navController: NavController) {
             
             // Models Header
             item {
-                Row(
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Text(
                         text = stringResource(R.string.model_share_available_title),
@@ -347,7 +353,7 @@ fun ModelShareScreen(navController: NavController) {
                         modifier = Modifier.padding(16.dp)
                     ) {
                         Text(
-                            text = "💡 " + stringResource(R.string.model_share_how_to),
+                            text = stringResource(R.string.model_share_how_to),
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold
                         )
@@ -358,6 +364,7 @@ fun ModelShareScreen(navController: NavController) {
                         )
                     }
                 }
+            }
             }
         }
     }

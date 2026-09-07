@@ -1,5 +1,6 @@
 package com.example.llamadroid.service
 
+import android.annotation.SuppressLint
 import android.app.Application
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -191,6 +192,8 @@ internal object LlamaRuntimeStateProjection {
         if (pendingLogs.isNotEmpty()) scheduleLogFlush()
     }
 
+    // Projection lifetime is process-wide; beginRuntimeGeneration stores applicationContext only.
+    @SuppressLint("StaticFieldLeak")
     @Volatile
     private var runtimeContextForProjection: Context? = null
 

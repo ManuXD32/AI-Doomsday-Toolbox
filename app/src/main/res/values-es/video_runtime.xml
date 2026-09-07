@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="video_runtime_family_wan">Wan</string>
+    <string name="video_runtime_family_hunyuan_video">HunyuanVideo</string>
+    <string name="video_runtime_family_lingbot_video">LingBot Video</string>
+    <string name="video_runtime_family_ltx_video">LTX Video</string>
+    <string name="video_runtime_family_minimax_h3">MiniMax-H3</string>
+    <string name="video_runtime_family_svd">Stable Video Diffusion</string>
+    <string name="video_runtime_family_animatediff">AnimateDiff</string>
+
+    <string name="video_runtime_workflow_text_to_video">Texto a video</string>
+    <string name="video_runtime_workflow_image_to_video">Imagen a video</string>
+    <string name="video_runtime_workflow_first_last_frame">Primer y último fotograma</string>
+    <string name="video_runtime_workflow_video_to_video">Video a video</string>
+    <string name="video_runtime_workflow_reference_to_video">Referencia a video</string>
+    <string name="video_runtime_workflow_text_to_audio_video">Texto a audio y video</string>
+    <string name="video_runtime_workflow_image_to_audio_video">Imagen a audio y video</string>
+    <string name="video_runtime_workflow_first_last_to_audio_video">Primer y último fotograma a audio y video</string>
+    <string name="video_runtime_workflow_reference_to_audio_video">Referencia a audio y video</string>
+
+
+    <string name="video_runtime_component_diffusion_model">Modelo de difusión</string>
+    <string name="video_runtime_component_uncond_diffusion_model">Modelo de difusión sin condicionamiento</string>
+    <string name="video_runtime_component_ip_adapter">Modelo de IP-Adapter</string>
+    <string name="video_runtime_component_full_model">Modelo completo</string>
+    <string name="video_runtime_component_high_noise_diffusion_model">Modelo de difusión de alto ruido</string>
+    <string name="video_runtime_component_vae">VAE de video</string>
+    <string name="video_runtime_component_tae">Decodificador TAE de video</string>
+    <string name="video_runtime_component_t5xxl">Codificador T5-XXL</string>
+    <string name="video_runtime_component_llm">Codificador de texto LLM</string>
+    <string name="video_runtime_component_llm_vision">Torre de visión LLM</string>
+    <string name="video_runtime_component_audio_vae">VAE de audio</string>
+    <string name="video_runtime_component_embeddings_connectors">Conectores de embeddings</string>
+    <string name="video_runtime_component_motion_module">Módulo de movimiento</string>
+    <string name="video_runtime_component_clip_vision">Codificador de visión CLIP</string>
+    <string name="video_runtime_component_control_net">ControlNet</string>
+    <string name="video_runtime_component_hires_upscaler">Reescalador de alta resolución</string>
+
+    <string name="video_runtime_output_mp4">MP4</string>
+    <string name="video_runtime_output_webm">WebM</string>
+    <string name="video_runtime_output_avi">AVI</string>
+    <string name="video_runtime_audio_aac">AAC</string>
+    <string name="video_runtime_audio_opus">Opus</string>
+    <string name="video_runtime_audio_copy">Copiar audio de origen</string>
+    <string name="video_runtime_audio_none">Sin audio</string>
+
+    <string name="video_runtime_conversion_recovered">La conversión solicitada falló, así que se conservó el video nativo y sigue disponible para reproducirlo y exportarlo.</string>
+    <string name="video_runtime_status_converting">Convirtiendo el video a %1$s…</string>
+    <string name="video_runtime_native_output_missing">No se encontró la salida de video nativa.</string>
+    <string name="video_runtime_missing_component">Falta el componente de video: %1$s</string>
+    <string name="video_runtime_missing_input">Falta la entrada de video: %1$s</string>
+    <string name="video_runtime_invalid_workflow">Este perfil de video no admite el flujo seleccionado.</string>
+    <string name="video_runtime_native_workflow_unsupported">El backend nativo reconoce esta familia de video, pero todavía no implementa su ruta de condicionamiento de imágenes. Elige otra familia de video.</string>
+    <string name="video_runtime_unsupported_mode">El binario nativo instalado no admite el modo de video: %1$s</string>
+    <string name="video_runtime_invalid_lora">La lista de LoRA de video seleccionada no es válida: %1$s</string>
+    <string name="video_runtime_input_image_required">Este flujo de video requiere una imagen de entrada.</string>
+    <string name="video_runtime_reference_audio_mismatch">Cada pista de audio de referencia necesita un video de referencia correspondiente.</string>
+    <string name="video_runtime_minimax_reference_keyframe_conflict">Las referencias de MiniMax (imágenes, carpetas de fotogramas o audio) no se pueden combinar con el primer o último fotograma. Borra las referencias o los fotogramas e inténtalo de nuevo.</string>
+    <string name="video_runtime_minimax_control_video_unsupported">El backend de MiniMax incluido no implementa fotogramas de video de control. Borra la entrada de video de control antes de iniciar esta familia.</string>
+    <string name="video_runtime_custom_profile">Perfil de video personalizado</string>
+</resources>
