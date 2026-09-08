@@ -13,6 +13,7 @@ import com.example.llamadroid.data.db.ModelBundleEntity
 import com.example.llamadroid.data.db.PendingModelArtifactEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.LiteRtModelEntity
+import com.example.llamadroid.data.model.StableAudioModelSupport
 import com.example.llamadroid.data.model.library.HfFolderListing
 import com.example.llamadroid.data.model.library.ModelFamily
 import com.example.llamadroid.data.model.library.ModelArtifactReference
@@ -21,7 +22,6 @@ import com.example.llamadroid.data.model.library.ModelLibraryException
 import com.example.llamadroid.data.model.library.ModelSourceDraft
 import com.example.llamadroid.data.model.library.ModelSourceRepository
 import com.example.llamadroid.data.model.library.ModelSourceUrlValidator
-import com.example.llamadroid.data.model.library.HuggingFaceHttpException
 import com.example.llamadroid.data.model.library.InstalledModelAsset
 import com.example.llamadroid.data.model.library.ModelLibraryQueueScope
 import kotlinx.coroutines.flow.Flow
@@ -269,7 +269,16 @@ class ModelLibraryViewModel(
         runPersistentOperation(operationKey = "delete-bundle:$bundleId",
             success = ModelLibraryMessage(ModelLibraryErrorCode.BUNDLE_INVALID, success = true),
             allowWhileBusy = true) {
-            repository.deleteBundle(appContext, bundleId)
+            val result = repository.deleteBundleWithResult(appContext, bundleId)
+            if (result.status != com.example.llamadroid.data.model.library.ModelDeletionStatus.COMPLETED) {
+                throw ModelLibraryException(
+                    result.errorCode ?: ModelLibraryErrorCode.DELETION_RECOVERABLE,
+                    result.errorMessage ?: appContext.getString(
+                        com.example.llamadroid.R.string.model_library_error_deletion_failed
+                    )
+                )
+            }
+            result
         }
     }
 
@@ -349,6 +358,10 @@ class ModelLibraryViewModel(
         ModelType.ONNX_IMAGE_UPSCALER,
         ModelType.ONNX_TTS -> ModelFamily.ONNX
         ModelType.WHISPER -> ModelFamily.WHISPER
+        ModelType.LLAMA_TTS,
+        ModelType.LLAMA_TTS_COMPANION -> ModelFamily.AUDIO
+        ModelType.LITERT_AUDIO_DIT,
+        ModelType.LITERT_AUDIO_COMPONENT -> ModelFamily.LITERT
         else -> ModelFamily.LLM
     }
 
@@ -382,6 +395,12 @@ class ModelLibraryViewModel(
         ModelType.ONNX_IMAGE_UPSCALER -> "upscaler"
         ModelType.ONNX_IMAGE_GEN -> "image_generation"
         ModelType.WHISPER -> "whisper"
+        ModelType.LLAMA_TTS -> "tts_main"
+        ModelType.LLAMA_TTS_COMPANION -> "tts_mmproj"
+        ModelType.LITERT_AUDIO_DIT,
+        ModelType.LITERT_AUDIO_COMPONENT -> model.audioComponentRole
+            ?.takeIf { StableAudioModelSupport.isComponentRole(it) }
+            ?: StableAudioModelSupport.defaultRoleForType(model.type)
         else -> null
     }
 
@@ -483,13 +502,8 @@ class ModelLibraryViewModel(
         if (job == null) endOperation()
     }
 
-    private fun errorCode(error: Throwable): ModelLibraryErrorCode = when (error) {
-        is ModelLibraryException -> error.code
-        is HuggingFaceHttpException -> error.errorCode
-        is java.net.SocketTimeoutException -> ModelLibraryErrorCode.REQUEST_TIMEOUT
-        is java.io.IOException -> ModelLibraryErrorCode.NETWORK_FAILURE
-        else -> ModelLibraryErrorCode.INVALID_URL
-    }
+    private fun errorCode(error: Throwable): ModelLibraryErrorCode =
+        com.example.llamadroid.data.model.library.modelLibraryErrorCode(error)
 }
 
 /** Canonical in-process key used to collapse duplicate custom-download taps. */

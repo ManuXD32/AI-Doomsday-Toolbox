@@ -36,6 +36,8 @@ private fun ModelEntity.storageGroups(): Set<String> = buildSet {
         "LORA" -> "llm:lora"
         "EMBEDDING" -> "llm:embedding"
         "VISION_PROJECTOR", "MMPROJ" -> "llm:projector"
+        "LLAMA_TTS", "LLAMA_TTS_COMPANION" -> "audio:tts"
+        "LITERT_AUDIO_DIT", "LITERT_AUDIO_COMPONENT" -> "audio:stable"
         else -> "type:${type.name}"
     })
     // A shared encoder can be managed from both families; total bytes are still deduplicated.
@@ -46,6 +48,8 @@ fun ModelEntity.storageFamilyKey(): String = when {
     type.name.startsWith("SD_") || !sdCompatProfiles.isNullOrBlank() -> "sd"
     type.name.startsWith("ONNX_") -> "onnx"
     type.name == "WHISPER" -> "whisper"
+    type.name == "LLAMA_TTS" || type.name == "LLAMA_TTS_COMPANION" -> "audio"
+    type.name == "LITERT_AUDIO_DIT" || type.name == "LITERT_AUDIO_COMPONENT" -> "audio"
     type.name == "QUADTRIX" -> "quadtrix"
     else -> "llm"
 }

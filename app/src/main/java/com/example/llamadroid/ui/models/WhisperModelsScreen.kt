@@ -95,6 +95,17 @@ fun WhisperModelsScreen(navController: NavController) {
     // Models directory
     val modelsDir = remember { repository.getModelDir(ModelType.WHISPER).apply { mkdirs() } }
 
+    fun deleteWhisperModel(model: ModelEntity) {
+        scope.launch {
+            val result = runCatching { repository.deleteModelWithResult(model) }
+            if (result.getOrNull()?.status != com.example.llamadroid.data.model.library.ModelDeletionStatus.COMPLETED) {
+                errorMessage = resources.getString(R.string.models_delete_result_retry)
+            } else {
+                errorMessage = null
+            }
+        }
+    }
+
     val exportPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { treeUri ->
@@ -452,9 +463,7 @@ fun WhisperModelsScreen(navController: NavController) {
                 ImportedWhisperModelsSection(
                     models = importedExtraModels,
                     onDelete = { model ->
-                        scope.launch {
-                            repository.deleteModel(model)
-                        }
+                        deleteWhisperModel(model)
                     },
                     onSource = { sourceAsset = installedAssetForModel(it) }
                 )
@@ -476,11 +485,7 @@ fun WhisperModelsScreen(navController: NavController) {
                 onDownload = { model -> startModelDownload(model) },
                 onExport = ::exportModel,
                 onSource = { sourceAsset = installedAssetForModel(it) },
-                onDelete = { model ->
-                    scope.launch {
-                        repository.deleteModel(model)
-                    }
-                }
+                onDelete = { model -> deleteWhisperModel(model) }
             )
             
             WhisperModelCategory(
@@ -491,7 +496,7 @@ fun WhisperModelsScreen(navController: NavController) {
                 onDownload = { model -> startModelDownload(model) },
                 onExport = ::exportModel,
                 onSource = { sourceAsset = installedAssetForModel(it) },
-                onDelete = { model -> scope.launch { repository.deleteModel(model) } }
+                onDelete = { model -> deleteWhisperModel(model) }
             )
             
             WhisperModelCategory(
@@ -502,7 +507,7 @@ fun WhisperModelsScreen(navController: NavController) {
                 onDownload = { model -> startModelDownload(model) },
                 onExport = ::exportModel,
                 onSource = { sourceAsset = installedAssetForModel(it) },
-                onDelete = { model -> scope.launch { repository.deleteModel(model) } }
+                onDelete = { model -> deleteWhisperModel(model) }
             )
             
             WhisperModelCategory(
@@ -513,7 +518,7 @@ fun WhisperModelsScreen(navController: NavController) {
                 onDownload = { model -> startModelDownload(model) },
                 onExport = ::exportModel,
                 onSource = { sourceAsset = installedAssetForModel(it) },
-                onDelete = { model -> scope.launch { repository.deleteModel(model) } }
+                onDelete = { model -> deleteWhisperModel(model) }
             )
             
             WhisperModelCategory(
@@ -524,7 +529,7 @@ fun WhisperModelsScreen(navController: NavController) {
                 onDownload = { model -> startModelDownload(model) },
                 onExport = ::exportModel,
                 onSource = { sourceAsset = installedAssetForModel(it) },
-                onDelete = { model -> scope.launch { repository.deleteModel(model) } }
+                onDelete = { model -> deleteWhisperModel(model) }
             )
             }
         }

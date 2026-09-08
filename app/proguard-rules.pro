@@ -195,6 +195,16 @@
 -keepclassmembers class * {
     *** Companion;
 }
+
+# Stable Audio 3 is entered through JNI from the isolated worker process.
+-keep class com.example.llamadroid.audio.music.StableAudio3Native { *; }
+-keep class com.example.llamadroid.audio.music.StableAudio3Native$ProgressSink { *; }
+-keep class com.example.llamadroid.audio.music.StableAudio3WorkerService { *; }
 -keepclasseswithmembers class * {
     kotlinx.serialization.KSerializer serializer(...);
 }
+
+# Retrofit 2.9 predates these R8 full-mode rules. Suspend response reflection
+# needs generic signatures on both Continuation and Response (upstream retrofit2.pro).
+-keep,allowoptimization,allowshrinking,allowobfuscation class kotlin.coroutines.Continuation
+-keep,allowoptimization,allowshrinking,allowobfuscation class retrofit2.Response

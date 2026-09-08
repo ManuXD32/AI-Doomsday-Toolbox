@@ -87,6 +87,7 @@
     <string name="model_library_error_auth_required">This source requires the saved Hugging Face token and model license access.</string>
     <string name="model_library_error_auth_rejected">The source rejected the saved Hugging Face token.</string>
     <string name="model_library_error_http">The source returned an HTTP error.</string>
+    <string name="model_library_error_rate_limited">The service is rate limiting requests. Retry in a moment.</string>
     <string name="model_library_error_network">The source could not be reached. Check the connection and try again.</string>
     <string name="model_library_error_timeout">The source request timed out.</string>
     <string name="model_library_error_source_missing">The saved source no longer exists.</string>
@@ -100,6 +101,9 @@
     <string name="model_library_error_download">A bundle file could not be downloaded.</string>
     <string name="model_library_error_download_timeout">The bundle download timed out.</string>
     <string name="model_library_error_grouped_rename">Multipart and folder model groups cannot be renamed as one file yet. Edit the group definition or remove and download it again.</string>
+    <string name="model_library_error_deletion_blocked">This item is still used by another model or provenance record.</string>
+    <string name="model_library_error_deletion_recoverable">Deletion was interrupted. The item remains available and can be retried.</string>
+    <string name="model_library_error_deletion_failed">Deletion could not be completed. Review the operation and retry.</string>
     <string name="model_library_custom_download_heading">Custom download</string>
     <string name="model_library_custom_download_help">Paste a direct HTTPS or Hugging Face file link. The file is validated and queued through the persistent model library.</string>
     <string name="model_library_custom_url">Download URL</string>
@@ -164,4 +168,11 @@
     <string name="model_library_optional_details">Optional details</string>
     <string name="model_library_component_auto">Automatic detection</string>
     <string name="model_library_component_saved">Saved component: %1$s</string>
+    <string name="model_library_role_stable_audio_dit">Stable Audio DiT</string>
+    <string name="model_library_role_stable_audio_text_encoder">Stable Audio text encoder</string>
+    <string name="model_library_role_stable_audio_codec_encoder">Stable Audio codec encoder</string>
+    <string name="model_library_role_stable_audio_codec_decoder">Stable Audio codec decoder</string>
+    <string name="model_library_role_stable_audio_tokenizer">Stable Audio tokenizer</string>
+    <string name="model_library_role_stable_audio_lora">Stable Audio LoRA</string>
+    <string name="model_library_role_stable_audio_component">Stable Audio component</string>
 </resources>

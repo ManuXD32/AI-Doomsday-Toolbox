@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="audio_runtime_title">Audio generation</string>
+    <string name="audio_runtime_status_preparing">Preparing audio</string>
+    <string name="audio_runtime_status_queued">Queued</string>
+    <string name="audio_runtime_status_generating">Generating speech</string>
+    <string name="audio_runtime_status_saving">Saving audio</string>
+    <string name="audio_runtime_status_complete">Audio ready</string>
+    <string name="audio_runtime_status_cancelling">Cancelling audio generation</string>
+    <string name="audio_runtime_status_cancelled">Audio generation cancelled</string>
+    <string name="audio_runtime_status_error">Audio generation failed</string>
+    <string name="audio_runtime_status_interrupted">Interrupted by runtime restart</string>
+    <string name="audio_runtime_complete">Audio generation complete</string>
+    <string name="audio_runtime_error_no_adapter">No compatible local audio adapter is installed</string>
+    <string name="audio_runtime_error_empty_text">Text or a source document is required</string>
+    <string name="audio_runtime_error_cancelled">Audio generation cancelled</string>
+    <string name="audio_runtime_error_generic">The local audio runtime could not complete this job</string>
+    <string name="audio_runtime_error_model_missing">The selected audio model is unavailable</string>
+    <string name="audio_runtime_error_companion_missing">The selected audio companion projector is unavailable</string>
+    <string name="audio_runtime_error_native_binary_missing">The local llama TTS runtime is not installed</string>
+    <string name="audio_runtime_error_reference_required">This model requires a valid speaker reference</string>
+    <string name="audio_runtime_error_voice_invalid">The selected voice reference could not be read</string>
+    <string name="audio_runtime_error_ffmpeg_missing">FFmpeg is required for this audio processing step</string>
+</resources>

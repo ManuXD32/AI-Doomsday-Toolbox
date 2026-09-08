@@ -79,6 +79,7 @@ object WalkthroughCatalog {
             titleRes = R.string.walkthrough_chapter_voice_title,
             descriptionRes = R.string.walkthrough_chapter_voice_description,
             lessons = listOf(
+                toolLesson("audio_workspace", R.string.walkthrough_lesson_audio_workspace_body, PREVIEW_CREATE),
                 toolLesson("onnx_tts", R.string.walkthrough_lesson_onnx_tts_body, PREVIEW_CREATE),
                 toolLesson("live_translator", R.string.walkthrough_lesson_live_translator_body, PREVIEW_TOOLS),
                 toolLesson("transcription", R.string.walkthrough_lesson_transcription_body, PREVIEW_CREATE)

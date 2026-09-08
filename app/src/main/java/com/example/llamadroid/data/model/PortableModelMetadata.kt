@@ -1,12 +1,17 @@
 package com.example.llamadroid.data.model
 
 import com.example.llamadroid.data.db.ModelEntity
+import com.example.llamadroid.data.db.isStableAudioComponentType
 import org.json.JSONObject
 
 /** Whitelist of portable runtime choices: weights, paths, credentials and private input never enter it. */
 object PortableModelMetadata {
     private val stringKeys = setOf("modelType", "sdCapabilities", "sdFamily", "sdVariant", "sdCompatProfiles",
-        "onnxCapabilities", "onnxAssetKind", "onnxPipelineFamily", "liteRtBackend", "liteRtProfile", "whisperVariant")
+        "onnxCapabilities", "onnxAssetKind", "onnxPipelineFamily", "liteRtBackend", "liteRtProfile", "whisperVariant",
+        "audioFamily", "audioComponentRole", "audioLanguage", "audioArtifactIdentity",
+        // Stable Audio uses appended model rows alongside the LiteRT runtime;
+        // its bundle items still need portable, role-specific metadata.
+        "stableAudioFamily", "stableAudioRole", "stableAudioComponentRole", "stableAudioVersion")
     private val booleanKeys = setOf("isVision", "supportsCpu", "supportsGpu", "supportsNpu",
         "supportsVision", "supportsAudio", "supportsEmbedding")
 
@@ -20,6 +25,44 @@ object PortableModelMetadata {
         put("onnxCapabilities", model.onnxCapabilities)
         put("onnxAssetKind", model.onnxAssetKind)
         put("onnxPipelineFamily", model.onnxPipelineFamily)
+        (AudioModelSupport.descriptorForModel(model)
+            ?: AudioModelSupport.descriptorForDownload(model.type, model.repoId, model.filename))?.let { descriptor ->
+            if (model.type.isStableAudioComponentType()) {
+                put("stableAudioFamily", descriptor.family)
+                put("stableAudioComponentRole", descriptor.role)
+            } else {
+                put("audioFamily", descriptor.family)
+                put("audioComponentRole", descriptor.role)
+                descriptor.language?.let { put("audioLanguage", it) }
+            }
+            model.audioArtifactIdentity?.let { put("audioArtifactIdentity", it) }
+        }
+    }.toString())
+
+    /** Adds explicit audio provenance for custom compatible imports. */
+    fun fromAudioModel(
+        model: ModelEntity,
+        family: String,
+        role: String,
+        language: String? = null,
+        artifactIdentity: String? = null
+    ): String = sanitize(JSONObject(fromModel(model)).apply {
+        put("audioFamily", family)
+        put("audioComponentRole", role)
+        language?.let { put("audioLanguage", it) }
+        artifactIdentity?.let { put("audioArtifactIdentity", it) }
+    }.toString())
+
+    /** Portable role contract for Stable Audio LiteRT bundle components. */
+    fun fromStableAudioComponent(
+        family: String,
+        role: String,
+        version: String? = null
+    ): String = sanitize(JSONObject().apply {
+        put("stableAudioFamily", family)
+        put("stableAudioRole", StableAudioModelSupport.canonicalRole(role) ?: role)
+        put("stableAudioComponentRole", StableAudioModelSupport.canonicalRole(role) ?: role)
+        version?.takeIf { it.isNotBlank() }?.let { put("stableAudioVersion", it) }
     }.toString())
 
     fun fromLiteRt(model: LiteRtModelEntity): String = sanitize(JSONObject().apply {

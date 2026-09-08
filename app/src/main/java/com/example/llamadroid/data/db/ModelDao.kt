@@ -55,6 +55,10 @@ interface ModelDao {
     @Query("UPDATE models SET isVision = :isVision WHERE filename = :filename")
     suspend fun updateVisionSupport(filename: String, isVision: Boolean)
 
+    /** Persist an explicitly selected native TTS companion edge. */
+    @Query("UPDATE models SET mmprojPath = :companionPath WHERE path = :modelPath")
+    suspend fun updateAudioCompanionPath(modelPath: String, companionPath: String): Int
+
     /** Persist only the local SD parameter residency profile. */
     @Query("UPDATE models SET sdParamsBackendSpec = :spec WHERE filename = :filename")
     suspend fun updateSdParamsBackendSpec(filename: String, spec: String)

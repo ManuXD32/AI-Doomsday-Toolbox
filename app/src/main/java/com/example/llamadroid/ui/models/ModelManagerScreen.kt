@@ -79,7 +79,11 @@ private fun editableModelTypeOptions(): List<ModelType> = listOf(
     ModelType.LLM_DRAFT,
     ModelType.LORA,
     ModelType.EMBEDDING,
-    ModelType.VISION_PROJECTOR
+    ModelType.VISION_PROJECTOR,
+    ModelType.LLAMA_TTS,
+    ModelType.LLAMA_TTS_COMPANION,
+    ModelType.LITERT_AUDIO_DIT,
+    ModelType.LITERT_AUDIO_COMPONENT
 )
 
 @Composable
@@ -91,6 +95,10 @@ private fun modelTypeLabel(type: ModelType): String = when (type) {
     ModelType.EMBEDDING -> stringResource(R.string.models_type_embedding)
     ModelType.VISION_PROJECTOR,
     ModelType.MMPROJ -> stringResource(R.string.models_type_vision_projector)
+    ModelType.LLAMA_TTS -> stringResource(R.string.model_promote_audio_tts)
+    ModelType.LLAMA_TTS_COMPANION -> stringResource(R.string.model_promote_audio_tts_companion)
+    ModelType.LITERT_AUDIO_DIT -> stringResource(R.string.model_library_role_stable_audio_dit)
+    ModelType.LITERT_AUDIO_COMPONENT -> stringResource(R.string.model_library_role_stable_audio_component)
     else -> type.name
 }
 
@@ -107,6 +115,15 @@ private val MODEL_MANAGER_CATEGORIES = listOf(
     ModelManagerCategory(
         R.string.models_category_vision_projectors,
         setOf(ModelType.VISION_PROJECTOR, ModelType.MMPROJ)
+    ),
+    ModelManagerCategory(
+        R.string.models_category_audio,
+        setOf(
+            ModelType.LLAMA_TTS,
+            ModelType.LLAMA_TTS_COMPANION,
+            ModelType.LITERT_AUDIO_DIT,
+            ModelType.LITERT_AUDIO_COMPONENT
+        )
     )
 )
 
@@ -138,7 +155,11 @@ fun ModelManagerScreen(navController: NavController) {
             ModelType.EMBEDDING,
             ModelType.VISION,
             ModelType.VISION_PROJECTOR,
-            ModelType.MMPROJ
+            ModelType.MMPROJ,
+            ModelType.LLAMA_TTS,
+            ModelType.LLAMA_TTS_COMPANION,
+            ModelType.LITERT_AUDIO_DIT,
+            ModelType.LITERT_AUDIO_COMPONENT
         ).map { it.name }
     }
     val managerDownloadTasks by db.downloadTaskDao()
@@ -249,6 +270,9 @@ fun InstalledTab(
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val models by viewModel.installedModels.collectAsStateWithLifecycle()
+    val deletionPreview by viewModel.deletionPreview.collectAsStateWithLifecycle()
+    val deletionResult by viewModel.deletionResult.collectAsStateWithLifecycle()
+    val interruptedDeletions by viewModel.interruptedDeletions.collectAsStateWithLifecycle()
     val storageSnapshot = rememberModelStorageInventory()
     val sourceRepository = rememberModelSourceRepository(context)
     val savedSources by sourceRepository.sources.collectAsStateWithLifecycle(initialValue = emptyList())
@@ -389,7 +413,11 @@ fun InstalledTab(
                         ModelType.LLM_DRAFT to stringResource(R.string.models_type_mtp),
                         ModelType.LORA to stringResource(R.string.models_type_lora),
                         ModelType.EMBEDDING to stringResource(R.string.models_type_embedding),
-                        ModelType.VISION_PROJECTOR to stringResource(R.string.models_type_vision_projector)
+                        ModelType.VISION_PROJECTOR to stringResource(R.string.models_type_vision_projector),
+                        ModelType.LLAMA_TTS to stringResource(R.string.model_promote_audio_tts),
+                        ModelType.LLAMA_TTS_COMPANION to stringResource(R.string.model_promote_audio_tts_companion),
+                        ModelType.LITERT_AUDIO_DIT to stringResource(R.string.model_library_role_stable_audio_dit),
+                        ModelType.LITERT_AUDIO_COMPONENT to stringResource(R.string.model_library_role_stable_audio_component)
                     )
                     
                     modelTypes.forEach { (type, label) ->
@@ -617,6 +645,36 @@ fun InstalledTab(
             contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            deletionResult?.let { result ->
+                item(key = "model-deletion-result-${result.operationId}") {
+                    val successful = result.status == com.example.llamadroid.data.model.library.ModelDeletionStatus.COMPLETED
+                    AppSectionCard {
+                        Text(
+                            text = if (successful) {
+                                stringResource(
+                                    R.string.models_delete_result_completed,
+                                    FormatUtils.formatFileSize(result.reclaimedBytes)
+                                )
+                            } else if (result.errorCode != null) {
+                                modelLibraryErrorText(result.errorCode)
+                            } else {
+                                stringResource(R.string.models_delete_result_retry)
+                            },
+                            color = if (successful) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
+            items(interruptedDeletions, key = { "deletion-recovery-${it.operationId}" }) { operation ->
+                AppSectionCard {
+                    Text(stringResource(R.string.models_delete_interrupted), style = MaterialTheme.typography.titleSmall)
+                    Text(operation.preview.targetLabel, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    TextButton(onClick = { viewModel.retryDeletion(operation.operationId) }) {
+                        Text(stringResource(R.string.action_retry))
+                    }
+                }
+            }
             item {
                 ModelStorageOverviewCard(storageSnapshot, "llm")
             }
@@ -690,7 +748,10 @@ fun InstalledTab(
                                 details = modelCardDetails(model),
                                 actionIcon = Icons.Default.Delete,
                                 actionColor = MaterialTheme.colorScheme.error,
-                                onAction = { pendingDeleteModel = model },
+                                onAction = {
+                                    pendingDeleteModel = model
+                                    viewModel.prepareDelete(model)
+                                },
                                 onExport = { exportModel(model) },
                                 onSource = { sourceAsset = installedAssetForModel(model) },
                                 onRename = {
@@ -888,15 +949,43 @@ fun InstalledTab(
 
         pendingDeleteModel?.let { model ->
             AlertDialog(
-                onDismissRequest = { pendingDeleteModel = null },
+                onDismissRequest = {
+                    pendingDeleteModel = null
+                    viewModel.clearDeleteState()
+                },
                 title = { Text(stringResource(R.string.models_delete)) },
-                text = { Text(stringResource(R.string.models_delete_confirm)) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(stringResource(R.string.models_delete_confirm))
+                        val preview = deletionPreview?.takeIf { it.targetKey == model.filename }
+                        if (preview == null) {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        } else {
+                            Text(
+                                stringResource(
+                                    R.string.models_delete_preview,
+                                    preview.files.size,
+                                    preview.protectedPaths.size
+                                ),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            if (preview.dependencies.isNotEmpty()) {
+                                Text(
+                                    stringResource(R.string.models_delete_preview_dependency),
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
+                },
                 confirmButton = {
                     TextButton(
                         onClick = {
                             pendingDeleteModel = null
                             viewModel.deleteModel(model)
                         },
+                        enabled = deletionPreview?.targetKey == model.filename && deletionPreview?.canDelete == true,
                         colors = ButtonDefaults.textButtonColors(
                             contentColor = MaterialTheme.colorScheme.error
                         )
@@ -905,7 +994,10 @@ fun InstalledTab(
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { pendingDeleteModel = null }) {
+                    TextButton(onClick = {
+                        pendingDeleteModel = null
+                        viewModel.clearDeleteState()
+                    }) {
                         Text(stringResource(R.string.action_cancel))
                     }
                 }
@@ -1110,7 +1202,11 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
             ModelType.EMBEDDING,
             ModelType.VISION,
             ModelType.VISION_PROJECTOR,
-            ModelType.MMPROJ
+            ModelType.MMPROJ,
+            ModelType.LLAMA_TTS,
+            ModelType.LLAMA_TTS_COMPANION,
+            ModelType.LITERT_AUDIO_DIT,
+            ModelType.LITERT_AUDIO_COMPONENT
         )
     }
     val managerDownloadTypeNames = remember(modelTypes) { modelTypes.map { it.name } }
@@ -1134,7 +1230,6 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
                 // The exact model-type query keeps Whisper and its separate VAD
                 // assets out without relying on task-id naming conventions.
                 modelTypes = modelTypes,
-                artifactFamily = com.example.llamadroid.data.model.library.ModelFamily.LLM,
                 includeTask = { task -> task.modelType in modelTypes.map { it.name } }
             )
         }
@@ -1268,6 +1363,7 @@ fun DiscoverTab(viewModel: ModelManagerViewModel) {
     var query by rememberSaveable { mutableStateOf("") }
     val results by viewModel.searchResults.collectAsStateWithLifecycle()
     val isSearching by viewModel.isSearching.collectAsStateWithLifecycle()
+    val searchError by viewModel.searchError.collectAsStateWithLifecycle()
     val progressMap by viewModel.downloadProgress.collectAsStateWithLifecycle()
     val repoVisionCache by viewModel.repoVisionCache.collectAsStateWithLifecycle()
     
@@ -1592,7 +1688,15 @@ fun DiscoverTab(viewModel: ModelManagerViewModel) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 16.dp)
-                    .clip(RoundedCornerShape(4.dp))
+                .clip(RoundedCornerShape(4.dp))
+            )
+        }
+        searchError?.let { code ->
+            Text(
+                text = modelLibraryErrorText(code),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 8.dp)
             )
         }
         
@@ -1620,6 +1724,13 @@ fun DiscoverTab(viewModel: ModelManagerViewModel) {
                                 settings.setSpeculativeMode(com.example.llamadroid.service.LlamaSpeculativeMode.DRAFT_MTP)
                             }
                         }
+                    )
+                }
+                item(key = "audio_curated_bundles") {
+                    com.example.llamadroid.ui.components.CuratedModelBundleSection(
+                        title = stringResource(R.string.audio_models_curated_title),
+                        description = stringResource(R.string.audio_models_curated_description),
+                        bundles = com.example.llamadroid.data.model.AudioCuratedBundleCatalog.bundles
                     )
                 }
             }

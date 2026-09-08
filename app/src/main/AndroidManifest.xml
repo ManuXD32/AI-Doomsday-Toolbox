@@ -162,6 +162,16 @@
             android:exported="false" />
 
         <service
+            android:name=".audio.AudioGenerationService"
+            android:foregroundServiceType="mediaProcessing"
+            android:exported="false" />
+
+        <service
+            android:name=".audio.music.StableAudio3WorkerService"
+            android:process=":stable_audio_worker"
+            android:exported="false" />
+
+        <service
             android:name=".service.LlamaCallService"
             android:foregroundServiceType="microphone|mediaPlayback"
             android:exported="false" />

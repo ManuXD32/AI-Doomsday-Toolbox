@@ -42,6 +42,26 @@ class ModelArtifactRecognizerTest {
     }
 
     @Test
+    fun `explicit stable audio role uses appended component type`() {
+        val file = Files.createTempFile("stable-audio", ".tflite").toFile()
+        writeMinimalTflite(file)
+        try {
+            val result = ModelArtifactRecognizer.validateForPromotion(
+                file,
+                ModelFamily.LITERT,
+                "stable_audio_dit"
+            )
+            assertEquals(ModelFamily.LITERT, result.family)
+            assertEquals(ModelType.LITERT_AUDIO_DIT.name, result.detectedType)
+            assertEquals("dit", result.role)
+            assertTrue(result.isStructurallyValid)
+            assertTrue(result.requiresManualPromotion)
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
     fun `malformed onnx and whisper filename remain unrecognized`() {
         val onnx = Files.createTempFile("model", ".onnx").toFile()
         val whisper = Files.createTempFile("whisper-base", ".bin").toFile()

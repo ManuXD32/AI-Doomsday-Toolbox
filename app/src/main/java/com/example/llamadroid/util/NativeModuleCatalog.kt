@@ -47,6 +47,7 @@ object NativeModuleCatalog {
         "libmtmd_${tier}.so",
         "libwhisper-cli_${tier}.so",
         "libllama-bench_${tier}.so",
+        "libllama-tts_${tier}.so",
         "libquadtrix_trainer_${tier}.so"
     )
 

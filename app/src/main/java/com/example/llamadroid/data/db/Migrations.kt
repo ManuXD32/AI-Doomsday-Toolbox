@@ -3470,6 +3470,212 @@ object Migrations {
         }
     }
 
+    /** Persist Audio workspace voice assets and serialized generation jobs. */
+    val MIGRATION_113_114 = object : Migration(113, 114) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 113 -> 114: Audio workspace")
+            if (!columnExists(database, "models", "audioFamily")) {
+                database.execSQL("ALTER TABLE `models` ADD COLUMN `audioFamily` TEXT")
+            }
+            if (!columnExists(database, "models", "audioLanguage")) {
+                database.execSQL("ALTER TABLE `models` ADD COLUMN `audioLanguage` TEXT")
+            }
+            if (!columnExists(database, "models", "audioComponentRole")) {
+                database.execSQL("ALTER TABLE `models` ADD COLUMN `audioComponentRole` TEXT")
+            }
+            if (!columnExists(database, "models", "audioArtifactIdentity")) {
+                database.execSQL("ALTER TABLE `models` ADD COLUMN `audioArtifactIdentity` TEXT")
+            }
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `audio_voice_profiles` (
+                    `id` TEXT NOT NULL,
+                    `name` TEXT NOT NULL,
+                    `language` TEXT NOT NULL,
+                    `originalPath` TEXT NOT NULL,
+                    `normalizedPath` TEXT,
+                    `denoisedPath` TEXT,
+                    `sourceUri` TEXT,
+                    `adapterId` TEXT,
+                    `family` TEXT,
+                    `durationMs` INTEGER NOT NULL,
+                    `sampleRate` INTEGER NOT NULL,
+                    `channels` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    `metadataJson` TEXT NOT NULL DEFAULT '{}',
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent()
+            )
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_voice_profiles_updatedAt` ON `audio_voice_profiles` (`updatedAt`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_voice_profiles_family` ON `audio_voice_profiles` (`family`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_voice_profiles_adapterId` ON `audio_voice_profiles` (`adapterId`)")
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `audio_generation_jobs` (
+                    `id` TEXT NOT NULL,
+                    `adapterId` TEXT NOT NULL,
+                    `family` TEXT NOT NULL,
+                    `modelId` TEXT NOT NULL,
+                    `modelPath` TEXT NOT NULL,
+                    `companionPath` TEXT,
+                    `modelDisplayName` TEXT NOT NULL,
+                    `modelLanguage` TEXT,
+                    `language` TEXT,
+                    `voiceStyle` TEXT,
+                    `voiceProfileId` TEXT,
+                    `referenceAudioPath` TEXT,
+                    `text` TEXT,
+                    `sourceUri` TEXT,
+                    `sourceName` TEXT,
+                    `speed` REAL NOT NULL,
+                    `totalSteps` INTEGER NOT NULL,
+                    `temperature` REAL NOT NULL,
+                    `topP` REAL NOT NULL,
+                    `topK` INTEGER NOT NULL,
+                    `seed` INTEGER,
+                    `maxFrames` INTEGER NOT NULL,
+                    `runtimeThreads` INTEGER NOT NULL,
+                    `batchSize` INTEGER NOT NULL,
+                    `microBatchSize` INTEGER NOT NULL,
+                    `outputFormat` TEXT NOT NULL,
+                    `outputSampleRate` INTEGER NOT NULL,
+                    `chunkSize` INTEGER NOT NULL,
+                    `normalizeReference` INTEGER NOT NULL,
+                    `denoiseReference` INTEGER NOT NULL,
+                    `trimStartMs` INTEGER NOT NULL,
+                    `trimEndMs` INTEGER,
+                    `includeMetadata` INTEGER NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `progress` REAL NOT NULL,
+                    `stageMessage` TEXT NOT NULL,
+                    `completedChunks` INTEGER NOT NULL,
+                    `totalChunks` INTEGER NOT NULL,
+                    `wavPath` TEXT,
+                    `outputPath` TEXT,
+                    `metadataPath` TEXT,
+                    `durationMs` INTEGER NOT NULL,
+                    `sampleRate` INTEGER NOT NULL,
+                    `errorMessage` TEXT,
+                    `retryCount` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    `startedAt` INTEGER,
+                    `completedAt` INTEGER,
+                    `metadataJson` TEXT NOT NULL DEFAULT '{}',
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent()
+            )
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_generation_jobs_status` ON `audio_generation_jobs` (`status`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_generation_jobs_createdAt` ON `audio_generation_jobs` (`createdAt`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_generation_jobs_updatedAt` ON `audio_generation_jobs` (`updatedAt`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_generation_jobs_voiceProfileId` ON `audio_generation_jobs` (`voiceProfileId`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_generation_jobs_modelId` ON `audio_generation_jobs` (`modelId`)")
+            DebugLog.log("[DB] Migration 113 -> 114 complete")
+        }
+    }
+
+    /** Persist logical Audio library organization without moving local or exported files. */
+    val MIGRATION_114_115 = object : Migration(114, 115) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 114 -> 115: Audio library")
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `audio_library_folders` (
+                    `id` TEXT NOT NULL,
+                    `name` TEXT NOT NULL,
+                    `parentId` TEXT,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent()
+            )
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_library_folders_parentId` ON `audio_library_folders` (`parentId`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_library_folders_updatedAt` ON `audio_library_folders` (`updatedAt`)")
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `audio_library_items` (
+                    `id` TEXT NOT NULL,
+                    `originKey` TEXT NOT NULL,
+                    `title` TEXT NOT NULL,
+                    `audioPath` TEXT NOT NULL,
+                    `metadataPath` TEXT,
+                    `mimeType` TEXT NOT NULL,
+                    `durationMs` INTEGER NOT NULL,
+                    `sizeBytes` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    `folderId` TEXT,
+                    `source` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `modelName` TEXT NOT NULL,
+                    `voiceName` TEXT,
+                    `language` TEXT NOT NULL,
+                    `kind` TEXT NOT NULL,
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent()
+            )
+            database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_audio_library_items_originKey` ON `audio_library_items` (`originKey`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_library_items_folderId` ON `audio_library_items` (`folderId`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_library_items_createdAt` ON `audio_library_items` (`createdAt`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_library_items_updatedAt` ON `audio_library_items` (`updatedAt`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_library_items_title` ON `audio_library_items` (`title`)")
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `audio_library_preferences` (
+                    `id` TEXT NOT NULL,
+                    `query` TEXT NOT NULL,
+                    `sort` TEXT NOT NULL,
+                    `folderId` TEXT,
+                    `kind` TEXT,
+                    `legacyMigrationVersion` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent()
+            )
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `model_deletion_journal_operations` (
+                    `operationId` TEXT NOT NULL,
+                    `targetKey` TEXT NOT NULL,
+                    `targetKind` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `previewJson` TEXT NOT NULL,
+                    `resultJson` TEXT,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`operationId`)
+                )
+                """.trimIndent()
+            )
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_model_deletion_journal_operations_status` ON `model_deletion_journal_operations` (`status`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_model_deletion_journal_operations_updatedAt` ON `model_deletion_journal_operations` (`updatedAt`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_model_deletion_journal_operations_targetKey` ON `model_deletion_journal_operations` (`targetKey`)")
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `model_deletion_journal_paths` (
+                    `operationId` TEXT NOT NULL,
+                    `path` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `failureCode` TEXT,
+                    `failureMessage` TEXT,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`operationId`, `path`),
+                    FOREIGN KEY(`operationId`) REFERENCES `model_deletion_journal_operations`(`operationId`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_model_deletion_journal_paths_operationId_status` ON `model_deletion_journal_paths` (`operationId`, `status`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_model_deletion_journal_paths_updatedAt` ON `model_deletion_journal_paths` (`updatedAt`)")
+            DebugLog.log("[DB] Migration 114 -> 115 complete")
+        }
+    }
+
     val ALL_MIGRATIONS: Array<Migration> = arrayOf(
         MIGRATION_27_28,
         MIGRATION_28_29,
@@ -3556,7 +3762,9 @@ object Migrations {
         MIGRATION_109_110,
         MIGRATION_110_111,
         MIGRATION_111_112,
-        MIGRATION_112_113
+        MIGRATION_112_113,
+        MIGRATION_113_114,
+        MIGRATION_114_115
     )
     /**
      * Check if a column exists in a table.

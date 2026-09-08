@@ -44,6 +44,7 @@ class NativeModuleCatalogTest {
     fun cpuModulesRequireCompleteStaticPayloads() {
         val llm = NativeModuleCatalog.require("feature_llm_i8mm")
         assertTrue("librpc-server_i8mm.so" in llm.expectedFiles)
+        assertTrue("libllama-tts_i8mm.so" in llm.expectedFiles)
         assertTrue("libwhisper-cli_i8mm.so" in llm.expectedFiles)
         assertTrue("libquadtrix_trainer_i8mm.so" in llm.expectedFiles)
         assertFalse("libggml.so" in llm.expectedFiles)
@@ -67,6 +68,7 @@ class NativeModuleCatalogTest {
     @Test
     fun knownBuiltInPayloadDoesNotNeedDynamicStaging() {
         assertTrue(NativeModuleCatalog.isBuiltInStaticPayload("libllama_server_dotprod.so"))
+        assertTrue(NativeModuleCatalog.isBuiltInStaticPayload("libllama-tts_baseline.so"))
         assertTrue(NativeModuleCatalog.isBuiltInStaticPayload("libsd_snapdragon_vulkan.so"))
         assertFalse(NativeModuleCatalog.isBuiltInStaticPayload("libllama_server.so"))
     }

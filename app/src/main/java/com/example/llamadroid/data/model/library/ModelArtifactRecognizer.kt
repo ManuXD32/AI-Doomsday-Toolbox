@@ -1,6 +1,8 @@
 package com.example.llamadroid.data.model.library
 
 import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.data.model.AudioModelSupport
+import com.example.llamadroid.data.model.StableAudioModelSupport
 import com.example.llamadroid.onnx.OnnxBundleValidator
 import com.example.llamadroid.onnx.OnnxTtsBundleValidator
 import com.example.llamadroid.sd.SdArtifactFormat
@@ -68,6 +70,25 @@ object ModelArtifactRecognizer {
         if (extension in setOf("gguf", "safetensors", "ckpt", "pt", "pth", "bin")) {
             val inspection = runCatching { SdArtifactInspector.inspect(target) }.getOrNull()
             if (inspection != null && inspection.isStructurallyUsable) {
+                // Native TTS GGUFs are structurally close to language models;
+                // classify them before the generic LLM branch so speech
+                // companions never become chat projectors.
+                val audio = AudioModelSupport.recognize(inspection, target.name)
+                if (audio != null) {
+                    val highConfidence = inspection.confidence == SdInspectionConfidence.HIGH
+                    return ArtifactRecognitionResult(
+                        family = ModelFamily.AUDIO,
+                        detectedType = audio.modelType.name,
+                        role = audio.role,
+                        confidence = if (highConfidence) ArtifactConfidence.HIGH else ArtifactConfidence.MEDIUM,
+                        isStructurallyValid = true,
+                        requiresManualPromotion = !highConfidence,
+                        validationMessage = ModelLibraryErrorCode.MANUAL_PROMOTION_REQUIRED.name
+                            .takeUnless { highConfidence },
+                        validationJson = inspection.toJson(),
+                        errorCode = ModelLibraryErrorCode.MANUAL_PROMOTION_REQUIRED.takeUnless { highConfidence }
+                    )
+                }
                 val role = inspection.detectedRole
                 val confidence = inspection.confidence.toArtifactConfidence()
                 val structurallyConfident = confidence == ArtifactConfidence.HIGH
@@ -192,8 +213,9 @@ object ModelArtifactRecognizer {
             ModelFamily.SD -> validateSd(target, role)
             ModelFamily.LLM -> validateLlm(target, role)
             ModelFamily.ONNX -> validateOnnx(target)
-            ModelFamily.LITERT -> validateLiteRt(target)
+            ModelFamily.LITERT -> validateLiteRt(target, role)
             ModelFamily.WHISPER -> validateWhisper(target)
+            ModelFamily.AUDIO -> validateAudio(target, role)
         }.let { validated ->
             if (!validated.isStructurallyValid) validated
             else validated.copy(
@@ -422,16 +444,18 @@ object ModelArtifactRecognizer {
         ).any(evidence::contains)
     }
 
-    private fun validateLiteRt(target: File): ArtifactRecognitionResult {
+    private fun validateLiteRt(target: File, role: String?): ArtifactRecognitionResult {
         val valid = when {
             target.isFile -> isLikelyLiteRtFile(target)
             target.isDirectory -> target.walkTopDown().any { it.isFile && isLikelyLiteRtFile(it) }
             else -> false
         }
+        val stableRole = StableAudioModelSupport.canonicalRole(role)
+        val stableType = StableAudioModelSupport.typeForRole(stableRole)
         return ArtifactRecognitionResult(
             family = ModelFamily.LITERT,
-            detectedType = ModelType.LLM.name,
-            role = "litert_model",
+            detectedType = stableType?.name ?: ModelType.LLM.name,
+            role = stableRole ?: "litert_model",
             confidence = if (valid) ArtifactConfidence.HIGH else ArtifactConfidence.UNKNOWN,
             isStructurallyValid = valid,
             requiresManualPromotion = true,
@@ -451,6 +475,52 @@ object ModelArtifactRecognizer {
             requiresManualPromotion = true,
             validationMessage = if (valid) "Whisper model header validated" else "Whisper model header is missing or malformed",
             errorCode = if (valid) ModelLibraryErrorCode.MANUAL_PROMOTION_REQUIRED else ModelLibraryErrorCode.RECOGNITION_FAILED
+        )
+    }
+
+    private fun validateAudio(target: File, role: String?): ArtifactRecognitionResult {
+        if (!target.isFile) return ArtifactRecognitionResult(
+            family = ModelFamily.AUDIO,
+            validationMessage = ModelLibraryErrorCode.AUDIO_MODEL_FILE_REQUIRED.name,
+            errorCode = ModelLibraryErrorCode.AUDIO_MODEL_FILE_REQUIRED
+        )
+        val inspection = runCatching { SdArtifactInspector.inspect(target) }.getOrNull()
+        val descriptor = inspection?.takeIf { it.isStructurallyUsable }
+            ?.let { AudioModelSupport.recognize(it, target.name) }
+        val normalizedRole = normalizedModelLibraryRole(role)
+        val roleValid = normalizedRole.isBlank() || isAudioMainRole(role) || isAudioCompanionRole(role)
+        val detectedRole = descriptor?.role ?: role?.takeIf { it.isNotBlank() } ?: AudioModelSupport.ROLE_MAIN
+        val type = if (detectedRole == AudioModelSupport.ROLE_MMProj || isAudioCompanionRole(detectedRole)) {
+            ModelType.LLAMA_TTS_COMPANION
+        } else {
+            ModelType.LLAMA_TTS
+        }
+        val roleMatches = descriptor == null || normalizedRole.isBlank() ||
+            normalizedRole == normalizedModelLibraryRole(descriptor.role) ||
+            (isAudioMainRole(role) && descriptor.role == AudioModelSupport.ROLE_MAIN) ||
+            (isAudioCompanionRole(role) && descriptor.role == AudioModelSupport.ROLE_MMProj)
+        // A valid GGUF is not automatically a speech model. Keep unknown
+        // architectures unresolved until bounded metadata/tensor evidence
+        // identifies a known TTS family (including custom compatible TTS).
+        val valid = inspection?.isStructurallyUsable == true && descriptor != null && roleValid && roleMatches
+        val audioError = when {
+            inspection?.isStructurallyUsable != true -> ModelLibraryErrorCode.AUDIO_STRUCTURE_INVALID
+            descriptor == null -> ModelLibraryErrorCode.AUDIO_ARCHITECTURE_UNRESOLVED
+            !roleValid -> ModelLibraryErrorCode.AUDIO_ROLE_INVALID
+            !roleMatches -> ModelLibraryErrorCode.AUDIO_ROLE_MISMATCH
+            else -> null
+        }
+        return ArtifactRecognitionResult(
+            family = ModelFamily.AUDIO,
+            detectedType = type.name,
+            role = detectedRole,
+            confidence = descriptor?.let { ArtifactConfidence.HIGH } ?:
+                inspection?.confidence.toArtifactConfidence(),
+            isStructurallyValid = valid,
+            requiresManualPromotion = !valid,
+            validationMessage = audioError?.name,
+            validationJson = inspection?.toJson(),
+            errorCode = audioError ?: ModelLibraryErrorCode.MANUAL_PROMOTION_REQUIRED.takeUnless { valid }
         )
     }
 

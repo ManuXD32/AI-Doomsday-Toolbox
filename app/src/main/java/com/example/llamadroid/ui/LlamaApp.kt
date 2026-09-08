@@ -57,6 +57,10 @@ import com.example.llamadroid.ui.ai.OnnxImageGenScreen
 import com.example.llamadroid.ui.ai.OnnxBackgroundRemovalScreen
 import com.example.llamadroid.ui.ai.OnnxTtsScreen
 import com.example.llamadroid.ui.ai.OnnxTtsGalleryScreen
+import com.example.llamadroid.ui.audio.AudioWorkspaceScreen
+import com.example.llamadroid.ui.audio.AudioWorkspaceSection
+import com.example.llamadroid.ui.audio.AudioWorkspaceRuntimeController
+import com.example.llamadroid.ui.models.AudioModelsScreen
 import com.example.llamadroid.ui.ai.LiveTranslatorScreen
 import com.example.llamadroid.ui.ai.SDModelsScreen
 import com.example.llamadroid.ui.ai.VideoGenScreen
@@ -627,6 +631,23 @@ fun LlamaApp(
             composable(Screen.OnnxBackgroundRemoval.route) { OnnxBackgroundRemovalScreen(navController) }
             composable(Screen.OnnxTts.route) { OnnxTtsScreen(navController) }
             composable(Screen.OnnxTtsGallery.route) { OnnxTtsGalleryScreen(navController) }
+            composable(
+                route = "${Screen.AudioWorkspace.route}?section={section}",
+                arguments = listOf(navArgument("section") {
+                    type = NavType.StringType
+                    defaultValue = "speech"
+                })
+            ) { entry ->
+                val audioWorkspaceController = remember(entry) { AudioWorkspaceRuntimeController(context) }
+                DisposableEffect(audioWorkspaceController) {
+                    onDispose { audioWorkspaceController.close() }
+                }
+                AudioWorkspaceScreen(
+                    navController = navController,
+                    initialSection = AudioWorkspaceSection.fromRoute(entry.arguments?.getString("section")),
+                    controller = audioWorkspaceController
+                )
+            }
             composable(Screen.LiveTranslator.route) { LiveTranslatorScreen(navController) }
             composable(
                 route = "${Screen.VideoGen.route}?tab={tab}",
@@ -655,15 +676,29 @@ fun LlamaApp(
             composable(Screen.Workflows.route) { WorkflowsScreen(navController) }
             // Model screens
             composable(Screen.ModelHub.route) { ModelHubScreen(navController) }
+            composable(Screen.AudioModels.route) { AudioModelsScreen(navController) }
             composable("${Screen.ModelSources.route}?family={family}&tab={tab}", arguments = listOf(
                 navArgument("family") { type = NavType.StringType; nullable = true; defaultValue = null },
                 navArgument("tab") { type = NavType.StringType; nullable = true; defaultValue = null }
             )) { entry -> ModelLibraryScreen(navController, entry.arguments?.getString("family"), entry.arguments?.getString("tab")) }
             composable(Screen.LLMModels.route) { ModelManagerScreen(navController) }
             composable(Screen.SDModels.route) { SDModelsScreen(navController) }
-            composable(Screen.OnnxModels.route) { OnnxModelsScreen(navController) }
+            composable(
+                route = "${Screen.OnnxModels.route}?tab={tab}",
+                arguments = listOf(navArgument("tab") {
+                    type = NavType.StringType
+                    defaultValue = "installed"
+                })
+            ) { entry ->
+                OnnxModelsScreen(
+                    navController,
+                    initialTab = entry.arguments?.getString("tab")
+                )
+            }
             composable(Screen.WhisperModels.route) { WhisperModelsScreen(navController) }
-            composable(Screen.LiteRtModels.route) { LiteRtModelsScreen(navController) }
+            composable("${Screen.LiteRtModels.route}?tab={tab}",
+                arguments = listOf(navArgument("tab") { type = NavType.StringType; defaultValue = "installed" })
+            ) { entry -> LiteRtModelsScreen(navController, initialTab = entry.arguments?.getString("tab")) }
             composable("model_share") { ModelShareScreen(navController) }
             // Settings sub-screens
             composable("settings_general") { GeneralSettingsScreen(navController) }

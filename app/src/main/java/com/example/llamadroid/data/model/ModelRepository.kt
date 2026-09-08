@@ -43,8 +43,18 @@ import com.example.llamadroid.onnx.OnnxStorage
 import com.example.llamadroid.onnx.buildOnnxCatalogStableId
 import com.example.llamadroid.onnx.buildOnnxImageGenModelEntity
 import com.example.llamadroid.data.model.library.ModelArtifactLifecycle
+import com.example.llamadroid.data.model.library.ModelDeletionDependency
+import com.example.llamadroid.data.model.library.ModelDeletionFile
+import com.example.llamadroid.data.model.library.ModelDeletionPathFailure
+import com.example.llamadroid.data.model.library.ModelDeletionPreview
+import com.example.llamadroid.data.model.library.ModelDeletionResult
+import com.example.llamadroid.data.model.library.ModelDeletionStatus
 import com.example.llamadroid.data.model.library.ModelLibraryErrorCode
 import com.example.llamadroid.data.model.library.ModelLibraryException
+import com.example.llamadroid.data.model.library.RoomModelDeletionJournal
+import com.example.llamadroid.data.model.library.activeDownloadDependencies
+import com.example.llamadroid.data.model.library.activeAudioJobDependencies
+import com.example.llamadroid.data.model.library.modelDeletionOperationMutex
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.Downloader
 import kotlinx.coroutines.CoroutineScope
@@ -52,6 +62,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
@@ -67,17 +78,27 @@ import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import java.io.File
 import com.example.llamadroid.data.db.buildOnnxCapabilities
+import com.example.llamadroid.data.db.isAudioTtsComponentType
+import com.example.llamadroid.data.db.isStableAudioComponentType
 import java.util.Locale
 
 class ModelRepository(
     private val context: Context,
     private val modelDao: ModelDao
 ) {
+    private data class InstalledModelReferenceKey(
+        val path: String,
+        val key: String,
+        val relation: String
+    )
+
     private data class LifecycleProtectionSnapshot(
         val pendingArtifacts: List<PendingModelArtifactEntity>,
         val allProvenance: List<ModelProvenanceEntity>,
         val otherRuntimePaths: List<String>,
-        val otherLiteRtPaths: List<String>
+        val otherLiteRtPaths: List<String>,
+        val activeAudioJobPaths: List<String>,
+        val activeDownloadPaths: List<String>
     )
 
     // Use kotlinx.serialization for API responses to avoid reflection issues with R8
@@ -131,28 +152,37 @@ class ModelRepository(
             // Keep legacy vision/projector rows visible for UI category normalization.
             ModelType.VISION,
             ModelType.VISION_PROJECTOR,
-            ModelType.MMPROJ
+            ModelType.MMPROJ,
+            ModelType.LLAMA_TTS,
+            ModelType.LLAMA_TTS_COMPANION,
+            ModelType.LITERT_AUDIO_DIT,
+            ModelType.LITERT_AUDIO_COMPONENT
         )
     ).onStart {
         pruneLegacyPortableModelRows()
         reconcileManagedModelCopiesIfNeeded()
     }
     
-    suspend fun searchModels(query: String, filter: String? = null): List<HfModelDto> = withContext(Dispatchers.IO) {
-        try {
-            // Enhance query with filter keyword for better search results
-            val enhancedQuery = if (filter != null && !query.contains(filter, ignoreCase = true)) {
-                "$query $filter"
-            } else {
-                query
+    /** Result-preserving variant used by model management UI error recovery. */
+    suspend fun searchModelsResult(query: String, filter: String? = null): Result<List<HfModelDto>> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                // Enhance query with filter keyword for better results without
+                // turning an HTTP/auth failure into a misleading empty catalog.
+                val enhancedQuery = if (filter != null && !query.contains(filter, ignoreCase = true)) {
+                    "$query $filter"
+                } else {
+                    query
+                }
+                hfService.searchModels(enhancedQuery, filter = filter, limit = 40)
+            }.onFailure { error ->
+                DebugLog.log("[HF-SEARCH] ${error::class.simpleName}")
             }
-            hfService.searchModels(enhancedQuery, filter = filter, limit = 40)
-        } catch (e: Exception) {
-            DebugLog.log("[HF-SEARCH] Error: ${e.message}")
-            e.printStackTrace()
-            emptyList()
         }
-    }
+
+    /** Legacy callers retain the old empty-list behavior; new UI uses the Result API. */
+    suspend fun searchModels(query: String, filter: String? = null): List<HfModelDto> =
+        searchModelsResult(query, filter).getOrElse { emptyList() }
     
     suspend fun getGgufFiles(repoId: String): List<String> = withContext(Dispatchers.IO) {
         try {
@@ -245,6 +275,10 @@ class ModelRepository(
             ModelType.SD_AUDIO_VAE -> "sd/audio_vae"
             ModelType.SD_EMBEDDINGS_CONNECTORS -> "sd/connectors"
             ModelType.SD_MOTION_MODULE -> "sd/motion_module"
+            ModelType.LLAMA_TTS,
+            ModelType.LLAMA_TTS_COMPANION -> "audio/tts"
+            ModelType.LITERT_AUDIO_DIT,
+            ModelType.LITERT_AUDIO_COMPONENT -> "audio/stable"
             ModelType.ONNX_IMAGE_GEN,
             ModelType.ONNX_TTS,
             ModelType.ONNX_BACKGROUND_REMOVAL,
@@ -290,7 +324,9 @@ class ModelRepository(
         onnxAssetKind: String? = null,
         onnxPipelineFamily: String? = null,
         onnxReferenceUri: String? = null,
-        onnxReferencePath: String? = null
+        onnxReferencePath: String? = null,
+        artifactFamily: String? = null,
+        artifactRole: String? = null
     ) {
         val modelDir = getModelDir(type)
         val localFilename = chooseUniqueDownloadFilename(
@@ -345,6 +381,47 @@ class ModelRepository(
             
             if (progress >= 1f) {
                 // Download complete - save to DB
+                if (type.isAudioTtsComponentType()) {
+                    // The service normally verifies curated files before this
+                    // path observes completion. Recheck here as well so a
+                    // direct repository caller cannot persist a digest marker
+                    // for a same-name but corrupted payload.
+                    verifyCuratedModelDownload(
+                        localFilename = localFilename,
+                        downloadedFile = destFile,
+                        repoId = repoId,
+                        sourceUrl = modelUrl,
+                        context = context
+                    )
+                } else if (type.isStableAudioComponentType()) {
+                    // Stable Audio uses an asset-backed manifest rather than
+                    // the static llama.cpp catalog. Bind verification to the
+                    // exact pinned URL so a custom same-name file remains
+                    // importable without inheriting curated metadata.
+                    StableAudioCuratedBundleCatalog.fileForDownload(
+                        context = context,
+                        localFilename = localFilename,
+                        repoId = repoId,
+                        sourceUrl = modelUrl
+                    )?.let { expected ->
+                        verifyCuratedBundleFile(expected, localFilename, destFile)
+                    }
+                }
+                val audioIdentity = if (type.isAudioTtsComponentType() || type.isStableAudioComponentType()) {
+                    AudioModelSupport.payloadArtifactIdentity(destFile)
+                } else {
+                    null
+                }
+                val audioDescriptor = AudioModelSupport.descriptorForPayload(
+                    type = type,
+                    digest = audioIdentity,
+                    repoId = repoId,
+                    filename = localFilename,
+                    familyHint = artifactFamily,
+                    roleHint = artifactRole,
+                    sourceUrl = modelUrl,
+                    context = context
+                )
                 val entity = ModelEntity(
                     filename = localFilename,
                     path = destFile.absolutePath,
@@ -361,7 +438,11 @@ class ModelRepository(
                     onnxAssetKind = onnxAssetKind,
                     onnxPipelineFamily = onnxPipelineFamily,
                     onnxReferenceUri = onnxReferenceUri,
-                    onnxReferencePath = onnxReferencePath
+                    onnxReferencePath = onnxReferencePath,
+                    audioFamily = audioDescriptor?.family,
+                    audioLanguage = audioDescriptor?.language,
+                    audioComponentRole = audioDescriptor?.role,
+                    audioArtifactIdentity = audioIdentity
                 )
                 try {
                     // insertModel performs the same bounded SD inspection used
@@ -409,7 +490,9 @@ class ModelRepository(
         onnxReferenceUri: String? = null,
         onnxReferencePath: String? = null,
         downloadUrlOverride: String? = null,
-        localFilenameOverride: String? = null
+        localFilenameOverride: String? = null,
+        artifactFamily: String? = null,
+        artifactRole: String? = null
     ) {
         val modelDir = getModelDir(type)
         val localFilename = localFilenameOverride?.let { requested ->
@@ -459,7 +542,9 @@ class ModelRepository(
             onnxAssetKind = onnxAssetKind,
             onnxPipelineFamily = onnxPipelineFamily,
             onnxReferenceUri = onnxReferenceUri,
-            onnxReferencePath = onnxReferencePath
+            onnxReferencePath = onnxReferencePath,
+            artifactFamily = artifactFamily,
+            artifactRole = artifactRole
         )
         
         // Start foreground service (this is called from main thread via onClick)
@@ -547,18 +632,353 @@ class ModelRepository(
         )
     }
     
+    private suspend fun activeAudioJobReferences(
+        database: AppDatabase
+    ): List<InstalledModelReferenceKey> = activeAudioJobDependencies(context, database).map { dependency ->
+        InstalledModelReferenceKey(
+            path = dependency.path,
+            key = dependency.targetKey,
+            relation = dependency.relation
+        )
+    }
+
+    /**
+     * Download rows and in-process pending entries are file leases too. Keep
+     * them in the same preflight set as runtime rows so a model removal cannot
+     * race a downloader that is about to materialize or resume its payload.
+     */
+    private suspend fun activeDownloadReferences(
+        database: AppDatabase
+    ): List<InstalledModelReferenceKey> = activeDownloadDependencies(database).map { dependency ->
+        InstalledModelReferenceKey(
+            path = dependency.path,
+            key = dependency.targetKey,
+            relation = dependency.relation
+        )
+    }
+
+    /**
+     * Records each candidate path after a deletion attempt. The journal is a
+     * Room-backed recovery boundary; callers intentionally do not replace it
+     * with an in-memory fallback when persistence fails.
+     */
+    private suspend fun recordDeletionPaths(
+        journal: RoomModelDeletionJournal,
+        preview: ModelDeletionPreview,
+        result: ModelDeletionResult
+    ) {
+        val deleted = result.deletedPaths.map(::canonicalPathOrSelf).toSet()
+        val failures = result.failedPaths.associateBy { canonicalPathOrSelf(it.path) }
+        for (file in preview.files) {
+            val path = canonicalPathOrSelf(file.path)
+            journal.recordPath(
+                operationId = result.operationId,
+                path = file.path,
+                deleted = path in deleted,
+                failure = failures[path]
+            )
+        }
+    }
+
+    private fun canonicalPathOrSelf(path: String): String =
+        if ("://" in path) path else runCatching { File(path).canonicalPath }.getOrDefault(path)
+
+    /** Computes dependency-aware deletion details without changing durable state. */
+    suspend fun previewDeleteModel(model: ModelEntity): ModelDeletionPreview = withContext(Dispatchers.IO) {
+        val database = AppDatabase.getDatabase(context)
+        val libraryDao = database.modelLibraryDao()
+        val otherRuntimeRows = modelDao.getAllModels().first()
+            .filter { it.filename != model.filename }
+        val provenance = libraryDao.observeProvenance().first()
+        val pendingArtifacts = libraryDao.observePendingArtifacts().first()
+        val protectedReferences = mutableListOf<InstalledModelReferenceKey>()
+        otherRuntimeRows.forEach { row ->
+            protectedReferences += InstalledModelReferenceKey(row.path, row.filename, "runtime")
+            row.mmprojPath?.let { protectedReferences += InstalledModelReferenceKey(it, row.filename, "companion") }
+        }
+        database.liteRtModelDao().getAllOnce().forEach { row ->
+            protectedReferences += InstalledModelReferenceKey(row.path, row.displayName, "litert")
+        }
+        provenance.filter { it.modelKey != model.filename }.forEach { edge ->
+            edge.localPath?.let { protectedReferences += InstalledModelReferenceKey(it, edge.modelKey, "provenance") }
+        }
+        protectedReferences += activeAudioJobReferences(database)
+        protectedReferences += activeDownloadReferences(database)
+        val candidates = linkedSetOf<File>().apply {
+            val primary = File(model.path)
+            if (primary.exists() && (
+                    isManagedModelPath(primary) ||
+                        ModelLibraryManager.usesManagedExternalCanonicalStorage(model.type) ||
+                        model.repoId == ModelBackupPolicy.LOCAL_IMPORT_REPO_ID ||
+                        model.repoId.startsWith("custom-import/")
+                    )) {
+                add(primary)
+            }
+            if (ModelLibraryManager.requiresRuntimeMirror(model.type)) {
+                add(File(getModelDir(model.type), ModelLibraryManager.canonicalFilename(model.filename)))
+            }
+            pendingArtifacts
+                .filter { it.promotedModelKey == model.filename }
+                .flatMap { listOfNotNull(it.stagingPath, it.destinationPath) }
+                .map(::File)
+                .filter { it.exists() && isManagedModelPath(it) }
+                .forEach(::add)
+            provenance
+                .filter { it.modelKey == model.filename }
+                .mapNotNull { it.localPath?.let(::File) }
+                .filter { it.exists() && isManagedModelPath(it) }
+                .forEach(::add)
+        }
+        val targetCanonicals = candidates.map { canonicalPathOrSelf(it.absolutePath) }.toSet()
+        val targetDirectories = candidates
+            .filter { it.isDirectory }
+            .map { canonicalPathOrSelf(it.absolutePath) }
+        val dependencies = protectedReferences.mapNotNull { reference ->
+            val path = reference.path
+            val canonical = runCatching { File(path).canonicalPath }.getOrNull()
+            if (canonical != null && (
+                    canonical in targetCanonicals ||
+                        targetDirectories.any { directory ->
+                            canonical.startsWith("$directory${File.separator}")
+                        }
+                )) {
+                ModelDeletionDependency(reference.key, reference.relation, path)
+            } else {
+                null
+            }
+        }
+        val protectedByPath = dependencies.groupBy { runCatching { File(it.path).canonicalPath }.getOrDefault(it.path) }
+        val files = candidates.filter { it.exists() }.map { file ->
+            val canonical = canonicalPathOrSelf(file.absolutePath)
+            ModelDeletionFile(
+                path = canonical,
+                sizeBytes = if (file.isFile) file.length() else file.walkTopDown().filter { it.isFile }.sumOf { it.length() },
+                kind = if (canonical == canonicalPathOrSelf(model.path)) "primary" else "managed-copy",
+                protectedBy = protectedByPath[canonical].orEmpty().map { it.targetKey }
+            )
+        }.toMutableList().apply {
+            if (model.type != ModelType.ONNX_IMAGE_GEN &&
+                model.type != ModelType.ONNX_TTS &&
+                model.type != ModelType.ONNX_BACKGROUND_REMOVAL &&
+                model.type != ModelType.ONNX_IMAGE_UPSCALER &&
+                dependencies.isEmpty()
+            ) {
+                ModelLibraryManager.libraryFile(
+                    context = context,
+                    relativeDir = ModelLibraryManager.relativeDirFor(model.type),
+                    filename = model.filename
+                )?.takeIf { it.exists() }?.let { document ->
+                    add(
+                        ModelDeletionFile(
+                            path = document.uri.toString(),
+                            sizeBytes = document.length().coerceAtLeast(0L),
+                            kind = "shared-library"
+                        )
+                    )
+                }
+            }
+        }
+        val blockedCode = if (dependencies.isNotEmpty()) ModelLibraryErrorCode.DELETION_BLOCKED else null
+        ModelDeletionPreview(
+            targetKey = model.filename,
+            targetLabel = model.filename,
+            files = files,
+            dependencies = dependencies,
+            protectedPaths = dependencies.map { it.path }.distinct(),
+            canDelete = dependencies.isEmpty(),
+            blockingCode = blockedCode
+        )
+    }
+
+    /** Performs a deletion and returns a recoverable typed result for UI callers. */
+    suspend fun deleteModelWithResult(model: ModelEntity): ModelDeletionResult =
+        modelDeletionOperationMutex.withLock {
+            deleteModelWithResultLocked(model, removeRuntimeRow = true)
+        }
+
+    /** Lists interrupted or recoverable model deletions for a Retry surface. */
+    suspend fun recoverableDeletionOperations(limit: Int = 50) =
+        RoomModelDeletionJournal(AppDatabase.getDatabase(context)).recoverableOperations(limit)
+
+    /** Retries a journal entry while the target runtime row is still present. */
+    suspend fun retryDeletion(operationId: String): ModelDeletionResult? {
+        val journal = RoomModelDeletionJournal(AppDatabase.getDatabase(context))
+        val snapshot = journal.operation(operationId) ?: return null
+        if (snapshot.preview.targetKind != "model") return null
+        val model = modelDao.getModelByFilename(snapshot.preview.targetKey)
+        if (model == null) {
+            // A process can be interrupted after the runtime row transaction
+            // succeeds but before the journal is finalized. Reconcile that
+            // durable state instead of leaving a Retry action that can never
+            // find its model row again.
+            val preserved = snapshot.preview.files
+                .map { it.path }
+                .filter(::deletionPathExists)
+            if (preserved.isEmpty()) {
+                val result = ModelDeletionResult(
+                    operationId = snapshot.operationId,
+                    targetKey = snapshot.preview.targetKey,
+                    targetKind = "model",
+                    status = ModelDeletionStatus.COMPLETED,
+                    deletedPaths = snapshot.preview.files.map { it.path },
+                    reclaimedBytes = 0L // No bytes were removed by this recovery pass.
+                )
+                journal.complete(result)
+                return result
+            }
+            return ModelDeletionResult(
+                operationId = snapshot.operationId,
+                targetKey = snapshot.preview.targetKey,
+                targetKind = "model",
+                status = ModelDeletionStatus.RECOVERABLE,
+                preservedPaths = preserved,
+                errorCode = ModelLibraryErrorCode.DELETION_RECOVERABLE,
+                errorMessage = context.getString(R.string.model_library_error_deletion_failed)
+            )
+        }
+        val retried = deleteModelWithResult(model)
+        val reconciled = retried.copy(operationId = snapshot.operationId)
+        if (retried.status == ModelDeletionStatus.COMPLETED) {
+            journal.complete(reconciled)
+        } else {
+            journal.fail(reconciled.copy(status = ModelDeletionStatus.RECOVERABLE))
+        }
+        return reconciled
+    }
+
+    private fun deletionPathExists(path: String): Boolean = if ("://" in path) {
+        DocumentFile.fromSingleUri(context, Uri.parse(path))?.exists() == true
+    } else {
+        File(path).exists()
+    }
+
+    private suspend fun deleteModelWithResultLocked(
+        model: ModelEntity,
+        removeRuntimeRow: Boolean
+    ): ModelDeletionResult {
+        val preview = previewDeleteModel(model)
+        if (!preview.canDelete) {
+            return ModelDeletionResult(
+                operationId = preview.operationId,
+                targetKey = model.filename,
+                status = ModelDeletionStatus.BLOCKED,
+                preservedPaths = preview.files.map { it.path },
+                errorCode = preview.blockingCode ?: ModelLibraryErrorCode.DELETION_BLOCKED,
+                errorMessage = context.getString(R.string.model_audio_companion_in_use)
+            )
+        }
+        val journal = RoomModelDeletionJournal(AppDatabase.getDatabase(context))
+        var journalStarted = false
+        val attemptedPaths = linkedSetOf<String>()
+        val attemptedDeletedPaths = linkedSetOf<String>()
+        val attemptedPreservedPaths = linkedSetOf<String>()
+        val attemptedFailures = linkedMapOf<String, ModelDeletionPathFailure>()
+        return try {
+            journal.begin(preview)
+            journalStarted = true
+            reconcileManagedModelCopiesIfNeeded()
+            val deleted = deleteModelArtifactsInternal(
+                model = model,
+                removeRuntimeRow = removeRuntimeRow,
+                onPathResult = { path, wasDeleted, failure ->
+                    val canonical = canonicalPathOrSelf(path)
+                    attemptedPaths += canonical
+                    if (wasDeleted) {
+                        attemptedDeletedPaths += canonical
+                    } else if (failure != null) {
+                        attemptedFailures[canonical] = failure
+                    } else {
+                        attemptedPreservedPaths += canonical
+                    }
+                    journal.recordPath(
+                        operationId = preview.operationId,
+                        path = path,
+                        deleted = wasDeleted,
+                        failure = failure
+                    )
+                }
+            )
+            val preserved = preview.files.map { it.path }.filterNot { it in deleted }
+            val result = ModelDeletionResult(
+                operationId = preview.operationId,
+                targetKey = model.filename,
+                status = ModelDeletionStatus.COMPLETED,
+                deletedPaths = deleted,
+                preservedPaths = preserved,
+                reclaimedBytes = preview.files.filter { it.path in deleted }.sumOf { it.sizeBytes }
+            )
+            recordDeletionPaths(journal, preview, result)
+            journal.complete(result)
+            result
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            val unobservedFailures = preview.files
+                .filter { canonicalPathOrSelf(it.path) !in attemptedPaths && File(it.path).exists() }
+                .map { file ->
+                    ModelDeletionPathFailure(
+                        path = file.path,
+                        code = ModelLibraryErrorCode.DELETION_RECOVERABLE,
+                        message = error.message
+                    )
+                }
+            val failedPaths = (attemptedFailures.values + unobservedFailures)
+                .distinctBy { canonicalPathOrSelf(it.path) }
+            val result = ModelDeletionResult(
+                operationId = preview.operationId,
+                targetKey = model.filename,
+                status = ModelDeletionStatus.RECOVERABLE,
+                deletedPaths = attemptedDeletedPaths.toList(),
+                preservedPaths = (attemptedPreservedPaths + preview.files
+                    .map { canonicalPathOrSelf(it.path) }
+                    .filter { path ->
+                        path !in attemptedPaths &&
+                            path !in failedPaths.map { failure -> canonicalPathOrSelf(failure.path) }
+                    })
+                    .toList(),
+                failedPaths = failedPaths,
+                errorCode = ModelLibraryErrorCode.DELETION_RECOVERABLE,
+                errorMessage = error.message
+            )
+            if (journalStarted) {
+                try {
+                    recordDeletionPaths(journal, preview, result)
+                    journal.fail(result)
+                } catch (_: Throwable) {
+                    // Keep the typed recoverable result when journal storage
+                    // itself is temporarily unavailable.
+                }
+            }
+            result
+        }
+    }
+
     suspend fun deleteModel(model: ModelEntity) {
-        reconcileManagedModelCopiesIfNeeded()
-        deleteModelArtifactsInternal(model, removeRuntimeRow = true)
+        val result = deleteModelWithResult(model)
+        if (result.status != ModelDeletionStatus.COMPLETED) {
+            throw ModelLibraryException(
+                code = result.errorCode ?: ModelLibraryErrorCode.DELETION_FAILED,
+                message = result.errorMessage ?: context.getString(R.string.error_generic)
+            )
+        }
     }
 
     suspend fun deleteModelArtifacts(model: ModelEntity) {
-        deleteModelArtifactsInternal(model, removeRuntimeRow = false)
+        val result = modelDeletionOperationMutex.withLock {
+            deleteModelWithResultLocked(model, removeRuntimeRow = false)
+        }
+        if (result.status != ModelDeletionStatus.COMPLETED) {
+            throw ModelLibraryException(
+                code = result.errorCode ?: ModelLibraryErrorCode.DELETION_FAILED,
+                message = result.errorMessage ?: context.getString(R.string.error_generic)
+            )
+        }
     }
 
     private suspend fun deleteModelArtifactsInternal(
         model: ModelEntity,
-        removeRuntimeRow: Boolean
+        removeRuntimeRow: Boolean,
+        onPathResult: suspend (path: String, deleted: Boolean, failure: ModelDeletionPathFailure?) -> Unit = { _, _, _ -> }
     ) = withContext(Dispatchers.IO) {
         val managedPaths = linkedSetOf<File>()
         val directPaths = linkedSetOf<File>()
@@ -581,13 +1001,23 @@ class ModelRepository(
         val database = AppDatabase.getDatabase(context)
         val libraryDao = database.modelLibraryDao()
         val lifecycle = try {
+            val otherRuntimeRows = modelDao.getAllModels().first()
+                .filter { it.filename != model.filename }
             LifecycleProtectionSnapshot(
                 pendingArtifacts = libraryDao.observePendingArtifacts().first(),
                 allProvenance = libraryDao.observeProvenance().first(),
-                otherRuntimePaths = modelDao.getAllModels().first()
-                    .filter { it.filename != model.filename }
-                    .map { it.path },
-                otherLiteRtPaths = database.liteRtModelDao().getAllOnce().map { it.path }
+                // A native TTS main row persists its selected companion in
+                // mmprojPath. Protect those references as well as the rows'
+                // own paths so removing a shared companion cannot strand a
+                // still-runnable model. This uses actual installed-row
+                // references rather than the curated catalog, which may be
+                // present even when no bundle is installed.
+                otherRuntimePaths = otherRuntimeRows.flatMap { row ->
+                    listOfNotNull(row.path, row.mmprojPath)
+                },
+                otherLiteRtPaths = database.liteRtModelDao().getAllOnce().map { it.path },
+                activeAudioJobPaths = activeAudioJobReferences(database).map { it.path },
+                activeDownloadPaths = activeDownloadReferences(database).map { it.path }
             )
         } catch (error: CancellationException) {
             throw error
@@ -601,9 +1031,13 @@ class ModelRepository(
         val allProvenance = lifecycle.allProvenance
         val otherRuntimePaths = lifecycle.otherRuntimePaths
         val otherLiteRtPaths = lifecycle.otherLiteRtPaths
+        val activeAudioJobPaths = lifecycle.activeAudioJobPaths
+        val activeDownloadPaths = lifecycle.activeDownloadPaths
         val protectedPaths = buildList {
             addAll(otherRuntimePaths)
             addAll(otherLiteRtPaths)
+            addAll(activeAudioJobPaths)
+            addAll(activeDownloadPaths)
             addAll(allProvenance.filter { it.modelKey != model.filename }.mapNotNull { it.localPath })
         }
 
@@ -623,27 +1057,94 @@ class ModelRepository(
             .mapNotNull { it.localPath?.let(::File) }
             .filter { it.exists() && isManagedModelPath(it) }
             .forEach(ownedCandidates::add)
-        ModelArtifactLifecycle.deleteOwnedPaths(ownedCandidates, protectedPaths)
+        var firstPathFailure: ModelDeletionPathFailure? = null
+        var firstPreservedPath: String? = null
+        val deletedPaths = ModelArtifactLifecycle.deleteOwnedPathsWithProgress(
+            candidates = ownedCandidates,
+            protectedPaths = protectedPaths,
+            onPathResult = { path, deleted, failure ->
+                if (!deleted && failure != null && firstPathFailure == null) {
+                    firstPathFailure = failure
+                } else if (!deleted && failure == null && firstPreservedPath == null) {
+                    firstPreservedPath = path
+                }
+                onPathResult(path, deleted, failure)
+            }
+        ).toMutableList()
         val currentPathIsShared = protectedPaths.any { protected ->
             // A failed canonicalization is treated as shared.  Deletion must
             // fail closed when a protection path cannot be resolved.
-            runCatching { File(protected).canonicalFile == currentPath.canonicalFile }.getOrDefault(true)
+            runCatching {
+                val protectedPath = File(protected).canonicalFile
+                protectedPath == currentPath.canonicalFile ||
+                    (currentPath.isDirectory && protectedPath.path.startsWith(
+                        "${currentPath.canonicalPath}${File.separator}"
+                    ))
+            }.getOrDefault(true)
+        }
+        if (model.type == ModelType.LLAMA_TTS_COMPANION && currentPathIsShared) {
+            // Keep the companion row and bytes together while a native TTS
+            // main row still points at them. The caller can surface this
+            // localized error and ask the user to remove that association
+            // first; deleting only the row would leave a dangling mmprojPath.
+            throw IllegalStateException(context.getString(R.string.model_audio_companion_in_use))
         }
 
-        if (
+        val libraryTarget = if (
             model.type == ModelType.ONNX_IMAGE_GEN ||
             model.type == ModelType.ONNX_TTS ||
             model.type == ModelType.ONNX_BACKGROUND_REMOVAL ||
             model.type == ModelType.ONNX_IMAGE_UPSCALER
         ) {
-            // ONNX payloads are now internal-only and no longer mirrored to a shared model library folder.
-        } else if (!currentPathIsShared && protectedPaths.none {
-                File(it).name == ModelLibraryManager.canonicalFilename(model.filename)
-            }) {
-            ModelLibraryManager.deleteFromLibrary(
+            null
+        } else {
+            ModelLibraryManager.libraryFile(
                 context = context,
                 relativeDir = ModelLibraryManager.relativeDirFor(model.type),
                 filename = model.filename
+            )
+        }
+        if (libraryTarget != null && !currentPathIsShared && protectedPaths.none {
+                File(it).name == ModelLibraryManager.canonicalFilename(model.filename)
+            }) {
+            val libraryPath = libraryTarget.uri.toString()
+            try {
+                val removed = libraryTarget.delete() && !libraryTarget.exists()
+                if (removed) {
+                    deletedPaths += libraryPath
+                    onPathResult(libraryPath, true, null)
+                } else if (libraryTarget.exists()) {
+                    val failure = ModelDeletionPathFailure(
+                        path = libraryPath,
+                        code = ModelLibraryErrorCode.DELETION_RECOVERABLE,
+                        message = null
+                    )
+                    if (firstPathFailure == null) firstPathFailure = failure
+                    onPathResult(
+                        libraryPath,
+                        false,
+                        failure
+                    )
+                }
+            } catch (error: Throwable) {
+                val failure = ModelDeletionPathFailure(
+                    path = libraryPath,
+                    code = ModelLibraryErrorCode.DELETION_RECOVERABLE,
+                    message = error.message
+                )
+                if (firstPathFailure == null) firstPathFailure = failure
+                onPathResult(
+                    libraryPath,
+                    false,
+                    failure
+                )
+            }
+        }
+
+        if (firstPathFailure != null || firstPreservedPath != null) {
+            throw IllegalStateException(
+                firstPathFailure?.message
+                    ?: "Managed model files could not be removed: ${firstPreservedPath.orEmpty()}"
             )
         }
 
@@ -662,6 +1163,7 @@ class ModelRepository(
             libraryDao.upsertPendingArtifactsAtomically(changed)
             if (removeRuntimeRow) database.modelDao().deleteModel(model)
         }
+        deletedPaths
     }
     
     suspend fun insertModel(model: ModelEntity) {
@@ -1197,6 +1699,10 @@ class ModelRepository(
                 ModelType.VISION,
                 ModelType.VISION_PROJECTOR,
                 ModelType.MMPROJ,
+                ModelType.LLAMA_TTS,
+                ModelType.LLAMA_TTS_COMPANION,
+                ModelType.LITERT_AUDIO_DIT,
+                ModelType.LITERT_AUDIO_COMPONENT,
                 ModelType.WHISPER,
                 ModelType.SD_CHECKPOINT,
                 ModelType.SD_UPSCALER,
@@ -1456,20 +1962,20 @@ object DownloadProgressHolder {
     val status = _status.asStateFlow()
     
     // Track filename for each exact download task for cancellation and display.
-    private val filenameMap = mutableMapOf<String, String>()
+    private val filenameMap = java.util.concurrent.ConcurrentHashMap<String, String>()
     
     fun updateProgress(repoId: String, filename: String, value: Float) {
         filenameMap[repoId] = filename
-        _progress.value = _progress.value.toMutableMap().apply { put(repoId, value) }
+        _progress.update { current -> current + (repoId to value) }
     }
     
     /** Update by repoId only (when filename already tracked) */
     fun updateProgress(repoId: String, value: Float) {
-        _progress.value = _progress.value.toMutableMap().apply { put(repoId, value) }
+        _progress.update { current -> current + (repoId to value) }
     }
 
     fun updateStatus(repoId: String, value: String) {
-        _status.value = _status.value.toMutableMap().apply { put(repoId, value) }
+        _status.update { current -> current + (repoId to value) }
     }
 
     fun getStatus(repoId: String): String? = _status.value[repoId]
@@ -1481,13 +1987,17 @@ object DownloadProgressHolder {
     
     fun removeProgress(repoId: String) {
         filenameMap.remove(repoId)
-        _progress.value = _progress.value.toMutableMap().apply { remove(repoId) }
-        _status.value = _status.value.toMutableMap().apply { remove(repoId) }
+        _progress.update { current -> current - repoId }
+        _status.update { current -> current - repoId }
     }
     
     fun getFilename(repoId: String): String? = filenameMap[repoId]
 
     fun isFilenameTracked(filename: String): Boolean = filenameMap.values.contains(filename)
+
+    fun trackedFilenames(): Set<String> = filenameMap.values.toSet()
+
+    fun getTrackedFilenames(): Set<String> = trackedFilenames()
 }
 
 /**
@@ -1569,7 +2079,7 @@ data class PendingDownload(
 )
 
 object PendingDownloadHolder {
-    private val pendingDownloads = mutableMapOf<String, PendingDownload>()
+    private val pendingDownloads = java.util.concurrent.ConcurrentHashMap<String, PendingDownload>()
     
     fun addPending(
         downloadId: String? = null,
@@ -1648,6 +2158,13 @@ object PendingDownloadHolder {
     }
     
     fun getPending(downloadId: String): PendingDownload? = pendingDownloads[downloadId]
+
+    /** Snapshot process-local registrations before their Room task is visible. */
+    fun allPending(): List<PendingDownload> = synchronized(pendingDownloads) {
+        pendingDownloads.values.distinctBy { it.progressKey to it.destPath }
+    }
+
+    fun getAllPending(): List<PendingDownload> = allPending()
 
     fun addPendingFrom(task: com.example.llamadroid.data.db.DownloadTaskEntity) {
         val pending = task.toPendingDownload()

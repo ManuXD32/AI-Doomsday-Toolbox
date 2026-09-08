@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="audio_component_main">Modelo principal</string>
+    <string name="audio_component_details">Detalles</string>
+    <string name="audio_component_hide_details">Ocultar detalles</string>
+    <string name="audio_component_copy_path">Copiar ruta</string>
+</resources>

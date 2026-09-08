@@ -1,7 +1,7 @@
 FFmpeg: d4ff0020b40b524a490cf62eccbd3a318f4c0e58 (n6.1)
 whisper.cpp: 642b5d3260e020c2fc6f34a9569d10ddd7672963
 stable-diffusion.cpp: 6b3edaaf32cc19e5bb2d819c788bd557eddc8eba
-llama.cpp: 4cbe8b070bb040f3b95845408f100fbf5fb746f1
+llama.cpp: 64e9bceb2c3a856efed96feda784a50947049feb (requested-ref=64e9bceb2c3a856efed96feda784a50947049feb)
 llama.cpp-sd-rpc: dff15d4ac95de1a3c73e8b784d4c436f5e5e36eb
 ncnn: 3b7bdba7fc8aea8fd46779533eee027df77c639d
 realcugan-ncnn-vulkan: 395302c5c70f1bff604c974e92e0a87e45c9f9ee (20220728)

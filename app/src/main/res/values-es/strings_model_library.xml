@@ -87,6 +87,7 @@
     <string name="model_library_error_auth_required">Esta fuente necesita el token de Hugging Face guardado y acceso a la licencia del modelo.</string>
     <string name="model_library_error_auth_rejected">La fuente rechazó el token de Hugging Face guardado.</string>
     <string name="model_library_error_http">La fuente devolvió un error HTTP.</string>
+    <string name="model_library_error_rate_limited">El servicio está limitando las solicitudes. Inténtalo de nuevo en un momento.</string>
     <string name="model_library_error_network">No se pudo acceder a la fuente. Comprueba la conexión e inténtalo de nuevo.</string>
     <string name="model_library_error_timeout">La solicitud de la fuente agotó el tiempo de espera.</string>
     <string name="model_library_error_source_missing">La fuente guardada ya no existe.</string>
@@ -100,6 +101,9 @@
     <string name="model_library_error_download">No se pudo descargar un archivo del paquete.</string>
     <string name="model_library_error_download_timeout">La descarga del paquete agotó el tiempo de espera.</string>
     <string name="model_library_error_grouped_rename">Los paquetes multipartes y las carpetas de modelos todavía no se pueden renombrar como un solo archivo. Edita la definición del paquete o elimínalo y vuelve a descargarlo.</string>
+    <string name="model_library_error_deletion_blocked">Este elemento todavía lo usa otro modelo o registro de procedencia.</string>
+    <string name="model_library_error_deletion_recoverable">La eliminación se interrumpió. El elemento sigue disponible y se puede reintentar.</string>
+    <string name="model_library_error_deletion_failed">No se pudo completar la eliminación. Revisa la operación y vuelve a intentarlo.</string>
     <string name="model_library_custom_download_heading">Descarga personalizada</string>
     <string name="model_library_custom_download_help">Pega un enlace directo HTTPS o de un archivo de Hugging Face. El archivo se valida y se pone en cola mediante la biblioteca persistente.</string>
     <string name="model_library_custom_url">URL de descarga</string>
@@ -164,4 +168,11 @@
     <string name="model_library_optional_details">Detalles opcionales</string>
     <string name="model_library_component_auto">Detección automática</string>
     <string name="model_library_component_saved">Componente guardado: %1$s</string>
+    <string name="model_library_role_stable_audio_dit">DiT de Stable Audio</string>
+    <string name="model_library_role_stable_audio_text_encoder">Codificador de texto de Stable Audio</string>
+    <string name="model_library_role_stable_audio_codec_encoder">Codificador de códec de Stable Audio</string>
+    <string name="model_library_role_stable_audio_codec_decoder">Decodificador de códec de Stable Audio</string>
+    <string name="model_library_role_stable_audio_tokenizer">Tokenizador de Stable Audio</string>
+    <string name="model_library_role_stable_audio_lora">LoRA de Stable Audio</string>
+    <string name="model_library_role_stable_audio_component">Componente de Stable Audio</string>
 </resources>

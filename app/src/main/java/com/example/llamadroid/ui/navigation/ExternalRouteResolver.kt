@@ -38,6 +38,8 @@ object ExternalRouteResolver {
         Screen.OnnxBackgroundRemoval.route,
         Screen.OnnxTts.route,
         Screen.OnnxTtsGallery.route,
+        Screen.AudioWorkspace.route,
+        Screen.AudioModels.route,
         Screen.LiveTranslator.route,
         Screen.VideoGen.route,
         Screen.AudioTranscription.route,
@@ -108,6 +110,12 @@ object ExternalRouteResolver {
     private val imageGenWithModePattern = Regex(
         "^${Regex.escape(Screen.ImageGen.route)}\\?startMode=[0-4](?:&tab=(?:create|gallery))?$"
     )
+    private val audioWorkspacePattern = Regex(
+        "^${Regex.escape(Screen.AudioWorkspace.route)}\\?section=(?:speech|voices|history|music|sfx)$"
+    )
+    private val onnxModelsTabPattern = Regex(
+        "^${Regex.escape(Screen.OnnxModels.route)}\\?tab=(?:installed|downloading|catalog)$"
+    )
     private val adventureRoutes = DungeonType.entries
         .map { Screen.Adventure.createRoute(it.name) }
         .toSet()
@@ -134,6 +142,9 @@ object ExternalRouteResolver {
             chatWithPortPattern.matches(canonical) &&
                 canonical.substringAfter("port=").toIntOrNull() in 1..65535 -> canonical
             imageGenWithModePattern.matches(canonical) -> canonical
+            audioWorkspacePattern.matches(canonical) -> canonical
+            onnxModelsTabPattern.matches(canonical) -> canonical
+            canonical in setOf("litert_models?tab=installed", "litert_models?tab=downloading", "litert_models?tab=catalog") -> canonical
             canonical.startsWith("agent?conversationId=") &&
                 canonical.removePrefix("agent?conversationId=").toLongOrNull()?.let { it > 0L } == true -> canonical
             canonical in setOf("image_gen?tab=gallery", "image_gen?tab=create",

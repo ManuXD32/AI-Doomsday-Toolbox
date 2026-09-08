@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "repository": "stabilityai/stable-audio-3-optimized",
+  "revision": "da6edc54ddba10bfd79a077102ded687f80e882b",
+  "license": "stability-ai-community",
+  "verification": "sha256-and-size-pinned-from-huggingface-lfs",
+  "entries": [
+    {
+      "id": "stable-audio3-sm-music-fp32-w8a8",
+      "kind": "sm-music",
+      "ditPrecision": "fp32",
+      "decoderPrecision": "w8a8",
+      "encoderPrecision": "w8a8",
+      "decoder": "same-s",
+      "supportsExtend": true,
+      "minRuntimeBytes": 3000000000,
+      "components": [
+        {
+          "role": "tokenizer",
+          "remotePath": "tokenizer.model",
+          "localFileName": "tokenizer.model",
+          "sha256": "61a7b147390c64585d6c3543dd6fc636906c9af3865a5548f27f31aee1d4c8e2",
+          "sizeBytes": 4241003,
+          "sourceRevision": "da6edc54ddba10bfd79a077102ded687f80e882b",
+          "license": "stability-ai-community"
+        },
+        {
+          "role": "textEncoder",
+          "remotePath": "tflite/t5gemma/encoder_fp16.tflite",
+          "localFileName": "encoder_fp16.tflite",
+          "sha256": "8530d0b3e6b9b9dcf1239145c2a853fb749708eaddbb472ff8f0802b50059372",
+          "sizeBytes": 563818608,
+          "sourceRevision": "da6edc54ddba10bfd79a077102ded687f80e882b",
+          "license": "stability-ai-community"
+        },
+        {
+          "role": "dit",
+          "remotePath": "tflite/sa3-sm-music/dit_fp32.tflite",
+          "localFileName": "dit_fp32.tflite",
+          "sha256": "d388700a2ca439c11e9a53506e964e93231386a2beb8173c6eec6d95f676ce09",
+          "sizeBytes": 1838758544,
+          "sourceRevision": "da6edc54ddba10bfd79a077102ded687f80e882b",
+          "license": "stability-ai-community"
+        },
+        {
+          "role": "codecDecoder",
+          "remotePath": "tflite/same-s/dec_w8a8.tflite",
+          "localFileName": "dec_w8a8.tflite",
+          "sha256": "90cad5ef81e6b18eb205012aee03bc53ed59e1c17033b79a84a4612674b1e03a",
+          "sizeBytes": 89329616,
+          "sourceRevision": "da6edc54ddba10bfd79a077102ded687f80e882b",
+          "license": "stability-ai-community"
+        },
+        {
+          "role": "codecEncoder",
+          "remotePath": "tflite/same-s/enc_w8a8.tflite",
+          "localFileName": "enc_w8a8.tflite",
+          "sha256": "d9f70cbd21f4daab94a9b6f2499cf9315253e93e152a18225f2b4960d9780a70",
+          "sizeBytes": 64024104,
+          "sourceRevision": "da6edc54ddba10bfd79a077102ded687f80e882b",
+          "license": "stability-ai-community"
+        }
+      ]
+    },
+    {
+      "id": "stable-audio3-sm-sfx-fp32-w8a8",
+      "kind": "sm-sfx",
+      "ditPrecision": "fp32",
+      "decoderPrecision": "w8a8",
+      "encoderPrecision": "w8a8",
+      "decoder": "same-s",
+      "supportsExtend": true,
+      "minRuntimeBytes": 3000000000,
+      "components": [
+        {
+          "role": "tokenizer",
+          "remotePath": "tokenizer.model",
+          "localFileName": "tokenizer.model",
+          "sha256": "61a7b147390c64585d6c3543dd6fc636906c9af3865a5548f27f31aee1d4c8e2",
+          "sizeBytes": 4241003,
+          "sourceRevision": "da6edc54ddba10bfd79a077102ded687f80e882b",
+          "license": "stability-ai-community"
+        },
+        {
+          "role": "textEncoder",
+          "remotePath": "tflite/t5gemma/encoder_fp16.tflite",
+          "localFileName": "encoder_fp16.tflite",
+          "sha256": "8530d0b3e6b9b9dcf1239145c2a853fb749708eaddbb472ff8f0802b50059372",
+          "sizeBytes": 563818608,
+          "sourceRevision": "da6edc54ddba10bfd79a077102ded687f80e882b",
+          "license": "stability-ai-community"
+        },
+        {
+          "role": "dit",
+          "remotePath": "tflite/sa3-sm-sfx/dit_fp32.tflite",
+          "localFileName": "dit_fp32.tflite",
+          "sha256": "6060ecfeca34c4ab35bc1912a37e680e8cd7aab6c4bd9de1bc2655414891b8d8",
+          "sizeBytes": 1838758544,
+          "sourceRevision": "da6edc54ddba10bfd79a077102ded687f80e882b",
+          "license": "stability-ai-community"
+        },
+        {
+          "role": "codecDecoder",
+          "remotePath": "tflite/same-s/dec_w8a8.tflite",
+          "localFileName": "dec_w8a8.tflite",
+          "sha256": "90cad5ef81e6b18eb205012aee03bc53ed59e1c17033b79a84a4612674b1e03a",
+          "sizeBytes": 89329616,
+          "sourceRevision": "da6edc54ddba10bfd79a077102ded687f80e882b",
+          "license": "stability-ai-community"
+        },
+        {
+          "role": "codecEncoder",
+          "remotePath": "tflite/same-s/enc_w8a8.tflite",
+          "localFileName": "enc_w8a8.tflite",
+          "sha256": "d9f70cbd21f4daab94a9b6f2499cf9315253e93e152a18225f2b4960d9780a70",
+          "sizeBytes": 64024104,
+          "sourceRevision": "da6edc54ddba10bfd79a077102ded687f80e882b",
+          "license": "stability-ai-community"
+        }
+      ]
+    }
+  ],
+  "upstreamRevision": "779434a908193105335fd8d833418603625b2859"
+}

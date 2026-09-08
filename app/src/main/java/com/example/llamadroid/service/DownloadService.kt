@@ -16,8 +16,12 @@ import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_FAILED
 import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_RESUMABLE
 import com.example.llamadroid.data.db.DownloadTaskEntity
 import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.data.db.isAudioTtsComponentType
+import com.example.llamadroid.data.db.isStableAudioComponentType
 import com.example.llamadroid.data.model.DownloadTaskArtifacts
 import com.example.llamadroid.data.model.DownloadProgressHolder
+import com.example.llamadroid.data.model.AudioModelSupport
+import com.example.llamadroid.data.model.StableAudioCuratedBundleCatalog
 import com.example.llamadroid.data.model.ModelLibraryManager
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.data.model.PendingDownload
@@ -900,7 +904,8 @@ class DownloadService : Service() {
                             database = db,
                             artifact = stagedArtifact,
                             downloadedFile = destFile,
-                            metadata = PendingArtifactRuntimeMetadata.fromPending(pending)
+                            metadata = PendingArtifactRuntimeMetadata.fromPending(pending),
+                            context = this@DownloadService
                         ).getOrThrow()
                         DownloadProgressHolder.updateProgress(progressKey, 1f)
                         DownloadProgressHolder.updateStatus(progressKey, getString(R.string.onnx_models_phase_completed))
@@ -956,19 +961,38 @@ class DownloadService : Service() {
                     try {
                         val genericCurated =
                             com.example.llamadroid.data.model.CuratedModelBundleRegistry
-                                .fileForInstalledFilename(finalFilename)
+                                .fileForInstalledFilename(finalFilename, this@DownloadService)
+                        val stableAudioCurated = if (pending.type.isStableAudioComponentType()) {
+                            StableAudioCuratedBundleCatalog.fileForDownload(
+                                context = this@DownloadService,
+                                localFilename = finalFilename,
+                                repoId = pending.repoId,
+                                sourceUrl = finalUrl
+                            )
+                        } else {
+                            null
+                        }
                         val sdCurated =
                             com.example.llamadroid.data.model.SdCuratedBundleCatalog
                                 .fileForLocalFilename(finalFilename)
-                        if (genericCurated != null || sdCurated != null) {
+                        if (genericCurated != null || stableAudioCurated != null || sdCurated != null) {
                             val verifyingLabel = getString(R.string.sd_bundle_verifying)
                             DownloadProgressHolder.updateProgress(progressKey, 0.999f)
                             DownloadProgressHolder.updateStatus(progressKey, verifyingLabel)
                             updateNotification(verifyingLabel, 99)
-                            if (genericCurated != null) {
-                                com.example.llamadroid.data.model.verifyCuratedModelDownload(
+                            if (stableAudioCurated != null) {
+                                com.example.llamadroid.data.model.verifyCuratedBundleFile(
+                                    expected = stableAudioCurated,
                                     localFilename = finalFilename,
                                     downloadedFile = destFile
+                                )
+                            } else if (genericCurated != null) {
+                                com.example.llamadroid.data.model.verifyCuratedModelDownload(
+                                    localFilename = finalFilename,
+                                    downloadedFile = destFile,
+                                    repoId = pending.repoId,
+                                    sourceUrl = finalUrl,
+                                    context = this@DownloadService
                                 )
                             } else {
                                 com.example.llamadroid.data.model.verifySdCuratedDownload(
@@ -1008,13 +1032,15 @@ class DownloadService : Service() {
                             val entity = finalizePendingDownload(
                                 pending = pending,
                                 downloadedFile = destFile,
+                                sourceUrl = finalUrl,
                                 onProgress = progressReporter
                             )
                             db.withTransaction {
                                 pending.pendingArtifactId?.let { artifactId ->
                                     ensurePendingArtifactActive(db.modelLibraryDao(), artifactId)
                                 }
-                                db.modelDao().insertModel(entity)
+                                val linkedEntity = linkAudioCompanion(db, entity)
+                                db.modelDao().insertModel(linkedEntity)
                             }
                             DebugLog.log("DownloadService: Saved $filename to DB as ${pending.type}")
                         }
@@ -1305,7 +1331,8 @@ class DownloadService : Service() {
                 database = db,
                 candidates = candidates,
                 allowedPendingArtifactId = effectivePending?.id,
-                allowedTaskId = task?.id
+                allowedTaskId = task?.id,
+                context = this@DownloadService
             )
             ModelArtifactDiscardPolicy.deleteFiles(candidates)
         }
@@ -1659,6 +1686,7 @@ class DownloadService : Service() {
     private suspend fun finalizePendingDownload(
         pending: PendingDownload,
         downloadedFile: File,
+        sourceUrl: String? = null,
         onProgress: (Float, String) -> Unit
     ): ModelEntity {
         return if (
@@ -1732,6 +1760,25 @@ class DownloadService : Service() {
             } else {
                 pending.onnxCapabilities
             }
+            // This marker is assigned from the completed payload, never from
+            // a filename or imported metadata. Curated verification runs in
+            // the worker before finalizePendingDownload is called.
+            val audioIdentity = if (pending.type.isAudioTtsComponentType() || pending.type.isStableAudioComponentType()) {
+                com.example.llamadroid.data.model.library.artifactFileSha256(downloadedFile)
+                    ?.let { "sha256:$it" }
+            } else {
+                null
+            }
+            val audioDescriptor = AudioModelSupport.descriptorForPayload(
+                type = pending.type,
+                digest = audioIdentity,
+                repoId = pending.repoId,
+                filename = pending.filename,
+                familyHint = pending.artifactFamily,
+                roleHint = pending.artifactRole,
+                sourceUrl = sourceUrl,
+                context = this@DownloadService
+            )
             // Inspect the completed payload before copying it to the canonical
             // library or inserting a trusted model row.  A failed preflight
             // leaves the downloaded file in place for recovery/retry.
@@ -1779,10 +1826,59 @@ class DownloadService : Service() {
                 onnxAssetKind = pending.onnxAssetKind,
                 onnxPipelineFamily = pending.onnxPipelineFamily,
                 onnxReferenceUri = pending.onnxReferenceUri,
-                onnxReferencePath = pending.onnxReferencePath
+                onnxReferencePath = pending.onnxReferencePath,
+                audioFamily = audioDescriptor?.family,
+                audioLanguage = audioDescriptor?.language,
+                audioComponentRole = audioDescriptor?.role,
+                audioArtifactIdentity = audioIdentity
             ).let { candidate ->
                 sdInspection?.let(candidate::withSdArtifactInspection) ?: candidate
             }
+        }
+    }
+
+    /**
+     * Persist the selected main -> companion edge once both rows are present.
+     * Matching is limited to durable family/language metadata and the same
+     * managed directory. Custom/legacy rows require an explicit mmprojPath so
+     * an arbitrary GGUF companion can never be selected by position.
+     */
+    private suspend fun linkAudioCompanion(
+        database: AppDatabase,
+        entity: ModelEntity
+    ): ModelEntity {
+        if (entity.type != ModelType.LLAMA_TTS && entity.type != ModelType.LLAMA_TTS_COMPANION) {
+            return entity
+        }
+        val descriptor = AudioModelSupport.descriptorForModel(entity, this@DownloadService) ?: return entity
+        if (descriptor.family == AudioModelSupport.FAMILY_CUSTOM_TTS && entity.mmprojPath == null) {
+            return entity
+        }
+        val rows = database.modelDao().getModelsByTypesSync(
+            listOf(ModelType.LLAMA_TTS, ModelType.LLAMA_TTS_COMPANION)
+        )
+        val sameDirectory: (ModelEntity) -> Boolean = { candidate ->
+            File(candidate.path).parentFile?.canonicalPath == File(entity.path).parentFile?.canonicalPath
+        }
+        val compatible: (ModelEntity) -> Boolean = { candidate ->
+            val candidateDescriptor = AudioModelSupport.descriptorForModel(candidate, this@DownloadService)
+            candidateDescriptor != null &&
+                candidateDescriptor.family == descriptor.family &&
+                (descriptor.language == null || candidateDescriptor.language == descriptor.language) &&
+                sameDirectory(candidate)
+        }
+        return if (entity.type == ModelType.LLAMA_TTS) {
+            if (entity.mmprojPath != null) entity else {
+                rows.firstOrNull {
+                    it.type == ModelType.LLAMA_TTS_COMPANION && compatible(it)
+                }?.path?.let { entity.copy(mmprojPath = it) } ?: entity
+            }
+        } else {
+            rows.filter { it.type == ModelType.LLAMA_TTS && compatible(it) }
+                .forEach { main ->
+                    database.modelDao().insertModel(main.copy(mmprojPath = entity.path))
+                }
+            entity
         }
     }
 

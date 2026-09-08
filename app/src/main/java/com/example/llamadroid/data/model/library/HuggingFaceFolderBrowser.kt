@@ -37,14 +37,10 @@ data class HfFolderListing(
 
 class HuggingFaceHttpException(
     val statusCode: Int,
-    message: String
+    message: String,
+    val phase: String = "repository"
 ) : IOException(message) {
-    val errorCode: ModelLibraryErrorCode = when (statusCode) {
-        401 -> ModelLibraryErrorCode.AUTHENTICATION_REQUIRED
-        403 -> ModelLibraryErrorCode.AUTHENTICATION_REJECTED
-        408, 504 -> ModelLibraryErrorCode.REQUEST_TIMEOUT
-        else -> ModelLibraryErrorCode.HTTP_FAILURE
-    }
+    val errorCode: ModelLibraryErrorCode = if (statusCode == 404 && phase == "revision") ModelLibraryErrorCode.REVISION_NOT_FOUND else modelLibraryHttpErrorCode(statusCode)
 }
 
 /**
@@ -58,13 +54,13 @@ class HuggingFaceFolderBrowser(
 ) {
     /** Pin browsing and selected downloads to the same commit whenever HF supplies one. */
     suspend fun resolveRevision(repositoryId: String, revision: String = "main", bearerToken: String? = null): String {
-        require(repositoryId.matches(REPOSITORY_PATTERN)) { "Invalid Hugging Face repository ID" }
+        if (!repositoryId.matches(REPOSITORY_PATTERN)) throw ModelLibraryException(ModelLibraryErrorCode.INVALID_HF_REPOSITORY, "Invalid repository ID")
         if (revision.matches(Regex("[a-fA-F0-9]{40}"))) return revision
         val token = bearerToken?.trim()?.takeIf { it.isNotEmpty() }
         val response = service.getRepoRevisionInfo(repositoryId, revision,
             token?.let { if (it.startsWith("Bearer ", true)) it else "Bearer $it" })
-        if (!response.isSuccessful) throw HuggingFaceHttpException(response.code(), "Repository revision request failed")
-        return response.body()?.sha?.takeIf { it.matches(Regex("[a-fA-F0-9]{40}")) } ?: revision
+        if (!response.isSuccessful) throw HuggingFaceHttpException(response.code(), "Repository revision request failed", "revision")
+        return response.body()?.sha?.takeIf { it.matches(Regex("[a-fA-F0-9]{40}")) } ?: throw ModelLibraryException(ModelLibraryErrorCode.RESPONSE_PARSING, "Repository response has no valid commit identity")
     }
 
     suspend fun listFolder(
@@ -77,9 +73,9 @@ class HuggingFaceFolderBrowser(
         cursor: String? = null
     ): HfFolderListing {
         val repo = repositoryId.trim()
-        require(repo.matches(REPOSITORY_PATTERN)) { "Invalid Hugging Face repository ID" }
+        if (!repo.matches(REPOSITORY_PATTERN)) throw ModelLibraryException(ModelLibraryErrorCode.INVALID_HF_REPOSITORY, "Invalid repository ID")
         val resolvedRevision = revision.trim().ifBlank { "main" }
-        require(resolvedRevision.length <= MAX_REVISION_LENGTH) { "Hugging Face revision is too long" }
+        if (resolvedRevision.length > MAX_REVISION_LENGTH) throw ModelLibraryException(ModelLibraryErrorCode.INVALID_HF_FILE_PATH, "Revision is too long")
         val normalizedFolder = normalizeFolder(folderPath)
         val boundedPageSize = pageSize.coerceIn(1, MAX_PAGE_SIZE)
         val boundedMaxPages = maxPages.coerceIn(1, MAX_PAGES)
@@ -109,7 +105,7 @@ class HuggingFaceFolderBrowser(
                     message = "Hugging Face folder request failed with HTTP ${response.code()}"
                 )
             }
-            val body = response.body().orEmpty()
+            val body = response.body() ?: throw ModelLibraryException(ModelLibraryErrorCode.RESPONSE_PARSING, "Repository response is empty")
             body.forEach { item ->
                 val key = item.path.trim()
                 if (key.isNotBlank()) items[key] = item
@@ -173,10 +169,8 @@ class HuggingFaceFolderBrowser(
     private fun normalizeFolder(folderPath: String?): String? {
         val normalized = folderPath.orEmpty().trim().trim('/')
         if (normalized.isBlank()) return null
-        require(normalized.length <= MAX_FOLDER_LENGTH) { "Hugging Face folder path is too long" }
-        require(normalized.split('/').none { it == "." || it == ".." }) {
-            "Hugging Face folder path contains an unsafe segment"
-        }
+        if (normalized.length > MAX_FOLDER_LENGTH) throw ModelLibraryException(ModelLibraryErrorCode.INVALID_HF_FILE_PATH, "Folder path is too long")
+        if (normalized.split('/').any { it == "." || it == ".." }) throw ModelLibraryException(ModelLibraryErrorCode.UNSAFE_PATH, "Unsafe folder path")
         return normalized
     }
 

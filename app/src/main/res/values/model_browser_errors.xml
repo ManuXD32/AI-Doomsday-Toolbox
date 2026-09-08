@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="model_library_error_response_parsing">The repository returned a response that could not be read. Retry or check for an app update.</string>
+    <string name="model_library_error_internal">The repository browser encountered an internal error. Retry to continue.</string>
+    <string name="model_library_error_revision_missing">This repository revision was not found. Check the selected branch or commit.</string>
+</resources>

@@ -12,6 +12,7 @@ import androidx.compose.ui.unit.dp
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.db.PendingModelArtifactEntity
+import com.example.llamadroid.data.model.StableAudioModelSupport
 import com.example.llamadroid.data.model.library.ModelFamily
 import com.example.llamadroid.data.model.PortableModelMetadata
 import com.example.llamadroid.ui.ai.SDModelSelectionType
@@ -27,7 +28,12 @@ internal fun initialModelPromotionChoice(family: ModelFamily, artifact: PendingM
     val type = saved.optString("modelType").ifBlank { artifact.detectedType.orEmpty() }
     val capabilities = saved.optString("sdCapabilities")
     return choices.firstOrNull { it.type.name == type && it.sdCapabilities != null && it.sdCapabilities == capabilities }
-        ?: choices.firstOrNull { it.role == role }
+        ?: choices.firstOrNull {
+            it.role == role || (
+                family == ModelFamily.LITERT &&
+                    StableAudioModelSupport.canonicalRole(it.role) == StableAudioModelSupport.canonicalRole(role)
+                )
+        }
         ?: choices.firstOrNull { it.type.name == type }
         ?: choices.first()
 }
@@ -55,8 +61,54 @@ internal fun modelPromotionChoices(family: ModelFamily): List<ModelPromotionChoi
         ModelPromotionChoice("upscaler", "upscaler", ModelType.ONNX_IMAGE_UPSCALER, R.string.model_promote_onnx_upscaler),
         ModelPromotionChoice("tts", "tts", ModelType.ONNX_TTS, R.string.model_promote_onnx_tts)
     )
-    ModelFamily.LITERT -> listOf(ModelPromotionChoice("litert", "litert_model", ModelType.LLM, R.string.model_library_family_litert))
+    ModelFamily.LITERT -> listOf(
+        ModelPromotionChoice("litert", "litert_model", ModelType.LLM, R.string.model_library_family_litert),
+        // Stable Audio components have appended model types so they remain
+        // visible in the shared Models catalog without being offered as chat
+        // or vision projector models. Persist the short manifest role; the
+        // support object accepts the longer portable/source aliases too.
+        ModelPromotionChoice(
+            "stable_audio_dit",
+            StableAudioModelSupport.ROLE_DIT,
+            ModelType.LITERT_AUDIO_DIT,
+            R.string.model_library_role_stable_audio_dit
+        ),
+        ModelPromotionChoice(
+            "stable_audio_text_encoder",
+            StableAudioModelSupport.ROLE_TEXT_ENCODER,
+            ModelType.LITERT_AUDIO_COMPONENT,
+            R.string.model_library_role_stable_audio_text_encoder
+        ),
+        ModelPromotionChoice(
+            "stable_audio_codec_encoder",
+            StableAudioModelSupport.ROLE_CODEC_ENCODER,
+            ModelType.LITERT_AUDIO_COMPONENT,
+            R.string.model_library_role_stable_audio_codec_encoder
+        ),
+        ModelPromotionChoice(
+            "stable_audio_codec_decoder",
+            StableAudioModelSupport.ROLE_CODEC_DECODER,
+            ModelType.LITERT_AUDIO_COMPONENT,
+            R.string.model_library_role_stable_audio_codec_decoder
+        ),
+        ModelPromotionChoice(
+            "stable_audio_tokenizer",
+            StableAudioModelSupport.ROLE_TOKENIZER,
+            ModelType.LITERT_AUDIO_COMPONENT,
+            R.string.model_library_role_stable_audio_tokenizer
+        ),
+        ModelPromotionChoice(
+            "stable_audio_lora",
+            StableAudioModelSupport.ROLE_LORA,
+            ModelType.LITERT_AUDIO_COMPONENT,
+            R.string.model_library_role_stable_audio_lora
+        )
+    )
     ModelFamily.WHISPER -> listOf(ModelPromotionChoice("whisper", "whisper_model", ModelType.WHISPER, R.string.model_library_family_whisper))
+    ModelFamily.AUDIO -> listOf(
+        ModelPromotionChoice("tts", "tts_main", ModelType.LLAMA_TTS, R.string.model_promote_audio_tts),
+        ModelPromotionChoice("tts_companion", "tts_mmproj", ModelType.LLAMA_TTS_COMPANION, R.string.model_promote_audio_tts_companion)
+    )
 }
 
 @Composable

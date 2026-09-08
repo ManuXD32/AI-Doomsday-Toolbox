@@ -24,6 +24,14 @@ sealed class Screen(val route: String) {
     object OnnxBackgroundRemoval : Screen("onnx_background_removal") // ONNX Runtime background removal
     object OnnxTts : Screen("onnx_tts")       // ONNX Runtime text-to-speech
     object OnnxTtsGallery : Screen("onnx_tts_gallery") // ONNX TTS generated audio gallery
+    object AudioWorkspace : Screen("audio_workspace") {
+        fun createRoute(section: String = "speech"): String {
+            require(section in setOf("speech", "voices", "history", "music", "sfx")) { "Unknown audio workspace section" }
+            return "$route?section=$section"
+        }
+    }
+    /** Curated and custom speech model bundles opened directly from Audio. */
+    object AudioModels : Screen("audio_models")
     object LiveTranslator : Screen("live_translator") // Turn-based bilingual voice translator
     object VideoGen : Screen("video_gen") {
         fun createRoute(tab: String = "create"): String {
@@ -53,9 +61,22 @@ sealed class Screen(val route: String) {
     object ModelSources : Screen("model_sources") // Saved sources, bundles, and pending artifacts
     object LLMModels : Screen("llm_models")      // LlamaCpp model management
     object SDModels : Screen("sd_models")        // SD model management
-    object OnnxModels : Screen("onnx_models")    // ONNX model management
+    object OnnxModels : Screen("onnx_models") {  // ONNX model management
+        fun createRoute(tab: String? = null): String {
+            if (tab == null) return route
+            require(tab in setOf("installed", "downloading", "catalog")) {
+                "Unknown ONNX model tab"
+            }
+            return "$route?tab=$tab"
+        }
+    }
     object WhisperModels : Screen("whisper_models") // Whisper model management
-    object LiteRtModels : Screen("litert_models") // LiteRT model management
+    object LiteRtModels : Screen("litert_models") {
+        fun createRoute(tab: String = "installed"): String {
+            require(tab in setOf("installed", "downloading", "catalog")) { "Unknown LiteRT model tab" }
+            return "$route?tab=$tab"
+        }
+    } // LiteRT model management
     // PDF screens
     object PDFToolbox : Screen("pdf_toolbox")
     object PDFSummary : Screen("pdf_summary")

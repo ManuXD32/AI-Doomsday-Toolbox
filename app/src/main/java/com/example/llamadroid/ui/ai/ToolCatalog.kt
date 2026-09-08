@@ -130,6 +130,12 @@ object ToolCatalog {
         tool("onnx_tts", ToolCategory.VOICE, Icons.Default.GraphicEq, R.string.ai_onnx_tts, R.string.ai_onnx_tts_desc, Screen.OnnxTts.route,
             routePatterns = listOf(Screen.OnnxTts.route, Screen.OnnxTtsGallery.route),
             settingsAction = ToolSettingsAction.Navigate(Screen.OnnxModels.route), keywords = listOf("onnx", "tts", "voice", "audio")),
+        tool("audio_workspace", ToolCategory.VOICE, Icons.Default.GraphicEq, R.string.audio_workspace_title, R.string.audio_workspace_subtitle, Screen.AudioWorkspace.route,
+            routePatterns = listOf(
+                Screen.AudioWorkspace.route,
+                "${Screen.AudioWorkspace.route}?section={section}"
+            ),
+            settingsAction = ToolSettingsAction.Navigate(Screen.AudioModels.route), keywords = listOf("audio", "tts", "speech", "voice", "clone", "qwen", "pocket", "supertonic")),
         tool("live_translator", ToolCategory.VOICE, Icons.Default.Translate, R.string.live_translator_title, R.string.live_translator_hub_desc, Screen.LiveTranslator.route,
             keywords = listOf("translate", "voice", "call", "bilingual")),
         tool("transcription", ToolCategory.VOICE, Icons.Default.Mic, R.string.ai_transcription, R.string.ai_transcription_desc, Screen.AudioTranscription.route,

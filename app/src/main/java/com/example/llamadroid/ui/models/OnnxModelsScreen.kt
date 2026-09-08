@@ -115,6 +115,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.Locale
 import kotlin.math.roundToInt
 
 private const val ONNX_IMPORT_SOURCE_MEMBER_LIMIT = 512
@@ -135,7 +136,7 @@ private data class OnnxImportResult(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun OnnxModelsScreen(navController: NavController) {
+fun OnnxModelsScreen(navController: NavController, initialTab: String? = null) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val resources = androidx.compose.ui.platform.LocalResources.current
     val scope = rememberCoroutineScope()
@@ -166,7 +167,15 @@ fun OnnxModelsScreen(navController: NavController) {
     }
     val validationMap = remember { mutableStateMapOf<String, OnnxBundleValidationResult>() }
 
-    var selectedTab by remember { mutableIntStateOf(0) }
+    var selectedTab by remember(initialTab) {
+        mutableIntStateOf(
+            when (initialTab?.lowercase(Locale.ROOT)) {
+                "downloading" -> 1
+                "catalog" -> 2
+                else -> 0
+            }
+        )
+    }
     var isImporting by remember { mutableStateOf(false) }
     var importProgress by remember { mutableFloatStateOf(0f) }
     var importLabel by remember { mutableStateOf("") }
@@ -180,6 +189,7 @@ fun OnnxModelsScreen(navController: NavController) {
     var selectedImportSourceMember by rememberSaveable { mutableStateOf<String?>(null) }
     var sourceAsset by remember { mutableStateOf<com.example.llamadroid.data.model.library.InstalledModelAsset?>(null) }
     var pendingDeleteModel by remember { mutableStateOf<ModelEntity?>(null) }
+    var deleteErrorMessage by remember { mutableStateOf<String?>(null) }
     var huggingFaceToken by remember { mutableStateOf(repository.huggingFaceToken()) }
 
     LaunchedEffect(onnxModels) {
@@ -594,6 +604,18 @@ fun OnnxModelsScreen(navController: NavController) {
                     }
                 }
             }
+            deleteErrorMessage?.let { message ->
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                ) {
+                    Text(
+                        message,
+                        modifier = Modifier.padding(12.dp),
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                }
+            }
             }
         }
     }
@@ -607,8 +629,13 @@ fun OnnxModelsScreen(navController: NavController) {
                 TextButton(
                     onClick = {
                         scope.launch {
-                            repository.deleteModel(model)
-                            pendingDeleteModel = null
+                            val result = runCatching { repository.deleteModelWithResult(model) }
+                            if (result.getOrNull()?.status == com.example.llamadroid.data.model.library.ModelDeletionStatus.COMPLETED) {
+                                pendingDeleteModel = null
+                                deleteErrorMessage = null
+                            } else {
+                                deleteErrorMessage = resources.getString(R.string.models_delete_result_retry)
+                            }
                         }
                     }
                 ) {

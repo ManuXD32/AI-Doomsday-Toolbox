@@ -584,37 +584,53 @@ private fun ModelLibraryMessageBanner(message: ModelLibraryMessage) {
 }
 
 @Composable
-internal fun modelLibraryErrorText(code: ModelLibraryErrorCode): String = when (code) {
-    ModelLibraryErrorCode.INVALID_URL -> androidx.compose.ui.res.stringResource(R.string.model_library_error_invalid_url)
-    ModelLibraryErrorCode.HTTPS_REQUIRED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_https)
-    ModelLibraryErrorCode.EMBEDDED_CREDENTIALS -> androidx.compose.ui.res.stringResource(R.string.model_library_error_credentials)
-    ModelLibraryErrorCode.CREDENTIAL_QUERY_PARAMETER -> androidx.compose.ui.res.stringResource(R.string.model_library_error_query_credentials)
-    ModelLibraryErrorCode.UNSAFE_PATH -> androidx.compose.ui.res.stringResource(R.string.model_library_error_unsafe_path)
-    ModelLibraryErrorCode.INVALID_HF_REPOSITORY -> androidx.compose.ui.res.stringResource(R.string.model_library_error_hf_repository)
-    ModelLibraryErrorCode.INVALID_HF_FILE_PATH -> androidx.compose.ui.res.stringResource(R.string.model_library_error_hf_file)
-    ModelLibraryErrorCode.UNSUPPORTED_HF_PATH -> androidx.compose.ui.res.stringResource(R.string.model_library_error_hf_path)
-    ModelLibraryErrorCode.WEBPAGE_LINK -> androidx.compose.ui.res.stringResource(R.string.model_library_error_webpage)
-    ModelLibraryErrorCode.AUTHENTICATION_REQUIRED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_auth_required)
-    ModelLibraryErrorCode.AUTHENTICATION_REJECTED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_auth_rejected)
-    ModelLibraryErrorCode.HTTP_FAILURE -> androidx.compose.ui.res.stringResource(R.string.model_library_error_http)
-    ModelLibraryErrorCode.NETWORK_FAILURE -> androidx.compose.ui.res.stringResource(R.string.model_library_error_network)
-    ModelLibraryErrorCode.REQUEST_TIMEOUT -> androidx.compose.ui.res.stringResource(R.string.model_library_error_timeout)
-    ModelLibraryErrorCode.SOURCE_NOT_FOUND -> androidx.compose.ui.res.stringResource(R.string.model_library_error_source_missing)
-    ModelLibraryErrorCode.SOURCE_ALREADY_SAVED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_source_duplicate)
-    ModelLibraryErrorCode.SOURCE_HAS_PENDING_DOWNLOAD -> androidx.compose.ui.res.stringResource(R.string.model_library_error_source_pending)
-    ModelLibraryErrorCode.SOURCE_NOT_VERIFIED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_not_verified)
-    ModelLibraryErrorCode.RECOGNITION_FAILED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_recognition)
-    ModelLibraryErrorCode.MANUAL_PROMOTION_REQUIRED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_manual)
-    ModelLibraryErrorCode.BUNDLE_INVALID -> androidx.compose.ui.res.stringResource(R.string.model_library_error_bundle)
-    ModelLibraryErrorCode.BUNDLE_ITEM_SOURCE_MISSING -> androidx.compose.ui.res.stringResource(R.string.model_library_error_bundle_source)
-    ModelLibraryErrorCode.BUNDLE_ITEM_PATH_INVALID -> androidx.compose.ui.res.stringResource(R.string.model_library_error_bundle_path)
-    ModelLibraryErrorCode.DOWNLOAD_FAILED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_download)
-    ModelLibraryErrorCode.DOWNLOAD_TIMEOUT -> androidx.compose.ui.res.stringResource(R.string.model_library_error_download_timeout)
-    ModelLibraryErrorCode.GROUPED_ARTIFACT_RENAME_UNSUPPORTED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_grouped_rename)
-    ModelLibraryErrorCode.ARTIFACT_DISCARD_UNSAFE_PATH -> androidx.compose.ui.res.stringResource(R.string.model_library_error_artifact_discard_unsafe)
-    ModelLibraryErrorCode.ARTIFACT_DISCARD_PROTECTED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_artifact_discard_protected)
-    ModelLibraryErrorCode.ARTIFACT_DISCARD_PROMOTED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_artifact_discard_promoted)
-    ModelLibraryErrorCode.ARTIFACT_DISCARD_FAILED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_artifact_discard_failed)
+internal fun modelLibraryErrorText(code: ModelLibraryErrorCode): String =
+    androidx.compose.ui.res.stringResource(modelLibraryErrorResource(code))
+
+@androidx.annotation.StringRes
+internal fun modelLibraryErrorResource(code: ModelLibraryErrorCode): Int = when (code) {
+    ModelLibraryErrorCode.RESPONSE_PARSING -> R.string.model_library_error_response_parsing
+    ModelLibraryErrorCode.INTERNAL_ERROR -> R.string.model_library_error_internal
+    ModelLibraryErrorCode.REVISION_NOT_FOUND -> R.string.model_library_error_revision_missing
+    ModelLibraryErrorCode.INVALID_URL -> R.string.model_library_error_invalid_url
+    ModelLibraryErrorCode.HTTPS_REQUIRED -> R.string.model_library_error_https
+    ModelLibraryErrorCode.EMBEDDED_CREDENTIALS -> R.string.model_library_error_credentials
+    ModelLibraryErrorCode.CREDENTIAL_QUERY_PARAMETER -> R.string.model_library_error_query_credentials
+    ModelLibraryErrorCode.UNSAFE_PATH -> R.string.model_library_error_unsafe_path
+    ModelLibraryErrorCode.INVALID_HF_REPOSITORY -> R.string.model_library_error_hf_repository
+    ModelLibraryErrorCode.INVALID_HF_FILE_PATH -> R.string.model_library_error_hf_file
+    ModelLibraryErrorCode.UNSUPPORTED_HF_PATH -> R.string.model_library_error_hf_path
+    ModelLibraryErrorCode.WEBPAGE_LINK -> R.string.model_library_error_webpage
+    ModelLibraryErrorCode.AUTHENTICATION_REQUIRED -> R.string.model_library_error_auth_required
+    ModelLibraryErrorCode.AUTHENTICATION_REJECTED -> R.string.model_library_error_auth_rejected
+    ModelLibraryErrorCode.HTTP_FAILURE -> R.string.model_library_error_http
+    ModelLibraryErrorCode.RATE_LIMITED -> R.string.model_library_error_rate_limited
+    ModelLibraryErrorCode.NETWORK_FAILURE -> R.string.model_library_error_network
+    ModelLibraryErrorCode.REQUEST_TIMEOUT -> R.string.model_library_error_timeout
+    ModelLibraryErrorCode.SOURCE_NOT_FOUND -> R.string.model_library_error_source_missing
+    ModelLibraryErrorCode.SOURCE_ALREADY_SAVED -> R.string.model_library_error_source_duplicate
+    ModelLibraryErrorCode.SOURCE_HAS_PENDING_DOWNLOAD -> R.string.model_library_error_source_pending
+    ModelLibraryErrorCode.SOURCE_NOT_VERIFIED -> R.string.model_library_error_not_verified
+    ModelLibraryErrorCode.RECOGNITION_FAILED -> R.string.model_library_error_recognition
+    ModelLibraryErrorCode.MANUAL_PROMOTION_REQUIRED -> R.string.model_library_error_manual
+    ModelLibraryErrorCode.BUNDLE_INVALID -> R.string.model_library_error_bundle
+    ModelLibraryErrorCode.BUNDLE_ITEM_SOURCE_MISSING -> R.string.model_library_error_bundle_source
+    ModelLibraryErrorCode.BUNDLE_ITEM_PATH_INVALID -> R.string.model_library_error_bundle_path
+    ModelLibraryErrorCode.DOWNLOAD_FAILED -> R.string.model_library_error_download
+    ModelLibraryErrorCode.DOWNLOAD_TIMEOUT -> R.string.model_library_error_download_timeout
+    ModelLibraryErrorCode.GROUPED_ARTIFACT_RENAME_UNSUPPORTED -> R.string.model_library_error_grouped_rename
+    ModelLibraryErrorCode.ARTIFACT_DISCARD_UNSAFE_PATH -> R.string.model_library_error_artifact_discard_unsafe
+    ModelLibraryErrorCode.ARTIFACT_DISCARD_PROTECTED -> R.string.model_library_error_artifact_discard_protected
+    ModelLibraryErrorCode.ARTIFACT_DISCARD_PROMOTED -> R.string.model_library_error_artifact_discard_promoted
+    ModelLibraryErrorCode.ARTIFACT_DISCARD_FAILED -> R.string.model_library_error_artifact_discard_failed
+    ModelLibraryErrorCode.DELETION_BLOCKED -> R.string.model_library_error_deletion_blocked
+    ModelLibraryErrorCode.DELETION_RECOVERABLE -> R.string.model_library_error_deletion_recoverable
+    ModelLibraryErrorCode.DELETION_FAILED -> R.string.model_library_error_deletion_failed
+    ModelLibraryErrorCode.AUDIO_MODEL_FILE_REQUIRED -> R.string.model_library_error_audio_file_required
+    ModelLibraryErrorCode.AUDIO_STRUCTURE_INVALID -> R.string.model_library_error_audio_structure
+    ModelLibraryErrorCode.AUDIO_ARCHITECTURE_UNRESOLVED -> R.string.model_library_error_audio_architecture
+    ModelLibraryErrorCode.AUDIO_ROLE_INVALID -> R.string.model_library_error_audio_role_invalid
+    ModelLibraryErrorCode.AUDIO_ROLE_MISMATCH -> R.string.model_library_error_audio_role_mismatch
 }
 
 @Composable
@@ -1148,10 +1164,20 @@ fun PendingArtifactCard(
     }
     if (showDetails) {
         val emptyRecord = androidx.compose.ui.res.stringResource(R.string.model_artifact_no_inspection)
+        val rawValidation = artifact.validationMessage
+        val validationCode = rawValidation
+            ?.let { runCatching { ModelLibraryErrorCode.valueOf(it) }.getOrNull() }
+        val localizedValidation = if (rawValidation == null) {
+            null
+        } else if (validationCode == null) {
+            rawValidation
+        } else {
+            modelLibraryErrorText(validationCode)
+        }
         com.example.llamadroid.ui.components.AppTextDetailsDialog(
             title = androidx.compose.ui.res.stringResource(R.string.model_artifact_inspection_record),
             text = listOfNotNull(artifact.filename, artifact.stagingPath,
-                artifact.validationMessage, artifact.validationJson).joinToString("\n\n") +
+                localizedValidation, artifact.validationJson).joinToString("\n\n") +
                 if (artifact.validationMessage == null && artifact.validationJson == null) "\n\n$emptyRecord" else "",
             onDismiss = { showDetails = false }
         )
@@ -2230,6 +2256,7 @@ private fun modelFamilyLabel(family: ModelFamily): String = when (family) {
     ModelFamily.ONNX -> androidx.compose.ui.res.stringResource(R.string.model_library_family_onnx)
     ModelFamily.LITERT -> androidx.compose.ui.res.stringResource(R.string.model_library_family_litert)
     ModelFamily.WHISPER -> androidx.compose.ui.res.stringResource(R.string.model_library_family_whisper)
+    ModelFamily.AUDIO -> androidx.compose.ui.res.stringResource(R.string.model_library_family_audio)
 }
 
 @Composable

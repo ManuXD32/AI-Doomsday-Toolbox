@@ -82,6 +82,7 @@ fun CuratedModelBundleSection(
     description: String,
     bundles: List<CuratedModelBundle>,
     onUseBundle: ((CuratedModelBundle, List<ModelEntity>, String) -> Unit)? = null,
+    prefixForBundle: (CuratedModelBundle) -> String = { it.defaultPrefix },
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -113,12 +114,23 @@ fun CuratedModelBundleSection(
         }
 
         bundles.forEach { bundle ->
-            val prefix = sanitizeCuratedBundlePrefix(bundle.defaultPrefix)
+            val prefixState = resolveCuratedBundlePrefix(bundle, prefixForBundle)
+            val prefix = prefixState.value
             val expectedNames = bundle.files.map { it.installedFilename(prefix) }
-            val installedFiles = installedModels.filter { it.filename in expectedNames }
+            val installedFiles = bundle.files.mapIndexedNotNull { index, file ->
+                installedModels.firstOrNull { model ->
+                    file.matchesVerifiedInstalledModel(expectedNames[index], model)
+                }
+            }
             val installedNames = installedFiles.map { it.filename }.toSet()
             val missingFiles = bundle.files.filterIndexed { index, _ ->
                 expectedNames[index] !in installedNames
+            }
+            val conflictingFiles = bundle.files.filterIndexed { index, _ ->
+                installedModels.any { model ->
+                    model.filename == expectedNames[index] &&
+                        !bundle.files[index].matchesVerifiedInstalledModel(expectedNames[index], model)
+                }
             }
             val expectedTaskIds = bundle.files.mapIndexed { index, file ->
                 expectedNames[index] to buildDownloadTaskId(file.repoId, expectedNames[index], file.type)
@@ -174,7 +186,9 @@ fun CuratedModelBundleSection(
                 missingBytes = progressSnapshot.remainingBytes,
                 isDownloading = progressSnapshot.hasActiveDownloads,
                 aggregateProgress = progressSnapshot.progress,
-                canUse = missingFiles.isEmpty() && onUseBundle != null,
+                canUse = missingFiles.isEmpty() && !prefixState.invalid && onUseBundle != null,
+                hasConflicts = conflictingFiles.isNotEmpty(),
+                hasPrefixError = prefixState.invalid,
                 onReview = { pendingBundle = bundle },
                 onCancel = {
                     activeTasks.forEach { (filename, taskId) ->
@@ -195,35 +209,71 @@ fun CuratedModelBundleSection(
     }
 
     pendingBundle?.let { bundle ->
-        val prefix = sanitizeCuratedBundlePrefix(bundle.defaultPrefix)
+        val prefixState = resolveCuratedBundlePrefix(bundle, prefixForBundle)
+        val prefix = prefixState.value
         val expectedNames = bundle.files.map { it.installedFilename(prefix) }
-        val installedFiles = installedModels.filter { it.filename in expectedNames }
+        val installedFiles = bundle.files.mapIndexedNotNull { index, file ->
+            installedModels.firstOrNull { model ->
+                file.matchesVerifiedInstalledModel(expectedNames[index], model)
+            }
+        }
+        val installedNames = installedFiles.map { it.filename }.toSet()
         val missingFiles = bundle.files.filterIndexed { index, _ ->
-            installedFiles.none { it.filename == expectedNames[index] }
+            expectedNames[index] !in installedNames
+        }
+        val conflictingFiles = bundle.files.filterIndexed { index, _ ->
+            installedModels.any { model ->
+                model.filename == expectedNames[index] &&
+                    !bundle.files[index].matchesVerifiedInstalledModel(expectedNames[index], model)
+            }
         }
         CuratedModelBundleDialog(
             bundle = bundle,
             expectedNames = expectedNames,
             missingFiles = missingFiles,
+            conflictingFiles = conflictingFiles,
+            prefix = prefix,
+            prefixInvalid = prefixState.invalid,
             onDismiss = { pendingBundle = null },
             onDownload = {
-                bundle.files.forEachIndexed { index, file ->
-                    val localFilename = expectedNames[index]
-                    if (installedFiles.none { it.filename == localFilename }) {
-                        repository.startDownloadAsync(
-                            repoId = file.repoId,
-                            filename = file.remotePath,
-                            type = file.type,
-                            isVision = file.type == ModelType.VISION_PROJECTOR,
-                            downloadUrlOverride = file.downloadUrl,
-                            localFilenameOverride = localFilename
-                        )
+                if (!prefixState.invalid && conflictingFiles.isEmpty()) {
+                    bundle.files.forEachIndexed { index, file ->
+                        val localFilename = expectedNames[index]
+                        if (installedFiles.none { it.filename == localFilename }) {
+                            repository.startDownloadAsync(
+                                repoId = file.repoId,
+                                filename = file.remotePath,
+                                type = file.type,
+                                isVision = file.type == ModelType.VISION_PROJECTOR,
+                                downloadUrlOverride = file.downloadUrl,
+                                localFilenameOverride = localFilename,
+                                artifactFamily = file.audioFamily,
+                                artifactRole = file.componentRole
+                            )
+                        }
                     }
+                    pendingBundle = null
                 }
-                pendingBundle = null
             }
         )
     }
+}
+
+private data class CuratedPrefixState(
+    val value: String,
+    val invalid: Boolean
+)
+
+private fun resolveCuratedBundlePrefix(
+    bundle: CuratedModelBundle,
+    prefixForBundle: (CuratedModelBundle) -> String
+): CuratedPrefixState {
+    val raw = runCatching { prefixForBundle(bundle) }.getOrNull()
+    val sanitized = raw?.let { runCatching { sanitizeCuratedBundlePrefix(it) }.getOrNull() }
+    val invalid = raw == null || (raw.trim().isNotEmpty() && sanitized.isNullOrBlank())
+    if (!invalid) return CuratedPrefixState(sanitized.orEmpty(), false)
+    val fallback = runCatching { sanitizeCuratedBundlePrefix(bundle.defaultPrefix) }.getOrDefault("")
+    return CuratedPrefixState(fallback, true)
 }
 
 @Composable
@@ -234,12 +284,14 @@ private fun CuratedModelBundleCard(
     isDownloading: Boolean,
     aggregateProgress: Float?,
     canUse: Boolean,
+    hasConflicts: Boolean,
+    hasPrefixError: Boolean,
     onReview: () -> Unit,
     onCancel: () -> Unit,
     onUse: () -> Unit
 ) {
     val context = LocalContext.current
-    val allInstalled = installedCount == bundle.files.size
+    val allInstalled = installedCount == bundle.files.size && !hasPrefixError
     val catalogIcon = if (bundle.files.any { it.type == ModelType.LLM || it.type == ModelType.LLM_DRAFT }) {
         Icons.Default.SmartToy
     } else {
@@ -348,6 +400,20 @@ private fun CuratedModelBundleCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            if (hasConflicts) {
+                Text(
+                    stringResource(R.string.curated_bundle_conflict),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            if (hasPrefixError) {
+                Text(
+                    stringResource(R.string.audio_models_prefix_invalid),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
             if (!isDownloading) {
                 LinearProgressIndicator(
                     progress = {
@@ -402,6 +468,9 @@ private fun CuratedModelBundleDialog(
     bundle: CuratedModelBundle,
     expectedNames: List<String>,
     missingFiles: List<CuratedBundleFile>,
+    conflictingFiles: List<CuratedBundleFile>,
+    prefix: String,
+    prefixInvalid: Boolean,
     onDismiss: () -> Unit,
     onDownload: () -> Unit
 ) {
@@ -419,10 +488,17 @@ private fun CuratedModelBundleDialog(
             ) {
                 Text(stringResource(bundle.descriptionRes))
                 Text(
-                    stringResource(R.string.sd_bundle_prefix_note, sanitizeCuratedBundlePrefix(bundle.defaultPrefix)),
+                    stringResource(R.string.sd_bundle_prefix_note, prefix),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary
                 )
+                if (prefixInvalid) {
+                    Text(
+                        stringResource(R.string.audio_models_prefix_invalid),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
                 Text(
                     stringResource(R.string.sd_bundle_total, FormatUtils.Display.formatBytes(context, bundle.totalBytes)),
                     fontWeight = FontWeight.SemiBold
@@ -432,18 +508,22 @@ private fun CuratedModelBundleDialog(
                     CuratedBundleFileRow(
                         file = file,
                         installedFilename = expectedNames[index],
-                        isMissing = file in missingFiles
+                        isMissing = file in missingFiles,
+                        isConflict = file in conflictingFiles
                     )
                 }
                 if (missingFiles.isEmpty()) {
                     Text(stringResource(R.string.sd_bundle_already_installed), color = MaterialTheme.colorScheme.primary)
+                }
+                if (conflictingFiles.isNotEmpty()) {
+                    Text(stringResource(R.string.curated_bundle_conflict), color = MaterialTheme.colorScheme.error)
                 }
             }
         },
         confirmButton = {
             Button(
                 onClick = onDownload,
-                enabled = missingFiles.isNotEmpty(),
+                enabled = missingFiles.isNotEmpty() && conflictingFiles.isEmpty() && !prefixInvalid,
                 modifier = Modifier.heightIn(min = 48.dp)
             ) {
                 Icon(Icons.Default.Download, contentDescription = null)
@@ -464,7 +544,8 @@ private fun CuratedModelBundleDialog(
 private fun CuratedBundleFileRow(
     file: CuratedBundleFile,
     installedFilename: String,
-    isMissing: Boolean
+    isMissing: Boolean,
+    isConflict: Boolean
 ) {
     val context = LocalContext.current
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -496,6 +577,13 @@ private fun CuratedBundleFileRow(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (isConflict) {
+                    Text(
+                        stringResource(R.string.curated_bundle_conflict_file),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
             }
             if (!isMissing) {
                 Icon(
@@ -515,5 +603,7 @@ private fun curatedBundleModelTypeLabel(type: ModelType): String = when (type) {
     ModelType.LLM_DRAFT -> stringResource(R.string.curated_bundle_type_draft_model)
     ModelType.VISION_PROJECTOR -> stringResource(R.string.models_type_vision_projector)
     ModelType.SD_ADETAILER -> stringResource(R.string.curated_bundle_type_adetailer_detector)
+    ModelType.LLAMA_TTS,
+    ModelType.LLAMA_TTS_COMPANION -> stringResource(R.string.model_promote_audio_tts)
     else -> type.name
 }

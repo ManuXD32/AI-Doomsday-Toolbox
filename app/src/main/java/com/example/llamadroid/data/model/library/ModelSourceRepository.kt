@@ -13,9 +13,12 @@ import com.example.llamadroid.data.db.ModelSourceEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.PendingModelArtifactEntity
+import com.example.llamadroid.data.db.isAudioTtsComponentType
 import com.example.llamadroid.data.model.DownloadProgressHolder
+import com.example.llamadroid.data.model.AudioModelSupport
 import com.example.llamadroid.data.model.PendingDownload
 import com.example.llamadroid.data.model.PortableModelMetadata
+import com.example.llamadroid.data.model.StableAudioModelSupport
 import com.example.llamadroid.data.model.PendingDownloadHolder
 import com.example.llamadroid.data.model.toDownloadTaskEntity
 import com.example.llamadroid.data.model.toPendingDownload
@@ -42,6 +45,9 @@ import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+
+private fun canonicalPathOrSelf(path: String): String =
+    runCatching { File(path).canonicalPath }.getOrDefault(path)
 
 /** Serializes durable state transitions which compete with queue cancellation. */
 private val modelLibraryBundleStateMutex = Mutex()
@@ -306,12 +312,160 @@ class ModelSourceRepository(
         libraryDao.deleteSourceById(sourceId)
     }
 
+    /** Side-effect-free bundle removal preview for the model library screen. */
+    suspend fun previewDeleteBundle(
+        bundleId: String,
+        context: Context? = null
+    ): ModelDeletionPreview = withContext(Dispatchers.IO) {
+        val bundle = libraryDao.getBundleById(bundleId)
+        val pending = libraryDao.getPendingArtifactsForBundle(bundleId)
+        val baseFiles = pending
+            .flatMap { artifact -> listOfNotNull(artifact.destinationPath, artifact.stagingPath) }
+            .distinct()
+            .map { path ->
+                val file = File(path)
+                ModelDeletionFile(
+                    path = runCatching { file.canonicalPath }.getOrDefault(path),
+                    sizeBytes = file.takeIf { it.isFile }?.length() ?: 0L,
+                    kind = "pending-artifact"
+                )
+            }
+        val canonicalFiles = baseFiles.map { it.path }.map(::canonicalPathOrSelf).toSet()
+        val dependencies = if (context == null) {
+            emptyList()
+        } else {
+            (activeAudioJobDependencies(context, AppDatabase.getDatabase(context)) +
+                activeDownloadDependencies(AppDatabase.getDatabase(context))).filter { dependency ->
+                    canonicalPathOrSelf(dependency.path) in canonicalFiles
+                }
+        }
+        val dependencyPaths = dependencies.map { canonicalPathOrSelf(it.path) }.toSet()
+        val files = baseFiles.map { file ->
+            file.copy(protectedBy = if (canonicalPathOrSelf(file.path) in dependencyPaths) {
+                dependencies.filter { canonicalPathOrSelf(it.path) == canonicalPathOrSelf(file.path) }
+                    .map { it.targetKey }
+            } else {
+                emptyList()
+            })
+        }
+        val missingCode = if (bundle == null && pending.isEmpty()) {
+            ModelLibraryErrorCode.SOURCE_NOT_FOUND
+        } else {
+            null
+        }
+        ModelDeletionPreview(
+            targetKey = bundleId,
+            targetLabel = bundle?.name ?: bundleId,
+            targetKind = "bundle",
+            files = files,
+            dependencies = dependencies,
+            protectedPaths = dependencies.map { it.path }.distinct(),
+            canDelete = missingCode == null && dependencies.isEmpty(),
+            blockingCode = missingCode ?: dependencies.takeIf { it.isNotEmpty() }?.let {
+                ModelLibraryErrorCode.DELETION_BLOCKED
+            }
+        )
+    }
+
+    /** Removes a bundle definition and returns retained staged files explicitly. */
+    suspend fun deleteBundleWithResult(context: Context, bundleId: String): ModelDeletionResult =
+        modelDeletionOperationMutex.withLock {
+            // The preview is repeated under the same lock as mutation, so a
+            // late queue/cancel transition cannot invalidate its decision.
+            val preview = previewDeleteBundle(bundleId, context)
+            if (!preview.canDelete) {
+                return@withLock ModelDeletionResult(
+                    operationId = preview.operationId,
+                    targetKey = bundleId,
+                    targetKind = "bundle",
+                    status = ModelDeletionStatus.BLOCKED,
+                    errorCode = preview.blockingCode ?: ModelLibraryErrorCode.SOURCE_NOT_FOUND
+                )
+            }
+            val journal = RoomModelDeletionJournal(AppDatabase.getDatabase(context))
+            var journalStarted = false
+            try {
+                journal.begin(preview)
+                journalStarted = true
+                deleteBundleInternal(context, bundleId)
+                val result = ModelDeletionResult(
+                    operationId = preview.operationId,
+                    targetKey = bundleId,
+                    targetKind = "bundle",
+                    status = ModelDeletionStatus.COMPLETED,
+                    preservedPaths = preview.files.map { it.path }
+                )
+                for (file in preview.files) {
+                    journal.recordPath(
+                        operationId = result.operationId,
+                        path = file.path,
+                        deleted = false
+                    )
+                }
+                journal.complete(result)
+                result
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                val result = ModelDeletionResult(
+                    operationId = preview.operationId,
+                    targetKey = bundleId,
+                    targetKind = "bundle",
+                    status = ModelDeletionStatus.RECOVERABLE,
+                    preservedPaths = preview.files.map { it.path },
+                    errorCode = ModelLibraryErrorCode.DELETION_RECOVERABLE,
+                    errorMessage = error.message
+                )
+                if (journalStarted) {
+                    try {
+                        for (file in preview.files) {
+                            journal.recordPath(
+                                operationId = result.operationId,
+                                path = file.path,
+                                deleted = false
+                            )
+                        }
+                        journal.fail(result)
+                    } catch (_: Throwable) {
+                        // The operation itself remains recoverable even when
+                        // journal persistence is temporarily unavailable.
+                    }
+                }
+                result
+            }
+        }
+
+    /** Lists interrupted or recoverable bundle deletions for a Retry surface. */
+    suspend fun recoverableDeletionOperations(context: Context, limit: Int = 50) =
+        RoomModelDeletionJournal(AppDatabase.getDatabase(context)).recoverableOperations(limit)
+
+    /** Retries a journal entry while its bundle definition or pending rows remain. */
+    suspend fun retryDeletion(context: Context, operationId: String): ModelDeletionResult? {
+        val journal = RoomModelDeletionJournal(AppDatabase.getDatabase(context))
+        val snapshot = journal.operation(operationId) ?: return null
+        if (snapshot.preview.targetKind != "bundle") return null
+        return deleteBundleWithResult(context, snapshot.preview.targetKey)
+    }
+
     /**
      * Cancels a bundle queue, then detaches its pending rows before deleting
      * the definition. Staged/downloaded files and source/provenance rows stay
      * on disk and remain inspectable as standalone Unknown artifacts.
      */
-    suspend fun deleteBundle(context: Context, bundleId: String) = withContext(Dispatchers.IO) {
+    suspend fun deleteBundle(context: Context, bundleId: String) =
+        run {
+            val result = deleteBundleWithResult(context, bundleId)
+            if (result.status != ModelDeletionStatus.COMPLETED) {
+                throw ModelLibraryException(
+                    code = result.errorCode ?: ModelLibraryErrorCode.DELETION_FAILED,
+                    message = result.errorMessage ?: context.getString(
+                        com.example.llamadroid.R.string.model_library_error_deletion_failed
+                    )
+                )
+            }
+        }
+
+    private suspend fun deleteBundleInternal(context: Context, bundleId: String) = withContext(Dispatchers.IO) {
         // Keep direct repository callers safe as well as the screen action.
         ModelLibraryQueueScope.cancel("bundle:$bundleId")
         val hadDefinition = libraryDao.getBundleById(bundleId) != null
@@ -568,7 +722,8 @@ class ModelSourceRepository(
                             database = db,
                             candidates = candidates,
                             allowedPendingArtifactId = current.id,
-                            allowedTaskId = linkedTask?.id
+                            allowedTaskId = linkedTask?.id,
+                            context = appContext
                         )
                         if (current.status != PendingArtifactStatus.CANCELLED.storedValue) {
                             libraryDao.upsert(
@@ -943,9 +1098,11 @@ class ModelSourceRepository(
         } catch (failure: Exception) {
             val error = when (failure) {
                 is ModelLibraryException -> failure
-                is HuggingFaceHttpException -> ModelLibraryException(failure.errorCode, "Hugging Face request failed", cause = failure)
-                is SocketTimeoutException -> ModelLibraryException(ModelLibraryErrorCode.REQUEST_TIMEOUT, "Source request timed out", cause = failure)
-                else -> ModelLibraryException(ModelLibraryErrorCode.NETWORK_FAILURE, "Source request failed", cause = failure)
+                else -> ModelLibraryException(
+                    modelLibraryErrorCode(failure),
+                    "Source request failed",
+                    cause = failure
+                )
             }
             val authentication = error.code in setOf(ModelLibraryErrorCode.AUTHENTICATION_REQUIRED, ModelLibraryErrorCode.AUTHENTICATION_REJECTED)
             val checkLater = error.code in setOf(ModelLibraryErrorCode.NETWORK_FAILURE, ModelLibraryErrorCode.REQUEST_TIMEOUT)
@@ -1245,7 +1402,8 @@ class ModelSourceRepository(
                             downloadedFile = destination,
                             metadata = PendingArtifactRuntimeMetadata(
                                 repoId = source.repositoryId ?: source.url
-                            )
+                            ),
+                            context = context
                         ).getOrThrow()
                         if (finalized.promoted) {
                             completed += item.id
@@ -1348,7 +1506,8 @@ class ModelSourceRepository(
                         downloadedFile = destination,
                         metadata = PendingArtifactRuntimeMetadata(
                             repoId = source.repositoryId ?: source.url
-                        )
+                        ),
+                        context = context
                     ).getOrThrow()
                     if (item.id !in completed) {
                         if (finalized.promoted) completed += item.id else failed += item.id
@@ -1381,7 +1540,8 @@ class ModelSourceRepository(
                         downloadedFile = existingStaged,
                         metadata = PendingArtifactRuntimeMetadata(
                             repoId = request.source.repositoryId ?: request.source.url
-                        )
+                        ),
+                        context = context
                     ).getOrThrow()
                     if (finalized.promoted) {
                         completed += request.item.id
@@ -1399,7 +1559,8 @@ class ModelSourceRepository(
                         downloadedFile = existingStaged,
                         metadata = PendingArtifactRuntimeMetadata(
                             repoId = request.source.repositoryId ?: request.source.url
-                        )
+                        ),
+                        context = context
                     ).getOrThrow()
                     if (finalized.promoted) {
                         completed += request.item.id
@@ -1421,7 +1582,8 @@ class ModelSourceRepository(
                         downloadedFile = existingStaged,
                         metadata = PendingArtifactRuntimeMetadata(
                             repoId = request.source.repositoryId ?: request.source.url
-                        )
+                        ),
+                        context = context
                     ).getOrThrow()
                     if (finalized.promoted) {
                         completed += request.item.id
@@ -1636,7 +1798,8 @@ class ModelSourceRepository(
                                 database = AppDatabase.getDatabase(context),
                                 artifact = row,
                                 downloadedFile = staged,
-                                metadata = PendingArtifactRuntimeMetadata(repoId = source?.repositoryId ?: source?.url ?: "model-library")
+                                metadata = PendingArtifactRuntimeMetadata(repoId = source?.repositoryId ?: source?.url ?: "model-library"),
+                                context = context
                             ).getOrThrow()
                             true
                         } else {
@@ -1805,7 +1968,14 @@ class ModelSourceRepository(
             if (!group.complete) throw ModelLibraryException(ModelLibraryErrorCode.MANUAL_PROMOTION_REQUIRED,
                 "Required multipart files are missing")
             val staged = group.entry.canonicalFile
-            val effectiveRole = role ?: row.requestedRole ?: row.detectedRole
+            val portableMetadata = JSONObject(PortableModelMetadata.sanitize(metadataJson ?: row.bundleItemId
+                ?.let { libraryDao.getBundleItemById(it)?.modelMetadataJson }))
+            val stableAudioRole = sequenceOf(
+                portableMetadata.optString("stableAudioComponentRole", ""),
+                portableMetadata.optString("stableAudioRole", "")
+            ).map { it.trim() }
+                .firstOrNull(::isStableAudioComponentRole)
+            val effectiveRole = role ?: row.requestedRole ?: row.detectedRole ?: stableAudioRole
             val result = ModelArtifactRecognizer.validateForPromotion(staged, family, effectiveRole)
             if (!result.isStructurallyValid) {
                 throw ModelLibraryException(
@@ -1826,14 +1996,65 @@ class ModelSourceRepository(
             }
             val source = row.sourceId?.let { libraryDao.getSourceById(it) }
             val repoId = source?.repositoryId ?: source?.url ?: "model-library"
-            val portableMetadata = JSONObject(PortableModelMetadata.sanitize(metadataJson ?: row.bundleItemId
-                ?.let { libraryDao.getBundleItemById(it)?.modelMetadataJson }))
             val database = libraryDaoDatabase(context)
             val installedSize = com.example.llamadroid.data.model.physicalFiles(destination.absolutePath).values.sum()
             val installedHash = artifactFileSha256(destination)
+            val runtimeType = runtimeModelTypeFor(family, effectiveRole)
+            val stableAudioRoleCanonical = StableAudioModelSupport.canonicalRole(effectiveRole)
+            val stableAudioType = StableAudioModelSupport.typeForRole(stableAudioRoleCanonical)
+            val stableAudioComponent = family == ModelFamily.LITERT && stableAudioType != null
+            val stableAudioFamily = portableMetadata.optString("stableAudioFamily", "")
+                .takeIf { StableAudioModelSupport.isFamily(it) }
+                ?: StableAudioModelSupport.FAMILY_SHARED
+            val inspectedAudio = if (runtimeType.isAudioTtsComponentType()) {
+                com.example.llamadroid.sd.SdArtifactInspection.fromJson(result.validationJson)
+                    ?.let { AudioModelSupport.recognize(it, destination.name) }
+            } else {
+                null
+            }
+            val audioDescriptor = AudioModelSupport.descriptorForPayload(
+                type = runtimeType,
+                digest = installedHash,
+                repoId = repoId,
+                filename = destination.name,
+                familyHint = inspectedAudio?.family
+                    ?: stableAudioFamily.takeIf { stableAudioComponent }
+                    ?: portableMetadata.optString("audioFamily", "")
+                        .takeIf { it.isNotBlank() },
+                roleHint = inspectedAudio?.role
+                    ?: stableAudioRoleCanonical.takeIf { stableAudioComponent }
+                    ?: portableMetadata.optString("audioComponentRole", "")
+                        .takeIf { it.isNotBlank() }
+                    ?: effectiveRole,
+                sourceUrl = source?.url,
+                context = context
+            )
+            // Portable metadata cannot vouch for the bytes on this device.
+            // Persist the digest computed from the installed artifact instead.
+            val audioIdentity = if (runtimeType.isAudioTtsComponentType() || stableAudioComponent) {
+                installedHash?.let { "sha256:$it" }
+            } else {
+                null
+            }
             val registeredKey = database.withTransaction {
             group.members.forEach { ensurePendingArtifactActive(libraryDao, it.id) }
-            val registeredKey = if (family == ModelFamily.LITERT) {
+            val registeredKey = if (stableAudioComponent) {
+                val key = availableModelRecordKey(database, destination, id)
+                libraryDaoDatabase(context).modelDao().insertModel(
+                    ModelEntity(
+                        filename = key,
+                        path = destination.absolutePath,
+                        sizeBytes = installedSize,
+                        type = stableAudioType!!,
+                        repoId = repoId,
+                        isDownloaded = true,
+                        audioFamily = stableAudioFamily,
+                        audioComponentRole = stableAudioRoleCanonical,
+                        audioArtifactIdentity = audioIdentity
+                    )
+                )
+                key
+            } else if (family == ModelFamily.LITERT) {
                 val previous = database.liteRtModelDao().getByPath(destination.absolutePath)
                 libraryDaoDatabase(context).liteRtModelDao().insert(
                     com.example.llamadroid.data.model.LiteRtModelEntity(
@@ -1859,7 +2080,6 @@ class ModelSourceRepository(
                 .let { "litert:$it" }
             } else {
                 val key = availableModelRecordKey(database, destination, id)
-                val runtimeType = runtimeModelTypeFor(family, effectiveRole)
                 libraryDaoDatabase(context).modelDao().insertModel(
                     ModelEntity(
                         filename = key,
@@ -1878,7 +2098,16 @@ class ModelSourceRepository(
                         sdCompatProfiles = portableMetadata?.optString("sdCompatProfiles")?.takeIf { it.isNotBlank() },
                         onnxCapabilities = portableMetadata?.optString("onnxCapabilities")?.takeIf { it.isNotBlank() },
                         onnxAssetKind = portableMetadata?.optString("onnxAssetKind")?.takeIf { it.isNotBlank() },
-                        onnxPipelineFamily = portableMetadata?.optString("onnxPipelineFamily")?.takeIf { it.isNotBlank() }
+                        onnxPipelineFamily = portableMetadata?.optString("onnxPipelineFamily")?.takeIf { it.isNotBlank() },
+                        audioFamily = audioDescriptor?.family ?: portableMetadata.optString("audioFamily", "")
+                            .takeIf { it.isNotBlank() },
+                        audioLanguage = audioDescriptor?.language
+                            ?: portableMetadata.optString("audioLanguage", "")
+                                .takeIf { it.isNotBlank() },
+                        audioComponentRole = audioDescriptor?.role
+                            ?: portableMetadata.optString("audioComponentRole", "")
+                                .takeIf { it.isNotBlank() },
+                        audioArtifactIdentity = audioIdentity
                     )
                 )
                 key
@@ -1900,6 +2129,9 @@ class ModelSourceRepository(
                     updatedAt = System.currentTimeMillis()
                 )
             )
+            if (family == ModelFamily.AUDIO) {
+                associateAudioCompanionForBundle(database, libraryDao, row.bundleId)
+            }
             row.sourceId?.let { sourceId ->
                 libraryDao.upsert(
                     ModelProvenanceEntity(
@@ -2034,6 +2266,7 @@ class ModelSourceRepository(
                 response.code == 401 -> throw ModelLibraryException(ModelLibraryErrorCode.AUTHENTICATION_REQUIRED, "Source requires authentication")
                 response.code == 403 -> throw ModelLibraryException(ModelLibraryErrorCode.AUTHENTICATION_REJECTED, "Source rejected authentication")
                 response.code == 404 -> throw ModelLibraryException(ModelLibraryErrorCode.SOURCE_NOT_FOUND, "Source file was not found")
+                response.code == 429 -> throw ModelLibraryException(ModelLibraryErrorCode.RATE_LIMITED, "Source request was rate limited")
                 !response.isSuccessful -> throw ModelLibraryException(ModelLibraryErrorCode.HTTP_FAILURE,
                     "Source request failed", arguments = listOf(response.code.toString()))
             }
@@ -2175,8 +2408,16 @@ class ModelSourceRepository(
                 "upscaler", "image_upscaler", "imageupscaler" -> ModelType.ONNX_IMAGE_UPSCALER
                 else -> ModelType.ONNX_IMAGE_GEN
             }
-            ModelFamily.LITERT -> ModelType.LLM
+            // Generic LiteRT-LM keeps the legacy placeholder while Stable
+            // Audio components use appended model types. The latter are
+            // regular model-library rows so the shared Models screen can
+            // filter, inspect, and delete them without exposing them as chat.
+            ModelFamily.LITERT -> StableAudioModelSupport.typeForRole(role) ?: ModelType.LLM
             ModelFamily.WHISPER -> ModelType.WHISPER
+            ModelFamily.AUDIO -> when {
+                isAudioCompanionRole(role) || normalizedModelLibraryRole(role) in setOf("mmproj", "companion") -> ModelType.LLAMA_TTS_COMPANION
+                else -> ModelType.LLAMA_TTS
+            }
         }
     }
 }

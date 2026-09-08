@@ -56,6 +56,10 @@ class ExternalRouteResolverTest {
             val route = Screen.ImageGen.createRoute(mode)
             assertEquals(route, ExternalRouteResolver.resolveRoute(route))
         }
+        assertEquals(
+            Screen.OnnxModels.createRoute("catalog"),
+            ExternalRouteResolver.resolveRoute(Screen.OnnxModels.createRoute("catalog"))
+        )
     }
 
     @Test
@@ -73,6 +77,8 @@ class ExternalRouteResolverTest {
             "chat?port=abc",
             "image_gen?startMode=5",
             "image_gen?startMode=",
+            "onnx_models?tab=unknown",
+            "onnx_models?tab=catalog&tab=installed",
             "dataset_project",
             "dataset_project/0",
             "dataset_project/-1",

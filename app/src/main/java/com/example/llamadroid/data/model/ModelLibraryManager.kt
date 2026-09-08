@@ -45,7 +45,11 @@ object ModelLibraryManager {
         ModelType.SD_ADETAILER,
         ModelType.SD_AUDIO_VAE,
         ModelType.SD_EMBEDDINGS_CONNECTORS,
-        ModelType.SD_MOTION_MODULE
+        ModelType.SD_MOTION_MODULE,
+        ModelType.LLAMA_TTS,
+        ModelType.LLAMA_TTS_COMPANION,
+        ModelType.LITERT_AUDIO_DIT,
+        ModelType.LITERT_AUDIO_COMPONENT
     )
 
     fun relativeDirFor(type: ModelType): String = when (type) {
@@ -75,6 +79,10 @@ object ModelLibraryManager {
         ModelType.SD_AUDIO_VAE -> "sd/audio_vae"
         ModelType.SD_EMBEDDINGS_CONNECTORS -> "sd/connectors"
         ModelType.SD_MOTION_MODULE -> "sd/motion_module"
+        ModelType.LLAMA_TTS,
+        ModelType.LLAMA_TTS_COMPANION -> "audio/tts"
+        ModelType.LITERT_AUDIO_DIT,
+        ModelType.LITERT_AUDIO_COMPONENT -> "audio/stable"
         ModelType.ONNX_IMAGE_GEN,
         ModelType.ONNX_BACKGROUND_REMOVAL,
         ModelType.ONNX_IMAGE_UPSCALER,
