@@ -6,6 +6,7 @@ qa-artifacts
 qa
 app/lint-baseline.xml
 .agents
+tests
 
 # Built application files
 *.apk

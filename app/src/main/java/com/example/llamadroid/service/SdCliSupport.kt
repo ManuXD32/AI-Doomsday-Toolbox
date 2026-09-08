@@ -397,13 +397,33 @@ fun buildSdCommandArgs(
         requireFlag("--vae-conv-direct")
         args.add("--vae-conv-direct")
     }
-    if (config.qwenImageZeroCondT && spec.supportsQwenImageZeroCondT) {
-        requireFlag("--qwen-image-zero-cond-t")
-        args.add("--qwen-image-zero-cond-t")
+    // stable-diffusion.cpp 6b3edaa removed the old family-specific switches
+    // from the CLI. These model toggles now share the typed key=value
+    // `--model-args` surface advertised by the packaged binary. An explicit
+    // help capability set may still describe an older custom binary, so keep
+    // its direct switches as a compatibility fallback only when that help
+    // proves they are supported.
+    val modelArgs = buildList<Pair<String, String>> {
+        if (config.qwenImageZeroCondT && spec.supportsQwenImageZeroCondT) {
+            add("qwen_image_zero_cond_t=true" to "--qwen-image-zero-cond-t")
+        }
+        if (config.chromaDisableDitMask && spec.supportsChromaDisableDitMask) {
+            add("chroma_use_dit_mask=false" to "--chroma-disable-dit-mask")
+        }
     }
-    if (config.chromaDisableDitMask && spec.supportsChromaDisableDitMask) {
-        requireFlag("--chroma-disable-dit-mask")
-        args.add("--chroma-disable-dit-mask")
+    if (modelArgs.isNotEmpty()) {
+        val useModelArgs = binaryCapabilities == null ||
+            binaryCapabilities == SdBinaryCapabilities.ALLOW_ALL ||
+            binaryCapabilities.supports("--model-args")
+        if (useModelArgs) {
+            requireFlag("--model-args")
+            args.addAll(listOf("--model-args", modelArgs.joinToString(",") { it.first }))
+        } else {
+            modelArgs.forEach { (_, legacyFlag) ->
+                requireFlag(legacyFlag)
+                args.add(legacyFlag)
+            }
+        }
     }
 
     args.addAll(listOf("-o", config.outputPath))

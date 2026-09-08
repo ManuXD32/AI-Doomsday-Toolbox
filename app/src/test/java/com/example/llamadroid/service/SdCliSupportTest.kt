@@ -184,7 +184,7 @@ class SdCliSupportTest {
     }
 
     @Test
-    fun `qwen image edit 2511 adds zero cond t flag`() {
+    fun `qwen image edit 2511 adds zero cond t model arg`() {
         val args = buildSdCommandArgs(
             SDConfig(
                 mode = SDMode.IMG2IMG,
@@ -196,11 +196,82 @@ class SdCliSupportTest {
                 initImage = "/tmp/ref.png",
                 llmPath = "/models/qwen2_5_vl.gguf",
                 qwenImageZeroCondT = true
+            ),
+            binaryCapabilities = SdBinaryCapabilities(
+                supportedFlags = setOf("--diffusion-model", "--llm", "--model-args", "-r")
+            )
+        )
+
+        assertOption(args, "--model-args", "qwen_image_zero_cond_t=true")
+        assertFalse(args.contains("--qwen-image-zero-cond-t"))
+        assertTrue(args.contains("-r"))
+    }
+
+    @Test
+    fun `qwen image edit 2511 retains legacy flag for older advertised binary`() {
+        val args = buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.IMG2IMG,
+                modelPath = "/models/qwen-image-edit.gguf",
+                modelFamily = "qwen_image_edit",
+                modelVariant = "2511",
+                prompt = "change the sky to sunset",
+                outputPath = "/tmp/out.png",
+                initImage = "/tmp/ref.png",
+                llmPath = "/models/qwen2_5_vl.gguf",
+                qwenImageZeroCondT = true
+            ),
+            binaryCapabilities = SdBinaryCapabilities(
+                supportedFlags = setOf("--diffusion-model", "--llm", "--qwen-image-zero-cond-t", "-r")
             )
         )
 
         assertTrue(args.contains("--qwen-image-zero-cond-t"))
-        assertTrue(args.contains("-r"))
+        assertFalse(args.contains("--model-args"))
+    }
+
+    @Test
+    fun `chroma disable dit mask uses model args`() {
+        val args = buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.TXT2IMG,
+                modelPath = "/models/chroma.gguf",
+                modelFamily = "chroma",
+                prompt = "a glowing forest",
+                outputPath = "/tmp/out.png",
+                vaePath = "/models/chroma-vae.safetensors",
+                t5xxlPath = "/models/t5xxl.gguf",
+                chromaDisableDitMask = true
+            ),
+            binaryCapabilities = SdBinaryCapabilities(
+                supportedFlags = setOf("--diffusion-model", "--model-args")
+            )
+        )
+
+        assertOption(args, "--model-args", "chroma_use_dit_mask=false")
+        assertFalse(args.contains("--chroma-disable-dit-mask"))
+    }
+
+    @Test
+    fun `chroma disable dit mask retains legacy flag for older advertised binary`() {
+        val args = buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.TXT2IMG,
+                modelPath = "/models/chroma.gguf",
+                modelFamily = "chroma",
+                prompt = "a glowing forest",
+                outputPath = "/tmp/out.png",
+                vaePath = "/models/chroma-vae.safetensors",
+                t5xxlPath = "/models/t5xxl.gguf",
+                chromaDisableDitMask = true
+            ),
+            binaryCapabilities = SdBinaryCapabilities(
+                supportedFlags = setOf("--diffusion-model", "--chroma-disable-dit-mask")
+            )
+        )
+
+        assertTrue(args.contains("--chroma-disable-dit-mask"))
+        assertFalse(args.contains("--model-args"))
     }
 
     @Test
@@ -251,7 +322,7 @@ class SdCliSupportTest {
               --llm_vision FILE
               --clip_g FILE
               --photo-maker FILE
-              --qwen-image-zero-cond-t
+              --model-args key=value
               -r FILE
             """.trimIndent()
         )
@@ -260,6 +331,7 @@ class SdCliSupportTest {
         assertTrue(caps.supports("--llm"))
         assertTrue(caps.supports("--clip_g"))
         assertTrue(caps.supports("--photo-maker"))
+        assertTrue(caps.supports("--model-args"))
         assertTrue(caps.supports("-r"))
         assertTrue(caps.supportsMode("adetailer"))
         assertTrue(caps.supportsMode("IMG_GEN"))
