@@ -141,10 +141,14 @@
     <string name="audio_workspace_voice_metadata">%1$s · %2$.1f s</string>
     <string name="audio_workspace_voice_incompatible">Este perfil no coincide con los requisitos del modelo seleccionado.</string>
     <string name="audio_workspace_preview_voice">Previsualizar voz</string>
+    <string name="audio_workspace_pause_voice">Pausar previsualización</string>
+    <string name="audio_workspace_resume_voice">Reanudar previsualización</string>
+    <string name="audio_workspace_stop_voice">Detener previsualización</string>
     <string name="audio_workspace_import_voice_title">Guardar voz de referencia</string>
     <string name="audio_workspace_voice_name">Nombre de la voz</string>
     <string name="audio_workspace_default_voice_name">Mi voz</string>
     <string name="audio_workspace_voice_import_format">El runtime convierte el origen a un formato de referencia local compatible.</string>
+    <string name="audio_workspace_reference_quality_hint">Para una referencia más clara, graba entre 3 y 10 segundos en una habitación silenciosa, con una sola voz, distancia estable y sin música ni eco. La normalización y la reducción de ruido son limpiezas opcionales; no sustituyen una grabación limpia.</string>
     <string name="audio_workspace_save_voice">Guardar voz</string>
     <string name="audio_voice_rename_title">Renombrar voz</string>
     <string name="audio_workspace_history_title">Audio generado</string>

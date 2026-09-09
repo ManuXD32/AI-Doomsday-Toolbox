@@ -91,6 +91,7 @@ class StableAudio3WorkerService : Service() {
         activeReply = reply
         cancellationRequested = false
         activeJob = scope.launch {
+            var lastStage = "validating"
             try {
                 reply.send(
                     StableAudio3WorkerProtocol.newMessage(
@@ -106,8 +107,10 @@ class StableAudio3WorkerService : Service() {
                     verifyComponents(request)
                 }
                 if (cancellationRequested) throw CancellationException("Audio cancelled")
+                lastStage = "loading"
                 val result = StableAudio3Native.run(request, object : StableAudio3Native.ProgressSink {
                     override fun onProgress(stage: String, completed: Int, total: Int) {
+                        lastStage = stage
                         val progress = StableAudio3WorkerProtocol.newMessage(
                             StableAudio3WorkerProtocol.MSG_PROGRESS, requestId
                         ) {
@@ -125,17 +128,17 @@ class StableAudio3WorkerService : Service() {
                     ) { putString(StableAudio3WorkerProtocol.KEY_RESULT_JSON, result) }
                 )
             } catch (cancelled: CancellationException) {
-                sendError(reply, requestId, StableAudio3WorkerProtocol.ERROR_CANCELLED)
+                sendError(reply, requestId, StableAudio3WorkerProtocol.ERROR_CANCELLED, lastStage)
             } catch (_: IllegalArgumentException) {
-                sendError(reply, requestId, StableAudio3WorkerProtocol.ERROR_BAD_REQUEST)
+                sendError(reply, requestId, StableAudio3WorkerProtocol.ERROR_BAD_REQUEST, lastStage)
             } catch (error: Throwable) {
-                val candidate = error.message?.trim().orEmpty()
-                val code = if (candidate.matches(Regex("[a-z0-9_:-]{1,100}"))) {
-                    candidate
-                } else {
-                    StableAudio3WorkerProtocol.ERROR_NATIVE_FAILURE
+                val failure = when (error) {
+                    is OutOfMemoryError -> StableAudio3Failure.fromNative("native_memory_exhausted", lastStage)
+                    is LinkageError -> StableAudio3Failure.fromNative("native_pipeline_unavailable", lastStage)
+                    is IllegalStateException -> StableAudio3Failure.fromNative(error.message, lastStage)
+                    else -> StableAudio3Failure.fromNative(null, lastStage)
                 }
-                sendError(reply, requestId, code)
+                sendError(reply, requestId, failure.code, failure.stage, failure.nativeStatus)
             } finally {
                 activeJob = null
                 activeReply = null
@@ -155,13 +158,18 @@ class StableAudio3WorkerService : Service() {
         StableAudio3Native.cancel()
     }
 
-    private fun sendError(reply: Messenger?, requestId: String, code: String) {
+    private fun sendError(reply: Messenger?, requestId: String, code: String,
+                          stage: String = "starting", nativeStatus: Int? = null) {
         if (reply == null) return
         runCatching {
             reply.send(
                 StableAudio3WorkerProtocol.newMessage(
                     StableAudio3WorkerProtocol.MSG_ERROR, requestId
-                ) { putString(StableAudio3WorkerProtocol.KEY_ERROR_CODE, code) }
+                ) {
+                    putString(StableAudio3WorkerProtocol.KEY_ERROR_CODE, code)
+                    putString(StableAudio3WorkerProtocol.KEY_STAGE, stage)
+                    nativeStatus?.let { putInt(StableAudio3WorkerProtocol.KEY_NATIVE_STATUS, it) }
+                }
             )
         }
     }

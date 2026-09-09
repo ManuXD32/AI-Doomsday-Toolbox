@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="agent_structured_task_completed">Tarea completada. Resumen: %1$s</string>
+    <string name="agent_structured_task_incomplete">La tarea está incompleta. %1$s</string>
+    <string name="agent_structured_action_required">El modelo no devolvió una única acción estructurada. La tarea sigue incompleta; se solicitará una llamada de herramienta.</string>
+    <string name="agent_structured_action_paused">El modelo sigue sin llamar a la acción necesaria tras un reintento. Tu trabajo está guardado. Pulsa Continuar para reanudar; los planes y las preguntas deben usar sus herramientas interactivas.</string>
+    <string name="agent_structured_action_output_limit">El modelo alcanzó su límite de salida sin una acción estructurada tras un reintento. Tu trabajo está guardado. Ajusta el límite de salida en Ajustes del agente si es necesario y pulsa Continuar.</string>
+</resources>

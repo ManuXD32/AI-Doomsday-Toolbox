@@ -21,6 +21,73 @@ class CuratedBundleSupportTest {
         }
     }
 
+    @Test fun `vision provenance marks main models while normal bundles stay non-vision`() {
+        val gemma = LlamaCuratedBundleCatalog.bundles.single { it.id == "gemma4-e2b-complete" }
+        val video = VideoRecognitionBundleCatalog.bundles.single { it.id == "video-qwen25vl-3b" }
+        val normal = LlamaCuratedBundleCatalog.bundles.single { it.id == "qwen35-2b" }
+
+        assertTrue(gemma.isVisionCapable)
+        assertTrue(gemma.runtimeIsVision(gemma.files.single { it.type == ModelType.LLM }))
+        assertTrue(video.isVisionCapable)
+        assertTrue(video.runtimeIsVision(video.files.single { it.type == ModelType.LLM }))
+        assertTrue(video.files.single { it.type == ModelType.LLM }.isVision)
+        assertTrue(video.runtimeIsVision(video.files.single { it.type == ModelType.VISION_PROJECTOR }))
+        assertFalse(normal.isVisionCapable)
+        assertFalse(normal.runtimeIsVision(normal.files.single { it.type == ModelType.LLM }))
+    }
+
+    @Test fun `speech bundle files retain family role and language metadata`() {
+        AudioCuratedBundleCatalog.bundles.flatMap { it.files }.forEach { file ->
+            val descriptor = AudioModelSupport.fromCuratedFile(file)
+            assertTrue("${file.id} is missing audio metadata", descriptor != null)
+            assertEquals(file.audioFamily, descriptor?.family)
+            assertEquals(file.componentRole, descriptor?.role)
+            assertEquals(file.audioLanguage, descriptor?.language)
+        }
+    }
+
+    @Test fun `vision repair only selects matching stale installed rows`() {
+        val file = CuratedBundleFile(
+            id = "video-main",
+            repoId = "test/video",
+            revision = "abcdef1",
+            remotePath = "video.gguf",
+            localFilename = "video.gguf",
+            type = ModelType.LLM,
+            sizeBytes = 4L,
+            sha256 = "a".repeat(64),
+            license = "Test"
+        )
+        val bundle = CuratedModelBundle(
+            id = "video-test",
+            titleRes = 0,
+            descriptionRes = 0,
+            defaultPrefix = "Video-Test",
+            videoPolicy = VideoRecognitionPolicy(),
+            files = listOf(file)
+        )
+        val payload = File.createTempFile("curated-vision", ".gguf")
+        payload.writeBytes(byteArrayOf(1, 2, 3, 4))
+        try {
+            val stale = ModelEntity(
+                filename = file.installedFilename(bundle.defaultPrefix),
+                path = payload.absolutePath,
+                sizeBytes = 4L,
+                type = ModelType.LLM,
+                repoId = file.repoId,
+                isDownloaded = true,
+                isVision = false
+            )
+            val alreadyMarked = stale.copy(filename = "already-marked.gguf", isVision = true)
+            assertEquals(
+                listOf(stale),
+                curatedVisionRepairTargets(bundle, bundle.defaultPrefix, listOf(stale, alreadyMarked))
+            )
+        } finally {
+            payload.delete()
+        }
+    }
+
     @Test fun `catalog contains qwen sizes through nine billion`() {
         val ids = LlamaCuratedBundleCatalog.bundles.map { it.id }.toSet()
         assertTrue(ids.containsAll(setOf("qwen35-08b", "qwen35-2b", "qwen35-4b", "qwen35-9b")))

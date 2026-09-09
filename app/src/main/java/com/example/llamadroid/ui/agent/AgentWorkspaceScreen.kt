@@ -115,6 +115,13 @@ private fun isAllowedAgentPreviewUrl(url: String, origin: AgentPreviewOrigin): B
     return scheme == origin.scheme && host == origin.host && port == origin.port
 }
 
+private data class PendingAgentPreviewBlobDownload(
+    val webView: WebView,
+    val bridge: AgentPreviewDownloadBridge,
+    val request: AgentPreviewDownloadRequest,
+    val configuredPreviewUrl: String
+)
+
 /**
  * AgentWorkspaceScreen - File manager for AI Agent workspace
  */
@@ -128,6 +135,10 @@ fun AgentWorkspaceScreen(navController: NavController) {
     val agentErrorPrefixFormat = stringResource(R.string.agent_error_prefix)
     val agentUploadSuccessFormat = stringResource(R.string.agent_upload_success)
     val agentWorkspacePreviewTitleText = stringResource(R.string.agent_workspace_preview_title)
+    val previewDownloadUnsupportedText = stringResource(R.string.agent_preview_download_unsupported)
+    val previewDownloadInProgressText = stringResource(R.string.agent_preview_download_in_progress)
+    val previewDownloadTooLargeText = stringResource(R.string.agent_preview_download_too_large)
+    val previewDownloadFailedText = stringResource(R.string.agent_preview_download_failed)
     val actionCopyText = stringResource(R.string.action_copy)
     val actionMoveText = stringResource(R.string.action_move)
     val agentCompressSuccessFormat = stringResource(R.string.agent_compress_success)
@@ -236,6 +247,74 @@ fun AgentWorkspaceScreen(navController: NavController) {
             }
         }
         downloadTarget = null
+    }
+
+    // Preview Blob downloads use the same user-selected SAF destination, but
+    // remain separate from workspace FileInfo downloads because a blob has no
+    // workspace path for AgentService.downloadFile to resolve.
+    var previewDownloadTarget by remember { mutableStateOf<PendingAgentPreviewBlobDownload?>(null) }
+    var previewDownloadSession by remember { mutableStateOf<AgentPreviewBlobExportSession?>(null) }
+    fun releasePreviewDownloadPin(webView: WebView, url: String) {
+        if (url.isBlank() || url.length > 2_048) return
+        runCatching { webView.evaluateJavascript(buildAgentPreviewDownloadReleaseScript(url), null) }
+    }
+    val previewDownloadLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
+        val target = previewDownloadTarget
+        previewDownloadTarget = null
+        if (target == null) return@rememberLauncherForActivityResult
+        if (uri == null) {
+            releasePreviewDownloadPin(target.webView, target.request.url)
+            return@rememberLauncherForActivityResult
+        }
+        val configuredUrl = localRunState?.previewUrl
+        if (configuredUrl == null ||
+            classifyAgentPreviewDownload(target.request.url, target.configuredPreviewUrl) != AgentPreviewDownloadKind.BLOB ||
+            classifyAgentPreviewDownload(target.webView.url.orEmpty(), configuredUrl) == AgentPreviewDownloadKind.UNSUPPORTED ||
+            !AgentPreviewBridge.hasActivePreview(activeConversationId)
+        ) {
+            releasePreviewDownloadPin(target.webView, target.request.url)
+            Toast.makeText(context, previewDownloadUnsupportedText, Toast.LENGTH_LONG).show()
+            return@rememberLauncherForActivityResult
+        }
+        if (!isAgentPreviewDownloadSizeAllowed(target.request.contentLength)) {
+            releasePreviewDownloadPin(target.webView, target.request.url)
+            Toast.makeText(context, previewDownloadTooLargeText, Toast.LENGTH_LONG).show()
+            return@rememberLauncherForActivityResult
+        }
+        if (previewDownloadSession != null) {
+            releasePreviewDownloadPin(target.webView, target.request.url)
+            Toast.makeText(context, previewDownloadInProgressText, Toast.LENGTH_SHORT).show()
+            return@rememberLauncherForActivityResult
+        }
+        setIsLoading(true, statusDownloadingText)
+        val session = AgentPreviewBlobExportSession(
+            webView = target.webView,
+            downloadBridge = target.bridge,
+            contentResolver = context.contentResolver,
+            destination = uri,
+            blobUrl = target.request.url,
+            scope = scope,
+            onResult = { result ->
+                previewDownloadSession = null
+                setIsLoading(false)
+                result.onSuccess {
+                    Toast.makeText(context, statusCompleteText, Toast.LENGTH_SHORT).show()
+                }.onFailure { _ ->
+                    Toast.makeText(
+                        context,
+                        previewDownloadFailedText,
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        )
+        previewDownloadSession = session
+        runCatching { session.start() }.onFailure {
+            session.cancel()
+            previewDownloadSession = null
+            setIsLoading(false)
+            Toast.makeText(context, previewDownloadFailedText, Toast.LENGTH_LONG).show()
+        }
     }
     
     // Load files
@@ -588,6 +667,58 @@ fun AgentWorkspaceScreen(navController: NavController) {
                     backend = workspaceBackend,
                     onOpenExternal = { url ->
                         navController.navigate(Screen.TermuxWebView.createRoute(url, agentWorkspacePreviewTitleText, "agent_local"))
+                    },
+                    onDownloadRequest = { webView, request, bridge ->
+                        val configuredUrl = localRunState?.previewUrl
+                        val rejected = configuredUrl == null ||
+                            classifyAgentPreviewDownload(request.url, configuredUrl) != AgentPreviewDownloadKind.BLOB ||
+                            !isAgentPreviewDownloadSizeAllowed(request.contentLength) ||
+                            previewDownloadSession != null || previewDownloadTarget != null
+                        // A duplicate click must not revoke a URL still being exported.
+                        if (rejected && previewDownloadSession == null &&
+                            previewDownloadTarget?.request?.url != request.url
+                        ) {
+                            releasePreviewDownloadPin(webView, request.url)
+                        }
+                        if (configuredUrl == null ||
+                            classifyAgentPreviewDownload(request.url, configuredUrl) != AgentPreviewDownloadKind.BLOB
+                        ) {
+                            Toast.makeText(context, previewDownloadUnsupportedText, Toast.LENGTH_LONG).show()
+                        } else if (!isAgentPreviewDownloadSizeAllowed(request.contentLength)) {
+                            Toast.makeText(context, previewDownloadTooLargeText, Toast.LENGTH_LONG).show()
+                        } else if (previewDownloadSession != null || previewDownloadTarget != null) {
+                            Toast.makeText(context, previewDownloadInProgressText, Toast.LENGTH_SHORT).show()
+                        } else {
+                            previewDownloadTarget = PendingAgentPreviewBlobDownload(
+                                webView = webView,
+                                bridge = bridge,
+                                request = request,
+                                configuredPreviewUrl = configuredUrl
+                            )
+                            runCatching {
+                                previewDownloadLauncher.launch(
+                                    sanitizeAgentPreviewDownloadFilename(request.contentDisposition, request.mimeType)
+                                )
+                            }.onFailure {
+                                releasePreviewDownloadPin(webView, request.url)
+                                previewDownloadTarget = null
+                                Toast.makeText(context, previewDownloadUnsupportedText, Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    },
+                    onPreviewDisposed = {
+                        previewDownloadTarget?.let { releasePreviewDownloadPin(it.webView, it.request.url) }
+                        previewDownloadTarget = null
+                        if (previewDownloadSession != null) setIsLoading(false)
+                        previewDownloadSession?.cancel()
+                        previewDownloadSession = null
+                    },
+                    onPreviewNavigated = {
+                        previewDownloadTarget?.let { releasePreviewDownloadPin(it.webView, it.request.url) }
+                        previewDownloadTarget = null
+                        if (previewDownloadSession != null) setIsLoading(false)
+                        previewDownloadSession?.cancel()
+                        previewDownloadSession = null
                     }
                 )
             } else {
@@ -1997,8 +2128,14 @@ private fun AgentWorkspacePreviewTab(
     modifier: Modifier,
     previewUrl: String?,
     backend: AgentWorkspaceBackendType,
-    onOpenExternal: (String) -> Unit
+    onOpenExternal: (String) -> Unit,
+    onDownloadRequest: (WebView, AgentPreviewDownloadRequest, AgentPreviewDownloadBridge) -> Unit,
+    onPreviewDisposed: () -> Unit,
+    onPreviewNavigated: () -> Unit
 ) {
+    val currentDownloadRequest = rememberUpdatedState(onDownloadRequest)
+    val currentPreviewDisposed = rememberUpdatedState(onPreviewDisposed)
+    val currentPreviewNavigated = rememberUpdatedState(onPreviewNavigated)
     val configuredOrigin = remember(previewUrl) {
         previewUrl?.let(::parseAgentPreviewOrigin)
     }
@@ -2041,13 +2178,47 @@ private fun AgentWorkspacePreviewTab(
                     AndroidView(
                         modifier = Modifier.fillMaxSize(),
                         factory = { context ->
+                            // Android exposes addJavascriptInterface objects to
+                            // a document only when it is created. Install this
+                            // WebView-scoped dispatcher before the first load;
+                            // the export session later attaches its token route.
+                            val downloadBridge = AgentPreviewDownloadBridge()
                             WebView(context).apply {
+                                AgentPreviewDownloadBridgeRegistry.register(this, downloadBridge)
+                                addJavascriptInterface(downloadBridge, AGENT_PREVIEW_DOWNLOAD_BRIDGE_NAME)
                                 settings.javaScriptEnabled = true
                                 settings.domStorageEnabled = true
                                 settings.allowFileAccess = false
                                 settings.allowContentAccess = false
                                 settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                                setDownloadListener { url, userAgent, contentDisposition, mimeType, contentLength ->
+                                    currentDownloadRequest.value(
+                                        this,
+                                        AgentPreviewDownloadRequest(
+                                            url = url.orEmpty().takeIf { it.length <= 2_048 }.orEmpty(),
+                                            userAgent = userAgent?.take(256),
+                                            contentDisposition = contentDisposition?.take(512),
+                                            mimeType = mimeType?.take(128),
+                                            contentLength = contentLength
+                                        ),
+                                        downloadBridge
+                                    )
+                                }
                                 webViewClient = object : WebViewClient() {
+                                    override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                                        currentPreviewNavigated.value()
+                                        super.onPageStarted(view, url, favicon)
+                                    }
+
+                                    override fun onPageFinished(view: WebView?, url: String?) {
+                                        super.onPageFinished(view, url)
+                                        if (view != null && url != null && isAllowedAgentPreviewUrl(url, origin)) {
+                                            runCatching {
+                                                view.evaluateJavascript(buildAgentPreviewDownloadPinScript(safePreviewUrl), null)
+                                            }
+                                        }
+                                    }
+
                                     override fun shouldOverrideUrlLoading(
                                         view: WebView,
                                         request: WebResourceRequest
@@ -2076,6 +2247,10 @@ private fun AgentWorkspacePreviewTab(
                             }
                         },
                         onRelease = { webView ->
+                            webView.setDownloadListener(null)
+                            currentPreviewDisposed.value()
+                            AgentPreviewDownloadBridgeRegistry.remove(webView)?.clear()
+                            runCatching { webView.removeJavascriptInterface(AGENT_PREVIEW_DOWNLOAD_BRIDGE_NAME) }
                             AgentPreviewBridge.unregister(webView)
                             webView.stopLoading()
                             webView.loadUrl("about:blank")

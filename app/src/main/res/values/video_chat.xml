@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="llama_attach_video">Attach video</string>
+    <string name="llama_video_attached">Video attached</string>
+    <string name="llama_video_play">Play video</string>
+    <string name="llama_video_duration">Duration: %1$s</string>
+    <string name="llama_video_file_missing">Video attachment is missing</string>
+    <string name="llama_video_unsupported">This server does not support video input</string>
+    <string name="llama_video_note_label">Video</string>
+    <string name="llama_video_mode">Video input</string>
+    <string name="llama_video_desc">Enable video input for this server</string>
+    <string name="llama_video_sampling_disclosure">Long video sampled as %1$d frames at uniform timestamps for this request; the original attachment remains available for future turns.</string>
+    <string name="llama_video_sampling_failed">The video could not be sampled into bounded frames.</string>
+    <string name="llama_video_open_failed">The selected video could not be opened.</string>
+    <string name="llama_video_duration_unavailable">The video duration could not be read, so it was not sent.</string>
+    <string name="llama_video_segment_prompt">Describe only observable events, people, objects, text, and changes in this video segment in chronological order.</string>
+    <string name="llama_video_observation_disclosure">Video analyzed in bounded 30-second segments. Model observations for this request (the original attachment remains available for future turns): %1$s</string>
+</resources>

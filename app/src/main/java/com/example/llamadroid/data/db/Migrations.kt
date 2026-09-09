@@ -3676,6 +3676,210 @@ object Migrations {
         }
     }
 
+    /**
+     * Persist the small-model execution contract and the durable continuation
+     * boundary. This migration is additive and keeps all existing chat,
+     * question, project-state, and invocation rows intact.
+     */
+    val MIGRATION_115_116 = object : Migration(115, 116) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 115 -> 116: durable agent contract and continuation outbox")
+
+            if (tableExists(database, "agent_conversations") &&
+                !columnExists(database, "agent_conversations", "executionProfile")
+            ) {
+                database.execSQL(
+                    "ALTER TABLE `agent_conversations` ADD COLUMN `executionProfile` TEXT NOT NULL DEFAULT 'legacy'"
+                )
+            }
+
+            if (tableExists(database, "agent_pending_questions") &&
+                !columnExists(database, "agent_pending_questions", "answerMessageOriginalId")
+            ) {
+                database.execSQL(
+                    "ALTER TABLE `agent_pending_questions` ADD COLUMN `answerMessageOriginalId` TEXT DEFAULT NULL"
+                )
+            }
+            if (tableExists(database, "agent_pending_questions") &&
+                !columnExists(database, "agent_pending_questions", "answerReceiptId")
+            ) {
+                database.execSQL(
+                    "ALTER TABLE `agent_pending_questions` ADD COLUMN `answerReceiptId` TEXT DEFAULT NULL"
+                )
+            }
+
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_project_contracts` (
+                    `conversationId` INTEGER NOT NULL,
+                    `contractVersion` INTEGER NOT NULL,
+                    `initialGoal` TEXT NOT NULL,
+                    `initialGoalSource` TEXT NOT NULL,
+                    `noMoreQuestions` INTEGER NOT NULL,
+                    `greenfield` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`conversationId`),
+                    FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_project_contracts_contractVersion` ON `agent_project_contracts` (`contractVersion`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_project_contracts_greenfield` ON `agent_project_contracts` (`greenfield`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_project_contracts_noMoreQuestions` ON `agent_project_contracts` (`noMoreQuestions`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_project_contracts_updatedAt` ON `agent_project_contracts` (`updatedAt`)")
+
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_decisions` (
+                    `id` TEXT NOT NULL,
+                    `conversationId` INTEGER NOT NULL,
+                    `rootTurnId` TEXT,
+                    `questionId` TEXT,
+                    `decisionKey` TEXT NOT NULL,
+                    `answerJson` TEXT NOT NULL,
+                    `submittedAnswerJson` TEXT NOT NULL,
+                    `selectedOptionsJson` TEXT NOT NULL,
+                    `customAnswer` TEXT,
+                    `specificationJson` TEXT NOT NULL,
+                    `provenanceJson` TEXT NOT NULL,
+                    `supersedesDecisionId` TEXT,
+                    `latestCorrectionId` TEXT,
+                    `isLatest` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_decisions_conversationId` ON `agent_decisions` (`conversationId`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_decisions_rootTurnId` ON `agent_decisions` (`rootTurnId`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_decisions_questionId` ON `agent_decisions` (`questionId`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_decisions_decisionKey` ON `agent_decisions` (`decisionKey`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_decisions_isLatest` ON `agent_decisions` (`isLatest`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_decisions_createdAt` ON `agent_decisions` (`createdAt`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_decisions_conversationId_decisionKey_isLatest` ON `agent_decisions` (`conversationId`, `decisionKey`, `isLatest`)")
+
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_continuation_outbox` (
+                    `id` TEXT NOT NULL,
+                    `conversationId` INTEGER NOT NULL,
+                    `rootTurnId` TEXT,
+                    `kind` TEXT NOT NULL,
+                    `dedupeKey` TEXT NOT NULL,
+                    `payloadJson` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `attemptCount` INTEGER NOT NULL,
+                    `claimedAt` INTEGER,
+                    `enqueuedAt` INTEGER,
+                    `completedAt` INTEGER,
+                    `errorClass` TEXT,
+                    `errorMessage` TEXT,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_continuation_outbox_conversationId` ON `agent_continuation_outbox` (`conversationId`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_continuation_outbox_rootTurnId` ON `agent_continuation_outbox` (`rootTurnId`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_continuation_outbox_status` ON `agent_continuation_outbox` (`status`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_continuation_outbox_createdAt` ON `agent_continuation_outbox` (`createdAt`)")
+            database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_agent_continuation_outbox_conversationId_dedupeKey` ON `agent_continuation_outbox` (`conversationId`, `dedupeKey`)")
+
+            // Seed the immutable contract from the best durable legacy source.
+            // A state goal is copied once; later packet rendering cannot change it.
+            if (tableExists(database, "agent_conversations")) {
+                database.execSQL(
+                    """
+                    INSERT OR IGNORE INTO `agent_project_contracts`
+                        (`conversationId`, `contractVersion`, `initialGoal`, `initialGoalSource`, `noMoreQuestions`, `greenfield`, `createdAt`, `updatedAt`)
+                    SELECT c.`id`, 1,
+                        COALESCE(
+                            NULLIF(TRIM((
+                                SELECT m.`content`
+                                FROM `agent_messages` m
+                                WHERE m.`conversationId` = c.`id`
+                                  AND LOWER(m.`role`) = 'user'
+                                  AND NULLIF(TRIM(m.`content`), '') IS NOT NULL
+                                  AND COALESCE(m.`isDelegation`, 0) = 0
+                                ORDER BY m.`sequenceNumber`, m.`timestamp`, m.`id`
+                                LIMIT 1
+                            )), ''),
+                            NULLIF(TRIM(s.`currentGoal`), ''),
+                            ''
+                        ),
+                        CASE
+                            WHEN NULLIF(TRIM((
+                                SELECT m.`content`
+                                FROM `agent_messages` m
+                                WHERE m.`conversationId` = c.`id`
+                                  AND LOWER(m.`role`) = 'user'
+                                  AND NULLIF(TRIM(m.`content`), '') IS NOT NULL
+                                  AND COALESCE(m.`isDelegation`, 0) = 0
+                                ORDER BY m.`sequenceNumber`, m.`timestamp`, m.`id`
+                                LIMIT 1
+                            )), '') IS NOT NULL THEN 'USER_MESSAGE'
+                            WHEN NULLIF(TRIM(s.`currentGoal`), '') IS NULL THEN 'MIGRATION'
+                            ELSE 'LEGACY_PROJECT_STATE'
+                        END,
+                        0, 0, c.`createdAt`, c.`updatedAt`
+                    FROM `agent_conversations` c
+                    LEFT JOIN `agent_project_states` s ON s.`conversationId` = c.`id`
+                    """.trimIndent()
+                )
+            }
+
+            // Make legacy answered rows recoverable even if their old enqueue
+            // flag was already set before the canonical message was flushed.
+            if (tableExists(database, "agent_pending_questions")) {
+                database.execSQL(
+                    """
+                    UPDATE `agent_pending_questions`
+                    SET `answerMessageOriginalId` = 'question-answer:' || `id`,
+                        `answerReceiptId` = 'question-continuation:' || `id`
+                    WHERE `status` = 'ANSWERED'
+                      AND `answerMessageOriginalId` IS NULL
+                    """.trimIndent()
+                )
+
+                database.execSQL(
+                    """
+                    INSERT OR IGNORE INTO `agent_decisions`
+                        (`id`, `conversationId`, `rootTurnId`, `questionId`, `decisionKey`, `answerJson`, `submittedAnswerJson`, `selectedOptionsJson`, `customAnswer`, `specificationJson`, `provenanceJson`, `supersedesDecisionId`, `latestCorrectionId`, `isLatest`, `createdAt`, `updatedAt`)
+                    SELECT 'decision-migration-' || `id`, `conversationId`, `rootTurnId`, `id`, 'question:' || `id`,
+                        COALESCE(`answerJson`, '{}'), COALESCE(`answerJson`, '{}'), '[]', NULL,
+                        COALESCE(`specificationJson`, '{}'), '{"source":"migration_116","legacy_question_id":"' || `id` || '"}',
+                        NULL, NULL, 1, COALESCE(`answeredAt`, `createdAt`), COALESCE(`answeredAt`, `createdAt`)
+                    FROM `agent_pending_questions`
+                    WHERE `status` = 'ANSWERED'
+                    """.trimIndent()
+                )
+
+                database.execSQL(
+                    """
+                    INSERT OR IGNORE INTO `agent_continuation_outbox`
+                        (`id`, `conversationId`, `rootTurnId`, `kind`, `dedupeKey`, `payloadJson`, `status`, `attemptCount`, `claimedAt`, `enqueuedAt`, `completedAt`, `errorClass`, `errorMessage`, `createdAt`, `updatedAt`)
+                    SELECT 'question-continuation-' || `id`, `conversationId`, `rootTurnId`, 'QUESTION_CONTINUATION',
+                        'question:' || `id`, '{"question_id":"' || `id` || '","source":"migration_116"}',
+                        CASE WHEN `continuationEnqueued` = 1 THEN 'ENQUEUED' ELSE 'QUEUED' END,
+                        0, NULL,
+                        CASE WHEN `continuationEnqueued` = 1 THEN COALESCE(`answeredAt`, `createdAt`) ELSE NULL END,
+                        NULL, NULL, NULL,
+                        COALESCE(`answeredAt`, `createdAt`), COALESCE(`answeredAt`, `createdAt`)
+                    FROM `agent_pending_questions`
+                    WHERE `status` = 'ANSWERED'
+                    """.trimIndent()
+                )
+            }
+
+            DebugLog.log("[DB] Migration 115 -> 116 complete")
+        }
+    }
+
     val ALL_MIGRATIONS: Array<Migration> = arrayOf(
         MIGRATION_27_28,
         MIGRATION_28_29,
@@ -3764,7 +3968,9 @@ object Migrations {
         MIGRATION_111_112,
         MIGRATION_112_113,
         MIGRATION_113_114,
-        MIGRATION_114_115
+        MIGRATION_114_115,
+        MIGRATION_115_116,
+        VideoVisionMigration.MIGRATION_116_117
     )
     /**
      * Check if a column exists in a table.

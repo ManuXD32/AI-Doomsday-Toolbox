@@ -818,6 +818,32 @@ class ProcessControllerTest {
     }
 
     @Test
+    fun `video custom runtime paths remain when config does not own them`() {
+        val custom = listOf(
+            "--video-fps", "1.5",
+            "--video-timestamp-interval", "500",
+            "--video-ffmpeg-dir", "/session/ffmpeg",
+            "--media-path", "/session/media"
+        )
+        val profileConfig = LlamaConfig(
+            modelPath = "/models/video.gguf",
+            videoEnabled = true
+        )
+        val retained = filterManagedLlamaCustomFlags(custom, profileConfig)
+        assertFalse(retained.contains("--video-fps"))
+        assertFalse(retained.contains("--video-timestamp-interval"))
+        assertArgValue(retained, "--video-ffmpeg-dir", "/session/ffmpeg")
+        assertArgValue(retained, "--media-path", "/session/media")
+
+        val typedConfig = profileConfig.copy(
+            videoFfmpegDir = "/typed/ffmpeg",
+            mediaPath = "/typed/media"
+        )
+        val removed = filterManagedLlamaCustomFlags(custom, typedConfig)
+        assertTrue(removed.isEmpty())
+    }
+
+    @Test
     fun `native tools template appends unless template handles native tools`() {
         val controller = ProcessController()
         val config = LlamaConfig(modelPath = "/models/main.gguf", nativeToolsEnabled = true)
@@ -842,6 +868,83 @@ class ProcessControllerTest {
             config = config
         )
         assertArgValue(placeholder, "--tools", "all")
+    }
+
+    @Test
+    fun `video flags are available in generated and templated commands`() {
+        val controller = ProcessController()
+        val config = LlamaConfig(
+            modelPath = "/models/video.gguf",
+            videoEnabled = true,
+            videoFps = 9f,
+            videoTimestampIntervalMs = 1,
+            mediaPath = "/private/video/media",
+            videoFfmpegDir = "/private/video/ffmpeg"
+        )
+
+        val generated = controller.getCommand("/bin/llama-server", config)
+        assertArgValue(generated, "--video-fps", "2")
+        assertArgValue(generated, "--video-timestamp-interval", "250")
+        assertArgValue(generated, "--media-path", "/private/video/media")
+        assertArgValue(generated, "--video-ffmpeg-dir", "/private/video/ffmpeg")
+
+        val appended = controller.renderCommandTemplate(
+            template = "{binary} -m {model}",
+            binaryPath = "/bin/llama-server",
+            config = config
+        )
+        assertArgValue(appended, "--video-fps", "2")
+        assertArgValue(appended, "--media-path", "/private/video/media")
+
+        val placeholder = controller.renderCommandTemplate(
+            template = "{binary} -m {model} --video-fps 0.5 {video_args}",
+            binaryPath = "/bin/llama-server",
+            config = config
+        )
+        assertEquals(1, placeholder.count { it == "--video-fps" })
+        assertArgValue(placeholder, "--video-fps", "2")
+    }
+
+    @Test
+    fun `typed video flags replace stale custom values while untyped paths remain`() {
+        val config = LlamaConfig(
+            modelPath = "/models/video.gguf",
+            videoEnabled = true,
+            videoFps = 2f,
+            videoTimestampIntervalMs = 250,
+            videoFfmpegDir = "/runtime/new/ffmpeg",
+            mediaPath = "/runtime/new/media"
+        )
+        val custom = listOf(
+            "--video-fps", "0.5",
+            "--video-timestamp-interval=60000",
+            "--video-ffmpeg-dir", "/runtime/old/ffmpeg",
+            "--media-path=/runtime/old/media",
+            "--model-alias", "video"
+        )
+
+        val rendered = ProcessController().appendVideoArgsIfNeeded(custom, config, enabled = true)
+
+        assertArgValue(rendered, "--video-fps", "2")
+        assertArgValue(rendered, "--video-timestamp-interval", "250")
+        assertArgValue(rendered, "--video-ffmpeg-dir", "/runtime/new/ffmpeg")
+        assertArgValue(rendered, "--media-path", "/runtime/new/media")
+        assertEquals(1, rendered.count { it == "--video-fps" })
+        assertEquals(1, rendered.count { it == "--video-timestamp-interval" })
+        assertEquals(1, rendered.count { it == "--video-ffmpeg-dir" })
+        assertEquals(1, rendered.count { it == "--media-path" })
+        assertArgValue(rendered, "--model-alias", "video")
+
+        val keyedConfig = config.copy(videoFfmpegDir = null, mediaPath = null)
+        val keyed = ProcessController().appendVideoArgsIfNeeded(
+            custom,
+            keyedConfig,
+            enabled = true
+        )
+        assertArgValue(keyed, "--video-ffmpeg-dir", "/runtime/old/ffmpeg")
+        assertTrue(keyed.contains("--media-path=/runtime/old/media"))
+        assertArgValue(keyed, "--video-fps", "2")
+        assertArgValue(keyed, "--video-timestamp-interval", "250")
     }
 
     @Test

@@ -33,6 +33,8 @@ import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import com.example.llamadroid.R
 import com.example.llamadroid.service.AgentService
+import com.example.llamadroid.service.AgentHarnessPolicy
+import com.example.llamadroid.service.AgentHarnessProfile
 import com.example.llamadroid.service.OllamaService
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
@@ -863,7 +865,11 @@ fun AgentSettingsDialog(
     runtimeLiteRtModels: List<AgentLiteRtProfileOption>? = null,
     onRuntimeContinue: ((AgentRuntimeContinueAction) -> Unit)? = null,
     globalOverride: AgentGlobalOverrideState? = null,
-    onGlobalOverrideChange: (AgentGlobalOverrideState) -> Unit = {}
+    onGlobalOverrideChange: (AgentGlobalOverrideState) -> Unit = {},
+    /** Canonical profile id for the active project; null hides this project control. */
+    currentProfile: String? = null,
+    /** Receives a normalized profile id so the owner can persist it on the project. */
+    onProfileChange: (String) -> Unit = {}
 ) {
     val showAgentConfiguration = section == AgentSettingsSection.AGENTS
     val showToolConfiguration = section == AgentSettingsSection.TOOLS
@@ -1001,6 +1007,96 @@ fun AgentSettingsDialog(
     val selectedAgentLiteRtModel = liteRtModels.firstOrNull { it.id == agentLiteRtModelId }
         ?: liteRtModels.firstOrNull()
 
+    val optimizedHarnessSelected = currentProfile?.let {
+        AgentHarnessProfile.fromId(it) == AgentHarnessProfile.OPTIMIZED
+    } == true
+
+    // Keep the persisted role values untouched while showing the effective
+    // Optimized recommendation in an unset field. Once a user starts editing,
+    // the preference key exists and the draft value is shown as-is.
+    fun displayRoleContext(role: String, configured: Int): Int =
+        if (
+            optimizedHarnessSelected &&
+                !effectiveGlobalOverride.enabled &&
+                !settingsRepository.hasExplicitAgentContextForRole(role)
+        ) {
+            AgentHarnessPolicy.DEFAULT_CONTEXT_TOKENS
+        } else {
+            configured
+        }
+
+    fun displayRoleOutput(role: String, configured: Int): Int =
+        if (
+            optimizedHarnessSelected &&
+                !effectiveGlobalOverride.enabled &&
+                !settingsRepository.hasExplicitAgentMaxOutputTokensForRole(role)
+        ) {
+            when (role.trim().uppercase(Locale.US)) {
+                "SUMMARIZER" -> AgentHarnessPolicy.SUMMARY_MAX_OUTPUT_TOKENS
+                else -> AgentHarnessPolicy.CONTROL_MAX_OUTPUT_TOKENS
+            }
+        } else {
+            configured
+        }
+
+    @Composable
+    fun outputRecommendationForRole(role: String): String? {
+        if (
+            !optimizedHarnessSelected ||
+            effectiveGlobalOverride.enabled ||
+            settingsRepository.hasExplicitAgentMaxOutputTokensForRole(role)
+        ) {
+            return null
+        }
+        return when (role.trim().uppercase(Locale.US)) {
+            "SUMMARIZER" -> stringResource(
+                R.string.agent_harness_summary_output_recommendation,
+                AgentHarnessPolicy.SUMMARY_MAX_OUTPUT_TOKENS
+            )
+            "ORCHESTRATOR", "CODER" -> stringResource(
+                R.string.agent_harness_build_output_recommendation,
+                AgentHarnessPolicy.CONTROL_MAX_OUTPUT_TOKENS,
+                AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS
+            )
+            else -> stringResource(
+                R.string.agent_harness_control_output_recommendation,
+                AgentHarnessPolicy.CONTROL_MAX_OUTPUT_TOKENS
+            )
+        }
+    }
+
+    val displayGlobalContext = if (
+        optimizedHarnessSelected &&
+            !effectiveGlobalOverride.enabled &&
+            !settingsRepository.hasExplicitAgentGlobalOverrideContextSize()
+    ) {
+        AgentHarnessPolicy.DEFAULT_CONTEXT_TOKENS
+    } else {
+        null
+    }
+    val displayGlobalOutput = if (
+        optimizedHarnessSelected &&
+            !effectiveGlobalOverride.enabled &&
+            !settingsRepository.hasExplicitAgentGlobalOverrideMaxOutputTokens()
+    ) {
+        AgentHarnessPolicy.CONTROL_MAX_OUTPUT_TOKENS
+    } else {
+        null
+    }
+    val globalOutputRecommendation = if (
+        optimizedHarnessSelected &&
+            !effectiveGlobalOverride.enabled &&
+            !settingsRepository.hasExplicitAgentGlobalOverrideMaxOutputTokens()
+    ) {
+        stringResource(
+            R.string.agent_harness_general_output_recommendation,
+            AgentHarnessPolicy.CONTROL_MAX_OUTPUT_TOKENS,
+            AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS
+        )
+    } else {
+        null
+    }
+
     fun saveRuntimeProfile(profile: AgentRuntimeProfile) {
         runtimeProfileScope.launch {
             runtimeProfileStore.save(profile.normalized())
@@ -1084,8 +1180,17 @@ fun AgentSettingsDialog(
                             AgentRuntimeBackend.LLAMA_SWAP -> globalLlamaSwapUrl
                             AgentRuntimeBackend.LITERT -> null
                         },
-                        onChange = saveGlobalOverride
+                        onChange = saveGlobalOverride,
+                        contextSizeForDisplay = displayGlobalContext,
+                        maxOutputTokensForDisplay = displayGlobalOutput,
+                        outputRecommendation = globalOutputRecommendation
                     )
+                    if (currentProfile != null) {
+                        AgentHarnessProfileCard(
+                            profile = AgentHarnessProfile.fromId(currentProfile),
+                            onProfileChange = { onProfileChange(it.id) }
+                        )
+                    }
                 }
 
                 if (showAgentConfiguration) {
@@ -1169,10 +1274,11 @@ fun AgentSettingsDialog(
                     prompt = orchestratorPrompt,
                     onPromptChange = { settingsRepository.setAgentOrchestratorPrompt(it) },
                     onResetPrompt = { settingsRepository.resetAgentPromptToDefault("ORCHESTRATOR") },
-                    contextSize = orchestratorCtx,
+                    contextSize = displayRoleContext("ORCHESTRATOR", orchestratorCtx),
                     onContextSizeChange = { settingsRepository.setAgentOrchestratorCtx(it) },
-                    maxOutputTokens = orchestratorMaxOutputTokens,
+                    maxOutputTokens = displayRoleOutput("ORCHESTRATOR", orchestratorMaxOutputTokens),
                     onMaxOutputTokensChange = settingsRepository::setAgentOrchestratorMaxOutputTokens,
+                    outputRecommendation = outputRecommendationForRole("ORCHESTRATOR"),
                     thinkingEnabled = orchestratorThinking,
                     onThinkingChange = { settingsRepository.setAgentOrchestratorThinkingEnabled(it) },
                     visionEnabled = orchestratorVisionEnabled,
@@ -1198,11 +1304,12 @@ fun AgentSettingsDialog(
                     llamaServerModelLabel = llamaServerModelLabel,
                     llamaServerContextLabel = llamaServerContextLabel,
                     onModelChange = settingsRepository::setAgentCodebaseScoutModel,
-                    contextSize = codebaseScoutCtx,
+                    contextSize = displayRoleContext("CODEBASE_SCOUT", codebaseScoutCtx),
                     onContextSizeChange = settingsRepository::setAgentCodebaseScoutCtx,
-                    maxOutputTokens = codebaseScoutMaxOutputTokens,
+                    maxOutputTokens = displayRoleOutput("CODEBASE_SCOUT", codebaseScoutMaxOutputTokens),
                     onMaxOutputTokensChange =
                         settingsRepository::setAgentCodebaseScoutMaxOutputTokens,
+                    outputRecommendation = outputRecommendationForRole("CODEBASE_SCOUT"),
                     thinkingEnabled = codebaseScoutThinking,
                     onThinkingChange =
                         settingsRepository::setAgentCodebaseScoutThinkingEnabled,
@@ -1234,11 +1341,12 @@ fun AgentSettingsDialog(
                     llamaServerModelLabel = llamaServerModelLabel,
                     llamaServerContextLabel = llamaServerContextLabel,
                     onModelChange = settingsRepository::setAgentPlannerModel,
-                    contextSize = plannerCtx,
+                    contextSize = displayRoleContext("PLANNER", plannerCtx),
                     onContextSizeChange = settingsRepository::setAgentPlannerCtx,
-                    maxOutputTokens = plannerMaxOutputTokens,
+                    maxOutputTokens = displayRoleOutput("PLANNER", plannerMaxOutputTokens),
                     onMaxOutputTokensChange =
                         settingsRepository::setAgentPlannerMaxOutputTokens,
+                    outputRecommendation = outputRecommendationForRole("PLANNER"),
                     thinkingEnabled = plannerThinking,
                     onThinkingChange =
                         settingsRepository::setAgentPlannerThinkingEnabled,
@@ -1270,11 +1378,12 @@ fun AgentSettingsDialog(
                     llamaServerModelLabel = llamaServerModelLabel,
                     llamaServerContextLabel = llamaServerContextLabel,
                     onModelChange = settingsRepository::setAgentResearcherModel,
-                    contextSize = researcherCtx,
+                    contextSize = displayRoleContext("RESEARCHER", researcherCtx),
                     onContextSizeChange = settingsRepository::setAgentResearcherCtx,
-                    maxOutputTokens = researcherMaxOutputTokens,
+                    maxOutputTokens = displayRoleOutput("RESEARCHER", researcherMaxOutputTokens),
                     onMaxOutputTokensChange =
                         settingsRepository::setAgentResearcherMaxOutputTokens,
+                    outputRecommendation = outputRecommendationForRole("RESEARCHER"),
                     thinkingEnabled = researcherThinking,
                     onThinkingChange =
                         settingsRepository::setAgentResearcherThinkingEnabled,
@@ -1313,10 +1422,11 @@ fun AgentSettingsDialog(
                     prompt = coderPrompt,
                     onPromptChange = { settingsRepository.setAgentCoderPrompt(it) },
                     onResetPrompt = { settingsRepository.resetAgentPromptToDefault("CODER") },
-                    contextSize = coderCtx,
+                    contextSize = displayRoleContext("CODER", coderCtx),
                     onContextSizeChange = { settingsRepository.setAgentCoderCtx(it) },
-                    maxOutputTokens = coderMaxOutputTokens,
+                    maxOutputTokens = displayRoleOutput("CODER", coderMaxOutputTokens),
                     onMaxOutputTokensChange = settingsRepository::setAgentCoderMaxOutputTokens,
+                    outputRecommendation = outputRecommendationForRole("CODER"),
                     thinkingEnabled = coderThinking,
                     onThinkingChange = { settingsRepository.setAgentCoderThinkingEnabled(it) },
                     visionEnabled = coderVisionEnabled,
@@ -1349,10 +1459,11 @@ fun AgentSettingsDialog(
                     prompt = executorPrompt,
                     onPromptChange = { settingsRepository.setAgentExecutorPrompt(it) },
                     onResetPrompt = { settingsRepository.resetAgentPromptToDefault("EXECUTOR") },
-                    contextSize = executorCtx,
+                    contextSize = displayRoleContext("EXECUTOR", executorCtx),
                     onContextSizeChange = { settingsRepository.setAgentExecutorCtx(it) },
-                    maxOutputTokens = executorMaxOutputTokens,
+                    maxOutputTokens = displayRoleOutput("EXECUTOR", executorMaxOutputTokens),
                     onMaxOutputTokensChange = settingsRepository::setAgentExecutorMaxOutputTokens,
+                    outputRecommendation = outputRecommendationForRole("EXECUTOR"),
                     thinkingEnabled = executorThinking,
                     onThinkingChange = { settingsRepository.setAgentExecutorThinkingEnabled(it) },
                     visionEnabled = executorVisionEnabled,
@@ -1387,10 +1498,11 @@ fun AgentSettingsDialog(
                     prompt = reviewerPrompt,
                     onPromptChange = { settingsRepository.setAgentReviewerPrompt(it) },
                     onResetPrompt = { settingsRepository.resetAgentPromptToDefault("REVIEWER") },
-                    contextSize = reviewerCtx,
+                    contextSize = displayRoleContext("REVIEWER", reviewerCtx),
                     onContextSizeChange = { settingsRepository.setAgentReviewerCtx(it) },
-                    maxOutputTokens = reviewerMaxOutputTokens,
+                    maxOutputTokens = displayRoleOutput("REVIEWER", reviewerMaxOutputTokens),
                     onMaxOutputTokensChange = settingsRepository::setAgentReviewerMaxOutputTokens,
+                    outputRecommendation = outputRecommendationForRole("REVIEWER"),
                     thinkingEnabled = reviewerThinking,
                     onThinkingChange = { settingsRepository.setAgentReviewerThinkingEnabled(it) },
                     visionEnabled = reviewerVisionEnabled,
@@ -1418,11 +1530,12 @@ fun AgentSettingsDialog(
                     llamaServerModelLabel = llamaServerModelLabel,
                     llamaServerContextLabel = llamaServerContextLabel,
                     onModelChange = settingsRepository::setAgentVisualTesterModel,
-                    contextSize = visualTesterCtx,
+                    contextSize = displayRoleContext("VISUAL_TESTER", visualTesterCtx),
                     onContextSizeChange = settingsRepository::setAgentVisualTesterCtx,
-                    maxOutputTokens = visualTesterMaxOutputTokens,
+                    maxOutputTokens = displayRoleOutput("VISUAL_TESTER", visualTesterMaxOutputTokens),
                     onMaxOutputTokensChange =
                         settingsRepository::setAgentVisualTesterMaxOutputTokens,
+                    outputRecommendation = outputRecommendationForRole("VISUAL_TESTER"),
                     thinkingEnabled = visualTesterThinking,
                     onThinkingChange =
                         settingsRepository::setAgentVisualTesterThinkingEnabled,
@@ -1468,10 +1581,11 @@ fun AgentSettingsDialog(
                     prompt = summarizerPrompt,
                     onPromptChange = { settingsRepository.setAgentSummarizerPrompt(it) },
                     onResetPrompt = { settingsRepository.resetAgentPromptToDefault("SUMMARIZER") },
-                    contextSize = summarizerCtx,
+                    contextSize = displayRoleContext("SUMMARIZER", summarizerCtx),
                     onContextSizeChange = { settingsRepository.setAgentSummarizerCtx(it) },
-                    maxOutputTokens = summarizerMaxOutputTokens,
+                    maxOutputTokens = displayRoleOutput("SUMMARIZER", summarizerMaxOutputTokens),
                     onMaxOutputTokensChange = settingsRepository::setAgentSummarizerMaxOutputTokens,
+                    outputRecommendation = outputRecommendationForRole("SUMMARIZER"),
                     thinkingEnabled = summarizerThinking,
                     onThinkingChange = { settingsRepository.setAgentSummarizerThinkingEnabled(it) },
                     visionEnabled = summarizerVisionEnabled,
@@ -2275,6 +2389,110 @@ private fun AgentSettingsGroupHeader(title: String) {
 }
 
 /**
+ * Project-scoped harness choice hosted in the existing Agent Settings dialog.
+ * The dialog only emits the canonical id; the conversation owner persists it.
+ */
+@Composable
+private fun AgentHarnessProfileCard(
+    profile: AgentHarnessProfile,
+    onProfileChange: (AgentHarnessProfile) -> Unit
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.agent_harness_profile_title),
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = stringResource(R.string.agent_harness_profile_desc),
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            AgentHarnessProfile.entries.forEach { candidate ->
+                val selected = candidate == profile
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onProfileChange(candidate) },
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (selected) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surface
+                    },
+                    border = if (selected) {
+                        androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            MaterialTheme.colorScheme.primary
+                        )
+                    } else {
+                        null
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = selected,
+                            onClick = { onProfileChange(candidate) }
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(
+                                    when (candidate) {
+                                        AgentHarnessProfile.OPTIMIZED ->
+                                            R.string.agent_harness_profile_optimized
+                                        AgentHarnessProfile.LEGACY ->
+                                            R.string.agent_harness_profile_legacy
+                                    }
+                                ),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = stringResource(
+                                    when (candidate) {
+                                        AgentHarnessProfile.OPTIMIZED ->
+                                            R.string.agent_harness_profile_optimized_desc
+                                        AgentHarnessProfile.LEGACY ->
+                                            R.string.agent_harness_profile_legacy_desc
+                                    }
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+            if (profile == AgentHarnessProfile.OPTIMIZED) {
+                Text(
+                    text = stringResource(
+                        R.string.agent_harness_profile_budget_note,
+                        AgentHarnessPolicy.DEFAULT_CONTEXT_TOKENS,
+                        AgentHarnessPolicy.MAX_CONTEXT_TOKENS,
+                        AgentHarnessPolicy.CONTROL_MAX_OUTPUT_TOKENS,
+                        AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS,
+                        AgentHarnessPolicy.SUMMARY_MAX_OUTPUT_TOKENS
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary
+                )
+            }
+        }
+    }
+}
+
+/**
  * Shared runtime defaults for all configured roles.
  *
  * This card only edits the adapter state. The owner persists it and applies it
@@ -2291,7 +2509,11 @@ fun AgentGlobalOverrideCard(
     managedLlamaServers: List<ManagedLlamaServerDescriptor> = emptyList(),
     liteRtModels: List<AgentLiteRtProfileOption> = emptyList(),
     globalConnectionDescription: String? = null,
-    onChange: (AgentGlobalOverrideState) -> Unit
+    onChange: (AgentGlobalOverrideState) -> Unit,
+    /** Optional display-only values for an active Optimized profile. */
+    contextSizeForDisplay: Int? = null,
+    maxOutputTokensForDisplay: Int? = null,
+    outputRecommendation: String? = null
 ) {
     val backendOptions = AgentRuntimeBackend.entries.map { it.id }
     val backend = state.normalizedBackend
@@ -2568,20 +2790,27 @@ fun AgentGlobalOverrideCard(
             }
 
             DraftIntTextField(
-                value = state.contextSize,
+                value = contextSizeForDisplay ?: state.contextSize,
                 onValueChange = { onChange(state.copy(contextSize = it)) },
                 label = { Text(stringResource(R.string.agent_global_override_context_label)) },
                 modifier = Modifier.fillMaxWidth(),
                 blankValue = 0
             )
             DraftIntTextField(
-                value = state.maxOutputTokens,
+                value = maxOutputTokensForDisplay ?: state.maxOutputTokens,
                 onValueChange = { onChange(state.copy(maxOutputTokens = it)) },
                 valueRange = 1..1_048_576,
                 label = { Text(stringResource(R.string.agent_global_override_max_output_label)) },
                 modifier = Modifier.fillMaxWidth(),
                 blankValue = 8096
             )
+            outputRecommendation?.let { recommendation ->
+                Text(
+                    text = recommendation,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary
+                )
+            }
 
             AgentGlobalOverrideSwitchRow(
                 title = stringResource(R.string.agent_thinking_enabled),
@@ -2943,6 +3172,7 @@ private fun AgentTuningCard(
     onContextSizeChange: (Int) -> Unit,
     maxOutputTokens: Int,
     onMaxOutputTokensChange: (Int) -> Unit,
+    outputRecommendation: String? = null,
     thinkingEnabled: Boolean,
     onThinkingChange: (Boolean) -> Unit,
     visionEnabled: Boolean? = null,
@@ -3114,6 +3344,13 @@ private fun AgentTuningCard(
                             modifier = Modifier.fillMaxWidth(),
                             blankValue = 8096
                         )
+                        outputRecommendation?.let { recommendation ->
+                            Text(
+                                text = recommendation,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.tertiary
+                            )
+                        }
                     }
                     if (!isLiteRt) {
                         AgentSwitchRow(
@@ -3571,6 +3808,7 @@ fun AgentConfigCard(
     onContextSizeChange: (Int) -> Unit,
     maxOutputTokens: Int,
     onMaxOutputTokensChange: (Int) -> Unit,
+    outputRecommendation: String? = null,
     thinkingEnabled: Boolean,
     onThinkingChange: (Boolean) -> Unit,
     visionEnabled: Boolean,
@@ -3751,6 +3989,13 @@ fun AgentConfigCard(
                             modifier = Modifier.fillMaxWidth(),
                             blankValue = 8096
                         )
+                        outputRecommendation?.let { recommendation ->
+                            Text(
+                                text = recommendation,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.tertiary
+                            )
+                        }
                         Text(
                             text = stringResource(
                                 R.string.agent_max_output_tokens_hint,

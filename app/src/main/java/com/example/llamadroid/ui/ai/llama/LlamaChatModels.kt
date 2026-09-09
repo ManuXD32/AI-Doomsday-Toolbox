@@ -21,7 +21,8 @@ data class LlamaChatSerializedMessage(
     val role: String,
     val content: String,
     val imagePath: String? = null,
-    val audioPath: String? = null
+    val audioPath: String? = null,
+    val videoPath: String? = null
 )
 
 @Keep

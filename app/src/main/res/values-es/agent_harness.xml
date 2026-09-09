@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="agent_harness_profile_title">Perfil de ejecución</string>
+    <string name="agent_harness_profile_desc">Elige la política de flujo para este proyecto. La elección se guarda con el proyecto y no cambia su modelo ni endpoint.</string>
+    <string name="agent_harness_profile_optimized">Optimizado</string>
+    <string name="agent_harness_profile_optimized_desc">Un agente directo para Plan y Construcción, investigación enfocada y verificación. Los especialistas siguen disponibles como ayudas secuenciales opcionales.</string>
+    <string name="agent_harness_profile_legacy">Anterior</string>
+    <string name="agent_harness_profile_legacy_desc">Mantén el flujo multiagente y los ajustes por rol existentes para este proyecto.</string>
+    <string name="agent_harness_profile_budget_note">Optimizado recomienda un contexto de %1$d tokens (%2$d es un objetivo prudente para el dispositivo) y presupuestos de salida por fase de %3$d para control, %4$d para Construcción y %5$d para resúmenes. Edita el contexto y la salida en las tarjetas General o de cada rol; se respetan los valores guardados y no se limitan silenciosamente.</string>
+    <string name="agent_harness_general_output_recommendation">Recomendación de Optimizado cuando General no tiene valor: %1$d tokens de control; Orquestador y Coder usan %2$d durante Construcción. Los valores guardados se usan tal como se introducen.</string>
+    <string name="agent_harness_control_output_recommendation">Recomendación de Optimizado cuando este rol no tiene valor: %1$d tokens de control. Los valores guardados se usan tal como se introducen.</string>
+    <string name="agent_harness_build_output_recommendation">Recomendación de Optimizado cuando este rol no tiene valor: %1$d tokens en Plan/control y %2$d durante Construcción. Los valores guardados se usan tal como se introducen.</string>
+    <string name="agent_harness_summary_output_recommendation">Recomendación de Optimizado cuando este rol no tiene valor: %1$d tokens de resumen. Los valores guardados se usan tal como se introducen.</string>
+    <string name="agent_harness_research_limit">La investigación está limitada para este perfil. Continúa con la evidencia disponible o pide indicaciones.</string>
+    <string name="agent_harness_no_progress">El agente se pausó porque el flujo no avanzó. Continúa después de revisar el estado actual.</string>
+    <string name="agent_harness_capacity_limit">El estado necesario no cabe en este contexto. Reduce la tarea y pulsa Continuar.</string>
+    <string name="agent_harness_older_messages">Mensajes anteriores</string>
+    <string name="agent_harness_newer_messages">Mensajes recientes</string>
+    <string name="agent_harness_history_load_failed">No se pudo cargar esa página del historial. La página actual sigue disponible.</string>
+    <string name="agent_harness_questions_suppressed">El usuario pidió no hacer más preguntas. Resuelve este bloqueo con las decisiones guardadas o indica cómo seguir y pulsa Continuar.</string>
+    <string name="agent_harness_local_plan_unsupported">El plan sigue necesitando un backend local no disponible. Revisa los entornos compatibles y pulsa Continuar.</string>
+    <string name="agent_harness_no_scout">La exploración del código está desactivada por las instrucciones guardadas del proyecto.</string>
+    <string name="agent_harness_no_scout_hint">Usa el estado guardado y la investigación pertinente; después propone el plan. No listes ni busques en el código.</string>
+    <string name="agent_harness_local_ready">El proyecto local **%1$s** está listo. Describe la tarea para comenzar. Las rutas son relativas a este proyecto; usa `.` para su raíz.</string>
+</resources>

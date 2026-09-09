@@ -343,7 +343,7 @@ object LlamaServerLauncher {
         Intent(context.applicationContext, LlamaServerSessionService::class.java).apply {
             action = LlamaServerSessionService.ACTION_START
             putExtra(LlamaServerSessionService.EXTRA_SESSION_ID, sessionId)
-            putExtra(LlamaServerSessionService.EXTRA_PROFILE_JSON, LlamaServerLaunchProfile.encode(profile))
+            putExtra(LlamaServerSessionService.EXTRA_PROFILE_JSON, LlamaServerLaunchProfile.encodeForRuntime(profile))
             portOverride?.let { putExtra(LlamaServerSessionService.EXTRA_PORT, it) }
             leaseToken?.let { putExtra(LlamaServerSessionService.EXTRA_LEASE_TOKEN, it) }
         }
@@ -435,7 +435,10 @@ object LlamaServerLauncher {
                 putExtra(LlamaService.EXTRA_SETTINGS_PROFILE, LlamaService.SETTINGS_PROFILE_GENERAL)
                 putExtra(LlamaService.EXTRA_HOST, profile.host)
                 putExtra(LlamaService.EXTRA_PORT, profile.serverPort)
-                putExtra(LlamaService.EXTRA_LAUNCH_PROFILE_JSON, LlamaServerLaunchProfile.encode(profile))
+                // This JSON crosses the process/service boundary.  Durable profile encodings
+                // deliberately omit session-private MTMD directories, so use the explicit
+                // runtime form for a video-enabled legacy launch.
+                putExtra(LlamaService.EXTRA_LAUNCH_PROFILE_JSON, LlamaServerLaunchProfile.encodeForRuntime(profile))
                 leaseToken?.let { putExtra(LlamaOcrExclusiveLeaseStore.TOKEN_EXTRA, it) }
             }
         ).getOrThrow()

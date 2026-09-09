@@ -31,8 +31,21 @@ data class AgentPromptOutputBudget(
     val effectiveMaxOutputTokens: Int,
     val minimumUsefulOutputTokens: Int,
     val availableOutputTokens: Int,
-    val canSend: Boolean
+    val canSend: Boolean,
+    /**
+     * The output reservation the caller must keep intact for this request.
+     * A request is sendable only when the full configured value fits; a
+     * smaller clamped value is never silently used as a substitute.
+     */
+    val reservedOutputTokens: Int = configuredMaxOutputTokens,
+    val requiredContextTokens: Int = 0,
+    val cannotSendReason: AgentPromptBudgetFailureReason? = null
 )
+
+enum class AgentPromptBudgetFailureReason(val wireValue: String) {
+    CONFIGURED_OUTPUT_DOES_NOT_FIT("configured_output_does_not_fit"),
+    NO_OUTPUT_CAPACITY("no_output_capacity")
+}
 
 data class AgentPromptPackingLimits(
     val triggerTokens: Int,
@@ -195,7 +208,9 @@ data class AgentHardCompactionMetadata(
 fun resolveAgentPromptCapacity(
     configuredContextTokens: Int,
     reportedContextTokens: Int?,
-    exactCountingAvailable: Boolean
+    exactCountingAvailable: Boolean,
+    configuredMaxOutputTokens: Int? = null,
+    fallbackMaxOutputTokens: Int = AGENT_DEFAULT_MAX_OUTPUT_TOKENS
 ): AgentPromptCapacity {
     val configured = configuredContextTokens.coerceAtLeast(512)
     val reported = reportedContextTokens?.takeIf { it > 0 }
@@ -212,9 +227,20 @@ fun resolveAgentPromptCapacity(
     } else {
         maxOf(1_024, capacity / 10)
     }
-    val maximumInput = (
+    val minimumReserveInput = (
         capacity - minimumGenerationReserve - safetyReserve
     ).coerceAtLeast(1)
+    val configuredOutput = configuredMaxOutputTokens?.let {
+        if (it > 0) it else fallbackMaxOutputTokens
+    }?.coerceAtLeast(1)
+    val maximumInput = if (configuredOutput != null) {
+        minOf(
+            minimumReserveInput,
+            (capacity - safetyReserve - configuredOutput).coerceAtLeast(0)
+        )
+    } else {
+        minimumReserveInput
+    }
     return AgentPromptCapacity(
         configuredContextTokens = configured,
         reportedContextTokens = reported,
@@ -240,18 +266,52 @@ fun resolveAgentPromptOutputBudget(
             authoritativeInputTokens.coerceAtLeast(0) -
             capacity.safetyReserveTokens
     ).coerceAtLeast(0)
-    val effective = minOf(configured, available)
+    // Keep the configured output reservation intact.  Clamping it to the
+    // remaining context makes a request appear sendable while silently
+    // removing the space needed for a structured tool call or terminal answer.
+    val canSend = available >= configured
+    val effective = configured.takeIf { canSend } ?: 0
     val usefulMinimum = minOf(
         configured.coerceAtLeast(1),
         capacity.minimumGenerationReserveTokens
     )
+    val requiredContext = authoritativeInputTokens.coerceAtLeast(0) +
+        capacity.safetyReserveTokens + configured
     return AgentPromptOutputBudget(
         configuredMaxOutputTokens = configured,
-        effectiveMaxOutputTokens = effective.coerceAtLeast(0),
+        effectiveMaxOutputTokens = effective,
         minimumUsefulOutputTokens = usefulMinimum,
         availableOutputTokens = available,
-        canSend = effective >= usefulMinimum
+        canSend = canSend,
+        reservedOutputTokens = configured,
+        requiredContextTokens = requiredContext,
+        cannotSendReason = if (canSend) {
+            null
+        } else if (available <= 0) {
+            AgentPromptBudgetFailureReason.NO_OUTPUT_CAPACITY
+        } else {
+            AgentPromptBudgetFailureReason.CONFIGURED_OUTPUT_DOES_NOT_FIT
+        }
     )
+}
+
+/**
+ * Maximum input that can be packed while preserving a caller's complete
+ * configured output reservation and the safety reserve.
+ */
+fun maximumAgentPromptInputTokensForOutput(
+    capacity: AgentPromptCapacity,
+    configuredMaxOutputTokens: Int,
+    fallbackMaxOutputTokens: Int = AGENT_DEFAULT_MAX_OUTPUT_TOKENS
+): Int {
+    val configured = configuredMaxOutputTokens
+        .takeIf { it > 0 }
+        ?: fallbackMaxOutputTokens
+    return (
+        capacity.contextCapacityTokens -
+            capacity.safetyReserveTokens -
+            configured.coerceAtLeast(1)
+    ).coerceAtLeast(0)
 }
 
 fun resolveAgentPromptPackingLimits(

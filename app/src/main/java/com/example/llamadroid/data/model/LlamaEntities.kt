@@ -24,7 +24,9 @@ data class LlamaServerEntity(
     val defaultApiParams: String? = null,
     /** JSON [LlamaServerLaunchProfile] for an app-managed loopback llama-server. */
     val localLaunchProfileJson: String? = null,
-    val lastUsed: Long = System.currentTimeMillis()
+    val lastUsed: Long = System.currentTimeMillis(),
+    @androidx.room.ColumnInfo(defaultValue = "0")
+    val supportsVideo: Boolean = false
 ) {
     fun normalizedEngine(): String = normalizeLlamaServerEngine(engine)
 
@@ -164,7 +166,8 @@ data class LlamaMessageEntity(
     val promptTokens: Int = 0,
     val completionTokens: Int = 0,
     val tps: Double = 0.0,
-    val generationTimeMs: Long = 0L
+    val generationTimeMs: Long = 0L,
+    val videoPath: String? = null
 )
 
 object LlamaScheduledTaskScheduleType {
@@ -268,7 +271,8 @@ data class EmbeddedDocumentText(
 
 data class LlamaServerCapabilityState(
     val supportsVision: Boolean,
-    val supportsAudio: Boolean
+    val supportsAudio: Boolean,
+    val supportsVideo: Boolean = false
 )
 
 fun normalizeLlamaServerEngine(engine: String?): String =

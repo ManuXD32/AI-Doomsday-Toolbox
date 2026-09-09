@@ -72,7 +72,10 @@ import com.example.llamadroid.util.FormatUtils
 
 /** Curated, complete model sets shown instead of the old recommendation cards. */
 @Composable
-fun SdCuratedBundlesSection(modifier: Modifier = Modifier) {
+fun SdCuratedBundlesSection(
+    modifier: Modifier = Modifier,
+    bundles: List<SdCuratedBundle> = SdCuratedBundleCatalog.bundles
+) {
     val context = LocalContext.current
     val db = remember { AppDatabase.getDatabase(context) }
     val repository = remember { ModelRepository(context, db.modelDao()) }
@@ -106,7 +109,7 @@ fun SdCuratedBundlesSection(modifier: Modifier = Modifier) {
             )
         }
 
-        SdCuratedBundleCatalog.bundles.forEach { bundle ->
+        bundles.forEach { bundle ->
             val installedCount = bundle.files.count { file ->
                 file.isInstalledForBundle(bundle, installedModels)
             }

@@ -57,9 +57,12 @@ class AudioWorkspaceRuntimeController(context: Context) : AudioWorkspaceControll
     private var voiceJob: Job? = null
     private var runtimeJob: Job? = null
     private var recordingJob: Job? = null
+    private var voicePreviewJob: Job? = null
     private var recorder: MediaRecorder? = null
     private var recordingFile: File? = null
     private var player: MediaPlayer? = null
+    private var previewRequestToken = 0L
+    private var playerGeneration = 0L
     private val historyTitles = linkedMapOf<String, String>()
     private val historyTitlePreferences = appContext.getSharedPreferences("audio_history_titles", Context.MODE_PRIVATE)
 
@@ -310,6 +313,10 @@ class AudioWorkspaceRuntimeController(context: Context) : AudioWorkspaceControll
     }
 
     override fun deleteVoice(profileId: String) {
+        // A profile can be removed while its preview is still playing or while
+        // its path is being resolved. Cancel both cases before the asset is
+        // deleted so no stale MediaPlayer callback can repopulate the state.
+        stopVoicePreview()
         scope.launch {
             try {
                 repository.deleteVoice(profileId)
@@ -336,29 +343,82 @@ class AudioWorkspaceRuntimeController(context: Context) : AudioWorkspaceControll
     override fun previewVoice(profileId: String) {
         // Voice previews use the same local MediaPlayer path as history once the profile has a
         // derived asset. The profile stream is the source of truth; no raw audio is logged.
-        scope.launch {
+        voicePreviewJob?.cancel()
+        voicePreviewJob = null
+        stopCurrentPlayback(clearVoiceState = true)
+        val requestToken = ++previewRequestToken
+        voicePreviewJob = scope.launch {
             try {
                 val profile = repository.getVoiceProfile(profileId)
+                if (requestToken != previewRequestToken) return@launch
                 if (profile == null) {
                     reportControllerFailure(IllegalArgumentException())
                     return@launch
                 }
-                playPath(profile.preferredAudioPath)
+                playPath(profile.preferredAudioPath, profile.id)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
+                if (requestToken == previewRequestToken) {
+                    clearVoicePlayback()
+                    reportControllerFailure(error)
+                }
+            }
+        }
+    }
+
+    override fun pauseVoicePreview(profileId: String) {
+        if (mutableState.value.activeVoiceProfileId != profileId ||
+            mutableState.value.voicePlaybackState != AudioVoicePlaybackState.PLAYING
+        ) return
+        scope.launch {
+            try {
+                check(player != null) { "Voice preview player is unavailable" }
+                player?.pause()
+                mutableState.value = mutableState.value.copy(
+                    voicePlaybackState = AudioVoicePlaybackState.PAUSED
+                )
+            } catch (error: Throwable) {
+                stopCurrentPlayback(clearVoiceState = true)
                 reportControllerFailure(error)
             }
         }
     }
 
+    override fun resumeVoicePreview(profileId: String) {
+        if (mutableState.value.activeVoiceProfileId != profileId ||
+            mutableState.value.voicePlaybackState != AudioVoicePlaybackState.PAUSED
+        ) return
+        scope.launch {
+            try {
+                check(player != null) { "Voice preview player is unavailable" }
+                player?.start()
+                mutableState.value = mutableState.value.copy(
+                    voicePlaybackState = AudioVoicePlaybackState.PLAYING
+                )
+            } catch (error: Throwable) {
+                stopCurrentPlayback(clearVoiceState = true)
+                reportControllerFailure(error)
+            }
+        }
+    }
+
+    override fun stopVoicePreview() {
+        previewRequestToken++
+        voicePreviewJob?.cancel()
+        voicePreviewJob = null
+        stopCurrentPlayback(clearVoiceState = true)
+    }
+
     override fun playHistory(itemId: String) {
+        stopVoicePreview()
         val item = mutableState.value.history.firstOrNull { it.id == itemId }
         if (item == null) {
             reportControllerFailure(IllegalArgumentException())
             return
         }
-        item.audioPath?.let(::playPath) ?: reportControllerFailure(IllegalStateException())
+        item.audioPath?.let { playPath(it, profileId = null) }
+            ?: reportControllerFailure(IllegalStateException())
     }
 
     override fun pauseHistory(itemId: String) {
@@ -444,13 +504,14 @@ class AudioWorkspaceRuntimeController(context: Context) : AudioWorkspaceControll
     }
 
     fun close() {
+        stopVoicePreview()
         if (recorder != null) stopVoiceRecording()
         recordingJob?.cancel()
         runCatching { recorder?.release() }
-        runCatching { player?.release() }
         modelJob?.cancel()
         voiceJob?.cancel()
         runtimeJob?.cancel()
+        voicePreviewJob?.cancel()
         scope.cancel()
     }
 
@@ -678,27 +739,69 @@ class AudioWorkspaceRuntimeController(context: Context) : AudioWorkspaceControll
         ))
     }
 
-    private fun playPath(path: String) {
+    private fun playPath(path: String, profileId: String?) {
+        stopCurrentPlayback(clearVoiceState = true)
         val file = File(path)
         if (!file.isFile) {
             reportControllerFailure(IllegalStateException())
             return
         }
         val next = MediaPlayer()
+        val generation = ++playerGeneration
         try {
-            player?.release()
             next.setDataSource(file.absolutePath)
             next.prepare()
             next.setOnCompletionListener {
+                val isCurrent = player === it && playerGeneration == generation
+                if (isCurrent) {
+                    player = null
+                    clearVoicePlayback()
+                }
                 it.release()
-                if (player === it) player = null
+            }
+            next.setOnErrorListener { failed, _, _ ->
+                val isCurrent = player === failed && playerGeneration == generation
+                if (isCurrent) {
+                    player = null
+                    clearVoicePlayback()
+                    reportControllerFailure(IllegalStateException())
+                }
+                failed.release()
+                true
             }
             player = next
             next.start()
+            if (profileId == null) {
+                clearVoicePlayback()
+            } else {
+                mutableState.value = mutableState.value.copy(
+                    activeVoiceProfileId = profileId,
+                    voicePlaybackState = AudioVoicePlaybackState.PLAYING
+                )
+            }
         } catch (error: Throwable) {
+            if (player === next) {
+                player = null
+                clearVoicePlayback()
+            }
             runCatching { next.release() }
             reportControllerFailure(error)
         }
+    }
+
+    private fun stopCurrentPlayback(clearVoiceState: Boolean) {
+        playerGeneration++
+        val current = player
+        player = null
+        runCatching { current?.release() }
+        if (clearVoiceState) clearVoicePlayback()
+    }
+
+    private fun clearVoicePlayback() {
+        mutableState.value = mutableState.value.copy(
+            activeVoiceProfileId = null,
+            voicePlaybackState = AudioVoicePlaybackState.IDLE
+        )
     }
 
     private fun toUiHistory(item: AudioHistoryItem): AudioHistoryItemUi = AudioHistoryItemUi(

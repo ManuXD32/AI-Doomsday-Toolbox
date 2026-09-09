@@ -348,12 +348,31 @@ fun AgentChatList(
     delegationsByParentToolCallId: Map<String, AgentDelegationInfo> = emptyMap(),
     onOpenDelegation: (AgentDelegationInfo) -> Unit = {},
     onRetryNeedsDirection: (AgentService.Companion.ChatMessage) -> Unit = {},
+    historyPagingEnabled: Boolean = false,
+    hasOlderMessages: Boolean = false,
+    hasNewerMessages: Boolean = false,
+    isLoadingHistory: Boolean = false,
+    onLoadOlderMessages: () -> Unit = {},
+    onLoadNewerMessages: () -> Unit = {},
     readOnly: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val walkthroughTargets = LocalWalkthroughTargets.current
-    val renderMessages = remember(messages) {
-        buildAgentChatRenderProjection(messages)
+    var historyOffset by remember(messages.firstOrNull()?.id) { mutableIntStateOf(0) }
+    var previousMessageCount by remember(messages.firstOrNull()?.id) { mutableIntStateOf(messages.size) }
+    LaunchedEffect(messages.size) {
+        if (!historyPagingEnabled && historyOffset > 0) {
+            historyOffset = (historyOffset + messages.size - previousMessageCount).coerceAtLeast(0)
+        }
+        previousMessageCount = messages.size
+    }
+    val safeOffset = if (historyPagingEnabled) {
+        0
+    } else {
+        historyOffset.coerceIn(0, (messages.size - 1).coerceAtLeast(0))
+    }
+    val renderMessages = remember(messages, safeOffset, historyPagingEnabled) {
+        buildAgentChatRenderProjection(messages.dropLast(safeOffset))
     }
     val visibleMessages = remember(renderMessages, showAllOutput) {
         buildVisibleAgentTimelineMessages(renderMessages, showAllOutput)
@@ -367,6 +386,32 @@ fun AgentChatList(
         modifier = modifier,
         contentPadding = PaddingValues(16.dp)
     ) {
+        if (historyPagingEnabled && (hasOlderMessages || hasNewerMessages || isLoadingHistory)) {
+            item(key = "history_pagination") {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    TextButton(
+                        enabled = hasOlderMessages && !isLoadingHistory,
+                        onClick = onLoadOlderMessages
+                    ) { Text(stringResource(R.string.agent_harness_older_messages)) }
+                    TextButton(
+                        enabled = hasNewerMessages && !isLoadingHistory,
+                        onClick = onLoadNewerMessages
+                    ) { Text(stringResource(R.string.agent_harness_newer_messages)) }
+                }
+            }
+        } else if (!historyPagingEnabled && messages.size > AGENT_CHAT_RENDER_MESSAGE_LIMIT) {
+            item(key = "history_pagination") {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    TextButton(
+                        enabled = messages.size - safeOffset > AGENT_CHAT_RENDER_MESSAGE_LIMIT,
+                        onClick = { historyOffset = (safeOffset + AGENT_CHAT_RENDER_MESSAGE_LIMIT).coerceAtMost((messages.size - 1).coerceAtLeast(0)) }
+                    ) { Text(stringResource(R.string.agent_harness_older_messages)) }
+                    TextButton(enabled = safeOffset > 0, onClick = { historyOffset = (safeOffset - AGENT_CHAT_RENDER_MESSAGE_LIMIT).coerceAtLeast(0) }) {
+                        Text(stringResource(R.string.agent_harness_newer_messages))
+                    }
+                }
+            }
+        }
         items(visibleItems, key = { it.key }) { item ->
             when (item) {
                 is AgentChatListItem.Message -> {

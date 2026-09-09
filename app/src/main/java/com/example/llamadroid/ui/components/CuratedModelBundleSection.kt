@@ -38,6 +38,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -51,11 +52,16 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import android.widget.Toast
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_ACTIVE
 import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_CANCELLED
 import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_COMPLETED
+import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_DISCARDED
+import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_FAILED
+import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_STALE
+import com.example.llamadroid.data.db.DownloadTaskEntity
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.BundleProgressEntry
@@ -64,12 +70,179 @@ import com.example.llamadroid.data.model.CuratedBundleFile
 import com.example.llamadroid.data.model.CuratedModelBundle
 import com.example.llamadroid.data.model.DownloadProgressHolder
 import com.example.llamadroid.data.model.ModelRepository
+import com.example.llamadroid.data.model.PendingDownloadHolder
 import com.example.llamadroid.data.model.buildDownloadTaskId
 import com.example.llamadroid.data.model.calculateBundleProgressSnapshot
+import com.example.llamadroid.data.model.curatedVisionRepairTargets
 import com.example.llamadroid.data.model.partFile
+import com.example.llamadroid.data.model.runtimeIsVision
 import com.example.llamadroid.data.model.sanitizeCuratedBundlePrefix
+import com.example.llamadroid.data.model.toPendingDownload
 import com.example.llamadroid.service.DownloadService
 import com.example.llamadroid.util.FormatUtils
+
+private val CURATED_TERMINAL_DOWNLOAD_STATUSES = setOf(
+    DOWNLOAD_TASK_STATUS_COMPLETED,
+    DOWNLOAD_TASK_STATUS_CANCELLED,
+    DOWNLOAD_TASK_STATUS_FAILED,
+    DOWNLOAD_TASK_STATUS_DISCARDED,
+    DOWNLOAD_TASK_STATUS_STALE
+)
+
+internal data class CuratedResolvedFile(
+    val file: CuratedBundleFile,
+    val expectedName: String,
+    val taskId: String,
+    val installedModel: ModelEntity?,
+    val task: DownloadTaskEntity?,
+    val liveValue: Float?
+) {
+    val installed: Boolean get() = installedModel != null
+    val cancelled: Boolean
+        get() = task?.status == DOWNLOAD_TASK_STATUS_CANCELLED ||
+            liveValue != null && liveValue < 0f && liveValue != DownloadProgressHolder.INDETERMINATE
+    val completed: Boolean
+        get() = task?.status == DOWNLOAD_TASK_STATUS_COMPLETED || liveValue == 1f
+    val active: Boolean
+        get() = !installed && !completed && !cancelled &&
+            task?.status !in CURATED_TERMINAL_DOWNLOAD_STATUSES && (
+            task?.status == DOWNLOAD_TASK_STATUS_ACTIVE ||
+                liveValue == DownloadProgressHolder.INDETERMINATE ||
+                liveValue != null && liveValue in 0f..0.999f
+            )
+}
+
+internal fun resolveCuratedFiles(
+    bundle: CuratedModelBundle,
+    prefix: String,
+    installedModels: List<ModelEntity>,
+    taskByProgressKey: Map<String, DownloadTaskEntity>,
+    progressMap: Map<String, Float>
+): List<CuratedResolvedFile> = bundle.files.map { file ->
+    val expectedName = file.installedFilename(prefix)
+    val taskId = buildDownloadTaskId(file.repoId, expectedName, file.type)
+    CuratedResolvedFile(
+        file = file,
+        expectedName = expectedName,
+        taskId = taskId,
+        installedModel = installedModels.firstOrNull { model ->
+            file.matchesVerifiedInstalledModel(expectedName, model)
+        },
+        task = taskByProgressKey[taskId],
+        liveValue = progressMap[taskId]
+    )
+}
+
+internal fun CuratedResolvedFile.toProgressEntry(): BundleProgressEntry = BundleProgressEntry(
+    key = taskId,
+    declaredBytes = file.sizeBytes,
+    installed = installed,
+    completed = completed,
+    cancelled = cancelled,
+    active = active,
+    persistedTaskBytes = task?.bytesDownloaded,
+    partBytes = task?.partFile()?.length(),
+    liveFraction = liveValue
+)
+
+internal fun isSharedCuratedFile(file: CuratedBundleFile): Boolean =
+    !file.sharedArtifactKey.isNullOrBlank()
+
+internal fun CuratedResolvedFile.isOwnedBy(
+    context: android.content.Context,
+    bundleId: String
+): Boolean = CuratedBundleDownloadOwnership.owners(context, taskId).contains(bundleId)
+
+/**
+ * Starts every missing file in a curated bundle, registering explicit owners
+ * before starting the worker. Existing active tasks are reused by task ID,
+ * which preserves deduplication for shared audio components.
+ */
+internal fun requestCuratedBundleDownload(
+    context: android.content.Context,
+    bundle: CuratedModelBundle,
+    prefix: String = bundle.defaultPrefix,
+    installedModels: List<ModelEntity>,
+    persistedTasks: List<DownloadTaskEntity> = emptyList(),
+    progressMap: Map<String, Float> = emptyMap()
+): CuratedBundleDownloadResult {
+    val repository = ModelRepository(context, AppDatabase.getDatabase(context).modelDao())
+    val taskByProgressKey = persistedTasks
+        .asSequence()
+        .flatMap { task -> sequenceOf(task.id to task, task.progressKey to task) }
+        .toMap()
+    var requested = 0
+    var failed = 0
+    resolveCuratedFiles(bundle, prefix, installedModels, taskByProgressKey, progressMap).forEach { resolved ->
+        if (resolved.installed) return@forEach
+        requested += 1
+        CuratedBundleDownloadOwnership.addOwner(context, resolved.taskId, bundle.id)
+        val taskIsActive = resolved.task?.status !in CURATED_TERMINAL_DOWNLOAD_STATUSES && (
+            resolved.task?.status == DOWNLOAD_TASK_STATUS_ACTIVE ||
+            resolved.liveValue == DownloadProgressHolder.INDETERMINATE ||
+            resolved.liveValue != null && resolved.liveValue in 0f..0.999f
+            )
+        if (taskIsActive) return@forEach
+        runCatching {
+            if (resolved.task?.status == DOWNLOAD_TASK_STATUS_CANCELLED) {
+                val recovered = resolved.task.toPendingDownload()
+                PendingDownloadHolder.putPending(
+                    downloadId = resolved.task.id,
+                    pending = recovered.copy(
+                        type = resolved.file.type,
+                        isVision = bundle.runtimeIsVision(resolved.file),
+                        artifactFamily = resolved.file.audioFamily ?: recovered.artifactFamily,
+                        artifactRole = resolved.file.componentRole ?: recovered.artifactRole
+                    )
+                )
+                DownloadService.resumeDownload(
+                    context = context,
+                    downloadId = resolved.task.id,
+                    explicitRetry = true
+                )
+            } else {
+                repository.startDownloadAsync(
+                    repoId = resolved.file.repoId,
+                    filename = resolved.file.remotePath,
+                    type = resolved.file.type,
+                    isVision = bundle.runtimeIsVision(resolved.file),
+                    downloadUrlOverride = resolved.file.downloadUrl,
+                    localFilenameOverride = resolved.expectedName,
+                    artifactFamily = resolved.file.audioFamily,
+                    artifactRole = resolved.file.componentRole
+                )
+            }
+        }.onFailure {
+            failed += 1
+            CuratedBundleDownloadOwnership.releaseOwner(context, resolved.taskId, bundle.id)
+        }
+    }
+    return CuratedBundleDownloadResult(requested = requested, failed = failed)
+}
+
+internal data class CuratedBundleDownloadResult(
+    val requested: Int,
+    val failed: Int
+)
+
+private fun cancelCuratedBundleDownloads(
+    context: android.content.Context,
+    bundle: CuratedModelBundle,
+    resolvedFiles: List<CuratedResolvedFile>
+) {
+    resolvedFiles
+        .filter { it.active }
+        .forEach { resolved ->
+            val shouldCancel = if (isSharedCuratedFile(resolved.file)) {
+                CuratedBundleDownloadOwnership.releaseOwner(context, resolved.taskId, bundle.id)
+            } else {
+                true
+            }
+            if (shouldCancel) {
+                DownloadService.cancelDownload(context, resolved.expectedName, resolved.taskId)
+            }
+        }
+}
 
 /**
  * Curated downloads use the same review-first card treatment as Stable Diffusion bundles.
@@ -87,7 +260,6 @@ fun CuratedModelBundleSection(
 ) {
     val context = LocalContext.current
     val db = remember { AppDatabase.getDatabase(context) }
-    val repository = remember { ModelRepository(context, db.modelDao()) }
     val installedModels by db.modelDao().getAllModels().collectAsState(initial = emptyList())
     val progressMap by DownloadProgressHolder.progress.collectAsState()
     val persistedTasks by db.downloadTaskDao().observeAll().collectAsState(initial = emptyList())
@@ -98,7 +270,75 @@ fun CuratedModelBundleSection(
             .flatMap { task -> sequenceOf(task.id to task, task.progressKey to task) }
             .toMap()
     }
+    val visionRepairPrefixes = bundles.associate { bundle ->
+        bundle.id to resolveCuratedBundlePrefix(bundle, prefixForBundle).value
+    }
     var pendingBundle by remember { mutableStateOf<CuratedModelBundle?>(null) }
+    val sharedFiles = remember(bundles) {
+        bundles
+            .flatMap { it.files }
+            .filter(::isSharedCuratedFile)
+            .distinctBy { file ->
+                buildDownloadTaskId(file.repoId, file.installedFilename(""), file.type)
+            }
+    }
+    val sharedResolvedFiles = remember(
+        bundles,
+        installedModels,
+        persistedTasks,
+        progressMap
+    ) {
+        sharedFiles.map { file ->
+            val expectedName = file.installedFilename("")
+            val taskId = buildDownloadTaskId(file.repoId, expectedName, file.type)
+            CuratedResolvedFile(
+                file = file,
+                expectedName = expectedName,
+                taskId = taskId,
+                installedModel = installedModels.firstOrNull { model ->
+                    file.matchesVerifiedInstalledModel(expectedName, model)
+                },
+                task = taskByProgressKey[taskId],
+                liveValue = progressMap[taskId]
+            )
+        }
+    }
+    val sharedProgressHistory = remember { mutableMapOf<String, BundleProgressSnapshot>() }
+    val sharedProgress = remember(sharedResolvedFiles, sharedProgressHistory["__shared__"]) {
+        val entries = sharedResolvedFiles.map { it.toProgressEntry() }
+        val hasActive = entries.any { it.active && !it.cancelled && !it.installed && !it.completed }
+        val previous = sharedProgressHistory["__shared__"]
+        calculateBundleProgressSnapshot(
+            entries = entries,
+            previousSnapshot = previous.takeIf { hasActive },
+            resetToPersisted = !hasActive && previous?.hasActiveDownloads == true &&
+                entries.any { !it.installed }
+        )
+    }
+    SideEffect {
+        if (sharedResolvedFiles.isNotEmpty()) sharedProgressHistory["__shared__"] = sharedProgress
+    }
+    LaunchedEffect(persistedTasks) {
+        persistedTasks
+            .filter { task ->
+                task.status in CURATED_TERMINAL_DOWNLOAD_STATUSES
+            }
+            .forEach { task ->
+                CuratedBundleDownloadOwnership.clear(context, task.id)
+                CuratedBundleDownloadOwnership.clear(context, task.progressKey)
+            }
+    }
+    LaunchedEffect(visionRepairPrefixes, installedModels) {
+        bundles.forEach { bundle ->
+            curatedVisionRepairTargets(
+                bundle = bundle,
+                prefix = visionRepairPrefixes[bundle.id].orEmpty(),
+                installedModels = installedModels
+            ).forEach { model ->
+                db.modelDao().updateVisionSupport(model.filename, true)
+            }
+        }
+    }
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -113,46 +353,32 @@ fun CuratedModelBundleSection(
             )
         }
 
+        if (sharedResolvedFiles.isNotEmpty() && sharedProgress.fileCount > 0 &&
+            sharedProgress.completedFileCount < sharedProgress.fileCount &&
+            (sharedProgress.hasActiveDownloads || sharedProgress.downloadedBytes > 0L)
+        ) {
+            CuratedSharedComponentsProgress(sharedProgress)
+        }
+
         bundles.forEach { bundle ->
             val prefixState = resolveCuratedBundlePrefix(bundle, prefixForBundle)
             val prefix = prefixState.value
-            val expectedNames = bundle.files.map { it.installedFilename(prefix) }
-            val installedFiles = bundle.files.mapIndexedNotNull { index, file ->
-                installedModels.firstOrNull { model ->
-                    file.matchesVerifiedInstalledModel(expectedNames[index], model)
-                }
-            }
-            val installedNames = installedFiles.map { it.filename }.toSet()
-            val missingFiles = bundle.files.filterIndexed { index, _ ->
-                expectedNames[index] !in installedNames
-            }
-            val conflictingFiles = bundle.files.filterIndexed { index, _ ->
+            val resolvedFiles = resolveCuratedFiles(
+                bundle = bundle,
+                prefix = prefix,
+                installedModels = installedModels,
+                taskByProgressKey = taskByProgressKey,
+                progressMap = progressMap
+            )
+            val installedFiles = resolvedFiles.mapNotNull { it.installedModel }
+            val missingFiles = resolvedFiles.filterNot { it.installed }.map { it.file }
+            val conflictingFiles = resolvedFiles.filter { resolved ->
                 installedModels.any { model ->
-                    model.filename == expectedNames[index] &&
-                        !bundle.files[index].matchesVerifiedInstalledModel(expectedNames[index], model)
+                    model.filename == resolved.expectedName &&
+                        !resolved.file.matchesVerifiedInstalledModel(resolved.expectedName, model)
                 }
             }
-            val expectedTaskIds = bundle.files.mapIndexed { index, file ->
-                expectedNames[index] to buildDownloadTaskId(file.repoId, expectedNames[index], file.type)
-            }
-            val progressEntries = bundle.files.mapIndexed { index, file ->
-                val (expectedName, taskId) = expectedTaskIds[index]
-                val task = taskByProgressKey[taskId]
-                val liveValue = progressMap[taskId]
-                BundleProgressEntry(
-                    key = taskId,
-                    declaredBytes = file.sizeBytes,
-                    installed = expectedName in installedNames,
-                    completed = task?.status == DOWNLOAD_TASK_STATUS_COMPLETED || liveValue == 1f,
-                    cancelled = task?.status == DOWNLOAD_TASK_STATUS_CANCELLED ||
-                        liveValue != null && liveValue < 0f && liveValue != DownloadProgressHolder.INDETERMINATE,
-                    active = task?.status == DOWNLOAD_TASK_STATUS_ACTIVE ||
-                        liveValue == DownloadProgressHolder.INDETERMINATE || liveValue != null && liveValue in 0f..0.999f,
-                    persistedTaskBytes = task?.bytesDownloaded,
-                    partBytes = task?.partFile()?.length(),
-                    liveFraction = liveValue
-                )
-            }
+            val progressEntries = resolvedFiles.map { it.toProgressEntry() }
             val previousSnapshot = bundleProgressHistory[bundle.id]
             val hasCurrentActive = progressEntries.any {
                 it.active && !it.cancelled && !it.installed && !it.completed
@@ -173,27 +399,23 @@ fun CuratedModelBundleSection(
             SideEffect {
                 bundleProgressHistory[bundle.id] = progressSnapshot
             }
-            val activeKeys = progressEntries
-                .filter { it.active && !it.cancelled && !it.installed && !it.completed }
-                .map { it.key }
-                .toSet()
-            val activeTasks = expectedTaskIds
-                .filter { (_, taskId) -> taskId in activeKeys }
+            val directActive = resolvedFiles.any { it.active && !isSharedCuratedFile(it.file) }
+            val sharedOwnedActive = resolvedFiles.any {
+                it.active && isSharedCuratedFile(it.file) && it.isOwnedBy(context, bundle.id)
+            }
 
             CuratedModelBundleCard(
                 bundle = bundle,
                 installedCount = installedFiles.size,
                 missingBytes = progressSnapshot.remainingBytes,
-                isDownloading = progressSnapshot.hasActiveDownloads,
+                isDownloading = directActive || sharedOwnedActive,
                 aggregateProgress = progressSnapshot.progress,
                 canUse = missingFiles.isEmpty() && !prefixState.invalid && onUseBundle != null,
                 hasConflicts = conflictingFiles.isNotEmpty(),
                 hasPrefixError = prefixState.invalid,
                 onReview = { pendingBundle = bundle },
                 onCancel = {
-                    activeTasks.forEach { (filename, taskId) ->
-                        DownloadService.cancelDownload(context, filename, taskId)
-                    }
+                    cancelCuratedBundleDownloads(context, bundle, resolvedFiles)
                 },
                 onUse = {
                     onUseBundle?.invoke(bundle, installedFiles, prefix)
@@ -237,20 +459,20 @@ fun CuratedModelBundleSection(
             onDismiss = { pendingBundle = null },
             onDownload = {
                 if (!prefixState.invalid && conflictingFiles.isEmpty()) {
-                    bundle.files.forEachIndexed { index, file ->
-                        val localFilename = expectedNames[index]
-                        if (installedFiles.none { it.filename == localFilename }) {
-                            repository.startDownloadAsync(
-                                repoId = file.repoId,
-                                filename = file.remotePath,
-                                type = file.type,
-                                isVision = file.type == ModelType.VISION_PROJECTOR,
-                                downloadUrlOverride = file.downloadUrl,
-                                localFilenameOverride = localFilename,
-                                artifactFamily = file.audioFamily,
-                                artifactRole = file.componentRole
-                            )
-                        }
+                    val result = requestCuratedBundleDownload(
+                        context = context,
+                        bundle = bundle,
+                        prefix = prefix,
+                        installedModels = installedModels,
+                        persistedTasks = persistedTasks,
+                        progressMap = progressMap
+                    )
+                    if (result.failed > 0) {
+                        Toast.makeText(
+                            context,
+                            R.string.audio_bundle_download_start_error,
+                            Toast.LENGTH_LONG
+                        ).show()
                     }
                     pendingBundle = null
                 }

@@ -511,6 +511,45 @@ data class TokenBudgetedRecentTail(
     val targetRecentTokens: Int
 )
 
+private const val COMPACT_HISTORICAL_SUMMARY_MAX_CHARS = 2_400
+
+private val MARKDOWN_HEADING_PATTERN = Regex("^\\s*(#{1,6})\\s+(.+?)\\s*#*\\s*$")
+
+/**
+ * Compaction summaries can predate the current Room control packet. Remove
+ * embedded packet sections before they become optional historical prose so an
+ * old decision cannot compete with the fresh required snapshot.
+ */
+private fun stripEmbeddedProjectControlPacket(summary: String): String {
+    if (summary.isBlank()) return ""
+    val kept = mutableListOf<String>()
+    var packetHeadingLevel: Int? = null
+    summary.replace("\r", "").lines().forEach { line ->
+        val heading = MARKDOWN_HEADING_PATTERN.matchEntire(line)
+        val headingLevel = heading?.groupValues?.getOrNull(1)?.length
+        if (packetHeadingLevel != null) {
+            if (headingLevel == null || headingLevel > packetHeadingLevel!!) {
+                return@forEach
+            }
+            packetHeadingLevel = null
+        }
+        val headingTitle = heading
+            ?.groupValues
+            ?.getOrNull(2)
+            ?.trim()
+            ?.trimEnd('#')
+            ?.trim()
+        if (
+            headingTitle?.equals("Project Control Packet", ignoreCase = true) == true
+        ) {
+            packetHeadingLevel = headingLevel
+            return@forEach
+        }
+        kept += line
+    }
+    return kept.joinToString("\n").trim()
+}
+
 fun buildCompactPromptBasisSections(
     systemPrompt: String,
     initialOrder: String,
@@ -518,24 +557,41 @@ fun buildCompactPromptBasisSections(
     compactionSummary: String,
     compactStateSnapshot: String?
 ): CompactPromptBasisSections {
+    val historicalSummary = stripEmbeddedProjectControlPacket(compactionSummary)
+    val canonicalCoverage = canonicalAgentPromptCoverage(compactStateSnapshot)
+    val normalizedInitialOrder = normalizeAgentPromptCoverageText(initialOrder)
+    val initialOrderCovered = normalizedInitialOrder.isNotBlank() &&
+        canonicalCoverage.initialGoal?.let(::normalizeAgentPromptCoverageText)
+            ?.equals(normalizedInitialOrder, ignoreCase = false) == true
+    val normalizedPlan = planContent?.let(::normalizeAgentPromptCoverageText)
+    val planCovered = normalizedPlan?.isNotBlank() == true &&
+        canonicalCoverage.approvedPlanContent
+            ?.let(::normalizeAgentPromptCoverageText)
+            ?.equals(normalizedPlan, ignoreCase = false) == true
     val required = buildList {
         add(systemPrompt)
-        AgentProjectControlPlane.compactDocumentReference(
-            title = "Initial Order",
-            content = initialOrder,
-            maxChars = 1_400
-        )?.let(::add)
-        AgentProjectControlPlane.compactDocumentReference(
-            title = "Plan",
-            content = planContent,
-            maxChars = 2_000
-        )?.let(::add)
-        add(compactionSummary.take(8_000))
-    }
-    val optional = listOfNotNull(
+        if (!initialOrderCovered) {
+            AgentProjectControlPlane.compactDocumentReference(
+                title = "Initial Order",
+                content = initialOrder,
+                maxChars = 1_400
+            )?.let(::add)
+        }
+        if (!planCovered) {
+            AgentProjectControlPlane.compactDocumentReference(
+                title = "Plan",
+                content = planContent,
+                maxChars = 2_000
+            )?.let(::add)
+        }
         compactStateSnapshot
             ?.takeIf { it.isNotBlank() }
-            ?.take(12_000)
+            ?.let(::add)
+    }
+    val optional = listOfNotNull(
+        historicalSummary
+            .takeIf { it.isNotBlank() }
+            ?.take(COMPACT_HISTORICAL_SUMMARY_MAX_CHARS)
     )
     return CompactPromptBasisSections(
         requiredSections = required,
@@ -1959,6 +2015,9 @@ internal object AgentRuntimeSupport {
         if (role == "CODEBASE_SCOUT") {
             payload = sanitizeCodebaseScoutReportPayload(payload)
         }
+        if (role == "CODER" && status == "SUCCESS" && payload.has("changed_files")) {
+            requireCoderSuccessEvidence(payload)
+        }
 
         val terminalFallback = when (status) {
             "SUCCESS" -> "Completed the assigned task. $fallbackDetails"
@@ -2428,9 +2487,7 @@ internal object AgentRuntimeSupport {
                 remainingRisks = json.optJSONArray("remaining_risks").toStringList()
             ).also {
                 if (it.status == "SUCCESS") {
-                    require(it.changedFiles.isNotEmpty()) {
-                        "CoderResult.changed_files must not be empty on success."
-                    }
+                    requireCoderSuccessEvidence(json)
                 }
             }
             "REVIEWER" -> AgentResult.ReviewerResult(
@@ -2493,6 +2550,15 @@ internal object AgentRuntimeSupport {
                 status = status,
                 summary = json.optString("summary").ifBlank { trimmed }
             )
+        }
+    }
+
+    private fun requireCoderSuccessEvidence(payload: JSONObject) {
+        require(payload.optJSONArray("changed_files").toStringList().isNotEmpty()) {
+            "Coder success requires changed_files."
+        }
+        require(payload.optJSONArray("verification_reads").toStringList().isNotEmpty()) {
+            "Coder success requires verification_reads with actual checks or inspected results."
         }
     }
 

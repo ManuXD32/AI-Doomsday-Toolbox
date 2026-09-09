@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="agent_preview_download_unsupported">This preview download is unavailable. Only same-origin generated Blob downloads are supported.</string>
+    <string name="agent_preview_download_in_progress">A preview download is already in progress.</string>
+    <string name="agent_preview_download_too_large">The preview download exceeds the 16 MiB limit.</string>
+    <string name="agent_preview_download_failed">Preview download failed.</string>
+</resources>

@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.AgentConversationEntity
+import com.example.llamadroid.data.db.AgentExecutionProfile
 import com.example.llamadroid.data.db.AgentMessageEntity
 import com.example.llamadroid.service.AgentService
 import com.example.llamadroid.service.OllamaService
@@ -158,7 +159,14 @@ class AgentViewModel(
         }
         
         // Load messages
-        val entities = db.agentChatDao().getMessagesForConversationSync(conversationId)
+        val entities = if (
+            AgentExecutionProfile.normalize(conv?.executionProfile) == AgentExecutionProfile.OPTIMIZED
+        ) {
+            AgentHistoryPager(db.agentChatDao()).newest(conversationId).messages
+        } else {
+            // Existing conversations keep their full legacy runtime hydration.
+            db.agentChatDao().getMessagesForConversationSync(conversationId)
+        }
         val restoredMessages = entities.map { AgentService.chatMessageFromEntity(it) }
         AgentService.resetMessageCounter(restoredMessages.maxOfOrNull { it.sequenceNumber } ?: 0)
         AgentService.setMessages(restoredMessages)

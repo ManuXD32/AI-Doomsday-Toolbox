@@ -179,6 +179,10 @@ data class AgentPendingQuestionEntity(
     val isCollapsed: Boolean = false,
     val status: String = "PENDING",
     val continuationEnqueued: Boolean = false,
+    /** Stable projection ID for the canonical answer tool message. */
+    val answerMessageOriginalId: String? = null,
+    /** Stable durable outbox receipt ID for the answer continuation. */
+    val answerReceiptId: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val answeredAt: Long? = null
 )
@@ -514,3 +518,143 @@ data class AgentPendingInputEntity(
     val deliveredAt: Long? = null,
     val cancelledAt: Long? = null
 )
+
+/**
+ * Versioned user contract for a project. The initial goal is write-once so a
+ * rendered control packet can never replace the user's original request.
+ */
+@Entity(
+    tableName = "agent_project_contracts",
+    foreignKeys = [
+        ForeignKey(
+            entity = AgentConversationEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["conversationId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [
+        Index("contractVersion"),
+        Index("greenfield"),
+        Index("noMoreQuestions"),
+        Index("updatedAt")
+    ]
+)
+data class AgentProjectContractEntity(
+    @PrimaryKey val conversationId: Long,
+    val contractVersion: Int = 1,
+    val initialGoal: String = "",
+    val initialGoalSource: String = "USER",
+    val noMoreQuestions: Boolean = false,
+    val greenfield: Boolean = false,
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+/**
+ * One durable decision per question item. Both submitted and canonical JSON
+ * are retained so custom values and selected options remain exact and
+ * corrections can be audited without relying on chat history.
+ */
+@Entity(
+    tableName = "agent_decisions",
+    foreignKeys = [
+        ForeignKey(
+            entity = AgentConversationEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["conversationId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [
+        Index("conversationId"),
+        Index("rootTurnId"),
+        Index("questionId"),
+        Index("decisionKey"),
+        Index("isLatest"),
+        Index("createdAt"),
+        Index(value = ["conversationId", "decisionKey", "isLatest"])
+    ]
+)
+data class AgentDecisionEntity(
+    @PrimaryKey val id: String,
+    val conversationId: Long,
+    val rootTurnId: String? = null,
+    val questionId: String? = null,
+    val decisionKey: String,
+    /** Exact canonical answer item, including selected option IDs/labels. */
+    val answerJson: String,
+    /** Exact submitted value before canonicalization, when available. */
+    val submittedAnswerJson: String = "{}",
+    val selectedOptionsJson: String = "[]",
+    val customAnswer: String? = null,
+    val specificationJson: String = "{}",
+    val provenanceJson: String = "{}",
+    val supersedesDecisionId: String? = null,
+    /** Points forward to the newest correction for this row. */
+    val latestCorrectionId: String? = null,
+    val isLatest: Boolean = true,
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+/**
+ * Durable continuation receipt. The in-memory queue may disappear with a
+ * process, while this row remains the idempotent handoff boundary.
+ */
+@Entity(
+    tableName = "agent_continuation_outbox",
+    foreignKeys = [
+        ForeignKey(
+            entity = AgentConversationEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["conversationId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [
+        Index("conversationId"),
+        Index("rootTurnId"),
+        Index("status"),
+        Index("createdAt"),
+        Index(value = ["conversationId", "dedupeKey"], unique = true)
+    ]
+)
+data class AgentContinuationOutboxEntity(
+    @PrimaryKey val id: String,
+    val conversationId: Long,
+    val rootTurnId: String? = null,
+    val kind: String,
+    val dedupeKey: String,
+    val payloadJson: String = "{}",
+    val status: String = AgentContinuationStatus.QUEUED,
+    val attemptCount: Int = 0,
+    val claimedAt: Long? = null,
+    val enqueuedAt: Long? = null,
+    val completedAt: Long? = null,
+    val errorClass: String? = null,
+    val errorMessage: String? = null,
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+/** Stable execution profile identifiers persisted on conversations. */
+object AgentExecutionProfile {
+    const val LEGACY = "legacy"
+    const val OPTIMIZED = "optimized"
+
+    fun normalize(value: String?): String = when (value?.trim()?.lowercase()) {
+        OPTIMIZED -> OPTIMIZED
+        else -> LEGACY
+    }
+}
+
+/** Stable outbox lifecycle identifiers used by storage and orchestration. */
+object AgentContinuationStatus {
+    const val QUEUED = "QUEUED"
+    const val CLAIMED = "CLAIMED"
+    const val ENQUEUED = "ENQUEUED"
+    const val COMPLETED = "COMPLETED"
+    const val FAILED = "FAILED"
+    const val CANCELLED = "CANCELLED"
+}

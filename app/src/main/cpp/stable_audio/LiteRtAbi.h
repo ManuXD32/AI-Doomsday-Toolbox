@@ -16,6 +16,7 @@ using Status = int;
 constexpr Status kOk = 0;
 constexpr Status kCancelled = 100;
 constexpr int kCpu = 1;
+constexpr int kHostMemory = 1;
 
 struct Layout {
   unsigned int rank : 7;
@@ -92,8 +93,8 @@ struct Api {
       void*, std::size_t, std::size_t, Layout*, bool);
   using ResizeInputTensorNonStrict = Status (*)(
       void*, std::size_t, std::size_t, const int32_t*, std::size_t);
-  using CreateTensorBufferFromHostMemory = Status (*)(
-      const RankedTensorType*, void*, std::size_t, void (*)(void*), void**);
+  using CreateManagedTensorBuffer = Status (*)(
+      void*, int, const RankedTensorType*, std::size_t, void**);
   using DestroyTensorBuffer = void (*)(void*);
   using GetTensorBufferHostMemory = Status (*)(void*, void**);
   using RunCompiledModel = Status (*)(
@@ -130,7 +131,7 @@ struct Api {
   GetCompiledModelInputTensorLayout get_compiled_model_input_tensor_layout = nullptr;
   GetCompiledModelOutputTensorLayouts get_compiled_model_output_tensor_layouts = nullptr;
   ResizeInputTensorNonStrict resize_input_tensor_non_strict = nullptr;
-  CreateTensorBufferFromHostMemory create_tensor_buffer_from_host_memory = nullptr;
+  CreateManagedTensorBuffer create_managed_tensor_buffer = nullptr;
   DestroyTensorBuffer destroy_tensor_buffer = nullptr;
   GetTensorBufferHostMemory get_tensor_buffer_host_memory = nullptr;
   RunCompiledModel run_compiled_model = nullptr;

@@ -109,7 +109,7 @@ class LlamaServerViewModel(
         host: String,
         port: Int,
         modelName: String,
-        onResult: (Result<Pair<Boolean, Boolean>>) -> Unit
+        onResult: (Result<Triple<Boolean, Boolean, Boolean>>) -> Unit
     ) {
         viewModelScope.launch {
             val result = runCatching {
@@ -119,7 +119,11 @@ class LlamaServerViewModel(
                         modelName = modelName
                     )
                     val capabilities = deriveOllamaCapabilityState(info.capabilities)
-                    capabilities.supportsVision to capabilities.supportsAudio
+                    Triple(
+                        capabilities.supportsVision,
+                        capabilities.supportsAudio,
+                        capabilities.supportsVideo
+                    )
                 }
             }
             onResult(result)
@@ -162,7 +166,8 @@ class LlamaServerViewModel(
             id = server.id,
             modelName = server.modelName?.ifBlank { server.name } ?: server.name,
             supportsVision = server.supportsVision,
-            supportsAudio = server.supportsAudio
+            supportsAudio = server.supportsAudio,
+            supportsVideo = false
         )
         DebugLog.log("LiteRT server metadata uses local model '${server.modelName ?: server.name}'")
     }
@@ -174,7 +179,8 @@ class LlamaServerViewModel(
                 id = server.id,
                 modelName = null,
                 supportsVision = false,
-                supportsAudio = false
+                supportsAudio = false,
+                supportsVideo = false
             )
             return
         }
@@ -188,10 +194,11 @@ class LlamaServerViewModel(
                 id = server.id,
                 modelName = modelName,
                 supportsVision = capabilities.supportsVision,
-                supportsAudio = capabilities.supportsAudio
+                supportsAudio = capabilities.supportsAudio,
+                supportsVideo = capabilities.supportsVideo
             )
             DebugLog.log(
-                "Fetched Ollama metadata for ${server.name}: $modelName vision=${capabilities.supportsVision} audio=${capabilities.supportsAudio}"
+                "Fetched Ollama metadata for ${server.name}: $modelName vision=${capabilities.supportsVision} audio=${capabilities.supportsAudio} video=${capabilities.supportsVideo}"
             )
         } catch (e: Exception) {
             DebugLog.log("Error fetching Ollama metadata: ${e.message}")
@@ -199,7 +206,8 @@ class LlamaServerViewModel(
                 id = server.id,
                 modelName = modelName,
                 supportsVision = false,
-                supportsAudio = false
+                supportsAudio = false,
+                supportsVideo = false
             )
         }
     }

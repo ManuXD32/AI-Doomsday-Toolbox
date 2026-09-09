@@ -215,7 +215,8 @@ class LlamaChatViewModel(
                     role = message.role,
                     content = message.content,
                     imagePath = message.imagePath,
-                    audioPath = message.audioPath
+                    audioPath = message.audioPath,
+                    videoPath = message.videoPath
                 )
             }
             onCreated(chatId)

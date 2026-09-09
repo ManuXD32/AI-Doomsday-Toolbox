@@ -38,6 +38,7 @@ import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.service.containsTraversalSegments
 import com.example.llamadroid.service.isSequentialBatchBlockedTool
 import com.example.llamadroid.service.stripHtmlTags
+import kotlinx.coroutines.async
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -477,6 +478,8 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
             put("messageCount", _messages.value.size)
             put("currentAgent", _currentAgent.value.name)
             put("currentTask", _currentTask.value)
+            put("processGeneration", processGeneration)
+            put("runEpoch", currentRunEpoch())
             put("projectFolder", _currentProjectFolder.value)
             put("workspaceBackend", _currentWorkspaceBackend.value.name)
             put("runtimeCapabilitiesJson", _currentRuntimeCapabilities.value.toJson())
@@ -593,7 +596,7 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
                         conversationId?.let {
                             AppDatabase.getDatabase(appContext)
                                 .agentChatDao()
-                                .updateResumeState(it, RESUME_STATE_IDLE, null)
+                                .updateResumeStateIfIdle(it, RESUME_STATE_IDLE, null)
                         }
                     }
                 }.onFailure {
@@ -739,6 +742,26 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
                 addDebugLog("⚠️ Failed to persist visible runtime state: ${e.message}")
                 Result.failure(e)
             }
+        }
+    }
+
+    /** Regenerate removes only its requested suffix, including when runtime restored one recent page. */
+    private suspend fun persistHistoryTruncation(conversationId: Long, cutoff: ChatMessage): Result<Unit> = runCatching {
+        runtimePersistenceMutex.withLock {
+            val database = AppDatabase.getDatabase(context.applicationContext)
+            database.withTransaction {
+                val stored = database.agentChatDao().getMessageByOriginalId(cutoff.id)
+                require(stored == null || stored.conversationId == conversationId) { "History cursor belongs to another conversation" }
+                val sequence = stored?.sequenceNumber ?: cutoff.sequenceNumber
+                val databaseId = stored?.id ?: Long.MAX_VALUE
+                // Delete the explicitly regenerated suffix; retain older rows absent from the loaded page.
+                database.agentWorkflowDao().deleteMessagePartsAtOrAfter(conversationId, sequence, databaseId)
+                database.agentChatDao().deleteMessagesAtOrAfter(conversationId, sequence, databaseId)
+            }
+            persistedMessageHashes.keys.removeIf { it.startsWith("$conversationId:") }
+        }
+        if (_activeConversationId.value == conversationId) {
+            persistVisibleRuntimeStateNow(reason = "Conversation suffix truncated").getOrThrow()
         }
     }
 
@@ -913,6 +936,10 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
     }
 
     fun restorePersistentState(payloadJson: String) {
+        // Compose/Room reconciliation must never replace a live runtime, including
+        // the idle-looking interval between child completion and parent continuation.
+        val restoredId = runCatching { JSONObject(payloadJson).optLong("activeConversationId") }.getOrNull()
+        if (restoredId != null && ownsLiveConversation(restoredId)) return
         fun deserializeToolCall(json: JSONObject?): com.example.llamadroid.service.OllamaService.ToolCall? {
             if (json == null) return null
             val argsJson = json.optJSONObject("arguments")
@@ -2709,6 +2736,63 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
 
 
     companion object {
+        @Volatile private var pendingStopCommit: Job? = null
+        @Volatile private var pendingHistoryCommit: kotlinx.coroutines.Deferred<Result<Unit>>? = null
+        private val actionBudget = AgentActionBudget()
+        private val processGeneration = java.util.UUID.randomUUID().toString()
+        internal val currentProcessGeneration: String get() = processGeneration
+        private val _executionProfile = MutableStateFlow(AgentHarnessPolicy.LEGACY)
+        val executionProfile: StateFlow<String> = _executionProfile.asStateFlow()
+        fun setExecutionProfile(profile: String) {
+            val normalized = AgentHarnessPolicy.normalizeProfileId(profile)
+            if (_executionProfile.value != normalized) clearFrozenPromptCaches()
+            _executionProfile.value = normalized
+        }
+        private val activatedToolByPalette = java.util.concurrent.ConcurrentHashMap<String, String>()
+        private fun activeHarnessPhase(): AgentHarnessPhase {
+            if (_currentPlanningModeEnabled.value) return AgentHarnessPhase.PLAN
+            val conversationId = _activeConversationId.value ?: _preferredConversationId.value
+            return if (conversationId != null && AgentProjectControlPlane.cachedState(conversationId)?.mode == "VERIFY")
+                AgentHarnessPhase.VERIFY else AgentHarnessPhase.BUILD
+        }
+        private fun activeToolPaletteKey() = "${_activeConversationId.value}|${_currentAgent.value}|${activeHarnessPhase()}"
+        private fun optimizedHarness() = AgentHarnessPolicy.isOptimized(_executionProfile.value)
+        private suspend fun planningEpisode(context: Context, conversationId: Long): String =
+            AppDatabase.getDatabase(context).agentWorkflowDao().getProjectState(conversationId)?.activePlanVersionId ?: "initial-plan"
+
+        private suspend fun admitHarnessResearch(context: Context, tool: String, arguments: Map<String, String>): Boolean {
+            if (!optimizedHarness() || tool !in setOf("web_search", "kiwix_search", "fetch_url")) return true
+            val conversationId = _activeConversationId.value ?: return false
+            val blocker = arguments["blocker_reason"]?.trim()?.takeIf { it.length >= 24 }
+            val admission = AgentDurableContractStore.admitResearch(context, conversationId,
+                planningEpisode(context, conversationId), tool, blocker, currentRootTurnId().toString())
+            if (admission.reason == "explicit_blocker_override") {
+                postOrchestratorProgressUpdate(context, "RESEARCH", blocker.orEmpty())
+            }
+            return admission.admitted
+        }
+
+
+        @Volatile private var ownedConversationId: Long? = null
+        @Volatile private var codebaseDiscoveryPolicy: Pair<Long, Boolean>? = null
+
+        internal fun updateCodebaseDiscoveryPolicy(conversationId: Long, suppressed: Boolean) {
+            val next = conversationId to suppressed
+            if (codebaseDiscoveryPolicy != next) {
+                codebaseDiscoveryPolicy = next
+                clearFrozenPromptCaches()
+            }
+        }
+
+        private fun suppressCodebaseDiscoveryInPlan(): Boolean {
+            val conversationId = _activeConversationId.value ?: _preferredConversationId.value
+            return optimizedHarness() && _currentPlanningModeEnabled.value &&
+                codebaseDiscoveryPolicy?.let { it.first == conversationId && it.second } == true
+        }
+
+        fun ownsLiveConversation(conversationId: Long?): Boolean =
+            conversationId != null && ownedConversationId == conversationId
+
         private const val TAG = "AgentService"
         private const val PROMPT_CONTEXT_AUTOCOMPACT_RATIO = 0.70
         private const val PROMPT_CONTEXT_AUTOCOMPACT_PERCENT = 70
@@ -2755,7 +2839,7 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
         private const val LOOP_WAKEUP_HANDOFFS = 4
         private const val MAX_HANDOFFS_PER_REQUEST = 8
         private const val LOOP_WAKEUP_TOOL_FAILURES = 2
-        private const val MAX_TOOL_FAILURES_PER_SIGNATURE = 3
+        private const val MAX_TOOL_FAILURES_PER_SIGNATURE = 2
         private const val LOOP_WAKEUP_REPEATED_PLANS = 2
         private const val MAX_REPEATED_PLANS = 6
         private const val MAX_CONTINUATION_QUEUE_DEPTH = 3
@@ -2763,7 +2847,7 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
         // delegation turns. This is only a last-resort safety ceiling; repeated
         // no-progress recovery is guarded separately.
         private const val MAX_CONTINUATIONS_PER_EPOCH = 96
-        private const val MAX_NO_PROGRESS_CONTINUATIONS = 4
+        private const val MAX_NO_PROGRESS_CONTINUATIONS = 3
         private const val MAX_NORMAL_LOADING_LEASES = 2
 
         // Instance-specific loading state (now in companion for static tool access)
@@ -3152,12 +3236,7 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
                     AgentCompactionStatus.SATURATED
             ) {
                 blockAutomaticContinuations()
-                val message =
-                    "The required control state and tool schema do not fit " +
-                        "the active context after deterministic compaction. " +
-                        "Your project and TODO state are safe. Increase the " +
-                        "model context or reduce the enabled Orchestrator " +
-                        "tool bundle before continuing."
+                val message = context.getString(R.string.agent_harness_capacity_limit)
                 addMessage(ChatMessage(role = "system", content = message))
                 updateActiveConversationResumeState(
                     RESUME_STATE_NEEDS_DIRECTION,
@@ -3188,18 +3267,8 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
 
             if (retryNumber > CONTEXT_OVERFLOW_MAX_RETRIES) {
                 blockAutomaticContinuations()
-                val friendlyMessage = buildString {
-                    appendLine(
-                        "The active model context is still too small after automatic compaction."
-                    )
-                    appendLine()
-                    appendLine(
-                        "Your project files, complete saved conversation, TODO state, and project memory are safe."
-                    )
-                    append(
-                        "Increase the model context or run /compact, then ask the agent to continue from the current TODO."
-                    )
-                }
+                val friendlyMessage =
+                    context.getString(R.string.agent_harness_capacity_limit)
                 addMessage(ChatMessage(role = "system", content = friendlyMessage))
                 updateActiveConversationResumeState(
                     RESUME_STATE_NEEDS_DIRECTION,
@@ -4042,6 +4111,8 @@ TODO status. Return via finish_task with JSON:
 
         fun setActiveConversationId(conversationId: Long?) {
             if (_activeConversationId.value != conversationId) {
+                ownedConversationId = null
+                codebaseDiscoveryPolicy = null
                 hardCompactionState = null
                 if (
                     pendingHardCompactionConversationId != null &&
@@ -4064,6 +4135,22 @@ TODO status. Return via finish_task with JSON:
             role: AgentRole = _currentAgent.value,
             customAgent: com.example.llamadroid.data.db.CustomAgentEntity? = _activeCustomAgent.value
         ): String = "$rootTurnId:${customAgent?.name ?: role.name}"
+
+        private fun promptCacheKey(
+            branch: String = turnBranchKey(),
+            permittedTools: List<AgentTool> = getAgentTools()
+        ): String {
+            val capabilities = permittedTools.map { it.name }.distinct().sorted().joinToString("\n")
+            val conversation = _activeConversationId.value ?: _preferredConversationId.value
+            return AgentHarnessPolicy.promptCacheKey("$conversation:$branch", _executionProfile.value, activeHarnessPhase()) +
+                ":${agentPromptSha256(capabilities)}"
+        }
+
+        private fun clearFrozenPromptCaches() {
+            frozenToolsByTurnBranch.clear()
+            frozenSystemPromptByTurnBranch.clear()
+            frozenOptionalPromptByTurnBranch.clear()
+        }
 
         private fun startNewRootTurn(): Long {
             closeRemoteWorkerRootSession(
@@ -4231,7 +4318,7 @@ TODO status. Return via finish_task with JSON:
             )
         }
 
-        private fun recordFrozenTurnContextForRequest(
+        private suspend fun recordFrozenTurnContextForRequest(
             context: Context,
             settingsRepo: com.example.llamadroid.data.SettingsRepository,
             ollamaService: OllamaService,
@@ -4250,7 +4337,7 @@ TODO status. Return via finish_task with JSON:
             packedMessages: List<ChatMessage>,
             thinkingEnabled: Boolean
         ) {
-            agentScope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.IO) {
                 val endpointGeneration = when {
                     useLiteRtBackend -> "litert|${liteRtModelFilename.orEmpty()}|$contextTokens"
                     useLlamaSwap -> "${settingsRepo.agentLlamaSwapUrl.value}|$model|$contextTokens"
@@ -4420,41 +4507,38 @@ TODO status. Return via finish_task with JSON:
         ): Job {
             rememberRuntimeRefs(context, ollamaService, settingsRepo, agentService)
             val refs = lastRuntimeRefs ?: return agentScope.launch { }
+            val answerEpoch = currentRunEpoch()
             return agentScope.launch(Dispatchers.IO) {
-                val dao = AppDatabase.getDatabase(refs.context).agentWorkflowDao()
-                val pendingQuestion = dao.getPendingQuestion(questionId) ?: return@launch
-                val authoritativeAnswer = runCatching {
-                    authoritativeQuestionAnswerJson(pendingQuestion.specificationJson, answerJson)
-                }.getOrElse { error ->
-                    addDebugLog("Question answer validation failed: ${error.message}")
-                    return@launch
-                }
-                val updated = dao.answerQuestionExactlyOnce(questionId, authoritativeAnswer)
-                if (updated != 1) return@launch
-                val question = dao.getPendingQuestion(questionId) ?: return@launch
-                addMessage(
-                    ChatMessage(
-                        role = "tool",
-                        content = authoritativeQuestionToolResult(authoritativeAnswer),
-                        toolName = "question",
-                        toolCallId = question.toolCallId
-                    )
-                )
-                _pendingQuestionCount.value = (_pendingQuestionCount.value - 1).coerceAtLeast(0)
-                if (_pendingQuestionCount.value == 0 && !hasPendingPlanApproval()) {
-                    UnifiedNotificationManager.dismissAgentAttention()
-                }
-                updateActiveConversationResumeState(RESUME_STATE_IDLE, null)
-                allowAutomaticContinuations()
-                if (dao.markQuestionContinuationEnqueued(questionId) == 1) {
+                try {
+                    val database = AppDatabase.getDatabase(refs.context)
+                    val committed = database.withTransaction {
+                        ensureAgentRunActive(answerEpoch)
+                        val question = database.agentWorkflowDao().getPendingQuestion(questionId) ?: return@withTransaction null
+                        if (question.conversationId != _activeConversationId.value ||
+                            database.agentChatDao().getConversation(question.conversationId)?.resumeState == RESUME_STATE_STOPPED_BY_USER) return@withTransaction null
+                        val result = AgentDurableContractStore.answerQuestionAtomically(database, questionId, answerJson)
+                        ensureAgentRunActive(answerEpoch)
+                        result
+                    } ?: return@launch
+                    ensureAgentRunActive(answerEpoch)
+                    if (_messages.value.none { it.id == committed.message.originalId }) addMessage(chatMessageFromEntity(committed.message))
+                    _pendingQuestionCount.value = database.agentWorkflowDao().getPendingQuestions(committed.question.conversationId).size
+                    if (_pendingQuestionCount.value == 0 && !hasPendingPlanApproval()) UnifiedNotificationManager.dismissAgentAttention()
+                    val claim = AgentDurableContractStore.claimContinuation(database, committed.receipt.id) ?: return@launch
+                    ensureAgentRunActive(answerEpoch)
+                    updateActiveConversationResumeState(RESUME_STATE_IDLE, null)
+                    allowAutomaticContinuations()
                     enqueueAgentContinuation(
-                        context = refs.context,
-                        ollamaService = refs.ollamaService,
-                        settingsRepo = refs.settingsRepo,
-                        agentService = refs.agentService,
-                        reason = "structured question answered",
-                        runEpoch = currentRunEpoch()
+                        context = refs.context, ollamaService = refs.ollamaService,
+                        settingsRepo = refs.settingsRepo, agentService = refs.agentService,
+                        reason = "structured question answered", runEpoch = answerEpoch
                     )
+                    AgentDurableContractStore.completeContinuation(database, claim.id)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    recordProjectJournalEvent(category = "ERROR", eventType = "answer_commit_failed", error = error)
+                    pauseForNeedsDirection(context, context.getString(R.string.agent_checkpoint_failed_continue))
                 }
             }
         }
@@ -4548,35 +4632,14 @@ TODO status. Return via finish_task with JSON:
                         context.getString(R.string.agent_status_waiting_for_answer)
                     )
                 }
-                dao.getAnsweredQuestionsAwaitingContinuation(conversationId).forEach { answered ->
-                    val answerJson = answered.answerJson ?: return@forEach
-                    if (_messages.value.none {
-                            it.role == "tool" &&
-                                it.toolCallId == answered.toolCallId &&
-                                it.toolName == "question"
-                        }
-                    ) {
-                        addMessage(
-                            ChatMessage(
-                                role = "tool",
-                                content = authoritativeQuestionToolResult(answerJson),
-                                toolName = "question",
-                                toolCallId = answered.toolCallId
-                            )
-                        )
-                    }
-                    if (dao.markQuestionContinuationEnqueued(answered.id) == 1) {
-                        allowAutomaticContinuations()
-                        enqueueAgentContinuation(
-                            context = context.applicationContext,
-                            ollamaService = ollamaService,
-                            settingsRepo = settingsRepo,
-                            agentService = agentService,
-                            reason = "restored structured question answer",
-                            runEpoch = currentRunEpoch()
-                        )
+                // Rebuild missing canonical results even when the legacy enqueue flag was set.
+                // Restoration never dispatches work: process-loss recovery requires Continue.
+                AgentDurableContractStore.restoreAnsweredQuestionMessages(context, conversationId).forEach { restored ->
+                    if (_activeConversationId.value == conversationId && _messages.value.none { it.id == restored.originalId }) {
+                        addMessage(chatMessageFromEntity(restored))
                     }
                 }
+
             }
         }
 
@@ -4845,6 +4908,8 @@ TODO status. Return via finish_task with JSON:
         }
 
         private fun maybePostAutomaticToolProgress(context: Context, toolName: String) {
+            // Optimized progress is based on evidence/receipts, not successful call counts.
+            if (optimizedHarness()) return
             if (_currentAgent.value != AgentRole.ORCHESTRATOR || toolName == "report_progress") return
             val count = consecutiveCompletedTools.incrementAndGet()
             if (count < 3) return
@@ -4892,10 +4957,10 @@ TODO status. Return via finish_task with JSON:
         }
 
         private fun roleRequiresMemoryGate(role: AgentRole): Boolean =
-            role == AgentRole.ORCHESTRATOR || role == AgentRole.CODER
+            !optimizedHarness() && (role == AgentRole.ORCHESTRATOR || role == AgentRole.CODER)
 
         private fun buildMemoryGateSystemPrompt(): String? {
-            if (!_memoryDirty.value || !roleRequiresMemoryGate(_currentAgent.value)) return null
+            if (optimizedHarness() || !_memoryDirty.value || !roleRequiresMemoryGate(_currentAgent.value)) return null
             val reason = _memoryDirtyReason.value ?: "Recent work changed project state."
             return buildString {
                 appendLine("MEMORY UPDATE REQUIRED:")
@@ -4924,7 +4989,7 @@ TODO status. Return via finish_task with JSON:
             reason: String
         ): String {
             val available =
-                frozenToolsByTurnBranch[turnBranchKey()]
+                frozenToolsByTurnBranch[promptCacheKey()]
                     ?: getAgentTools()
             val selected = suspectedToolName
                 ?.takeIf { it.isNotBlank() }
@@ -4944,7 +5009,7 @@ TODO status. Return via finish_task with JSON:
         }
 
         private fun shouldGateCompletionForMemory(content: String): Boolean {
-            if (!_memoryDirty.value || !roleRequiresMemoryGate(_currentAgent.value)) return false
+            if (optimizedHarness() || !_memoryDirty.value || !roleRequiresMemoryGate(_currentAgent.value)) return false
             if (_currentSessionId.value != null && _currentAgent.value != AgentRole.ORCHESTRATOR) return true
 
             val completionRegex = Regex(
@@ -5106,50 +5171,60 @@ TODO status. Return via finish_task with JSON:
             completed: CompletedAgentSession?,
             runEpoch: Long
         ): Boolean {
-            if (completed == null) return false
+            if (completed == null || !isAgentRunActive(runEpoch)) return false
             val pending = pendingDelegations.remove(completed.sessionId)
                 ?: return false
             restoreDelegationParentContext(pending)
 
-            agentScope.launch {
+            agentScope.launch(Dispatchers.IO) {
                 try {
-                    val transition =
-                        AgentProjectControlPlane.recordWorkReportAndTransition(
+                    ensureAgentRunActive(runEpoch)
+                    val database = AppDatabase.getDatabase(context.applicationContext)
+                    val receiptId = "delegation-continuation:${pending.invocationId}"
+                    val (transition, parentMessage) = database.withTransaction {
+                        ensureAgentRunActive(runEpoch)
+                        val committed = AgentProjectControlPlane.recordWorkReportAndTransition(
                             context = context,
                             invocationId = pending.invocationId,
                             rawSummary = completed.rawSummary,
                             result = completed.result,
                             evidence = completed.evidence
                         )
-                    val parentSummary = transition.compactEnvelope()
-                    val terminal = resolveAgentTerminalPresentation(
-                        completed.result.status
-                    )
-                    val output = buildToolResultEnvelope(
-                        toolName = "call_agent",
-                        status = terminal.envelopeStatus,
-                        summary = parentSummary,
-                        nextHint =
-                            "Read project_state. Follow the runtime-owned TODO " +
-                                "status and permitted next action; do not " +
-                                "reconstruct the TODO list from chat."
-                    )
-                    addMessage(
-                        ChatMessage(
+                        val reportTerminal = resolveAgentTerminalPresentation(committed.report.status)
+                        val message = ChatMessage(
+                            id = "delegation-result:${pending.invocationId}",
                             role = "tool",
-                            content = output,
+                            content = buildToolResultEnvelope(
+                                toolName = "call_agent",
+                                status = reportTerminal.envelopeStatus,
+                                summary = "Specialist completion committed.",
+                                importantOutput = committed.compactEnvelope(),
+                                nextHint = "Use this report and current task state. Continue the permitted action; do not repeat completed work."
+                            ),
                             toolName = pending.toolCall.name,
                             toolCallId = pending.toolCall.id,
-                            toolOutput = parentSummary
+                            toolOutput = committed.compactEnvelope()
                         )
-                    )
-                    AppDatabase.getDatabase(context.applicationContext)
-                        .agentWorkflowDao()
-                        .finishInvocationExactlyOnce(
-                            id = pending.invocationId,
-                            status = terminal.invocationStatus,
-                            resultSummary = parentSummary.take(4_000)
+                        AgentDurableContractStore.completeInvocationAtomically(
+                            database = database,
+                            invocationId = pending.invocationId,
+                            report = committed.report,
+                            terminalStatus = committed.report.status,
+                            parentMessage = chatMessageToEntity(message, committed.report.conversationId),
+                            continuation = ContinuationReceiptSpec(
+                                id = receiptId,
+                                conversationId = committed.report.conversationId,
+                                rootTurnId = currentRootTurnId().toString(),
+                                kind = "DELEGATION_CONTINUATION",
+                                dedupeKey = receiptId
+                            )
                         )
+                        ensureAgentRunActive(runEpoch)
+                        committed to message
+                    }
+                    ensureAgentRunActive(runEpoch)
+                    if (_messages.value.none { it.id == parentMessage.id }) addMessage(parentMessage)
+                    val terminal = resolveAgentTerminalPresentation(transition.report.status)
 
                     val progressSummary = when (terminal.kind) {
                         AgentTerminalKind.SUCCESS -> context.getString(
@@ -5203,6 +5278,7 @@ TODO status. Return via finish_task with JSON:
                     val continuationReason =
                         "delegation ${pending.agentLabel} " +
                             terminal.continuationLabel
+                    AgentDurableContractStore.claimContinuation(context, receiptId) ?: return@launch
                     enqueueAgentContinuation(
                         context = context,
                         ollamaService = ollamaService,
@@ -5215,7 +5291,11 @@ TODO status. Return via finish_task with JSON:
                         },
                         runEpoch = runEpoch
                     )
+                    AgentDurableContractStore.completeContinuation(context, receiptId)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
                 } catch (error: Throwable) {
+                    if (!isAgentRunActive(runEpoch)) return@launch
                     AppDatabase.getDatabase(context.applicationContext)
                         .agentWorkflowDao()
                         .finishInvocationExactlyOnce(
@@ -5361,6 +5441,7 @@ TODO status. Return via finish_task with JSON:
         }
 
         fun setCurrentPlanningModeEnabled(enabled: Boolean) {
+            if (_currentPlanningModeEnabled.value != enabled) clearFrozenPromptCaches()
             _currentPlanningModeEnabled.value = enabled
             if (!enabled) {
                 _planningImplementationUnlocked.value = false
@@ -5403,17 +5484,31 @@ TODO status. Return via finish_task with JSON:
             _planningImplementationUnlocked.value = false
         }
 
+        private val resumeStateWriteRevision = java.util.concurrent.atomic.AtomicLong(0L)
+        private val pendingResumeStateWrites = java.util.concurrent.ConcurrentHashMap<Long, Long>()
+
         fun updateActiveConversationResumeState(resumeState: String, reason: String? = null) {
             val conversationId = _activeConversationId.value ?: _preferredConversationId.value ?: return
+            val writeEpoch = activeRunEpoch.get()
+            val writeRevision = resumeStateWriteRevision.incrementAndGet()
+            pendingResumeStateWrites[conversationId] = writeRevision
             val appContext = com.example.llamadroid.LlamaApplication.instance
             agentScope.launch(Dispatchers.IO) {
                 runCatching {
-                    AppDatabase.getDatabase(appContext)
-                        .agentChatDao()
-                        .updateResumeState(conversationId, resumeState, reason)
+                    val database = AppDatabase.getDatabase(appContext)
+                    database.withTransaction {
+                        // Validate after obtaining the Room transaction, not before its queue.
+                        // Stop's later transaction then wins over any already-running write.
+                        if (activeRunEpoch.get() == writeEpoch &&
+                            pendingResumeStateWrites[conversationId] == writeRevision
+                        ) {
+                            database.agentChatDao().updateResumeState(conversationId, resumeState, reason)
+                        }
+                    }
                 }.onFailure {
                     addDebugLog("⚠️ Failed to persist agent resume state: ${it.message}")
                 }
+                pendingResumeStateWrites.remove(conversationId, writeRevision)
             }
         }
 
@@ -5570,11 +5665,7 @@ TODO status. Return via finish_task with JSON:
                 val timestamp = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
                     .format(java.util.Date(event.timestamp))
                 val entry = buildString {
-                    append("- $timestamp | ${event.kind} | ${event.summary}")
-                    event.details?.let {
-                        appendLine()
-                        append("  details: $it")
-                    }
+                    append("- $timestamp | ${sanitizeJournalToken(event.kind)} | role=${_currentAgent.value.name} details_chars=${details?.length ?: 0}")
                 }
                 svc.ensureStructuredBrainFiles()
                     .onFailure { addDebugLog("⚠️ Failed to ensure brain scaffold before timeline write: ${it.message}") }
@@ -5693,6 +5784,11 @@ TODO status. Return via finish_task with JSON:
         private val llamaServerChatService = LlamaServerChatService()
         private const val MAX_COMMAND_TAIL_LINES = 200
         private const val LLAMA_SERVER_METADATA_STALE_MS = 30_000L
+        // Control envelopes may contain authoritative answers and opaque IDs.
+        // Give them a bounded but generous normalization floor; if even this
+        // cannot fit, packing reports an explicit cannot-send state.
+        private const val CONTROL_PROMPT_MIN_PRESERVED_CHARS = 8_000
+        private const val CONTROL_PROMPT_MIN_PRESERVED_LINES = 160
         // Active instance reference for companion methods needing SSH
         @Volatile
         var activeInstance: AgentService? = null
@@ -5710,7 +5806,9 @@ TODO status. Return via finish_task with JSON:
             val estimatedTokens: Int,
             val thresholdTriggered: Boolean = false,
             val didCompactHistory: Boolean = false,
-            val compactionPasses: Int = 1
+            val compactionPasses: Int = 1,
+            val requiredControlStateFits: Boolean = true,
+            val requiredControlStateReason: String? = null
         )
         private data class PromptAssembly(
             val requiredPrimacyMessages: List<ChatMessage>,
@@ -5883,7 +5981,9 @@ TODO status. Return via finish_task with JSON:
         private fun currentRunEpoch(): Long = activeRunEpoch.get()
 
         private fun invalidateRunEpoch(): Long {
-            val next = activeRunEpoch.incrementAndGet()
+            val next = synchronized(activeRunEpoch) {
+                activeRunEpoch.incrementAndGet().also { blockAutomaticContinuations() }
+            }
             // Cancel the queue-drain coroutine as part of the same stop fence as the epoch
             // increment. Clearing the queue alone is insufficient when a drain already polled
             // an item and is waiting for its turn job: it could otherwise dispatch that stale
@@ -5913,6 +6013,9 @@ TODO status. Return via finish_task with JSON:
 
         private fun blockAutomaticContinuations() {
             automaticContinuationBlocked.set(true)
+            // An explicit pause/Stop ends live orchestration ownership. Never release
+            // on a zero loading count: child completion may still owe a parent turn.
+            ownedConversationId = null
         }
 
         private fun allowAutomaticContinuations() {
@@ -6158,9 +6261,14 @@ TODO status. Return via finish_task with JSON:
         }
 
         fun stopAllJobs() {
+            val stoppedTurnStorageId = currentRootTurnStorageId(_activeCustomAgent.value?.name ?: _currentAgent.value.name)
             val cancelledInvocationId = activeInvocationId
             activeInvocationId = null
             invalidateRunEpoch()
+            val pendingInputJobs = pendingInputPersistenceJobs.values.toList().distinct()
+            pendingInputJobs.forEach { it.cancel(CancellationException("Pending input persistence stopped")) }
+            pendingInputPersistenceJobs.clear()
+            val previousStopCommit = pendingStopCommit
             blockAutomaticContinuations()
             clearPendingUrgentUserGuidance()
             clearPlanningImplementationUnlock()
@@ -6179,13 +6287,69 @@ TODO status. Return via finish_task with JSON:
             // Ensure WakeLock is released (defensive call before setIsLoading)
             releaseWakeLock()
             val appContext = com.example.llamadroid.LlamaApplication.instance
+            val stoppedConversationId = _activeConversationId.value ?: _preferredConversationId.value
+            _pendingQuestionCount.value = 0
+            _pendingPlanApprovalId.value = null
+            val cancelledApprovalResults = _messages.value.asSequence()
+                .filter { it.needsApproval && it.isApproved == null }
+                .mapNotNull { message ->
+                    val call = message.pendingToolCall
+                    val callId = call?.id ?: message.toolCallId ?: return@mapNotNull null
+                    val toolName = call?.name ?: message.toolName ?: return@mapNotNull null
+                    ChatMessage(
+                        id = "stopped-tool:$callId",
+                        role = "tool",
+                        toolName = toolName,
+                        toolCallId = callId,
+                        content = buildToolResultEnvelope(
+                            toolName = toolName,
+                            status = "cancelled",
+                            summary = appContext.getString(R.string.agent_resume_reason_stopped_by_user),
+                            errorCode = "ACTION_CANCELLED",
+                            nextHint = "This action was cancelled before approval; it did not execute. Follow the latest user instruction after explicit Continue."
+                        )
+                    )
+                }
+                .distinctBy { it.toolCallId }
+                .filterNot { cancelled ->
+                    _messages.value.any { it.role == "tool" && it.toolCallId == cancelled.toolCallId }
+                }.toList()
+            _messages.update { messages ->
+                messages.map { message ->
+                    if (message.needsApproval && message.isApproved == null) {
+                        message.copy(needsApproval = false, isApproved = false)
+                    } else message
+                }
+            }
+            cancelledApprovalResults.forEach(::addMessage)
+            UnifiedNotificationManager.dismissAgentAttention()
+            stoppedConversationId?.let { conversationId ->
+                pendingStopCommit = agentScope.launch(Dispatchers.IO) {
+                    previousStopCommit?.join()
+                    pendingInputJobs.forEach { it.join() }
+                    val database = AppDatabase.getDatabase(appContext)
+                    database.withTransaction {
+                        AgentDurableContractStore.cancelConversationWork(database, conversationId, appContext.getString(R.string.agent_resume_reason_stopped_by_user))
+                        cancelledApprovalResults.forEach { cancelled ->
+                            if (database.agentChatDao().getToolMessage(
+                                    conversationId, cancelled.toolName.orEmpty(), cancelled.toolCallId.orEmpty()
+                                ) == null
+                            ) {
+                                database.agentChatDao().insertMessage(chatMessageToEntity(cancelled, conversationId))
+                            }
+                        }
+                        database.agentWorkflowDao().finishTurnContext(stoppedTurnStorageId, "INTERRUPTED")
+                        database.agentWorkflowDao().terminatePendingPlans(conversationId, "CANCELLED")
+                    }
+                }
+            }
             cancelledInvocationId?.let { invocationId ->
                 agentScope.launch(Dispatchers.IO) {
                     runCatching {
                         AgentProjectControlPlane.cancelInvocationAndReleaseTodo(
                             context = appContext,
                             invocationId = invocationId,
-                            reason = "Stopped by user."
+                            reason = appContext.getString(R.string.agent_resume_reason_stopped_by_user)
                         )
                     }.onFailure { error ->
                         addDebugLog(
@@ -6198,7 +6362,7 @@ TODO status. Return via finish_task with JSON:
             setIsLoading(false, appContext.getString(R.string.agent_status_interrupted))
             addDebugLog("🛑 All jobs stopped by user. Reset to Orchestrator.")
             recordAgentEvent("agent_stop", "Stopped all running agent work", "User interrupted the active workflow.")
-            updateActiveConversationResumeState(RESUME_STATE_STOPPED_BY_USER, "Stopped by user.")
+            updateActiveConversationResumeState(RESUME_STATE_STOPPED_BY_USER, appContext.getString(R.string.agent_resume_reason_stopped_by_user))
             // Find the last streaming message and mark it as finished
             _messages.value.findLast { it.isStreaming }?.let { lastMsg ->
                 updateMessage(lastMsg.id) { it.copy(content = it.content + " [" + appContext.getString(R.string.agent_status_interrupted) + "]", isStreaming = false) }
@@ -6289,28 +6453,49 @@ TODO status. Return via finish_task with JSON:
          * been committed. This preserves the assistant-tool/tool-result adjacency required by
          * OpenAI-compatible chat templates and llama.cpp exact-prefix prompt caching.
          */
+        private fun persistQueuedInput(
+            input: com.example.llamadroid.data.db.AgentPendingInputEntity,
+            queueEpoch: Long,
+            rootTurnId: String
+        ) {
+            // Register before execution so Stop can cancel and join the writer.
+            val job = agentScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
+                pendingStopCommit?.join()
+                val database = AppDatabase.getDatabase(com.example.llamadroid.LlamaApplication.instance)
+                database.withTransaction {
+                    ensureAgentRunActive(queueEpoch)
+                    AgentDurableContractStore.enqueuePendingInputAtomically(database, input, rootTurnId)
+                    ensureAgentRunActive(queueEpoch)
+                }
+            }
+            pendingInputPersistenceJobs[input.id] = job
+            job.invokeOnCompletion { failure ->
+                pendingInputPersistenceJobs.remove(input.id, job)
+                if (failure != null) pendingUrgentUserGuidance.removeIf { it.id == input.id }
+            }
+            job.start()
+        }
+
         fun queueUrgentUserGuidance(message: ChatMessage) {
             require(message.role == "user") { "Queued guidance must be a user message." }
+            val queueEpoch = currentRunEpoch()
+            val queueRootTurnId = activeRootTurnStorageId
             pendingUrgentUserGuidance.add(message)
             _pendingUrgentUserGuidanceCount.value = pendingUrgentUserGuidance.size
-            val conversationId = _activeConversationId.value
-            if (conversationId != null) {
-                val job = agentScope.launch(Dispatchers.IO) {
-                    AppDatabase.getDatabase(com.example.llamadroid.LlamaApplication.instance)
-                        .agentWorkflowDao()
-                        .insertPendingInput(
-                            com.example.llamadroid.data.db.AgentPendingInputEntity(
-                                id = message.id,
-                                conversationId = conversationId,
-                                targetInvocationId = message.invocationId,
-                                content = message.content,
-                                imagePath = message.imagePath,
-                                sequenceNumber = pendingInputSequence.incrementAndGet()
-                            )
-                        )
-                }
-                pendingInputPersistenceJobs[message.id] = job
-                job.invokeOnCompletion { pendingInputPersistenceJobs.remove(message.id) }
+            _activeConversationId.value?.let { conversationId ->
+                persistQueuedInput(
+                    input = com.example.llamadroid.data.db.AgentPendingInputEntity(
+                        id = message.id,
+                        conversationId = conversationId,
+                        targetInvocationId = message.invocationId,
+                        content = message.content,
+                        imagePath = message.imagePath,
+                        sequenceNumber = pendingInputSequence.incrementAndGet(),
+                        createdAt = message.timestamp
+                    ),
+                    queueEpoch = queueEpoch,
+                    rootTurnId = queueRootTurnId
+                )
             }
             recordProjectJournalEvent(
                 category = "UI",
@@ -6336,22 +6521,19 @@ TODO status. Return via finish_task with JSON:
                 "/compact" -> "COMPACT"
                 else -> return
             }
+            val queueEpoch = currentRunEpoch()
             val id = java.util.UUID.randomUUID().toString()
-            val job = agentScope.launch(Dispatchers.IO) {
-                AppDatabase.getDatabase(com.example.llamadroid.LlamaApplication.instance)
-                    .agentWorkflowDao()
-                    .insertPendingInput(
-                        com.example.llamadroid.data.db.AgentPendingInputEntity(
-                            id = id,
-                            conversationId = conversationId,
-                            kind = kind,
-                            content = guidance,
-                            sequenceNumber = pendingInputSequence.incrementAndGet()
-                        )
-                    )
-            }
-            pendingInputPersistenceJobs[id] = job
-            job.invokeOnCompletion { pendingInputPersistenceJobs.remove(id) }
+            persistQueuedInput(
+                input = com.example.llamadroid.data.db.AgentPendingInputEntity(
+                    id = id,
+                    conversationId = conversationId,
+                    kind = kind,
+                    content = guidance,
+                    sequenceNumber = pendingInputSequence.incrementAndGet()
+                ),
+                queueEpoch = queueEpoch,
+                rootTurnId = activeRootTurnStorageId
+            )
             _pendingUrgentUserGuidanceCount.value += 1
             recordProjectJournalEvent(
                 category = "UI",
@@ -6362,7 +6544,10 @@ TODO status. Return via finish_task with JSON:
         }
 
         private suspend fun drainPendingUrgentUserGuidance(context: Context, boundary: String): Int {
+            val drainEpoch = currentRunEpoch()
             pendingInputPersistenceJobs.values.toList().forEach { it.join() }
+            ensureAgentRunActive(drainEpoch)
+            val database = AppDatabase.getDatabase(context.applicationContext)
             val targetInvocationId = activeInvocationId
             val conversationId = _activeConversationId.value
             val durableInputs = if (conversationId != null) {
@@ -6373,6 +6558,12 @@ TODO status. Return via finish_task with JSON:
             }
             val pendingById = linkedMapOf<String, ChatMessage>()
             durableInputs.forEach { persisted ->
+                database.withTransaction {
+                    ensureAgentRunActive(drainEpoch)
+                    // Also repairs pre-upgrade queued guidance, using its original ID/value.
+                    AgentDurableContractStore.enqueuePendingInputAtomically(database, persisted)
+                    ensureAgentRunActive(drainEpoch)
+                }
                 when (persisted.kind) {
                     "MODE_PLAN" -> {
                         setCurrentPlanningModeEnabled(true)
@@ -6404,6 +6595,7 @@ TODO status. Return via finish_task with JSON:
                 .forEach { pendingById.putIfAbsent(it.id, it) }
             var drained = 0
             pendingById.values.forEach { pending ->
+                ensureAgentRunActive(drainEpoch)
                 pendingUrgentUserGuidance.remove(pending)
                 addMessage(
                     pending.copy(
@@ -6413,6 +6605,7 @@ TODO status. Return via finish_task with JSON:
                 )
                 drained += 1
             }
+            ensureAgentRunActive(drainEpoch)
             if (durableInputs.isNotEmpty()) {
                 AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao()
                     .markPendingInputsDelivered(
@@ -6808,14 +7001,17 @@ TODO status. Return via finish_task with JSON:
                             summary = approvalCacheDecision.summary,
                             importantOutput =
                                 approvalCacheDecision.modifiedPlanForToolResult,
-                            nextHint =
+                            nextHint = if (optimizedHarness()) {
+                                "The user approved this plan. Build the current durable TODO directly with permitted tools. " +
+                                    "Read plan_read only when more plan detail is needed. Preserve the TODO list."
+                            } else
                                 "The user explicitly approved this plan. " +
                                     "The runtime already materialized stable " +
                                     "durable TODOs. Call project_state_read, " +
                                     "then delegate exactly the current permitted " +
                                     "TODO transition. Do not replace the complete " +
                                     "TODO list."
-                        )
+                        ) + "\nplan_id: ${materializedPlan.planVersion.id}"
                     )
                     _messages.update { current ->
                         current.filterNot {
@@ -7272,7 +7468,8 @@ TODO status. Return via finish_task with JSON:
             toolOutputChars: Int? = null,
             toolOutputLines: Int? = null,
             error: Throwable? = null,
-            summary: String = eventType
+            summary: String = eventType,
+            metrics: Map<String, Long> = emptyMap()
         ) {
             val conversationId = _activeConversationId.value ?: _preferredConversationId.value ?: return
             val projectFolder = _currentProjectFolder.value.ifBlank { "default_project" }
@@ -7282,7 +7479,7 @@ TODO status. Return via finish_task with JSON:
                 sequenceNumber = _eventCounter.incrementAndGet(),
                 category = category.uppercase().ifBlank { "UI" },
                 eventType = sanitizeJournalToken(eventType),
-                phase = phase?.let { sanitizeJournalText(it, 80) },
+                phase = _currentAgent.value.name,
                 agentRole = agentRole?.let { sanitizeJournalToken(it) },
                 customAgentName = customAgentName?.let { sanitizeJournalToken(it) },
                 toolName = toolName?.let { sanitizeJournalToken(it) },
@@ -7300,8 +7497,16 @@ TODO status. Return via finish_task with JSON:
                 protectionState = "conversation=$conversationId",
                 connectionState = if (_isConnected.value) "CONNECTED" else "DISCONNECTED",
                 errorClass = error?.javaClass?.simpleName?.let { sanitizeJournalToken(it) },
-                errorMessage = error?.message?.let { sanitizeJournalText(it, JOURNAL_ERROR_MAX_CHARS) },
-                summary = sanitizeJournalText(summary, JOURNAL_SUMMARY_MAX_CHARS),
+                errorMessage = error?.javaClass?.simpleName,
+                summary = buildString {
+                    append(sanitizeJournalToken(eventType))
+                    val permitted = setOf("prompt_tokens", "completion_tokens", "total_tokens", "context_tokens", "output_limit", "input_estimate", "schema_tokens", "input_limit", "required_state_fits", "pre_tokens", "post_tokens", "saved_tokens", "common_prefix_chars", "request_chars",
+                        "stream_delta_chunks", "stream_message_chunks", "stream_content_chunks",
+                        "stream_reasoning_content_chunks", "stream_thinking_chunks", "stream_reasoning_chunks", "stream_tool_calls_chunks")
+                    metrics.toSortedMap().filterKeys { it in permitted }.forEach { (key, value) ->
+                        if (value >= 0) append(" $key=$value")
+                    }
+                },
                 invocationId = activeInvocationId
             )
 
@@ -7361,7 +7566,7 @@ TODO status. Return via finish_task with JSON:
             val timestamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
             synchronized(debugLogDeque) {
                 if (debugLogDeque.size >= 50) debugLogDeque.removeFirst()
-                debugLogDeque.addLast("[$timestamp] $entry")
+                debugLogDeque.addLast("[$timestamp] ${entry.take(2_000)}")
                 _debugLog.value = debugLogDeque.toList()
             }
             recordProjectJournalEvent(
@@ -7381,15 +7586,21 @@ TODO status. Return via finish_task with JSON:
         }
 
         fun truncateHistoryAt(id: String, inclusive: Boolean = true) {
-            val index = _messages.value.indexOfFirst { it.id == id }
-            if (index != -1) {
-                _messages.update { current -> current.take(if (inclusive) index else index + 1) }
-                activeInstance?.let { instance ->
-                    agentScope.launch(Dispatchers.IO) {
-                        instance.persistVisibleRuntimeStateNow(
-                            reason = "Conversation history truncated",
-                            pruneMissingMessages = true
-                        )
+            val before = _messages.value
+            val index = before.indexOfFirst { it.id == id }
+            if (index < 0) return
+            val cutoffIndex = if (inclusive) index else index + 1
+            val cutoff = before.getOrNull(cutoffIndex) ?: return
+            val conversationId = _activeConversationId.value
+            _messages.update { current -> current.take(cutoffIndex) }
+            activeInstance?.let { instance ->
+                if (conversationId != null) {
+                    val previousCommit = pendingHistoryCommit
+                    pendingHistoryCommit = agentScope.async(Dispatchers.IO) {
+                        previousCommit?.await()
+                        instance.persistHistoryTruncation(conversationId, cutoff).onFailure {
+                            pauseForNeedsDirection(instance.context, instance.context.getString(R.string.agent_checkpoint_failed_continue))
+                        }
                     }
                 }
             }
@@ -7402,6 +7613,8 @@ TODO status. Return via finish_task with JSON:
         fun prepareRegenerateAt(id: String): Boolean {
             val index = _messages.value.indexOfFirst { it.id == id }
             if (index < 0) return false
+            val cutoff = _messages.value[index]
+            val conversationId = _activeConversationId.value
             activeInvocationId = null
             invalidateRunEpoch()
             blockAutomaticContinuations()
@@ -7428,11 +7641,14 @@ TODO status. Return via finish_task with JSON:
                 details = "truncatedIndex=$index queueDepth=${pendingContinuations.size} logicalJobs=${loadingRefCount.get()}"
             )
             activeInstance?.let { instance ->
-                agentScope.launch(Dispatchers.IO) {
-                    instance.persistVisibleRuntimeStateNow(
-                        reason = "Regenerate history truncated",
-                        pruneMissingMessages = true
-                    )
+                if (conversationId != null) {
+                    val previousCommit = pendingHistoryCommit
+                    pendingHistoryCommit = agentScope.async(Dispatchers.IO) {
+                        previousCommit?.await()
+                        instance.persistHistoryTruncation(conversationId, cutoff).onFailure {
+                            pauseForNeedsDirection(instance.context, instance.context.getString(R.string.agent_checkpoint_failed_continue))
+                        }
+                    }
                 }
             }
             return true
@@ -7528,7 +7744,7 @@ TODO status. Return via finish_task with JSON:
                 "command_list" -> "{\"name\": \"command_list\", \"arguments\": {}}"
                 "cancel_command" -> "{\"name\": \"cancel_command\", \"arguments\": {\"command_id\": \"cmd_1234567890\"}}"
                 "send_command_input" -> "{\"name\": \"send_command_input\", \"arguments\": {\"command_id\": \"cmd_1234567890\", \"input\": \"y\", \"append_newline\": \"true\"}}"
-                "list_directory" -> "{\"name\": \"list_directory\", \"arguments\": {\"path\": \"src/components\"}}"
+                "list_directory" -> "{\"name\": \"list_directory\", \"arguments\": {\"path\": \".\"}}"
                 "create_folder" -> "{\"name\": \"create_folder\", \"arguments\": {\"path\": \"art/concepts\"}}"
                 "search_code" -> "{\"name\": \"search_code\", \"arguments\": {\"query\": \"TODO\", \"file_pattern\": \"*.py\"}}"
                 "edit_lines" -> "{\"name\": \"edit_lines\", \"arguments\": {\"path\": \"src/main.py\", \"start_line\": \"5\", \"end_line\": \"7\", \"new_content\": \"new line 5\\nnew line 6\"}}"
@@ -7560,7 +7776,7 @@ TODO status. Return via finish_task with JSON:
 
         private fun buildSuspectedToolGuidance(toolName: String): String {
             val available =
-                frozenToolsByTurnBranch[turnBranchKey()]
+                frozenToolsByTurnBranch[promptCacheKey()]
                     ?: getAgentTools()
             val selected = available.firstOrNull {
                 it.name.equals(toolName, ignoreCase = true)
@@ -7661,6 +7877,7 @@ TODO status. Return via finish_task with JSON:
                 // it cannot be mistaken for a fresh model instruction or remain as stale UI.
                 clearRetryableNeedsDirectionMessages()
                 startNewRootTurn()
+                actionBudget.reset()
                 allowAutomaticContinuations()
                 recoveryTurnsByEpoch.clear()
                 supervisorRetriesByEpoch.clear()
@@ -7680,6 +7897,7 @@ TODO status. Return via finish_task with JSON:
                 refreshIdleStatusIfNeeded()
                 return agentScope.launch { }
             }
+            ownedConversationId = _activeConversationId.value
             val currentAgent = _currentAgent.value
             val activeCustom = _activeCustomAgent.value
             val runEpoch = currentRunEpoch()
@@ -7758,7 +7976,48 @@ TODO status. Return via finish_task with JSON:
 
             val newJob = agentScope.launch(start = CoroutineStart.LAZY) {
                 try {
+                    pendingStopCommit?.join()
+                    pendingHistoryCommit?.await()?.getOrThrow()
                     ensureAgentRunActive(runEpoch)
+                    val contractConversation = _activeConversationId.value ?: _preferredConversationId.value
+                    if (contractConversation != null) {
+                        val database = AppDatabase.getDatabase(context.applicationContext)
+                        AgentDurableContractStore.recordInitialGoal(database, contractConversation, initialOrderContent.orEmpty())
+                        AgentDurableContractStore.migrateLegacyUserCorrections(database, contractConversation)
+                        val latestUser = _messages.value.lastOrNull { it.role == "user" && !isQueuedGuidanceEnvelope(it.content) }
+                        if (latestUser != null) {
+                            val directive = latestUser.content.lowercase(java.util.Locale.ROOT)
+                            if (Regex("no (more|further) (optional )?questions|do not ask (any )?more|no m[aá]s preguntas").containsMatchIn(directive)) {
+                                AgentDurableContractStore.markNoMoreQuestions(database, contractConversation, true)
+                            }
+                            if (Regex("greenfield|no (existing )?codebase|no files have been written|project has not (yet )?started|proyect has not (yet )?started").containsMatchIn(directive)) {
+                                AgentDurableContractStore.markGreenfield(database, contractConversation, true)
+                            }
+                            if (latestUser.content != initialOrderContent) {
+                                AgentDurableContractStore.recordUserCorrection(
+                                    database = database, conversationId = contractConversation,
+                                    messageId = latestUser.id, content = latestUser.content,
+                                    rootTurnId = currentRootTurnStorageId(currentAgent.name),
+                                    provenanceJson = JSONObject().put("source", "USER_MESSAGE").put("message_id", latestUser.id).toString(),
+                                    createdAt = latestUser.timestamp
+                                )
+                            }
+                        }
+                        val discoveryPolicy = withContext(Dispatchers.IO) {
+                            val dao = database.agentWorkflowDao()
+                            val contract = dao.getProjectContract(contractConversation)
+                            val corrections = AgentDurableContractStore.projectUserCorrections(
+                                dao.getAllLatestDecisions(contractConversation)
+                            ).values.map { it.content }
+                            contractConversation to AgentHarnessPolicy.shouldSuppressCodebaseDiscovery(
+                                greenfield = contract?.greenfield == true,
+                                initialGoal = contract?.initialGoal.orEmpty(),
+                                corrections = corrections
+                            )
+                        }
+                        ensureAgentRunActive(runEpoch)
+                        updateCodebaseDiscoveryPolicy(discoveryPolicy.first, discoveryPolicy.second)
+                    }
                     val runtimeDispatch = resolveRuntimeDispatchForTurn(
                         agentKey = runtimeAgentKey,
                         globalOverride = globalOverride
@@ -7800,6 +8059,11 @@ TODO status. Return via finish_task with JSON:
                     val namedEndpointUrl = runtimeReady?.endpointConfig?.baseUrl
                         ?.let(HttpEndpointUrlSupport::normalizeBaseUrl)
                         ?.takeIf { it.isNotBlank() }
+                    val effectiveOpenAiBaseUrl = namedEndpointUrl ?: managedServerUrl ?: if (useLlamaSwap) {
+                        settingsRepo.agentLlamaSwapUrl.value
+                    } else {
+                        settingsRepo.llamaServerUrl.value
+                    }
                     if (runtimeReady?.managedServer != null && managedServerUrl == null) {
                         val message = AgentRuntimeNeedsDirectionReason.SERVER_NOT_READY
                             .toNeedsDirectionMessage(context)
@@ -7896,15 +8160,15 @@ TODO status. Return via finish_task with JSON:
                     _selectedModel.value = friendlyBackendModelLabel(model) ?: model
                     activePromptBackend = backend
 
-                    // Set context size for this agent
+                    // Apply profile defaults without rewriting explicit backend/model settings.
+                    val harnessContextSize = settingsRepo.resolveAgentHarnessContext(
+                        profileId = _executionProfile.value,
+                        role = activeCustom?.name ?: currentAgent.name,
+                        configuredContextSize = dispatchSettings.contextSize
+                    )
                     val configuredContextSize = if (useLiteRtBackend) {
-                        resolveAgentLiteRtContextTokens(
-                            dispatchSettings.contextSize,
-                            liteRtModel
-                        )
-                    } else {
-                        dispatchSettings.contextSize
-                    }
+                        resolveAgentLiteRtContextTokens(harnessContextSize, liteRtModel)
+                    } else harnessContextSize
                     val reportedServerContextSize = if (useLlamaServer) {
                         _llamaServerRuntimeState.value.contextTokens
                             ?.takeIf { it > 0 }
@@ -7934,23 +8198,51 @@ TODO status. Return via finish_task with JSON:
                         activeAgentRole = activeAgentRole,
                         activeCustomAgent = activeCustomAgent
                     )
-                    val availableTools = frozenToolsByTurnBranch.getOrPut(activeTurnBranchKey) {
-                        getAgentTools(
-                            activeAgentRole,
-                            activeCustomAgent,
-                            settingsRepo
-                        )
-                            .distinctBy { it.name }
-                            .sortedBy { it.name }
+                    if (optimizedHarness()) {
+                        (_activeConversationId.value ?: _preferredConversationId.value)?.let { conversationId ->
+                            AgentProjectControlPlane.cacheState(AppDatabase.getDatabase(context).agentWorkflowDao().getProjectState(conversationId))
+                        }
                     }
+                    val permittedTools = getAgentTools(activeAgentRole, activeCustomAgent, settingsRepo)
+                        .distinctBy { it.name }.sortedBy { it.name }
+                    val activePromptCacheKey = promptCacheKey(activeTurnBranchKey, permittedTools)
+                    val compactRootPalette = optimizedHarness() && activeAgentRole in setOf(AgentRole.ORCHESTRATOR, AgentRole.CODER)
+                    val palettePhase = activeHarnessPhase()
+                    val availableTools = frozenToolsByTurnBranch.getOrPut(activePromptCacheKey) {
+                        val selected = if (compactRootPalette) AgentToolSchemaPolicy.selectOptimizedToolPaletteForRole(
+                            permittedTools, palettePhase, activeAgentRole.name, activatedToolByPalette[activeToolPaletteKey()]
+                        ) else permittedTools
+                        if (optimizedHarness()) compactAgentToolSchemas(selected) else selected
+                    }
+                    val optionalToolCatalog = if (compactRootPalette) {
+                        val coreNames = AgentToolSchemaPolicy.selectOptimizedToolPaletteForRole(permittedTools, palettePhase, activeAgentRole.name).map { it.name }.toSet()
+                        permittedTools.filter { it.name !in coreNames }.joinToString(", ") { it.name }
+                    } else ""
+                    val capabilityDiscoveryPrompt = optionalToolCatalog.takeIf { it.isNotBlank() }?.let {
+                        "\nAdditional permitted tools: $it. Call tool_help(tool_name) to load one when needed; it replaces the previously loaded optional tool. Core tools remain available.\n"
+                    }.orEmpty()
                     restoreHardCompactionStateFromBrain()
                         .onFailure {
                             addDebugLog(
                                 "⚠️ Failed to restore hard compaction state: ${it.message}"
                             )
                         }
-                    val thinkingEnabled = dispatchSettings.thinkingEnabled
-                    val configuredMaxOutputTokens = dispatchSettings.maxOutputTokens
+                    val thinkingEnabled = if (optimizedHarness()) {
+                        settingsRepo.getAgentGlobalRuntimeOverride().takeIf { it.enabled }?.thinkingEnabled
+                            ?: settingsRepo.getExplicitAgentThinkingEnabledForRole(activeCustom?.name ?: currentAgent.name)
+                            ?: false
+                    } else dispatchSettings.thinkingEnabled
+                    val configuredMaxOutputTokens = settingsRepo.resolveAgentHarnessOutputTokens(
+                        profileId = _executionProfile.value,
+                        role = activeCustom?.name ?: currentAgent.name,
+                        stage = when {
+                            currentAgent == AgentRole.SUMMARIZER -> AgentHarnessStage.SUMMARY
+                            activeHarnessPhase() != AgentHarnessPhase.BUILD -> AgentHarnessStage.CONTROL
+                            currentAgent in setOf(AgentRole.ORCHESTRATOR, AgentRole.CODER) -> AgentHarnessStage.BUILD
+                            else -> AgentHarnessStage.CONTROL
+                        },
+                        configuredMaxOutputTokens = dispatchSettings.maxOutputTokens
+                    )
                     val modelClampedOutputTokens = if (
                         useLiteRtBackend && liteRtModel != null
                     ) {
@@ -7993,24 +8285,49 @@ TODO status. Return via finish_task with JSON:
                     val preliminaryCapacity = resolveAgentPromptCapacity(
                         configuredContextTokens = contextSize,
                         reportedContextTokens = reportedServerContextSize,
-                        exactCountingAvailable = useLlamaServer
+                        exactCountingAvailable = useLlamaServer,
+                        configuredMaxOutputTokens = modelClampedOutputTokens
                     )
                     val budgetPlanContent = hardCompactionState?.planContent
                         ?: agentService.readBrainFileRaw("plan.md")
-                    val budgetCompactionSummary =
-                        hardCompactionState?.summaryContent.orEmpty()
+                    val preliminarySystemPromptBasis = if (
+                        optimizedHarness() && activeAgentRole == AgentRole.ORCHESTRATOR
+                    ) {
+                        AgentHarnessPolicy.optimizedSystemPromptForPhase(palettePhase) + capabilityDiscoveryPrompt
+                    } else {
+                        activeCustom?.systemPrompt ?: currentAgent.systemPrompt
+                    }
+                    val preliminaryRootProjectControlPacket =
+                        if (
+                            (
+                                _currentSessionId.value == null &&
+                                    activeAgentRole == AgentRole.ORCHESTRATOR
+                            ) || optimizedHarness()
+                        ) {
+                            val conversationId = _activeConversationId.value
+                                ?: _preferredConversationId.value
+                            conversationId?.let {
+                                AgentProjectControlPlane.buildControlPacket(
+                                    context = context,
+                                    conversationId = it,
+                                    initialOrder = initialOrderContent,
+                                    maxChars = 12_000
+                                )
+                            }
+                        } else {
+                            null
+                        }
+                    val preliminaryBasis = buildCompactPromptBasisSections(
+                        systemPrompt = preliminarySystemPromptBasis,
+                        initialOrder = initialOrderContent.orEmpty(),
+                        planContent = budgetPlanContent,
+                        compactionSummary = "",
+                        compactStateSnapshot = preliminaryRootProjectControlPacket
+                    )
                     val preliminaryRequiredPrimacyTokens =
-                        estimateRawPromptTextTokens(
-                            activeCustom?.systemPrompt ?: currentAgent.systemPrompt
-                        ) +
-                            estimateRawPromptTextTokens(
-                                initialOrderContent.orEmpty()
-                            ) +
-                            estimateRawPromptTextTokens(budgetPlanContent) +
-                            estimateRawPromptTextTokens(
-                                budgetCompactionSummary
-                            ) +
-                            1_024
+                        preliminaryBasis.requiredSections.sumOf {
+                            estimateRawPromptTextTokens(it)
+                        } + 1_024
                     val hardRecentTailBudget =
                         resolveHardCompactionRecentTailBudget(
                             maximumInputTokens =
@@ -8080,7 +8397,7 @@ TODO status. Return via finish_task with JSON:
                             activeAgentRole == AgentRole.ORCHESTRATOR
                     val hardCompactionMode =
                         isRootOrchestrator && hardCompactionState != null
-                    val rootProjectControlPacket = if (isRootOrchestrator) {
+                    val rootProjectControlPacket = if (isRootOrchestrator || optimizedHarness()) {
                         val conversationId = _activeConversationId.value
                             ?: _preferredConversationId.value
                         conversationId?.let {
@@ -8094,8 +8411,15 @@ TODO status. Return via finish_task with JSON:
                     } else {
                         null
                     }
+                    if (isControlPacketCapacityFailure(rootProjectControlPacket.orEmpty())) {
+                        pauseForNeedsDirection(
+                            context,
+                            context.getString(R.string.agent_harness_capacity_limit)
+                        )
+                        return@launch
+                    }
                     val structuredResumeState = if (
-                        isRootOrchestrator || hardCompactionMode
+                        isRootOrchestrator || hardCompactionMode || optimizedHarness()
                     ) {
                         null
                     } else {
@@ -8106,17 +8430,17 @@ TODO status. Return via finish_task with JSON:
                     } else {
                         null
                     }
-                    val retrievedWorkingSet = if (hardCompactionMode) {
+                    val retrievedWorkingSet = if (hardCompactionMode || optimizedHarness()) {
                         null
                     } else {
                         agentService.buildRetrievedWorkingSet().getOrNull()
                     }
-                    val relevantLessons = if (hardCompactionMode) {
+                    val relevantLessons = if (hardCompactionMode || optimizedHarness()) {
                         null
                     } else {
                         agentService.buildRelevantLessonsPrompt().getOrNull()
                     }
-                    val memoryInterruptPrompt = if (hardCompactionMode) {
+                    val memoryInterruptPrompt = if (hardCompactionMode || optimizedHarness()) {
                         null
                     } else {
                         agentService.buildMemoryInterruptPrompt().getOrNull()
@@ -8154,8 +8478,18 @@ TODO status. Return via finish_task with JSON:
                         "/workspace/${_currentProjectFolder.value}"
                     }
 
-                    val baseSystemPrompt = activeCustom?.systemPrompt ?: currentAgent.systemPrompt
-                    val computedSystemPrompt = buildString {
+                    val baseSystemPrompt = if (optimizedHarness() && currentAgent == AgentRole.ORCHESTRATOR) AgentHarnessPolicy.optimizedSystemPromptForPhase(palettePhase) else activeCustom?.systemPrompt ?: currentAgent.systemPrompt
+                    val computedSystemPrompt = if (optimizedHarness()) buildString {
+                        append(baseSystemPrompt)
+                        append(capabilityDiscoveryPrompt)
+                        append("\nThe durable contract and latest correction are authoritative. Use real tool calls. Ask only for an execution blocker; do not repeat answered questions. Work directly within the current phase; delegation is optional and sequential.\n")
+                        append("Project: $projectDisplayRoot. Tools are limited to the advertised schema. Read existing files relevant to an edit; skip discovery for a declared greenfield project.\n")
+                        if (localBackend) {
+                            append(AgentHarnessPolicy.OPTIMIZED_LOCAL_SANDBOX_GUIDANCE).append('\n')
+                        }
+                        append("Plan approval and tool authorization are required. Finish with changed artifacts and actual verification evidence, or state the unresolved blocker.\n")
+                        if (activeCustom != null) append("Assigned custom role instructions above remain binding.\n")
+                    } else buildString {
                         append(baseSystemPrompt)
                         append("\n\n**CONTEXT:**\n")
                         append("Your project path is: $projectDisplayRoot\n")
@@ -8187,7 +8521,7 @@ TODO status. Return via finish_task with JSON:
                         append("This runtime has Plan and Build modes. The current mode is supplied as a compact suffix control message. In Plan mode, mutation tools remain visible for schema stability but the runtime rejects them; propose_plan is the approval boundary. In Build mode, implement only after explicit approval and keep the durable todo list current.\n")
                         append("When you need a tool, emit a real tool call. Do NOT place tool JSON inside <think>, markdown fences, or plain assistant text.\n")
                         append("Before writing or editing a file, read the current file state first. After you change a file, reread it or check brain/changed_files.md before editing it again.\n")
-                        if (currentAgent == AgentRole.ORCHESTRATOR) {
+                        if (currentAgent == AgentRole.ORCHESTRATOR && !optimizedHarness()) {
                             append("As ORCHESTRATOR, operate only as the project control plane. Treat the fresh Project Control Packet and runtime-owned TODO transitions as authoritative. Use CODEBASE_SCOUT for repository discovery, RESEARCHER for external information, PLANNER for structured plan synthesis, CODER for changes, REVIEWER for findings, EXECUTOR for commands, VISUAL_TESTER for previews, and SUMMARIZER only for bounded human-readable state projection.\n")
                             append("In Build mode every worker/custom call_agent invocation must include exactly one current todo_id from project_state. After each specialist return, read project_state again and follow only the permitted next action. Never replace or reconstruct the complete TODO list from chat.\n")
                             if (isBuiltInAgentEnabled("REVIEWER")) {
@@ -8198,7 +8532,7 @@ TODO status. Return via finish_task with JSON:
                         }
                         append("Verify edits with targeted reads, review, and focused build/test commands before claiming completion.\n")
                         append("Older chat is evidence and may be omitted. Canonical project state, stable TODOs, plan/report IDs, blockers, and verification transitions survive in Room. Hard compaction renders a deterministic control-state projection and a token-budgeted atomic recent tail; it never recursively summarizes previous compaction prose.\n")
-                        if (_autoReflectionEnabled.value) {
+                        if (_autoReflectionEnabled.value && !optimizedHarness()) {
                             append("Use reflection near completion or after a major milestone to compare the work against plan.md before finalizing.\n")
                         } else {
                             append("Automatic reflection before finalization is disabled by the user. Do not rely on reflection unless the reflection tool is explicitly available and manually useful.\n")
@@ -8212,7 +8546,7 @@ TODO status. Return via finish_task with JSON:
                         }
                     }
                     val fullSystemPrompt = frozenSystemPromptByTurnBranch.getOrPut(
-                        activeTurnBranchKey
+                        activePromptCacheKey
                     ) {
                         computedSystemPrompt
                     }
@@ -8221,11 +8555,11 @@ TODO status. Return via finish_task with JSON:
 
                     // Inject compact reminders periodically to prevent model drift without resending large tool text
                     val userMsgCount = promptHistoryMessages.count { it.role == "user" }
-                    val toolsRefReminder = if (canReadToolsReference && !hardCompactionMode && !recoveryMode && userMsgCount > 0 && userMsgCount % promptProfile.refreshReminderEvery == 0) {
+                    val toolsRefReminder = if (!optimizedHarness() && canReadToolsReference && !hardCompactionMode && !recoveryMode && userMsgCount > 0 && userMsgCount % promptProfile.refreshReminderEvery == 0) {
                         ChatMessage(role = "system", content = "REMINDER: Use tool_help for exactly one unclear tool. Use project_state_read/current task state for continuity, and wait_command/check_command/command_list instead of rerunning active commands.")
                     } else null
 
-                    val messagesWithReminders = if (!hardCompactionMode && !recoveryMode && promptHistoryMessages.size > promptProfile.reminderInterval) {
+                    val messagesWithReminders = if (!optimizedHarness() && !hardCompactionMode && !recoveryMode && promptHistoryMessages.size > promptProfile.reminderInterval) {
                         val reminderContent = buildString {
                             append("REMINDER: Stay within the declared tools, keep structured brain files current, and verify changes before finishing. ")
                             if (currentAgent == AgentRole.ORCHESTRATOR) {
@@ -8284,7 +8618,13 @@ TODO status. Return via finish_task with JSON:
                         add(
                             ChatMessage(
                                 role = "system",
-                                content = buildAgentRuntimeModeControl(
+                                content = if (optimizedHarness()) {
+                                    when (activeHarnessPhase()) {
+                                        AgentHarnessPhase.PLAN -> "CURRENT MODE: PLAN. Read only what is relevant, research only if needed, call propose_plan and wait for approval. Questions are optional and blocker-only."
+                                        AgentHarnessPhase.BUILD -> "CURRENT MODE: BUILD. Implement the approved task directly, run focused verification, and report evidence with finish_task."
+                                        AgentHarnessPhase.VERIFY -> "CURRENT MODE: VERIFY. Inspect and check the implemented result, then finish_task with artifacts and actual validation evidence. If repair is needed, use tool_help for report_progress, then report_progress(phase=build, summary=concrete repair needed) before modifying files."
+                                    }
+                                } else buildAgentRuntimeModeControl(
                                     isPlanMode = _currentPlanningModeEnabled.value,
                                     isOrchestrator = currentAgent == AgentRole.ORCHESTRATOR
                                 )
@@ -8308,7 +8648,7 @@ TODO status. Return via finish_task with JSON:
                     } else {
                         val frozenOptionalMessages =
                             frozenOptionalPromptByTurnBranch.getOrPut(
-                                activeTurnBranchKey
+                                activePromptCacheKey
                             ) {
                                 buildList {
                                     structuredResumeState
@@ -8361,25 +8701,11 @@ TODO status. Return via finish_task with JSON:
                                         }
                                 }
                             }
-                        val currentOptionalMessages = buildList {
-                            rootProjectControlPacket
-                                ?.takeIf { it.isNotBlank() }
-                                ?.let {
-                                    add(
-                                        ChatMessage(
-                                            role = "system",
-                                            content = it
-                                        )
-                                    )
-                                }
-                            addAll(frozenOptionalMessages)
-                        }
+                        val currentOptionalMessages = frozenOptionalMessages
                         PromptAssembly(
-                            requiredPrimacyMessages = listOf(
-                                ChatMessage(
-                                    role = "system",
-                                    content = fullSystemPrompt
-                                )
+                            requiredPrimacyMessages = listOfNotNull(
+                                ChatMessage(role = "system", content = fullSystemPrompt),
+                                rootProjectControlPacket?.takeIf { it.isNotBlank() }?.let { ChatMessage(role = "system", content = it) }
                             ),
                             optionalPrimacyMessages =
                                 currentOptionalMessages,
@@ -8416,24 +8742,21 @@ TODO status. Return via finish_task with JSON:
                             rawToolSchemaTokens -
                             128
                         ).coerceAtLeast(messageTargetTokens)
-                    var messageMaximumTokens = (
-                        packingLimits.maximumCompactedTokens -
-                            rawToolSchemaTokens -
-                            128
-                        ).coerceAtLeast(messageTargetTokens)
                     var packedContext = packMessagesForContext(
                         assembly = promptAssembly,
                         contextSize = activeCapacity.maximumInputTokens,
                         profile = profileForPacking,
                         allowCompaction = true,
                         thresholdTokensOverride = messageTriggerTokens,
-                        targetTokensOverride = messageTargetTokens,
-                        maximumCompactedTokensOverride = messageMaximumTokens
+                        targetTokensOverride = messageTargetTokens
+                    )
+                    if (optimizedHarness()) packedContext = packedContext.copy(
+                        messages = reorderOptimizedAgentPromptMessages(packedContext.messages)
                     )
                     var promptCount = resolvePreparedPromptCount(
                         context = context,
-                        useLlamaServer = useLlamaServer,
-                        llamaBaseUrl = settingsRepo.llamaServerUrl.value,
+                        useLlamaServer = useOpenAiBackend,
+                        llamaBaseUrl = effectiveOpenAiBaseUrl,
                         messages = packedContext.messages,
                         tools = availableTools,
                         model = model,
@@ -8445,7 +8768,8 @@ TODO status. Return via finish_task with JSON:
                         reportedContextTokens = reportedServerContextSize,
                         exactCountingAvailable =
                             promptCount.countSource ==
-                                AgentPromptCountSource.LLAMA_SERVER_EXACT
+                                AgentPromptCountSource.LLAMA_SERVER_EXACT,
+                        configuredMaxOutputTokens = modelClampedOutputTokens
                     )
                     packingLimits = resolveAgentPromptPackingLimits(
                         maximumInputTokens = activeCapacity.maximumInputTokens,
@@ -8474,21 +8798,21 @@ TODO status. Return via finish_task with JSON:
                                 ).coerceAtLeast(256)
                         )
                         messageTriggerTokens = messageTargetTokens
-                        messageMaximumTokens = messageTargetTokens
                         packedContext = packMessagesForContext(
                             assembly = promptAssembly,
                             contextSize = activeCapacity.maximumInputTokens,
                             profile = profileForPacking.moreAggressive(),
                             allowCompaction = true,
                             thresholdTokensOverride = messageTriggerTokens,
-                            targetTokensOverride = messageTargetTokens,
-                            maximumCompactedTokensOverride =
-                                messageMaximumTokens
+                            targetTokensOverride = messageTargetTokens
+                        )
+                        if (optimizedHarness()) packedContext = packedContext.copy(
+                            messages = reorderOptimizedAgentPromptMessages(packedContext.messages)
                         )
                         promptCount = resolvePreparedPromptCount(
                             context = context,
-                            useLlamaServer = useLlamaServer,
-                            llamaBaseUrl = settingsRepo.llamaServerUrl.value,
+                            useLlamaServer = useOpenAiBackend,
+                            llamaBaseUrl = effectiveOpenAiBaseUrl,
                             messages = packedContext.messages,
                             tools = availableTools,
                             model = model,
@@ -8500,7 +8824,8 @@ TODO status. Return via finish_task with JSON:
                             reportedContextTokens = reportedServerContextSize,
                             exactCountingAvailable =
                                 promptCount.countSource ==
-                                    AgentPromptCountSource.LLAMA_SERVER_EXACT
+                                    AgentPromptCountSource.LLAMA_SERVER_EXACT,
+                            configuredMaxOutputTokens = modelClampedOutputTokens
                         )
                     }
 
@@ -8553,6 +8878,24 @@ TODO status. Return via finish_task with JSON:
                         )
                     }
 
+                    recordProjectJournalEvent(
+                        category = "LLM", eventType = "packing_budget", status = if (packedContext.requiredControlStateFits) "OK" else "BLOCKED",
+                        metrics = mapOf(
+                            "input_limit" to activeCapacity.maximumInputTokens.toLong(),
+                            "input_estimate" to promptCount.resolvedInputTokens.toLong(),
+                            "schema_tokens" to rawToolSchemaTokens.toLong(),
+                            "output_limit" to modelClampedOutputTokens.toLong(),
+                            "required_state_fits" to if (packedContext.requiredControlStateFits) 1L else 0L
+                        )
+                    )
+                    if (!packedContext.requiredControlStateFits) {
+                        pauseForNeedsDirection(
+                            context = context,
+                            reason = context.getString(R.string.agent_harness_capacity_limit)
+                        )
+                        return@launch
+                    }
+
                     if (
                         promptCount.resolvedInputTokens >
                         activeCapacity.maximumInputTokens
@@ -8595,7 +8938,9 @@ TODO status. Return via finish_task with JSON:
                                 promptCount.exactInputTokens,
                             serverContextTokens =
                                 reportedServerContextSize,
-                            reason = "minimum useful generation reserve unavailable"
+                            reason = "Configured output reservation unavailable: " +
+                                (outputBudget.cannotSendReason?.wireValue
+                                    ?: "cannot_send")
                         )
                         return@launch
                     }
@@ -8678,6 +9023,7 @@ TODO status. Return via finish_task with JSON:
                             "context=$contextSize input=${promptCount.resolvedInputTokens} " +
                             "maxInput=${activeCapacity.maximumInputTokens} source=${promptCount.countSource.wireValue}"
                     )
+                    val requestTurnStorageId = currentRootTurnStorageId(activeCustomAgent?.name ?: activeAgentRole.name)
                     recordFrozenTurnContextForRequest(
                         context = context,
                         settingsRepo = settingsRepo,
@@ -8869,13 +9215,8 @@ TODO status. Return via finish_task with JSON:
                         }
                     } else if (useOpenAiBackend) {
                         // Use OpenAI-compatible API (llama-server or llama-swap)
-                        val configuredLlamaUrl = if (useLlamaSwap) {
-                            settingsRepo.agentLlamaSwapUrl.value
-                        } else {
-                            settingsRepo.llamaServerUrl.value
-                        }
                         val llamaUrl = HttpEndpointUrlSupport.normalizeBaseUrl(
-                            namedEndpointUrl ?: managedServerUrl ?: configuredLlamaUrl
+                            effectiveOpenAiBaseUrl
                         )
                         if (llamaUrl == null) {
                             val backendLabel = if (useLlamaSwap) "llama-swap" else "llama-server"
@@ -9032,7 +9373,8 @@ TODO status. Return via finish_task with JSON:
                                     maxTokens = effectiveMaxOutputTokens,
                                     samplingParams = LlamaServerSamplingParams(),
                                     requestOptions = LlamaServerRequestOptions(
-                                        cachePrompt = settingsRepo.serverCachePrompt.value
+                                        cachePrompt = settingsRepo.serverCachePrompt.value,
+                                        requireToolCall = optimizedHarness() && activeAgentRole == AgentRole.ORCHESTRATOR
                                     ),
                                     slotOwner = LlamaSlotOwnerKey(
                                         endpointGeneration = "$llamaUrl|${settingsRepo.serverParallel.value}|${settingsRepo.contextSize.value}",
@@ -9052,7 +9394,19 @@ TODO status. Return via finish_task with JSON:
                                 onStatus = { workerStatus ->
                                     if (isAgentRunActive(runEpoch)) {
                                         lastLlamaServerActivityAt = android.os.SystemClock.elapsedRealtime()
-                                        publishLlamaServerStatus(workerStatus = workerStatus)
+                                        if (workerStatus.startsWith("stream_channels ") && workerStatus.length <= 512) {
+                                            val metrics = runCatching {
+                                                val fields = JSONObject(workerStatus.removePrefix("stream_channels "))
+                                                listOf("delta", "message", "content", "reasoning_content", "thinking", "reasoning", "tool_calls")
+                                                    .associate { key -> "stream_${key}_chunks" to fields.optLong(key).coerceAtLeast(0L) }
+                                            }.getOrDefault(emptyMap())
+                                            recordProjectJournalEvent(
+                                                category = "LLM", eventType = "stream_channel_counts", status = "OK",
+                                                metrics = metrics
+                                            )
+                                        } else {
+                                            publishLlamaServerStatus(workerStatus = workerStatus)
+                                        }
                                     }
                                 },
                                 onStreamSnapshot = { snapshot ->
@@ -9137,6 +9491,23 @@ TODO status. Return via finish_task with JSON:
                             details = "contentChars=${fullContent.length} thinkingChars=${fullThinking.length}"
                         )
                         val turnNumber = nextModelTurnNumber()
+                        if (!thinkingEnabled && !chatResponse.message.thinking.isNullOrBlank()) {
+                            recordProjectJournalEvent(category = "LLM", eventType = "thinking_control_not_honored", status = "REASONING_RETURNED")
+                        }
+                        chatResponse.finishReason?.let { reason ->
+                            recordProjectJournalEvent(
+                                category = "LLM", eventType = "generation_finished", status = reason,
+                                metrics = mapOf(
+                                    "prompt_tokens" to (chatResponse.usage?.promptTokens?.toLong() ?: -1L),
+                                    "completion_tokens" to (chatResponse.usage?.completionTokens?.toLong() ?: -1L),
+                                    "total_tokens" to (chatResponse.usage?.totalTokens?.toLong() ?: -1L),
+                                    "context_tokens" to contextSize.toLong(),
+                                    "output_limit" to effectiveMaxOutputTokens.toLong(),
+                                    "input_estimate" to promptCount.resolvedInputTokens.toLong(),
+                                    "schema_tokens" to rawToolSchemaTokens.toLong()
+                                )
+                            )
+                        }
                         val calibratedFactor = chatResponse.usage
                             ?.promptTokens
                             ?.takeIf { it > 0 }
@@ -9195,11 +9566,35 @@ TODO status. Return via finish_task with JSON:
                             )
                         }
                         val finalContent = chatResponse.message.content
-                        val toolCall = chatResponse.message.toolCalls?.firstOrNull()
-                        val recoveredToolAttempt = if (toolCall == null) {
+                        val multipleRootCalls = optimizedHarness() && currentAgent == AgentRole.ORCHESTRATOR &&
+                            (chatResponse.message.toolCalls?.size ?: 0) > 1
+                        // The optimized execution boundary is one approved action at a time.
+                        // Never execute just the first call and silently discard the rest.
+                        val toolCall = chatResponse.message.toolCalls?.firstOrNull().takeUnless { multipleRootCalls }
+                        val recoveredToolAttempt = if (toolCall == null && !multipleRootCalls) {
                             recoverToolCallAttempt(finalContent, fullThinking)
                         } else null
-                        val effectiveToolCall = toolCall ?: recoveredToolAttempt?.toolCall
+                        val planProposalRecovery = if (
+                            toolCall == null &&
+                            recoveredToolAttempt == null &&
+                            optimizedHarness() &&
+                            currentAgent == AgentRole.ORCHESTRATOR &&
+                            activeHarnessPhase() == AgentHarnessPhase.PLAN
+                        ) {
+                            recoverImplementationPlanProse(finalContent)
+                        } else {
+                            null
+                        }
+                        val recoveredPlanToolCall = planProposalRecovery
+                            ?.takeIf {
+                                it.disposition ==
+                                    PlanProposalRecoveryDisposition.SUBMIT
+                            }
+                            ?.proposal
+                            ?.toToolCall()
+                        val effectiveToolCall = toolCall
+                            ?: recoveredToolAttempt?.toolCall
+                            ?: recoveredPlanToolCall
 
                         updateMessage(assistantMsgId) { it.copy(
                             content = finalContent,
@@ -9230,6 +9625,13 @@ TODO status. Return via finish_task with JSON:
                                 pauseForNeedsDirection(context, context.getString(R.string.agent_checkpoint_failed_continue))
                                 return@onSuccess
                             }
+                            // An optimized root without an action is still unfinished.
+                            // Keep its durable turn open across repair/pause so process loss
+                            // cannot mistake a research summary for completed work.
+                            if (!optimizedHarness() || currentAgent != AgentRole.ORCHESTRATOR) {
+                                AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao()
+                                    .finishTurnContext(requestTurnStorageId, "COMPLETED")
+                            }
                         }
 
                         when {
@@ -9247,10 +9649,56 @@ TODO status. Return via finish_task with JSON:
                             effectiveToolCall != null -> {
                                 if (toolCall != null) {
                                     addDebugLog("🔧 Tool call detected: ${toolCall.name}")
+                                } else if (recoveredPlanToolCall != null) {
+                                    addDebugLog(
+                                        "🛠️ Recovered an explicit Plan response through the propose_plan approval boundary"
+                                    )
                                 } else {
                                     addDebugLog("🛠️ Recovered tool call from ${recoveredToolAttempt?.source ?: "assistant output"}: ${effectiveToolCall.name}")
                                 }
                                 executeToolCall(context, ollamaService, settingsRepo, agentService, effectiveToolCall, runEpoch = runEpoch)
+                            }
+                            planProposalRecovery?.disposition ==
+                                PlanProposalRecoveryDisposition.REPROMPT -> {
+                                val recoveryHint = planProposalRecovery.instruction
+                                    ?: context.getString(
+                                        R.string.agent_tool_recovery_failed_hint
+                                    )
+                                addMessage(
+                                    ChatMessage(
+                                        role = "tool",
+                                        toolName = "propose_plan",
+                                        content = buildToolResultEnvelope(
+                                            toolName = "propose_plan",
+                                            status = "error",
+                                            summary = context.getString(
+                                                R.string.agent_tool_recovery_failed_summary
+                                            ),
+                                            errorCode = planProposalRecovery.reasonCode,
+                                            nextHint = recoveryHint
+                                        )
+                                    )
+                                )
+                                if (!recoveryMode) {
+                                    ensureAgentRunActive(runEpoch)
+                                    enqueueAgentContinuation(
+                                        context = context,
+                                        ollamaService = ollamaService,
+                                        settingsRepo = settingsRepo,
+                                        agentService = agentService,
+                                        reason = "plan proposal tool repair",
+                                        recoveryInstruction = recoveryHint,
+                                        recoveryMode = true,
+                                        runEpoch = runEpoch
+                                    )
+                                } else {
+                                    pauseForNeedsDirection(
+                                        context,
+                                        context.getString(
+                                            R.string.agent_structured_action_paused
+                                        )
+                                    )
+                                }
                             }
                             recoveredToolAttempt?.attempted == true -> {
                                 val malformedSummary = context.getString(R.string.agent_tool_recovery_failed_summary)
@@ -9285,7 +9733,54 @@ TODO status. Return via finish_task with JSON:
                                     val completed = endSession(agentOutput)
                                     completePendingDelegation(context, ollamaService, settingsRepo, agentService, completed, runEpoch)
                                 } else {
-                                    refreshIdleStatusIfNeeded()
+                                    pauseForNeedsDirection(context, malformedHint)
+                                }
+                            }
+                            optimizedHarness() && currentAgent == AgentRole.ORCHESTRATOR -> {
+                                // Prose is not a workflow boundary. In particular, research
+                                // summaries and plain-text plans must not silently end a run
+                                // or bypass the question / plan approval / verification tools.
+                                val boundaryHint = context.getString(R.string.agent_structured_action_required)
+                                val phaseInstruction = when (activeHarnessPhase()) {
+                                    AgentHarnessPhase.PLAN -> "Use collected research now. Call propose_plan to display the implementation plan and request approval. If a required decision is unresolved, call question and wait. Do not ask for approval or answers in prose."
+                                    AgentHarnessPhase.BUILD -> "Continue the next unfinished approved action using its tool. If a required decision blocks execution, call question. Run supported checks and inspect the actual result before finish_task; a prose progress update is not completion."
+                                    AgentHarnessPhase.VERIFY -> "Review the approved acceptance criteria against actual check results and inspect the changed artifacts. Use preview interaction for relevant WebUI behavior. Call finish_task only with actual artifacts and validation evidence; use question for an unresolved user decision or finish_task with BLOCKED for an execution blocker."
+                                }
+                                val exhausted = chatResponse.finishReason.equals("length", ignoreCase = true)
+                                val boundaryCode = when {
+                                    multipleRootCalls -> "ONE_TOOL_CALL_REQUIRED"
+                                    exhausted -> "GENERATION_OUTPUT_LIMIT"
+                                    else -> "STRUCTURED_ACTION_REQUIRED"
+                                }
+                                addMessage(ChatMessage(
+                                    role = "tool",
+                                    toolName = "workflow_boundary",
+                                    content = buildToolResultEnvelope(
+                                        toolName = "workflow_boundary",
+                                        status = "error",
+                                        summary = boundaryHint,
+                                        errorCode = boundaryCode,
+                                        nextHint = phaseInstruction
+                                    )
+                                ))
+                                recordProjectJournalEvent(
+                                    category = "WORKFLOW", eventType = "structured_boundary_missing",
+                                    status = boundaryCode, phase = activeHarnessPhase().name
+                                )
+                                if (!recoveryMode) {
+                                    ensureAgentRunActive(runEpoch)
+                                    enqueueAgentContinuation(
+                                        context = context, ollamaService = ollamaService,
+                                        settingsRepo = settingsRepo, agentService = agentService,
+                                        reason = "missing structured workflow boundary repair",
+                                        recoveryInstruction = "$phaseInstruction Return one real structured tool call using an advertised schema. If needed, call tool_help for one tool. Do not output a JSON example, repeat research, or claim completion in prose.",
+                                        recoveryMode = true, runEpoch = runEpoch
+                                    )
+                                } else {
+                                    pauseForNeedsDirection(context, context.getString(
+                                        if (exhausted) R.string.agent_structured_action_output_limit
+                                        else R.string.agent_structured_action_paused
+                                    ))
                                 }
                             }
                             finalContent.isBlank() -> {
@@ -9317,7 +9812,7 @@ TODO status. Return via finish_task with JSON:
                                     val completed = endSession(emptySummary)
                                     completePendingDelegation(context, ollamaService, settingsRepo, agentService, completed, runEpoch)
                                 } else {
-                                    refreshIdleStatusIfNeeded()
+                                    pauseForNeedsDirection(context, emptyHint)
                                 }
                             }
                             shouldGateCompletionForMemory(finalContent) -> {
@@ -9629,6 +10124,36 @@ TODO status. Return via finish_task with JSON:
             return newJob
         }
 
+        /** Claims the current approval card once; stale UI callbacks never authorize a new run. */
+        fun approvePendingTool(
+            context: Context,
+            ollamaService: OllamaService,
+            settingsRepo: com.example.llamadroid.data.SettingsRepository,
+            agentService: AgentService,
+            messageId: String
+        ): Job? {
+            val epoch = currentRunEpoch()
+            while (true) {
+                val current = _messages.value
+                val message = current.firstOrNull { it.id == messageId } ?: return null
+                if (!message.needsApproval || message.isApproved != null) return null
+                val call = message.pendingToolCall ?: message.toolName?.takeIf { it.isNotBlank() }?.let {
+                    OllamaService.ToolCall(name = it, arguments = message.toolArgs ?: emptyMap(), id = message.toolCallId)
+                } ?: return null
+                val updated = current.map {
+                    if (it.id == messageId) it.copy(needsApproval = false, isApproved = true) else it
+                }
+                if (!_messages.compareAndSet(current, updated)) continue
+                // Keep the session mirror aligned without reviving a card cancelled by Stop.
+                updateMessage(messageId) { existing ->
+                    _messages.value.firstOrNull { it.id == messageId } ?: existing
+                }
+                UnifiedNotificationManager.dismissAgentAttention()
+                return executeToolCall(context, ollamaService, settingsRepo, agentService, call,
+                    isForced = true, runEpoch = epoch)
+            }
+        }
+
         fun executeToolCall(
             context: Context,
             ollamaService: OllamaService,
@@ -9639,11 +10164,18 @@ TODO status. Return via finish_task with JSON:
             runEpoch: Long = currentRunEpoch()
         ): Job {
             if (isForced) {
-                allowAutomaticContinuations()
+                val accepted = synchronized(activeRunEpoch) {
+                    if (!isAgentRunActive(runEpoch)) false else {
+                        allowAutomaticContinuations()
+                        true
+                    }
+                }
+                if (!accepted) return agentScope.launch { }
             } else if (areAutomaticContinuationsBlocked()) {
                 addDebugLog("🧱 Ignoring automatic tool execution for ${toolCall.name} because the user pressed Stop.")
                 return agentScope.launch { }
             }
+            val toolTurnStorageId = currentRootTurnStorageId(_activeCustomAgent.value?.name ?: _currentAgent.value.name)
             // Increment ref count immediately to bridge the gap
             lastNotificationToolName = toolCall.name
             setIsLoading(true, context.getString(R.string.agent_executing_tool, toolCall.name))
@@ -9652,6 +10184,10 @@ TODO status. Return via finish_task with JSON:
                 val traceSessionId = _currentSessionId.value
                 try {
                     ensureAgentRunActive(runEpoch)
+                    if (isForced) {
+                        agentService.persistVisibleRuntimeStateNow("Individual tool approval granted.")
+                        ensureAgentRunActive(runEpoch)
+                    }
                     var toolHandlesContinuation = false
                     val (assistantAgentRole, assistantCustomAgentName) = currentAssistantIdentity()
                     // Ref count already incremented
@@ -9665,6 +10201,75 @@ TODO status. Return via finish_task with JSON:
                     )
                     syncAssistantToolProgress(toolCall)
 
+                    val replayConversation = _activeConversationId.value
+                    val replayCallId = toolCall.id
+                    if (replayConversation != null && !replayCallId.isNullOrBlank()) {
+                        val committed = AppDatabase.getDatabase(context).agentChatDao().getToolMessage(replayConversation, toolCall.name, replayCallId)
+                        if (committed != null) {
+                            if (_messages.value.none { it.id == committed.originalId }) addMessage(chatMessageFromEntity(committed))
+                            enqueueAgentContinuation(context, ollamaService, settingsRepo, agentService, "committed action restored", runEpoch = runEpoch)
+                            return@launch
+                        }
+                    }
+                    suspend fun commitEarlyOutcome(
+                        code: String,
+                        output: String,
+                        recovery: String? = null,
+                        researchBudget: AgentResearchBudget? = null
+                    ): Boolean {
+                        val conversationId = _activeConversationId.value ?: error("No active conversation")
+                        val rootId = currentRootTurnId().toString()
+                        val outcomeId = agentPromptSha256("$conversationId|$rootId|${toolCall.id ?: toolCall.arguments.toSortedMap()}|${toolCall.name}|$code")
+                        val receipt = recovery?.let {
+                            ContinuationReceiptSpec(
+                                id = "tool-repair:$outcomeId", conversationId = conversationId,
+                                rootTurnId = rootId, kind = "TOOL_REPAIR", dedupeKey = "tool-repair:$outcomeId",
+                                payloadJson = JSONObject().put("recovery_instruction", it).put("tool", toolCall.name).toString()
+                            )
+                        }
+                        val database = AppDatabase.getDatabase(context)
+                        val noProgress = optimizedHarness() && code != "DECISION_ALREADY_ANSWERED" &&
+                            actionBudget.record(toolCall.name, toolCall.arguments, "", false)
+                        var repairAllowed = recovery != null && !noProgress
+                        val committed = database.withTransaction {
+                            ensureAgentRunActive(runEpoch)
+                            val result = if (researchBudget != null) {
+                                val fetch = toolCall.name == "fetch_url"
+                                val failure = AgentDurableContractStore.recordResearchBudgetFailureAndRepairAtomically(
+                                    database = database, conversationId = conversationId,
+                                    planningEpisodeId = researchBudget.planningEpisodeId, toolName = toolCall.name,
+                                    used = if (fetch) researchBudget.fetchUsed else researchBudget.searchUsed,
+                                    limit = if (fetch) researchBudget.fetchLimit else researchBudget.searchLimit,
+                                    stableOutcomeId = outcomeId, toolCallId = toolCall.id, content = output,
+                                    rootTurnId = rootId, repairContinuation = requireNotNull(receipt)
+                                )
+                                repairAllowed = failure.automaticRepairAllowed && !noProgress
+                                failure.outcome
+                            } else AgentDurableContractStore.recordCanonicalToolOutcomeAtomically(
+                                database = database, conversationId = conversationId, stableOutcomeId = outcomeId,
+                                toolName = toolCall.name, toolCallId = toolCall.id, content = output,
+                                rootTurnId = rootId, continuation = receipt
+                            )
+                            ensureAgentRunActive(runEpoch)
+                            result
+                        }
+                        ensureAgentRunActive(runEpoch)
+                        if (_messages.value.none { it.id == committed.message.originalId }) addMessage(chatMessageFromEntity(committed.message))
+                        if (repairAllowed && recovery != null) {
+                            val claim = committed.receipt?.let { AgentDurableContractStore.claimContinuation(database, it.id) }
+                            if (claim != null) {
+                                ensureAgentRunActive(runEpoch)
+                                enqueueAgentContinuation(context, ollamaService, settingsRepo, agentService,
+                                    reason = "tool outcome repair", recoveryInstruction = recovery, recoveryMode = true, runEpoch = runEpoch)
+                                AgentDurableContractStore.completeContinuation(database, claim.id)
+                            }
+                        }
+                        if (noProgress) {
+                            committed.receipt?.let { AgentDurableContractStore.completeContinuation(database, it.id) }
+                            pauseForNeedsDirection(context, context.getString(R.string.agent_harness_no_progress))
+                        }
+                        return repairAllowed
+                    }
                     val validatedToolCall = validateToolCall(toolCall, _currentAgent.value, _activeCustomAgent.value, settingsRepo).getOrElse { error ->
                         recordSessionToolTrace(
                             sessionId = traceSessionId,
@@ -9704,37 +10309,12 @@ TODO status. Return via finish_task with JSON:
                                 "Runtime policy blocked ${toolCall.name}",
                                 "code=${error.policyCode} message=$policyMessage"
                             )
-                            addMessage(
-                                ChatMessage(
-                                    role = "tool",
-                                    content = policyOutput,
-                                    toolName = toolCall.name,
-                                    toolCallId = toolCall.id,
-                                    toolOutput = policyMessage
-                                )
-                            )
-                            ensureAgentRunActive(runEpoch)
+                            commitEarlyOutcome("POLICY_${error.policyCode}", policyOutput,
+                                error.recoveryHint.takeIf { policyFailureCount <= 1 })
                             if (policyFailureCount > 1) {
-                                pauseForNeedsDirection(
-                                    context = context,
-                                    reason = "Repeated runtime-policy violation for " +
-                                        toolCall.name +
-                                        ". " +
-                                        error.recoveryHint,
-                                    loopDetected = true
-                                )
-                                return@launch
+                                pauseForNeedsDirection(context,
+                                    "Repeated runtime-policy violation for ${toolCall.name}. ${error.recoveryHint}", loopDetected = true)
                             }
-                            enqueueAgentContinuation(
-                                context = context,
-                                ollamaService = ollamaService,
-                                settingsRepo = settingsRepo,
-                                agentService = agentService,
-                                reason = "tool policy blocked",
-                                recoveryInstruction = error.recoveryHint,
-                                recoveryMode = true,
-                                runEpoch = runEpoch
-                            )
                             return@launch
                         }
                         val validationError = error.message ?: "Invalid tool call."
@@ -9748,14 +10328,6 @@ TODO status. Return via finish_task with JSON:
                                 occurrenceCount = failureCount,
                                 evidence = validationError
                             )
-                        }
-                        if (failureCount >= MAX_TOOL_FAILURES_PER_SIGNATURE) {
-                            pauseForNeedsDirection(
-                                context = context,
-                                reason = context.getString(R.string.agent_loop_tool_failure_reason, toolCall.name),
-                                loopDetected = true
-                            )
-                            return@launch
                         }
                         val invalidOutput = buildToolResultEnvelope(
                             toolName = toolCall.name,
@@ -9772,26 +10344,16 @@ TODO status. Return via finish_task with JSON:
                         )
                         syncAssistantToolProgress(toolCall, invalidOutput)
                         ensureAgentRunActive(runEpoch)
-                        addMessage(ChatMessage(
-                            role = "tool",
-                            content = invalidOutput,
-                            toolName = toolCall.name,
-                            toolCallId = toolCall.id
-                        ))
-                        ensureAgentRunActive(runEpoch)
-                        enqueueAgentContinuation(
-                            context = context,
-                            ollamaService = ollamaService,
-                            settingsRepo = settingsRepo,
-                            agentService = agentService,
-                            reason = "invalid tool call repair",
-                            recoveryInstruction = buildToolCallRecoveryInstruction(toolCall.name, validationError),
-                            recoveryMode = true,
-                            runEpoch = runEpoch
-                        )
+                        commitEarlyOutcome("VALIDATION_ERROR", invalidOutput,
+                            buildToolCallRecoveryInstruction(toolCall.name, validationError)
+                                .takeIf { failureCount < MAX_TOOL_FAILURES_PER_SIGNATURE })
+                        if (failureCount >= MAX_TOOL_FAILURES_PER_SIGNATURE) {
+                            pauseForNeedsDirection(context,
+                                context.getString(R.string.agent_loop_tool_failure_reason, toolCall.name), loopDetected = true)
+                        }
                         return@launch
                     }
-                    clearRepeatedFailure(toolCall.name, validatedToolCall.normalizedArguments)
+                    // Validation success is not action success; retain the repair count until execution succeeds.
 
                     if (validatedToolCall.toolCall.name == "finish_task" && _memoryDirty.value && roleRequiresMemoryGate(_currentAgent.value)) {
                         val gatedOutput = buildToolResultEnvelope(
@@ -9868,8 +10430,45 @@ TODO status. Return via finish_task with JSON:
                     }
 
                     val workflowToolCall = validatedToolCall.toolCall
+                    if (!admitHarnessResearch(context, workflowToolCall.name, workflowToolCall.arguments)) {
+                        val conversationId = _activeConversationId.value ?: error("No active conversation")
+                        val budget = AgentDurableContractStore.readResearchBudget(context, conversationId, planningEpisode(context, conversationId))
+                        val recovery = "Research allowance exhausted. Use the collected evidence and call propose_plan now. Do not search or fetch again without a specific unresolved blocker."
+                        val repaired = commitEarlyOutcome("RESEARCH_BUDGET_EXHAUSTED",
+                            buildToolResultEnvelope(workflowToolCall.name, "blocked", "RESEARCH_BUDGET_EXHAUSTED", nextHint = recovery),
+                            recovery, budget)
+                        if (!repaired) pauseForNeedsDirection(context, context.getString(R.string.agent_harness_research_limit))
+                        return@launch
+                    }
                     if (workflowToolCall.name == "question") {
                         val specification = parseQuestionToolCall(workflowToolCall)
+                        val questionConversation = _activeConversationId.value ?: throw IllegalStateException("No active conversation")
+                        val workflowDao = AppDatabase.getDatabase(context).agentWorkflowDao()
+                        val answered = workflowDao.getAnsweredQuestions(questionConversation).firstOrNull { previous ->
+                            runCatching { questionSpecFromJson(previous.specificationJson).questions }.getOrDefault(emptyList()).any { old ->
+                                specification.questions.any { fresh ->
+                                    old.prompt.trim().equals(fresh.prompt.trim(), ignoreCase = true) ||
+                                        (old.id.equals(fresh.id, true) && old.header.equals(fresh.header, true) &&
+                                            old.options.map { it.label.lowercase() }.toSet() == fresh.options.map { it.label.lowercase() }.toSet())
+                                }
+                            }
+                        }
+                        if (answered != null) {
+                            val repeated = actionBudget.record("question", workflowToolCall.arguments, "", false)
+                            val recovery = "Use this stored answer. Do not ask it again; continue the task."
+                            commitEarlyOutcome("DECISION_ALREADY_ANSWERED",
+                                buildToolResultEnvelope("question", "error", "DECISION_ALREADY_ANSWERED",
+                                    importantOutput = answered.answerJson, nextHint = recovery), recovery.takeUnless { repeated })
+                            if (repeated) pauseForNeedsDirection(context, context.getString(R.string.agent_harness_no_progress))
+                            return@launch
+                        }
+                        if (workflowDao.getProjectContract(questionConversation)?.noMoreQuestions == true) {
+                            commitEarlyOutcome("QUESTIONS_SUPPRESSED",
+                                buildToolResultEnvelope("question", "blocked", "QUESTIONS_SUPPRESSED",
+                                    nextHint = "The user said no more questions. Use the durable decisions. If execution is impossible, explain the concrete blocker and wait for direction."))
+                            pauseForNeedsDirection(context, context.getString(R.string.agent_harness_questions_suppressed))
+                            return@launch
+                        }
                         persistPendingQuestion(context, workflowToolCall, specification)
                         toolHandlesContinuation = true
                         return@launch
@@ -9964,7 +10563,7 @@ TODO status. Return via finish_task with JSON:
 
                                 agentService.writeFile(path, content).getOrThrow()
                                 markMemoryDirty("Updated file $path.")
-                                context.getString(R.string.agent_file_written, path) + "\nREMINDER: Append what you just did and why to memory using write_memory."
+                                context.getString(R.string.agent_file_written, path) + if (optimizedHarness()) "" else "\nREMINDER: Append what you just did and why to memory using write_memory."
                             }
                             "run_command" -> {
                                 val command = effectiveToolCall.arguments["command"] ?: ""
@@ -10190,7 +10789,7 @@ TODO status. Return via finish_task with JSON:
 
                                 agentService.editLines(path, startLine, endLine, newContent).getOrThrow().also {
                                     markMemoryDirty("Edited lines in $path.")
-                                } + "\nREMINDER: Append what you just did and why to memory using write_memory."
+                                } + if (optimizedHarness()) "" else "\nREMINDER: Append what you just did and why to memory using write_memory."
                             }
                             "apply_patch" -> {
                                 val patch = effectiveToolCall.arguments["patch"] ?: ""
@@ -10221,7 +10820,7 @@ TODO status. Return via finish_task with JSON:
 
                                 agentService.applyPatch(patch).getOrThrow().also {
                                     markMemoryDirty("Applied a patch that changed project files.")
-                                } + "\nREMINDER: Append what you just did and why to memory using write_memory."
+                                } + if (optimizedHarness()) "" else "\nREMINDER: Append what you just did and why to memory using write_memory."
                             }
                             "call_agent" -> {
                                 val agentName = effectiveToolCall.arguments["agent"]
@@ -10416,6 +11015,33 @@ TODO status. Return via finish_task with JSON:
                                                 initialOrderContent,
                                             maxChars = 8_000
                                         )
+                                if (isControlPacketCapacityFailure(controlPacket)) {
+                                    val capacityOutput = buildToolResultEnvelope(
+                                        toolCall.name,
+                                        "blocked",
+                                        "CONTROL_STATE_CAPACITY",
+                                        nextHint = context.getString(
+                                            R.string.agent_harness_capacity_limit
+                                        )
+                                    )
+                                    syncAssistantToolProgress(
+                                        toolCall,
+                                        capacityOutput
+                                    )
+                                    ensureAgentRunActive(runEpoch)
+                                    commitEarlyOutcome(
+                                        "CONTROL_STATE_CAPACITY",
+                                        capacityOutput
+                                    )
+                                    pauseForNeedsDirection(
+                                        context,
+                                        context.getString(
+                                            R.string.agent_harness_capacity_limit
+                                        )
+                                    )
+                                    toolHandlesContinuation = true
+                                    return@launch
+                                }
                                 val agentCtx = buildString {
                                     append(controlPacket)
                                     if (suppliedContext.isNotBlank()) {
@@ -10769,12 +11395,43 @@ TODO status. Return via finish_task with JSON:
                             "propose_plan" -> {
                                 val plan = effectiveToolCall.arguments["plan"] ?: ""
                                 val summary = effectiveToolCall.arguments["summary"] ?: "Implementation Plan"
+                                if (optimizedHarness() && !AgentPlanBudgetSupport.isWithinBudget(plan)) {
+                                    val episode = _activeConversationId.value?.let { planningEpisode(context, it) }.orEmpty()
+                                    val failureKey = "plan-size:${_activeConversationId.value}:$episode"
+                                    val failureCount = toolFailureCounts.merge(failureKey, 1) { previous, added -> previous + added } ?: 1
+                                    val repair = context.getString(R.string.agent_harness_plan_shorten)
+                                    val output = buildToolResultEnvelope(
+                                        toolName = "propose_plan", status = "error",
+                                        summary = context.getString(R.string.agent_harness_plan_too_large),
+                                        nextHint = repair,
+                                        errorCode = "PLAN_TOO_LARGE"
+                                    )
+                                    commitEarlyOutcome("PLAN_TOO_LARGE", output, repair.takeIf { failureCount == 1 })
+                                    if (failureCount > 1) pauseForNeedsDirection(context, context.getString(R.string.agent_harness_plan_too_large))
+                                    return@launch
+                                }
+                                if (optimizedHarness() && _currentWorkspaceBackend.value == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
+                                    val capabilityIssue = AgentLocalPlanSupport.validateLocalSandboxPlan(plan, summary).issues.firstOrNull()
+                                    if (capabilityIssue != null) {
+                                        val episode = _activeConversationId.value?.let { planningEpisode(context, it) }.orEmpty()
+                                        val failureKey = "local-plan-runtime:${_activeConversationId.value}:$episode"
+                                        val failureCount = toolFailureCounts.merge(failureKey, 1) { previous, added -> previous + added } ?: 1
+                                        val repair = "${capabilityIssue.message} Submit one corrected structured propose_plan using only the supported local runtime. Preserve all user requirements and decisions."
+                                        val failureOutput = buildToolResultEnvelope(
+                                            toolName = "propose_plan", status = "error",
+                                            summary = capabilityIssue.message, nextHint = repair
+                                        )
+                                        commitEarlyOutcome(capabilityIssue.code, failureOutput, repair.takeIf { failureCount == 1 })
+                                        if (failureCount > 1) pauseForNeedsDirection(context, context.getString(R.string.agent_harness_local_plan_unsupported))
+                                        return@launch
+                                    }
+                                }
                                 val planToolCallId = toolCall.id?.takeIf { it.isNotBlank() }
                                     ?: throw IllegalArgumentException("propose_plan requires a stable tool-call ID")
                                 if (hasPendingPlanApproval()) {
                                     throw IllegalStateException(context.getString(R.string.agent_status_awaiting_approval))
                                 }
-                                if (_currentPlanningModeEnabled.value) {
+                                if (_currentPlanningModeEnabled.value && !optimizedHarness()) {
                                     val conversationId = _activeConversationId.value
                                         ?: throw IllegalStateException(context.getString(R.string.agent_plan_question_required))
                                     val answeredQuestions = AppDatabase.getDatabase(context.applicationContext)
@@ -10909,6 +11566,35 @@ TODO status. Return via finish_task with JSON:
                                                 fallbackSummary =
                                                     buildCurrentSessionFinishFallbackSummary()
                                             )
+                                    if (resolvedFinish.result.status.equals("SUCCESS", true)) {
+                                        require(effectiveToolCall.arguments["summary"].orEmpty().isNotBlank()) {
+                                            "REPORT_EVIDENCE_REQUIRED: provide findings, changed artifacts, sources or validation, and remaining limitations. Empty success is not accepted."
+                                        }
+                                    }
+                                    if (optimizedHarness() && _currentAgent.value == AgentRole.ORCHESTRATOR &&
+                                        resolvedFinish.result.status.equals("SUCCESS", true)) {
+                                        val finishedConversation = _activeConversationId.value
+                                            ?: error("VERIFICATION_REQUIRED: no active project")
+                                        val finishedDao = AppDatabase.getDatabase(context).agentWorkflowDao()
+                                        val finishedState = finishedDao.getProjectState(finishedConversation)
+                                        val finishedPlan = finishedState?.activePlanVersionId?.let { finishedDao.getPlanVersionById(it) }
+                                        require(finishedState?.mode == "VERIFY" && finishedPlan?.status == "APPROVED") {
+                                            "VERIFICATION_REQUIRED: run a supported check under the approved plan before successful completion."
+                                        }
+                                        val completionEvidence = AgentProjectControlPlane.readCompletionEvidence(
+                                            database = AppDatabase.getDatabase(context),
+                                            conversationId = finishedConversation,
+                                            planVersionId = requireNotNull(finishedPlan).id
+                                        )
+                                        require(completionEvidence.hasFreshPassAfterLatestMutation) {
+                                            "VERIFICATION_REQUIRED: no passing check covers the latest changes under this approved plan. Run a supported check and inspect its result; do not rewrite existing files just to finish. Use BLOCKED if a required check cannot run."
+                                        }
+                                        require(effectiveToolCall.arguments["artifacts"].orEmpty().isNotBlank() &&
+                                            effectiveToolCall.arguments["validation"].orEmpty().isNotBlank() &&
+                                            effectiveToolCall.arguments["review"].orEmpty().isNotBlank()) {
+                                            "REPORT_EVIDENCE_REQUIRED: provide artifacts with changed or inspected paths, validation with actual check results, and review comparing the result with the approved acceptance criteria and remaining limitations. Use BLOCKED when verification is unavailable."
+                                        }
+                                    }
                                     val summary =
                                         resolvedFinish.canonicalSummary
                                     if (
@@ -10954,7 +11640,16 @@ TODO status. Return via finish_task with JSON:
                                     setCurrentAgent(AgentRole.ORCHESTRATOR)
                                     setCurrentTask(null)
                                     toolHandlesContinuation = true
-                                    "Task completed. Summary: $summary"
+                                    if (resolvedFinish.result.status.equals("SUCCESS", true)) {
+                                        context.getString(R.string.agent_structured_task_completed, summary)
+                                    } else {
+                                        val terminalReason = context.getString(
+                                            R.string.agent_structured_task_incomplete,
+                                            effectiveToolCall.arguments["summary"].orEmpty().take(4000)
+                                        )
+                                        pauseForNeedsDirection(context, terminalReason)
+                                        terminalReason
+                                    }
                                 }
                             }
                             "reflection" -> {
@@ -10975,23 +11670,24 @@ TODO status. Return via finish_task with JSON:
                                 agentService.queueVisionAttachment(path, _currentAgent.value, _activeCustomAgent.value).getOrThrow()
                             }
                             "observe_preview" -> {
-                                if (_currentAgent.value != AgentRole.VISUAL_TESTER) {
+                                if (_currentAgent.value != AgentRole.VISUAL_TESTER && !(optimizedHarness() && _currentAgent.value == AgentRole.ORCHESTRATOR)) {
                                     throw IllegalStateException("observe_preview is only available to VISUAL_TESTER.")
                                 }
-                                if (!settingsRepo.agentVisualTestingEnabled.value ||
-                                    !isVisionEnabledForAgent(AgentRole.VISUAL_TESTER, null, settingsRepo)
-                                ) {
-                                    throw IllegalStateException("Visual testing is disabled or the selected tester model does not have vision enabled.")
+                                if (!settingsRepo.agentVisualTestingEnabled.value) {
+                                    throw IllegalStateException("Preview testing is disabled in Agent Settings.")
                                 }
                                 val observation = AgentPreviewBridge.observe(
                                     context.applicationContext,
-                                    _activeConversationId.value ?: _preferredConversationId.value
+                                    _activeConversationId.value ?: _preferredConversationId.value,
+                                    captureScreenshot = isVisionEnabledForAgent(
+                                        _currentAgent.value, _activeCustomAgent.value, settingsRepo
+                                    )
                                 ).getOrThrow()
                                 observation.screenshotPath?.takeIf { it.isNotBlank() }?.let { screenshotPath ->
                                     pendingVisionAttachment = PendingVisionAttachment(
                                         imagePath = screenshotPath,
                                         workspacePath = "active_preview.png",
-                                        roleName = AgentRole.VISUAL_TESTER.name,
+                                        roleName = _currentAgent.value.name,
                                         customAgentName = null,
                                         sessionId = _currentSessionId.value
                                     )
@@ -10999,13 +11695,11 @@ TODO status. Return via finish_task with JSON:
                                 observation.toJson()
                             }
                             "interact_preview" -> {
-                                if (_currentAgent.value != AgentRole.VISUAL_TESTER) {
+                                if (_currentAgent.value != AgentRole.VISUAL_TESTER && !(optimizedHarness() && _currentAgent.value == AgentRole.ORCHESTRATOR)) {
                                     throw IllegalStateException("interact_preview is only available to VISUAL_TESTER.")
                                 }
-                                if (!settingsRepo.agentVisualTestingEnabled.value ||
-                                    !isVisionEnabledForAgent(AgentRole.VISUAL_TESTER, null, settingsRepo)
-                                ) {
-                                    throw IllegalStateException("Visual testing is disabled or the selected tester model does not have vision enabled.")
+                                if (!settingsRepo.agentVisualTestingEnabled.value) {
+                                    throw IllegalStateException("Preview testing is disabled in Agent Settings.")
                                 }
                                 AgentPreviewBridge.interact(
                                     conversationId = _activeConversationId.value ?: _preferredConversationId.value,
@@ -11168,11 +11862,40 @@ TODO status. Return via finish_task with JSON:
                                     ?: throw IllegalStateException(
                                         "No active project conversation is selected"
                                     )
-                                AgentProjectControlPlane.buildControlPacket(
-                                    context = context,
-                                    conversationId = conversationId,
-                                    initialOrder = initialOrderContent
-                                )
+                                val controlPacket =
+                                    AgentProjectControlPlane.buildControlPacket(
+                                        context = context,
+                                        conversationId = conversationId,
+                                        initialOrder = initialOrderContent
+                                    )
+                                if (isControlPacketCapacityFailure(controlPacket)) {
+                                    val capacityOutput = buildToolResultEnvelope(
+                                        toolCall.name,
+                                        "blocked",
+                                        "CONTROL_STATE_CAPACITY",
+                                        nextHint = context.getString(
+                                            R.string.agent_harness_capacity_limit
+                                        )
+                                    )
+                                    syncAssistantToolProgress(
+                                        toolCall,
+                                        capacityOutput
+                                    )
+                                    ensureAgentRunActive(runEpoch)
+                                    commitEarlyOutcome(
+                                        "CONTROL_STATE_CAPACITY",
+                                        capacityOutput
+                                    )
+                                    pauseForNeedsDirection(
+                                        context,
+                                        context.getString(
+                                            R.string.agent_harness_capacity_limit
+                                        )
+                                    )
+                                    toolHandlesContinuation = true
+                                    return@launch
+                                }
+                                controlPacket
                             }
                             "project_order_read" -> {
                                 val order = agentService.readBrainFileRaw(
@@ -11269,13 +11992,11 @@ TODO status. Return via finish_task with JSON:
                                 val requestedTool =
                                     effectiveToolCall.arguments["tool_name"]
                                         .orEmpty()
-                                val available =
-                                    frozenToolsByTurnBranch[turnBranchKey()]
-                                        ?: getAgentTools(
-                                            _currentAgent.value,
-                                            _activeCustomAgent.value,
-                                            settingsRepo
-                                        )
+                                val available = getAgentTools(
+                                    _currentAgent.value,
+                                    _activeCustomAgent.value,
+                                    settingsRepo
+                                )
                                 val selectedName = resolveToolHelpName(
                                     requestedName = requestedTool,
                                     availableToolNames = available.map { it.name }
@@ -11288,6 +12009,22 @@ TODO status. Return via finish_task with JSON:
                                         availableToolNames = available.map { it.name }
                                     )
                                 } else {
+                                    if (optimizedHarness() && _currentAgent.value in setOf(AgentRole.ORCHESTRATOR, AgentRole.CODER)) {
+                                        val paletteKey = activeToolPaletteKey()
+                                        val alreadyCore = AgentToolSchemaPolicy.selectOptimizedToolPaletteForRole(
+                                            available, activeHarnessPhase(), _currentAgent.value.name
+                                        ).any { it.name == selected.name }
+                                        if (!alreadyCore && activatedToolByPalette[paletteKey] != selected.name) {
+                                            if (activatedToolByPalette.size >= 32 && !activatedToolByPalette.containsKey(paletteKey)) activatedToolByPalette.clear()
+                                            activatedToolByPalette[paletteKey] = selected.name
+                                            recordProjectJournalEvent(category = "TOOLS", eventType = "tool_capability_activated",
+                                                toolName = selected.name, status = "ACTIVE")
+                                            val branch = promptCacheKey()
+                                            frozenToolsByTurnBranch.remove(branch)
+                                            frozenSystemPromptByTurnBranch.remove(branch)
+                                            frozenOptionalPromptByTurnBranch.remove(branch)
+                                        }
+                                    }
                                     AgentRuntimeSupport.buildToolHelpText(
                                         toolName = selected.name,
                                         description = selected.description,
@@ -11376,6 +12113,7 @@ TODO status. Return via finish_task with JSON:
                                 val results = StringBuilder()
                                 try {
                                     val toolsArray = org.json.JSONArray(toolsJson)
+                                    require(!optimizedHarness() || toolsArray.length() <= 4) { "BATCH_LIMIT: use at most four bounded actions" }
                                     for (i in 0 until toolsArray.length()) {
                                         val toolObj = toolsArray.getJSONObject(i)
                                         val toolName = toolObj.getString("name")
@@ -11389,6 +12127,7 @@ TODO status. Return via finish_task with JSON:
 
                                         val args = mutableMapOf<String, String>()
                                         argsObj.keys().forEach { key -> args[key] = argsObj.opt(key)?.toString().orEmpty() }
+                                        require(admitHarnessResearch(context, toolName, args)) { "RESEARCH_BUDGET_EXHAUSTED: provide a specific unresolved blocker_reason" }
                                         val nestedToolCall = com.example.llamadroid.service.OllamaService.ToolCall(
                                             name = toolName,
                                             arguments = args
@@ -11574,7 +12313,12 @@ TODO status. Return via finish_task with JSON:
                             )
                         },
                         onFailure = {
-                            val orchestrationHint = if (_currentAgent.value == AgentRole.ORCHESTRATOR &&
+                            val pathHint = localPathRecoveryHint(
+                                toolName = toolCall.name,
+                                localBackend = _currentWorkspaceBackend.value == AgentWorkspaceBackendType.LOCAL_SANDBOX,
+                                error = it
+                            )
+                            val orchestrationHint = if (!optimizedHarness() && _currentAgent.value == AgentRole.ORCHESTRATOR &&
                                 toolCall.name !in setOf("call_agent", "propose_plan", "finish_task")
                             ) {
                                 " Orchestrator: delegate the specialist follow-up through call_agent."
@@ -11585,7 +12329,11 @@ TODO status. Return via finish_task with JSON:
                                 toolName = toolCall.name,
                                 status = "error",
                                 summary = it.message ?: "Tool execution failed.",
-                                nextHint = "Inspect the error and retry with corrected arguments or a narrower follow-up action.$orchestrationHint"
+                                nextHint = if (pathHint != null && suppressCodebaseDiscoveryInPlan()) {
+                                    context.getString(R.string.agent_harness_no_scout_hint)
+                                } else {
+                                    pathHint ?: "Inspect the error and retry with corrected arguments or a narrower follow-up action.$orchestrationHint"
+                                }
                             )
                         }
                     )
@@ -11675,6 +12423,10 @@ TODO status. Return via finish_task with JSON:
                             toolHandlesContinuation = true
                         }
                     }
+                    if (optimizedHarness() && actionBudget.record(toolCall.name, validatedToolCall.normalizedArguments, result.getOrNull().orEmpty(), result.isSuccess)) {
+                        pauseForNeedsDirection(context, context.getString(R.string.agent_harness_no_progress))
+                        toolHandlesContinuation = true
+                    }
                     syncAssistantToolProgress(toolCall, output)
                     recordAgentEvent(
                         "tool_output_shape",
@@ -11710,13 +12462,60 @@ TODO status. Return via finish_task with JSON:
                         event = "tool_message_add_started",
                         details = "tool=${toolCall.name} id=${toolCall.id ?: "none"} chars=${output.length}"
                     )
-                    addMessage(ChatMessage(
-                        role = "tool",
-                        content = output,
-                        toolName = toolCall.name,
-                        toolCallId = toolCall.id,
-                        toolOutput = toolOutputDetails
-                    ))
+                    val canonicalToolMessage = ChatMessage(
+                        role = "tool", content = output, toolName = toolCall.name,
+                        toolCallId = toolCall.id, toolOutput = toolOutputDetails
+                    )
+                    _activeConversationId.value?.let { conversationId ->
+                        val database = AppDatabase.getDatabase(context)
+                        database.withTransaction {
+                            ensureAgentRunActive(runEpoch)
+                            database.agentChatDao().insertMessage(chatMessageToEntity(canonicalToolMessage, conversationId))
+                            AgentDurableContractStore.recordActionReceipt(database, conversationId,
+                                planningEpisode(context, conversationId), toolCall.name,
+                                toolCall.id ?: canonicalToolMessage.id, if (result.isSuccess) "SUCCESS" else "ERROR",
+                                rootTurnId = currentRootTurnId().toString(),
+                                evidenceFingerprint = agentPromptSha256(result.getOrNull().orEmpty()),
+                                metadataJson = AgentDurableContractStore.mutationReceiptMetadata(
+                                    toolCall.name, validatedToolCall.normalizedArguments, result.isSuccess
+                                ))
+                            if (optimizedHarness() && _currentAgent.value == AgentRole.ORCHESTRATOR &&
+                                toolCall.name in setOf("check_project_run", "check_command", "wait_command", "observe_preview")) {
+                                val previousMode = AgentProjectControlPlane.cachedState(conversationId)?.mode
+                                val transition = AgentProjectControlPlane.applyVerificationResult(
+                                    database, conversationId, toolCall.name, toolCall.id ?: canonicalToolMessage.id,
+                                    result.getOrNull() ?: JSONObject().put("status", "ERROR").toString()
+                                )
+                                if (transition.state.mode != previousMode) {
+                                    frozenToolsByTurnBranch.clear()
+                                    frozenSystemPromptByTurnBranch.clear()
+                                }
+                            }
+                            if (optimizedHarness() && _currentAgent.value == AgentRole.ORCHESTRATOR &&
+                                toolCall.name == "report_progress" && result.isSuccess &&
+                                validatedToolCall.normalizedArguments["phase"].orEmpty().equals("build", true)) {
+                                val repair = AgentProjectControlPlane.applyRepairProgress(
+                                    database, conversationId, "build", toolCall.id ?: canonicalToolMessage.id,
+                                    validatedToolCall.normalizedArguments["summary"].orEmpty()
+                                )
+                                if (repair.transition == AgentVerificationTransition.RETURNED_TO_BUILD) {
+                                    frozenToolsByTurnBranch.clear()
+                                    frozenSystemPromptByTurnBranch.clear()
+                                }
+                            }
+                            database.agentWorkflowDao().finishTurnContext(toolTurnStorageId, "COMPLETED")
+                            database.agentWorkflowDao().insertContinuationReceipt(
+                                com.example.llamadroid.data.db.AgentContinuationOutboxEntity(
+                                    id = "tool-continuation:${canonicalToolMessage.id}", conversationId = conversationId,
+                                    rootTurnId = currentRootTurnId().toString(), kind = "TOOL_CONTINUATION",
+                                    dedupeKey = "tool:${toolCall.id ?: canonicalToolMessage.id}",
+                                    payloadJson = JSONObject().put("message_id", canonicalToolMessage.id).put("tool", toolCall.name).toString()
+                                )
+                            )
+                            ensureAgentRunActive(runEpoch)
+                        }
+                    }
+                    addMessage(canonicalToolMessage)
                     GenerationDiagnosticsStore.recordBreadcrumb(
                         source = "agent_tool_runtime",
                         event = "tool_message_add_finished",
@@ -11772,6 +12571,9 @@ TODO status. Return via finish_task with JSON:
                         )
                     }
 
+                    AgentDurableContractStore.completeContinuation(context, "tool-continuation:${canonicalToolMessage.id}",
+                        status = if (toolHandlesContinuation) com.example.llamadroid.data.db.AgentContinuationStatus.COMPLETED else com.example.llamadroid.data.db.AgentContinuationStatus.ENQUEUED)
+
                 } catch (e: Exception) {
                     if (e is CancellationException || !isAgentRunActive(runEpoch)) {
                         addDebugLog("🛑 Tool execution cancelled for ${toolCall.name}.")
@@ -11785,7 +12587,7 @@ TODO status. Return via finish_task with JSON:
                         details = "tool=${toolCall.name} id=${toolCall.id ?: "none"} error=${(e.message ?: e::class.java.simpleName).take(220)} " +
                             "active=${GenerationDiagnosticsStore.activeSessionSummaryForBreadcrumb()}"
                     )
-                    val orchestrationHint = if (_currentAgent.value == AgentRole.ORCHESTRATOR &&
+                    val orchestrationHint = if (!optimizedHarness() && _currentAgent.value == AgentRole.ORCHESTRATOR &&
                         toolCall.name !in setOf("call_agent", "propose_plan", "finish_task")
                     ) {
                         " Orchestrator: delegate the specialist follow-up through call_agent."
@@ -12122,7 +12924,7 @@ TODO status. Return via finish_task with JSON:
         }
 
         private fun noteRepeatedFailure(toolName: String, arguments: Map<String, String>, summary: String): Int {
-            val key = buildLoopKey(toolName, arguments, summary.take(80))
+            val key = buildLoopKey(toolName, arguments)
             val count = (repeatedToolFailures[key] ?: 0) + 1
             repeatedToolFailures[key] = count
             return count
@@ -13231,7 +14033,7 @@ TODO status. Return via finish_task with JSON:
             candidateSummary: String,
             turnNumber: Int
         ): Result<ReflectionResult?> = withContext(Dispatchers.IO) {
-            if (!_autoReflectionEnabled.value) {
+            if (optimizedHarness() || !_autoReflectionEnabled.value) {
                 addDebugLog("🪞 Automatic reflection skipped because the user disabled it.")
                 recordAgentEvent("reflection_skipped", "Automatic reflection disabled", "scope=$scope", persist = false)
                 return@withContext Result.success(null)
@@ -13256,8 +14058,7 @@ TODO status. Return via finish_task with JSON:
             profile: PromptPackingProfile,
             allowCompaction: Boolean = true,
             thresholdTokensOverride: Int? = null,
-            targetTokensOverride: Int? = null,
-            maximumCompactedTokensOverride: Int? = null
+            targetTokensOverride: Int? = null
         ): PackedPromptContext {
             if (assembly.allMessages().isEmpty()) {
                 return PackedPromptContext(emptyList(), 0, 0)
@@ -13274,9 +14075,6 @@ TODO status. Return via finish_task with JSON:
             val targetTokens = targetTokensOverride
                 ?.coerceAtLeast(256)
                 ?: limits.targetTokens
-            val maxCompactTokens = maximumCompactedTokensOverride
-                ?.coerceAtLeast(targetTokens)
-                ?: limits.maximumCompactedTokens
             val normalizedRequiredPrimacy = normalizePrimacyMessages(
                 assembly.requiredPrimacyMessages
             )
@@ -13331,8 +14129,7 @@ TODO status. Return via finish_task with JSON:
             var compactionPasses = 1
             while (true) {
                 if (
-                    assembly.compactMode &&
-                    packed.estimatedTokens > maxCompactTokens &&
+                    packed.estimatedTokens > targetTokens &&
                     optionalPrimacyCount > 0
                 ) {
                     optionalPrimacyCount -= 1
@@ -13406,19 +14203,80 @@ TODO status. Return via finish_task with JSON:
             targetTokens: Int,
             profile: PromptPackingProfile
         ): PackedPromptContext {
-            val sourceUnits = buildAgentPromptAtomicUnits(historyMessages)
+            val canonicalPacket = pinnedSystemMessages.firstOrNull {
+                it.role == "system" && it.content.trimStart().startsWith("# Project Control Packet")
+            }?.content
+            // Project exact duplicate state before both mandatory-fit validation and normalization.
+            val sourceUnits = buildAgentPromptAtomicUnits(historyMessages.map {
+                projectExactProjectStateReadReceipt(it, canonicalPacket)
+            }).map(::projectFailedProposePlanPromptUnit)
+            val sourceProtection = selectProtectedAgentPromptUnits(
+                units = sourceUnits,
+                canonicalCoverage = canonicalAgentPromptCoverage(canonicalPacket),
+                latestControlExchangeCount = 2,
+                latestUserMessageCount = 2
+            )
             val preferredRecentUnits =
                 (profile.recentMessages / 2).coerceAtLeast(2)
             val recentStart = (
                 sourceUnits.size - preferredRecentUnits
             ).coerceAtLeast(0)
+            // Only the newest control exchanges are mandatory for this prompt.
+            // Older reports may be summarized or evicted; an oversized old
+            // result must not make a sendable current state look unfit.
+            val requiredControlUnitIds = sourceProtection.protectedControlUnitIds
+            val protectedLatestUserUnitIds = sourceProtection.protectedUserUnitIds
+            var requiredControlStateFits = true
+            var requiredControlStateReason: String? = null
             val normalizedUnits = sourceUnits.mapIndexedNotNull { index, unit ->
+                unit.messages.forEach { message ->
+                    if (message.role != "tool" || !isControlBearingTool(message)) {
+                        return@forEach
+                    }
+                    val maxChars = if (index >= recentStart) {
+                        profile.toolRecentChars
+                    } else {
+                        profile.toolOldChars
+                    }
+                    val maxLines = if (index >= recentStart) {
+                        profile.recentLines
+                    } else {
+                        profile.oldLines
+                    }
+                    val toolPrefixLength = message.toolName
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { "Tool $it result:\n".length }
+                        ?: 0
+                    val controlContent = preserveToolControlContent(
+                        message = message,
+                        maxChars = maxOf(
+                            maxChars - toolPrefixLength,
+                            CONTROL_PROMPT_MIN_PRESERVED_CHARS
+                        ),
+                        maxLines = maxOf(maxLines, CONTROL_PROMPT_MIN_PRESERVED_LINES)
+                    )
+                    if (!controlContent.fits && unit.id in requiredControlUnitIds) {
+                        requiredControlStateFits = false
+                        requiredControlStateReason =
+                            "Required control state from ${message.toolName ?: "tool"} " +
+                                "cannot fit the bounded prompt envelope " +
+                                "without truncation."
+                    }
+                }
                 val normalizedMessages = unit.messages.mapNotNull { message ->
-                    normalizeMessageForPrompt(
+                    val normalized = normalizeMessageForPrompt(
                         message = message,
                         isRecent = index >= recentStart,
-                        profile = profile
+                        profile = profile,
+                        preserveLatestUserContent = unit.id in protectedLatestUserUnitIds
                     )
+                    val call = normalized?.pendingToolCall
+                    if (normalized?.role == "assistant" && call != null &&
+                        isPromptMutationTool(call.name) && unit.messages.any {
+                            it.role == "tool" && it.toolCallId == (call.id ?: normalized.toolCallId)
+                        }) {
+                        normalized.copy(pendingToolCall = compactAgentPromptToolCallArguments(call))
+                    } else normalized
                 }
                 if (normalizedMessages.isEmpty()) {
                     null
@@ -13429,9 +14287,11 @@ TODO status. Return via finish_task with JSON:
 
             if (normalizedUnits.isEmpty()) {
                 return PackedPromptContext(
-                    pinnedSystemMessages,
-                    0,
-                    estimatePromptTokens(pinnedSystemMessages)
+                    messages = pinnedSystemMessages,
+                    omittedCount = 0,
+                    estimatedTokens = estimatePromptTokens(pinnedSystemMessages),
+                    requiredControlStateFits = requiredControlStateFits,
+                    requiredControlStateReason = requiredControlStateReason
                 )
             }
 
@@ -13440,13 +14300,9 @@ TODO status. Return via finish_task with JSON:
                 targetTokens,
                 pinnedBudget
             )
-            val protectedUnitIds = buildSet {
-                normalizedUnits.lastOrNull()?.id?.let(::add)
-                normalizedUnits.indices
-                    .filter { normalizedUnits[it].containsUserMessage }
-                    .takeLast(2)
-                    .forEach { add(normalizedUnits[it].id) }
-            }
+            // Coverage was checked against exact source content, before any
+            // normalization. Rechecking shortened copies could re-protect them.
+            val protectedUnitIds = sourceProtection.protectedUnitIds
             val keptNewestFirst = mutableListOf<AgentPromptAtomicUnit>()
             val omitted = mutableListOf<AgentPromptAtomicUnit>()
             var usedTokens = 0
@@ -13462,25 +14318,15 @@ TODO status. Return via finish_task with JSON:
                 }
             }
 
-            val kept = keptNewestFirst.asReversed().toMutableList()
-            var omittedMessages = omitted.flatMap { it.messages }
-            var digest = buildContextDigest(omittedMessages, profile)
-            while (
-                digest != null &&
-                usedTokens + estimatePromptTokens(digest.content) >
-                    historyBudget
-            ) {
-                val removableIndex = kept.indexOfFirst {
-                    it.id !in protectedUnitIds
-                }
-                if (removableIndex < 0) break
-                val moved = kept.removeAt(removableIndex)
-                omitted += moved
-                omittedMessages = omitted.flatMap { it.messages }
-                usedTokens = kept.sumOf {
-                    estimatePromptTokens(it.messages)
-                }
-                digest = buildContextDigest(omittedMessages, profile)
+            val kept = keptNewestFirst.asReversed()
+            val omittedMessages = omitted.flatMap { it.messages }
+            val digestMessages = retainHistoricalPromptUnitsForDigest(
+                omitted, canonicalAgentPromptCoverage(canonicalPacket)
+            ).flatMap { it.messages }
+            // Historical digests are optional. Never evict newer evidence to
+            // make one fit, or append one after protected state exhausts input.
+            val digest = buildContextDigest(digestMessages, profile)?.takeIf {
+                usedTokens + estimatePromptTokens(it.content) <= historyBudget
             }
 
             val packedMessages = buildList {
@@ -13493,23 +14339,38 @@ TODO status. Return via finish_task with JSON:
                 omittedCount = omittedMessages.size,
                 estimatedTokens = estimatePromptTokens(packedMessages),
                 didCompactHistory =
-                    omittedMessages.isNotEmpty() || digest != null
+                    omittedMessages.isNotEmpty() || digest != null,
+                requiredControlStateFits = requiredControlStateFits,
+                requiredControlStateReason = requiredControlStateReason
             )
         }
 
-        private fun normalizeMessageForPrompt(message: ChatMessage, isRecent: Boolean, profile: PromptPackingProfile): ChatMessage? {
+        private fun normalizeMessageForPrompt(
+            message: ChatMessage,
+            isRecent: Boolean,
+            profile: PromptPackingProfile,
+            preserveLatestUserContent: Boolean = false
+        ): ChatMessage? {
             if (message.isStreaming) return null
             if (message.role == "system" && isRoutineSystemReminder(message) && !isRecent) return null
 
             val normalizedContent = when (message.role) {
                 "assistant" -> normalizeAssistantPromptContent(message, isRecent, profile)
                 "tool" -> normalizeToolPromptContent(message, isRecent, profile)
-                "user" -> compactTextForContext(message.content, if (isRecent) profile.assistantRecentChars + 400 else profile.assistantOldChars + 250, if (isRecent) profile.recentLines + 4 else profile.oldLines + 2)
+                "user" -> if (preserveLatestUserContent) {
+                    message.content.trim()
+                } else {
+                    compactTextForContext(
+                        message.content,
+                        if (isRecent) profile.assistantRecentChars + 400 else profile.assistantOldChars + 250,
+                        if (isRecent) profile.recentLines + 4 else profile.oldLines + 2
+                    )
+                }
                 "system" -> compactTextForContext(message.content, if (isRecent) profile.assistantOldChars + 250 else profile.assistantOldChars, if (isRecent) profile.oldLines + 4 else profile.oldLines)
                 else -> compactTextForContext(message.content, profile.assistantOldChars, profile.oldLines)
             }
 
-            if (normalizedContent.isBlank()) return null
+            if (normalizedContent.isBlank() && !(message.role == "assistant" && message.pendingToolCall != null)) return null
             return message.copy(content = normalizedContent, thinking = null)
         }
 
@@ -13519,6 +14380,9 @@ TODO status. Return via finish_task with JSON:
             val toolCall = message.pendingToolCall
             if (toolCall == null) return body
 
+            // Native tool-call metadata is already serialized separately. Do not teach
+            // small models a second, prose-only tool protocol or duplicate its arguments.
+            if (optimizedHarness()) return body
             val rationale = extractToolCallRationale(message)
             val argsPreview = buildToolArgsPreview(toolCall.arguments)
             return buildString {
@@ -13542,6 +14406,35 @@ TODO status. Return via finish_task with JSON:
             val maxChars = if (isRecent) profile.toolRecentChars else profile.toolOldChars
             val maxLines = if (isRecent) profile.recentLines else profile.oldLines
             val prefix = message.toolName?.takeIf { it.isNotBlank() }?.let { "Tool $it result:\n" } ?: ""
+            if (isControlBearingTool(message)) {
+                val preserved = preserveToolControlContent(
+                    message = message,
+                    maxChars = maxOf(
+                        maxChars - prefix.length,
+                        CONTROL_PROMPT_MIN_PRESERVED_CHARS
+                    ),
+                    maxLines = maxOf(maxLines, CONTROL_PROMPT_MIN_PRESERVED_LINES)
+                )
+                if (!preserved.fits) return ""
+                return (prefix + preserved.content).trim()
+            }
+            if (message.toolName == "observe_preview") {
+                projectAgentPreviewPromptContent(
+                    content = message.content,
+                    maxChars = (maxChars - prefix.length).coerceAtLeast(256)
+                )?.let { return prefix + it }
+            }
+            if (isEvidenceBearingTool(message)) {
+                val preserved = preserveToolEvidenceContent(
+                    message = message,
+                    maxChars = maxOf(
+                        maxChars - prefix.length,
+                        900
+                    ),
+                    maxLines = maxOf(maxLines, 8)
+                )
+                return (prefix + preserved.content).trim()
+            }
             val compacted = if (isRecent) {
                 compactTextForContext(message.content, maxChars - prefix.length, maxLines)
             } else {
@@ -13581,7 +14474,8 @@ TODO status. Return via finish_task with JSON:
         private fun buildContextDigest(omittedMessages: List<ChatMessage>, profile: PromptPackingProfile): ChatMessage? {
             if (omittedMessages.isEmpty()) return null
             val orderedMessages = omittedMessages.sortedBy { it.sequenceNumber }
-            val notes = orderedMessages.mapNotNull { summarizeMessageForDigest(it) }
+            val notes = orderedMessages
+                .mapNotNull { summarizeMessageForDigest(it, profile) }
                 .distinct()
                 .takeLast(profile.digestItems)
 
@@ -13597,7 +14491,10 @@ TODO status. Return via finish_task with JSON:
             return ChatMessage(role = "system", content = digestText)
         }
 
-        private fun summarizeMessageForDigest(message: ChatMessage): String? {
+        private fun summarizeMessageForDigest(
+            message: ChatMessage,
+            profile: PromptPackingProfile
+        ): String? {
             return when (message.role) {
                 "user" -> "User request: ${extractSummarySnippet(message.content, 220)}"
                 "assistant" -> {
@@ -13609,6 +14506,66 @@ TODO status. Return via finish_task with JSON:
                 }
                 "tool" -> {
                     val prefix = message.toolName?.takeIf { it.isNotBlank() } ?: "tool"
+                    if (isControlBearingTool(message)) {
+                        val maxChars = maxOf(900, profile.toolOldChars)
+                        val preserved = preserveToolControlContent(
+                            message = message,
+                            maxChars = maxChars,
+                            maxLines = maxOf(8, profile.oldLines)
+                        )
+                        val ids = preserved.opaqueIds
+                        val receipt = buildString {
+                            append("$prefix control result")
+                            if (preserved.content.isNotBlank()) {
+                                append(": ")
+                                append(preserved.content)
+                            } else {
+                                message.content.lineSequence()
+                                    .map { it.trim() }
+                                    .filter {
+                                        it.startsWith("status:", ignoreCase = true) ||
+                                            it.startsWith("summary:", ignoreCase = true) ||
+                                            it.startsWith("next_hint:", ignoreCase = true)
+                                    }
+                                    .take(3)
+                                    .forEach {
+                                        append("\n")
+                                        append(it)
+                                    }
+                            }
+                            ids.reportIds.forEach {
+                                append("\nreport_id: ")
+                                append(it)
+                            }
+                            ids.todoIds.forEach {
+                                append("\ntodo_id: ")
+                                append(it)
+                            }
+                            ids.questionIds.forEach {
+                                append("\nquestion_id: ")
+                                append(it)
+                            }
+                            ids.invocationIds.forEach {
+                                append("\ninvocation_id: ")
+                                append(it)
+                            }
+                        }.trim()
+                        return compactTextForContext(
+                            receipt,
+                            maxChars.coerceAtLeast(900),
+                            maxOf(8, profile.oldLines)
+                        )
+                    }
+                    if (isEvidenceBearingTool(message)) {
+                        val evidence = preserveToolEvidenceContent(
+                            message = message,
+                            maxChars = maxOf(900, profile.toolOldChars),
+                            maxLines = maxOf(8, profile.oldLines)
+                        )
+                        if (evidence.content.isNotBlank()) {
+                            return "$prefix evidence: ${evidence.content}"
+                        }
+                    }
                     "$prefix result: ${extractSummarySnippet(message.content, 220)}"
                 }
                 "system" -> summarizeSystemMessageForDigest(message.content)
@@ -13764,7 +14721,8 @@ TODO status. Return via finish_task with JSON:
                         requestOptions = LlamaServerRequestOptions(
                             cachePrompt = false,
                             slotId = null,
-                            returnPromptProgress = false
+                            returnPromptProgress = false,
+                            requireToolCall = optimizedHarness() && _currentAgent.value == AgentRole.ORCHESTRATOR
                         )
                     )
                 ).toString()
@@ -13798,7 +14756,8 @@ TODO status. Return via finish_task with JSON:
                     messages = ollamaMessages,
                     tools = tools,
                     modelLabel = model,
-                    thinkingEnabled = thinkingEnabled
+                    thinkingEnabled = thinkingEnabled,
+                    requireToolCall = optimizedHarness() && _currentAgent.value == AgentRole.ORCHESTRATOR
                 )
             } else {
                 null
@@ -14114,8 +15073,19 @@ TODO status. Return via finish_task with JSON:
                 }
             }
 
+            val proseAttempt = sources.firstNotNullOfOrNull { (source, rawText) ->
+                detectExplicitPlainTextToolCallAttempt(rawText, getAgentTools().map { it.name })?.let {
+                    ToolCallRecoveryAttempt(
+                        attempted = true,
+                        source = source,
+                        error = it.error,
+                        suspectedToolName = it.suspectedToolName
+                    )
+                }
+            }
             return when {
                 firstError != null -> firstError
+                proseAttempt != null -> proseAttempt
                 sawIntent -> ToolCallRecoveryAttempt(
                     attempted = true,
                     source = "assistant output",
@@ -14275,6 +15245,19 @@ TODO status. Return via finish_task with JSON:
             )
             if (!runtimePolicy.allowed) {
                 return Result.failure(AgentToolPolicyException(runtimePolicy))
+            }
+            if (suppressCodebaseDiscoveryInPlan() &&
+                (AgentHarnessPolicy.isCodebaseDiscoveryTool(toolCall.name) ||
+                    (toolCall.name == "call_agent" &&
+                        toolCall.arguments["agent"]?.trim()?.equals("CODEBASE_SCOUT", ignoreCase = true) == true))
+            ) {
+                val appContext = com.example.llamadroid.LlamaApplication.instance
+                return Result.failure(AgentToolPolicyException(AgentToolPolicyDecision(
+                    allowed = false,
+                    code = "CODEBASE_DISCOVERY_SUPPRESSED",
+                    message = appContext.getString(R.string.agent_harness_no_scout),
+                    recoveryHint = appContext.getString(R.string.agent_harness_no_scout_hint)
+                )))
             }
             val tool = getAgentTools(role, activeCustom, settingsRepo).find { it.name == toolCall.name }
                 ?: return Result.failure(IllegalArgumentException("Tool `${toolCall.name}` is not available to the current agent."))
@@ -14564,7 +15547,8 @@ TODO status. Return via finish_task with JSON:
             status: String,
             summary: String,
             importantOutput: String? = null,
-            nextHint: String? = null
+            nextHint: String? = null,
+            errorCode: String? = null
         ): String {
             val (maxChars, maxLines) = when (toolName) {
                 "run_command", "wait_command", "check_command", "cancel_command", "command_list", "send_command_input" -> 2200 to 20
@@ -14573,6 +15557,7 @@ TODO status. Return via finish_task with JSON:
             return buildString {
                 appendLine("status: $status")
                 appendLine("tool: $toolName")
+                errorCode?.let { appendLine("error_code: $it") }
                 appendLine("summary: ${extractSummarySnippet(summary, 220)}")
                 importantOutput?.takeIf { it.isNotBlank() }?.let {
                     appendLine("important_output:")
@@ -14596,7 +15581,7 @@ TODO status. Return via finish_task with JSON:
                 "apply_patch" -> lines.firstOrNull() ?: "Patch applied."
                 "create_folder" -> lines.firstOrNull() ?: "Folder created."
                 "view_image" -> lines.firstOrNull() ?: "Image queued for inspection."
-                "observe_preview" -> lines.firstOrNull { it.contains("\"url\"") } ?: "Preview screenshot captured."
+                "observe_preview" -> "Preview page text and control positions observed."
                 "interact_preview" -> lines.firstOrNull { it.contains("\"action\"") } ?: "Preview interaction completed."
                 "generate_image" -> lines.firstOrNull() ?: "Image generated successfully."
                 "remove_image_background" -> lines.firstOrNull() ?: "Background removed successfully."
@@ -14615,6 +15600,9 @@ TODO status. Return via finish_task with JSON:
         }
 
         private fun nextHintForTool(toolName: String, rawOutput: String): String? {
+            if (optimizedHarness() && toolName in setOf("write_file", "edit_lines", "apply_patch")) {
+                return "Continue with the next unfinished artifact in the approved plan; use a focused check when the current increment is runnable."
+            }
             val baseHint = when (toolName) {
                 "run_command", "wait_command", "check_command" ->
                     if (rawOutput.contains("Command is still running", ignoreCase = true) || rawOutput.contains("Status: running", ignoreCase = true)) {
@@ -14631,7 +15619,7 @@ TODO status. Return via finish_task with JSON:
                 "generate_image" -> "Inspect the saved image path or hand it to a vision-enabled agent with view_image if you need analysis."
                 "remove_image_background" -> "Inspect the transparent PNG path or use it as the next image artifact."
                 "view_image" -> "Use the visual evidence in the next response, or delegate the specialist follow-up through call_agent."
-                "observe_preview" -> "Use the screenshot evidence to decide the next single interaction or finish with a visual testing report."
+                "observe_preview" -> "Use page text and control coordinates for the next interaction; scroll and observe again if truncated. Report only checks actually performed."
                 "interact_preview" -> "Call observe_preview after the interaction to verify how the interface responded."
                 "reflection" -> "If can_finalize is false, address the missing items before finishing. If it passed, finalize only after one last verification read."
                 "write_memory" -> "If memory is getting long, read it back and use rewrite_memory to consolidate it."
@@ -14647,7 +15635,7 @@ TODO status. Return via finish_task with JSON:
                 "web_search", "kiwix_search", "fetch_url" -> "Cite web/Kiwix/fetched claims with the returned source_citations Markdown links; do not leave bare [1] references in the final answer."
                 else -> null
             }
-            val orchestrationHint = if (_currentAgent.value == AgentRole.ORCHESTRATOR &&
+            val orchestrationHint = if (!optimizedHarness() && _currentAgent.value == AgentRole.ORCHESTRATOR &&
                 toolName !in setOf("call_agent", "propose_plan", "finish_task")
             ) {
                 "Orchestrator: delegate the specialist follow-up through call_agent."
@@ -14676,7 +15664,6 @@ TODO status. Return via finish_task with JSON:
             val localCapabilities = _currentRuntimeCapabilities.value
             val visualPreviewAvailable = localBackend &&
                 repo.agentVisualTestingEnabled.value &&
-                repo.resolveAgentSettingsForDispatch(role = "VISUAL_TESTER").visionEnabled &&
                 AgentPreviewBridge.hasActivePreview(_activeConversationId.value ?: _preferredConversationId.value)
 
             if (role == AgentRole.VISUAL_TESTER) {
@@ -14685,7 +15672,7 @@ TODO status. Return via finish_task with JSON:
                     visualTools.add(
                         AgentTool(
                             name = "observe_preview",
-                            description = "Capture the active local WebUI preview. Returns URL, viewport, load state, screenshot metadata, and bounded visual context for the vision-capable tester model.",
+                            description = "Inspect the open local WebUI preview. Returns bounded page text, visible controls and their tap coordinates, URL and load state. Adds a screenshot only when vision is enabled for the current model.",
                             parameters = emptyMap(),
                             requiredParams = emptyList()
                         )
@@ -14693,12 +15680,12 @@ TODO status. Return via finish_task with JSON:
                     visualTools.add(
                         AgentTool(
                             name = "interact_preview",
-                            description = "Interact with the active local WebUI preview. Perform one action at a time: tap, type, key, scroll, wait, or reload.",
+                            description = "Interact with the active local WebUI preview. Perform one action at a time: tap, type (append), fill (replace focused input), key, scroll, wait, or reload.",
                             parameters = mapOf(
-                                "action" to "One of: tap, click, type, key, scroll, wait, reload",
+                                "action" to "One of: tap, click, type, fill, key, scroll, wait, reload",
                                 "x" to "Optional x coordinate for tap/click",
                                 "y" to "Optional y coordinate for tap/click",
-                                "text" to "Optional text for type",
+                                "text" to "Text for type or fill",
                                 "key" to "Optional key for key action: enter, tab, backspace, escape",
                                 "scroll_dx" to "Optional horizontal scroll delta",
                                 "scroll_dy" to "Optional vertical scroll delta",
@@ -14721,12 +15708,16 @@ TODO status. Return via finish_task with JSON:
                 visualTools.add(
                     AgentTool(
                         name = "finish_task",
-                        description = "Return control to the Orchestrator for this one assigned task. No argument is required; the smallest valid call uses an empty arguments object. You may add an optional terminal status and one short summary. Rich role-specific JSON remains accepted for compatibility. The runtime performs the final reflection gate automatically.",
-                        parameters = mapOf(
-                            "summary" to "Optional short terminal summary, or optional rich role-specific JSON for compatibility.",
-                            "status" to "Optional terminal status: SUCCESS, FAILED, BLOCKED, CANCELLED, or INTERRUPTED. Defaults to SUCCESS."
-                        ),
-                        requiredParams = emptyList()
+                        description = if (optimizedHarness() && role == AgentRole.ORCHESTRATOR) "Complete the approved task with summary, changed artifacts, actual validation results, and limitations. Use BLOCKED or FAILED when incomplete." else "Return control to the Orchestrator for this one assigned task. Successful completion requires a substantive summary with findings, artifacts and source or validation evidence. Include limitations and unresolved issues. Rich role-specific JSON remains accepted for compatibility. The runtime performs the final reflection gate automatically.",
+                        parameters = buildMap {
+                            put("summary", "Substantive terminal summary; rich role-specific JSON is also accepted.")
+                            put("status", "SUCCESS, FAILED, BLOCKED, CANCELLED, or INTERRUPTED; default SUCCESS.")
+                            if (optimizedHarness() && role == AgentRole.ORCHESTRATOR) {
+                                put("artifacts", "Changed project paths; required for SUCCESS.")
+                                put("validation", "Actual checks and their results; required for SUCCESS. State limitations.")
+                            }
+                        },
+                        requiredParams = if (optimizedHarness()) listOf("summary") else emptyList()
                     )
                 )
                 return stableAgentToolSchemaAcrossModes(visualTools, _currentPlanningModeEnabled.value)
@@ -14807,7 +15798,7 @@ TODO status. Return via finish_task with JSON:
                 ),
                 AgentTool(
                     name = "list_directory",
-                    description = "List files and directories. Use '.' or empty for project root, 'src' for src folder. Do NOT use /workspace prefix.",
+                    description = "List files and directories. Use '.' for the project root or a relative path such as 'src'. Do not use an empty path, /workspace prefix, or repeat the project name.",
                     parameters = mapOf(
                         "path" to "Directory path relative to project root, e.g., '.', 'src', or 'lib/components'"
                     ),
@@ -14974,7 +15965,7 @@ TODO status. Return via finish_task with JSON:
                 listOf(
                     AgentTool(
                         name = "question",
-                        description = "Pause this exact agent session and ask the user 1 to 5 structured requirement questions. In Plan mode you MUST call this tool and receive at least one answer before propose_plan is accepted. Each question needs 2 to 3 coherent literal choices and always allows a custom answer. Never use this tool to ask for plan approval.",
+                        description = if (optimizedHarness()) "Ask only an unresolved execution blocker, then wait for its answer. Never repeat an answered decision or ask optional preferences. Each question needs 2 to 3 literal choices and allows a custom answer. Use propose_plan for plan approval." else "Pause this exact agent session and ask the user 1 to 5 structured requirement questions. In Plan mode you MUST call this tool and receive at least one answer before propose_plan is accepted. Each question needs 2 to 3 coherent literal choices and always allows a custom answer. Never use this tool to ask for plan approval.",
                         parameters = mapOf("questions" to "Structured question array"),
                         requiredParams = listOf("questions"),
                         schemaJson = """
@@ -15207,7 +16198,8 @@ TODO status. Return via finish_task with JSON:
                         name = "web_search",
                         description = "Search the web for information. Returns result titles, URLs, snippets, and Markdown citation links. Cite claims from web results with the returned citation links. Use this when you need up-to-date information, documentation, or answers that may not be in the project files.",
                         parameters = mapOf(
-                            "query" to "Search query string"
+                            "query" to "Search query string",
+                            "blocker_reason" to "Optional specific unresolved blocker requiring research beyond the default allowance; it is shown to the user"
                         ),
                         requiredParams = listOf("query")
                     )
@@ -15217,7 +16209,8 @@ TODO status. Return via finish_task with JSON:
                         name = "fetch_url",
                         description = "Fetch content from a URL and return a Markdown citation link for that source. Useful for reading documentation or external APIs after web_search finds a promising source.",
                         parameters = mapOf(
-                            "url" to "The URL to fetch"
+                            "url" to "The URL to fetch",
+                            "blocker_reason" to "Optional specific unresolved blocker requiring research beyond the default allowance; it is shown to the user"
                         ),
                         requiredParams = listOf("url")
                     )
@@ -15230,7 +16223,8 @@ TODO status. Return via finish_task with JSON:
                         name = "kiwix_search",
                         description = "Search the local offline Kiwix library (Wikipedia, StackOverflow, etc.). Returns Markdown citation links; cite claims from Kiwix results with those links. Use this as an alternative to web_search for offline knowledge access.",
                         parameters = mapOf(
-                            "query" to "Search query string"
+                            "query" to "Search query string",
+                            "blocker_reason" to "Optional specific unresolved blocker requiring research beyond the default allowance; it is shown to the user"
                         ),
                         requiredParams = listOf("query")
                     )
@@ -15270,7 +16264,7 @@ TODO status. Return via finish_task with JSON:
             if (role == AgentRole.ORCHESTRATOR) {
                 val disabled = _disabledBuiltInAgents.value
                 val builtInList = buildList {
-                    add("CODEBASE_SCOUT")
+                    if (!suppressCodebaseDiscoveryInPlan()) add("CODEBASE_SCOUT")
                     add("RESEARCHER")
                     add("PLANNER")
                     add("CODER")
@@ -15293,11 +16287,16 @@ TODO status. Return via finish_task with JSON:
                 val disabledNote = if (disabledBuiltIn.isNotEmpty()) {
                     " DISABLED (do NOT call): ${disabledBuiltIn.joinToString(", ")}."
                 } else ""
+                val planSpecialists = if (suppressCodebaseDiscoveryInPlan()) {
+                    "RESEARCHER or PLANNER"
+                } else {
+                    "CODEBASE_SCOUT, RESEARCHER, or PLANNER"
+                }
 
                 tools.add(
                     AgentTool(
                         name = "call_agent",
-                        description = "Orchestrator-only. Start one isolated specialist. In Plan mode use CODEBASE_SCOUT, RESEARCHER, or PLANNER without a TODO. In Build mode every Coder/Reviewer/Executor/Visual Tester/State Curator/custom invocation requires one stable todo_id and atomically claims it. Child agents return structured reports; they never delegate.",
+                        description = "Orchestrator-only. Start one isolated specialist. In Plan mode use $planSpecialists without a TODO. In Build mode every Coder/Reviewer/Executor/Visual Tester/State Curator/custom invocation requires one stable todo_id and atomically claims it. Child agents return structured reports; they never delegate.",
                         parameters = mapOf(
                             "agent" to "Agent class to call ($available)",
                             "name" to "Required invocation name, maximum 40 characters. Repeated names are automatically suffixed",
@@ -15314,7 +16313,7 @@ TODO status. Return via finish_task with JSON:
                 tools.add(
                     AgentTool(
                         name = "propose_plan",
-                        description = "Propose an implementation plan for explicit user approval. This always creates a hard durable wait boundary: do not expect a tool result or continue until the user approves. In Plan mode this is rejected until the question tool has collected at least one authoritative user answer during the current root turn. Describe the .adt/run.json needed for LOCAL_SANDBOX testing, but create it only after approval switches the project to Build mode.",
+                        description = if (optimizedHarness()) "Propose a concise implementation plan (at most 500 words and 4000 characters) for explicit approval, then wait. Ask questions only for unresolved blockers. For LOCAL_SANDBOX describe .adt/run.json; create it only after approval." else "Propose an implementation plan for explicit user approval. This always creates a hard durable wait boundary: do not expect a tool result or continue until the user approves. In Plan mode this is rejected until the question tool has collected at least one authoritative user answer during the current root turn. Describe the .adt/run.json needed for LOCAL_SANDBOX testing, but create it only after approval switches the project to Build mode.",
                         parameters = mapOf(
                             "plan" to "Detailed implementation plan in markdown format",
                             "summary" to "One-line summary of what the plan accomplishes"
@@ -15335,17 +16334,22 @@ TODO status. Return via finish_task with JSON:
                 )
             }
 
-            // Sub-agents can signal task completion to return to Orchestrator
-            if (role != AgentRole.ORCHESTRATOR) {
+            // Specialists return to the root; the optimized root can complete its own approved work.
+            if (role != AgentRole.ORCHESTRATOR || optimizedHarness()) {
                 tools.add(
                     AgentTool(
                         name = "finish_task",
-                        description = "Return control to the Orchestrator for this one assigned task. No argument is required; the smallest valid call uses an empty arguments object. You may add an optional terminal status and one short summary. Rich role-specific JSON remains accepted for compatibility. The runtime performs the final reflection gate automatically.",
-                        parameters = mapOf(
-                            "summary" to "Optional short terminal summary, or optional rich role-specific JSON for compatibility.",
-                            "status" to "Optional terminal status: SUCCESS, FAILED, BLOCKED, CANCELLED, or INTERRUPTED. Defaults to SUCCESS."
-                        ),
-                        requiredParams = emptyList()
+                        description = if (role == AgentRole.ORCHESTRATOR) "Complete the approved task with changed artifacts and actual validation evidence. Report BLOCKED or FAILED when incomplete." else "Return the assigned task report with findings, sources or changed artifacts, validation, limitations and unresolved issues.",
+                        parameters = buildMap {
+                            put("summary", "Substantive terminal summary; rich role-specific JSON is also accepted.")
+                            put("status", "SUCCESS, FAILED, BLOCKED, CANCELLED, or INTERRUPTED; default SUCCESS.")
+                            if (role == AgentRole.ORCHESTRATOR) {
+                                put("artifacts", "Changed or inspected project paths; required for SUCCESS.")
+                                put("validation", "Actual checks and results; required for SUCCESS. State limitations.")
+                                put("review", "Review against approved acceptance criteria, defects addressed and remaining limitations; required for SUCCESS.")
+                            }
+                        },
+                        requiredParams = if (optimizedHarness()) listOf("summary") else emptyList()
                     )
                 )
             }
@@ -15390,7 +16394,13 @@ TODO status. Return via finish_task with JSON:
                 }
             }
 
-            val filteredTools = if (activeCustom != null) {
+            if (optimizedHarness() && role == AgentRole.ORCHESTRATOR && visualPreviewAvailable) {
+                tools.addAll(getAgentTools(AgentRole.VISUAL_TESTER, null, repo).filter { it.name in setOf("observe_preview", "interact_preview") })
+            }
+            val filteredTools = if (optimizedHarness() && role == AgentRole.ORCHESTRATOR && activeCustom == null) {
+                val phase = activeHarnessPhase()
+                tools.filter { it.name in AgentHarnessPolicy.rootToolsForPhase(phase) }
+            } else if (activeCustom != null) {
                 tools
                     .filter { tool ->
                         capabilityPolicy.allowedToolNames.isEmpty() ||
@@ -15410,12 +16420,16 @@ TODO status. Return via finish_task with JSON:
 
             val distinctTools = filteredTools
                 .distinctBy { it.name }
+                .filterNot {
+                    suppressCodebaseDiscoveryInPlan() &&
+                        AgentHarnessPolicy.isCodebaseDiscoveryTool(it.name)
+                }
                 .filter {
                     it.name !in _disabledStandardAgentTools.value ||
                         isCriticalAgentProtocolTool(it.name)
                 }
-            // Keep schemas frozen across Plan → Build so prompt caches survive approval.
-            // validateToolCall still rejects every build mutation while Plan mode is active.
+            // Stable ordering within a phase; explicit capability changes invalidate its cache.
+            // Runtime validation independently rejects mutations while Plan mode is active.
             return stableAgentToolSchemaAcrossModes(distinctTools, _currentPlanningModeEnabled.value)
         }
     } // End of companion object
@@ -17777,6 +18791,18 @@ sys.exit(proc.returncode)
             val resultCount = minOf(links.size, maxResults)
             if (resultCount == 0) {
                 return@withContext Result.success("Web search results for: $query\n\nNo results found.")
+            }
+
+            if (optimizedHarness()) {
+                val results = links.take(minOf(maxResults, 4)).mapIndexed { index, link ->
+                    val href = link.groupValues[1].replace("&amp;", "&")
+                    val url = if (href.contains("uddg=")) java.net.URLDecoder.decode(href.substringAfter("uddg=").substringBefore("&"), "UTF-8") else href
+                    val end = links.getOrNull(index + 1)?.range?.first ?: html.length
+                    val snippet = AgentRuntimeSupport.stripHtmlTags(html.substring(link.range.last + 1, end)).take(700)
+                    "${index + 1}. ${NativeChatToolRuntime.sourceCitationMarkdown(link.groupValues[2], url)}\n$snippet"
+                }
+                refreshIdleStatusIfNeeded()
+                return@withContext Result.success(results.joinToString("\n\n") + "\nFetch only a relevant source if these snippets do not resolve the task.")
             }
 
             val output = StringBuilder()

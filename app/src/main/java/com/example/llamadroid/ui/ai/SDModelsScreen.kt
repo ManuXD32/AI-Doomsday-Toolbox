@@ -3715,17 +3715,8 @@ private fun DiscoverTab(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             if (com.example.llamadroid.ui.components.isCuratedCatalogBrowseMode(searchQuery)) {
-                item {
-                    // Complete SD/workflow bundles come first; individual
-                    // detector downloads remain the focused follow-up section.
-                    SdCuratedBundlesSection()
-                }
-                item(key = "phase_c_adetailer_curated_bundles") {
-                    com.example.llamadroid.ui.components.CuratedModelBundleSection(
-                        title = stringResource(R.string.phase_c_adetailer_bundles_title),
-                        description = stringResource(R.string.adetailer_bundles_desc),
-                        bundles = com.example.llamadroid.data.model.AdetailerCuratedBundleCatalog.bundles
-                    )
+                item(key = "sd_bundle_folders") {
+                    SdBundleFolders()
                 }
             }
 

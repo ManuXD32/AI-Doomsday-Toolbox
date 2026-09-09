@@ -1,0 +1,13 @@
+<resources>
+    <string name="bundle_folder_normal">Normal models</string>
+    <string name="bundle_folder_vision">Vision models</string>
+    <string name="bundle_folder_speech">Speech models</string>
+    <string name="bundle_folder_music">Music models</string>
+    <string name="bundle_folder_video">Video models</string>
+    <string name="bundle_folder_upscaling">Upscaling models</string>
+    <string name="bundle_folder_editing">Editing workflows</string>
+    <string name="bundle_folder_detectors">Detection models</string>
+    <string name="bundle_folder_back">All folders</string>
+    <string name="bundle_folder_count">Bundles: %1$d</string>
+    <string name="bundle_folder_description">Review a bundle to download its components or use an installed model.</string>
+</resources>

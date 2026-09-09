@@ -432,7 +432,9 @@ class AudioGenerationService : Service() {
         } catch (error: Throwable) {
             val failedAt = System.currentTimeMillis()
             val message = localizeError(error)
-            DebugLog.log("[AUDIO] Generation failed adapter=${initial.adapterId} job=${initial.id}: ${error.javaClass.simpleName}")
+            val nativeFailure = error as? com.example.llamadroid.audio.music.StableAudio3Failure
+            DebugLog.log("[AUDIO] Generation failed adapter=${initial.adapterId} job=${initial.id}: ${error.javaClass.simpleName}" +
+                (nativeFailure?.let { " ${it.diagnosticMetadata()}" } ?: ""))
             withContext(NonCancellable) {
                 try {
                     val current = dao.getJob(initial.id) ?: initial
@@ -469,13 +471,11 @@ class AudioGenerationService : Service() {
     }
 
     private fun resolveReferencePath(job: AudioGenerationJobEntity, profile: AudioVoiceProfile?): String? {
-        profile ?: return job.referenceAudioPath
-        val preferred = when {
-            job.denoiseReference && !profile.denoisedPath.isNullOrBlank() -> profile.denoisedPath
-            job.normalizeReference && !profile.normalizedPath.isNullOrBlank() -> profile.normalizedPath
-            else -> profile.originalPath
-        }
-        return preferred?.takeIf { File(it).isFile } ?: profile.originalPath
+        // The saved profile's edits define the previewed reference. Job-level
+        // processing is applied afterward and must not select a different,
+        // untrimmed original merely because normalization is switched off.
+        // A missing derivative is a recoverable error, not a silent voice change.
+        return profile?.preferredAudioPath ?: job.referenceAudioPath
     }
 
     private fun ensureNotCancelled() {
@@ -483,7 +483,7 @@ class AudioGenerationService : Service() {
     }
 
     private fun localizeStage(stage: String): String {
-        val lower = stage.lowercase()
+        val lower = stage.lowercase().replace('_', ' ')
         return when {
             "tokeniz" in lower -> getString(R.string.audio_music_stage_tokenize)
             "condition" in lower || "text encod" in lower -> getString(R.string.audio_music_stage_condition)
@@ -501,9 +501,9 @@ class AudioGenerationService : Service() {
 
     private fun localizeError(error: Throwable): String {
         val raw = error.message.orEmpty().lowercase()
-        return when {
+        val summary = when {
             "worker_process_died" in raw || "timeout" in raw -> getString(R.string.audio_music_error_worker)
-            "not enough memory" in raw -> getString(R.string.audio_music_error_memory)
+            "not enough memory" in raw || "native_memory_exhausted" in raw -> getString(R.string.audio_music_error_memory)
             "lora" in raw || "adapter" in raw || "fp16" in raw -> getString(R.string.audio_music_error_lora)
             "output_invalid" in raw || "invalid audio output" in raw -> getString(R.string.audio_music_error_output)
             "input audio" in raw || "extension duration" in raw -> getString(R.string.audio_music_error_input)
@@ -518,13 +518,19 @@ class AudioGenerationService : Service() {
             "speaker reference" in raw ->
                 getString(R.string.audio_runtime_error_reference_required)
             "ffmpeg" in raw -> getString(R.string.audio_runtime_error_ffmpeg_missing)
-            "text" in raw || "source document" in raw ->
+            error !is com.example.llamadroid.audio.music.StableAudio3Failure &&
+                ("text" in raw || "source document" in raw) ->
                 getString(R.string.audio_runtime_error_empty_text)
             "voice reference" in raw && ("read" in raw || "silent" in raw || "format" in raw || "duration" in raw || "empty" in raw) ->
                 getString(R.string.audio_runtime_error_voice_invalid)
             "shared output export" in raw -> getString(R.string.audio_runtime_error_generic)
             else -> getString(R.string.audio_runtime_error_generic)
         }
+        val failure = error as? com.example.llamadroid.audio.music.StableAudio3Failure ?: return summary
+        val unknown = getString(R.string.audio_native_detail_unknown)
+        return summary + "\n" + getString(R.string.audio_native_failure_details,
+            failure.code, localizeStage(failure.stage), failure.operation ?: unknown,
+            failure.nativeStatus?.toString() ?: unknown)
     }
 
     companion object {

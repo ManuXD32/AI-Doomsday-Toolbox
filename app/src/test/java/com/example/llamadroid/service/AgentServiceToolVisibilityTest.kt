@@ -4,6 +4,8 @@ import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.runtime.AgentRuntimeDispatchSettings
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.mockkObject
+import io.mockk.unmockkObject
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -204,6 +206,127 @@ class AgentServiceToolVisibilityTest {
         )
         assertEquals("tool", mappedResult.role)
         assertEquals("read_file", mappedResult.toolName)
+    }
+
+    @Test
+    fun `saved no scout policy removes discovery in Plan and restores it in Build`() {
+        val oldProfile = AgentService.executionProfile.value
+        val oldBackend = AgentService.currentWorkspaceBackend.value
+        val oldPlanMode = AgentService.currentPlanningModeEnabled.value
+        val oldConversation = AgentService.activeConversationId.value
+        val oldPreferred = AgentService.preferredConversationId.value
+        try {
+            AgentService.setActiveConversationId(999L)
+            AgentService.setExecutionProfile(AgentHarnessPolicy.OPTIMIZED)
+            AgentService.setCurrentWorkspaceBackend(AgentWorkspaceBackendType.LOCAL_SANDBOX)
+            AgentService.setCurrentPlanningModeEnabled(true)
+            AgentService.updateCodebaseDiscoveryPolicy(999L, true)
+            val settings = mockAgentSettings(true, true, false, false, false)
+            val planTools = AgentService.getAgentTools(
+                role = AgentService.Companion.AgentRole.ORCHESTRATOR, settingsRepo = settings
+            )
+            assertFalse(planTools.any { it.name in setOf("list_directory", "search_code") })
+            assertTrue(planTools.any { it.name == "read_file" })
+            assertTrue(planTools.any { it.name == "propose_plan" })
+            assertFalse(planTools.single { it.name == "call_agent" }.parameters.getValue("agent").contains("CODEBASE_SCOUT"))
+            AgentService.setCurrentPlanningModeEnabled(false)
+            val buildTools = AgentService.getAgentTools(
+                role = AgentService.Companion.AgentRole.ORCHESTRATOR, settingsRepo = settings
+            )
+            assertTrue(buildTools.any { it.name == "list_directory" })
+            assertTrue(buildTools.any { it.name == "write_file" })
+            AgentService.setCurrentPlanningModeEnabled(true)
+            AgentService.updateCodebaseDiscoveryPolicy(999L, false)
+            assertTrue(AgentService.getAgentTools(
+                role = AgentService.Companion.AgentRole.ORCHESTRATOR, settingsRepo = settings
+            ).any { it.name == "list_directory" })
+        } finally {
+            AgentService.setActiveConversationId(oldConversation)
+            AgentService.setPreferredConversationId(oldPreferred)
+            AgentService.setExecutionProfile(oldProfile)
+            AgentService.setCurrentWorkspaceBackend(oldBackend)
+            AgentService.setCurrentPlanningModeEnabled(oldPlanMode)
+        }
+    }
+
+    @Test
+    fun `optimized local root can build and finish with compact schemas`() {
+        val oldProfile = AgentService.executionProfile.value
+        val oldBackend = AgentService.currentWorkspaceBackend.value
+        val oldPlanMode = AgentService.currentPlanningModeEnabled.value
+        try {
+            AgentService.setExecutionProfile(AgentHarnessPolicy.OPTIMIZED)
+            AgentService.setCurrentWorkspaceBackend(AgentWorkspaceBackendType.LOCAL_SANDBOX)
+            AgentService.setCurrentPlanningModeEnabled(false)
+            val tools = AgentService.getAgentTools(
+                role = AgentService.Companion.AgentRole.ORCHESTRATOR,
+                settingsRepo = mockAgentSettings(true, true, false, false, false)
+            )
+            val names = tools.map { it.name }.toSet()
+            assertTrue("write_file" in names)
+            assertTrue("run_project" in names)
+            assertTrue("check_project_run" in names)
+            assertTrue("finish_task" in names)
+            assertFalse("run_command" in names)
+            assertFalse("propose_plan" in names)
+            val compact = compactAgentToolSchemas(tools)
+            assertEquals(names, compact.map { it.name }.toSet())
+            val rawTokens = estimateRawAgentToolSchemaTokens(tools)
+            val compactTokens = estimateRawAgentToolSchemaTokens(compact)
+            println("Optimized local Build schemas: tools=${tools.size} raw=$rawTokens compact=$compactTokens")
+            assertTrue(compactTokens < rawTokens)
+            val core = compactAgentToolSchemas(AgentToolSchemaPolicy.selectOptimizedToolPalette(tools, AgentHarnessPhase.BUILD))
+            val coreTokens = estimateRawAgentToolSchemaTokens(core)
+            println("Optimized local Build core: tools=${core.size} tokens=$coreTokens")
+            assertTrue("Core schemas must leave space for protected state at 8K", coreTokens < 1_600)
+            assertTrue(core.map { it.name }.containsAll(listOf("write_file", "run_project", "check_project_run", "finish_task", "tool_help")))
+            val expanded = AgentToolSchemaPolicy.selectOptimizedToolPalette(tools, AgentHarnessPhase.BUILD, "project_state_read")
+            assertTrue(expanded.any { it.name == "project_state_read" })
+            assertTrue(tools.single { it.name == "finish_task" }.parameters.keys.containsAll(listOf("summary", "artifacts", "validation")))
+        } finally {
+            AgentService.setExecutionProfile(oldProfile)
+            AgentService.setCurrentWorkspaceBackend(oldBackend)
+            AgentService.setCurrentPlanningModeEnabled(oldPlanMode)
+        }
+    }
+
+    @Test
+    fun `text root preview tools respect preview toggle and retain read only tester contract`() {
+        val oldProfile = AgentService.executionProfile.value
+        val oldBackend = AgentService.currentWorkspaceBackend.value
+        val oldPlanMode = AgentService.currentPlanningModeEnabled.value
+        mockkObject(AgentPreviewBridge)
+        try {
+            every { AgentPreviewBridge.hasActivePreview(any()) } returns true
+            AgentService.setExecutionProfile(AgentHarnessPolicy.OPTIMIZED)
+            AgentService.setCurrentWorkspaceBackend(AgentWorkspaceBackendType.LOCAL_SANDBOX)
+            AgentService.setCurrentPlanningModeEnabled(false)
+            val settings = mockAgentSettings(true, false, false, false, false)
+            val previewEnabled = MutableStateFlow(true)
+            every { settings.agentVisualTestingEnabled } returns previewEnabled
+            val rootTools = AgentService.getAgentTools(
+                role = AgentService.Companion.AgentRole.ORCHESTRATOR,
+                settingsRepo = settings
+            )
+            assertTrue(rootTools.any { it.name == "observe_preview" })
+            assertTrue(rootTools.single { it.name == "interact_preview" }
+                .parameters.getValue("action").contains("fill"))
+            val testerTools = AgentService.getAgentTools(
+                role = AgentService.Companion.AgentRole.VISUAL_TESTER,
+                settingsRepo = settings
+            ).map { it.name }.toSet()
+            assertEquals(setOf("observe_preview", "interact_preview", "tool_help", "finish_task"), testerTools)
+            previewEnabled.value = false
+            assertFalse(AgentService.getAgentTools(
+                role = AgentService.Companion.AgentRole.ORCHESTRATOR,
+                settingsRepo = settings
+            ).any { it.name in setOf("observe_preview", "interact_preview") })
+        } finally {
+            unmockkObject(AgentPreviewBridge)
+            AgentService.setExecutionProfile(oldProfile)
+            AgentService.setCurrentWorkspaceBackend(oldBackend)
+            AgentService.setCurrentPlanningModeEnabled(oldPlanMode)
+        }
     }
 
     private fun mockAgentSettings(

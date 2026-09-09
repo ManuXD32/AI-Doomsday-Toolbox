@@ -79,8 +79,7 @@ bool Api::load(std::string* error) {
                 "LiteRtGetCompiledModelOutputTensorLayouts");
   LOAD_REQUIRED(resize_input_tensor_non_strict,
                 "LiteRtCompiledModelResizeInputTensorNonStrict");
-  LOAD_REQUIRED(create_tensor_buffer_from_host_memory,
-                "LiteRtCreateTensorBufferFromHostMemory");
+  LOAD_REQUIRED(create_managed_tensor_buffer, "LiteRtCreateManagedTensorBuffer");
   LOAD_REQUIRED(destroy_tensor_buffer, "LiteRtDestroyTensorBuffer");
   LOAD_REQUIRED(get_tensor_buffer_host_memory,
                 "LiteRtGetTensorBufferHostMemory");
@@ -125,7 +124,7 @@ void Api::unload() {
   get_compiled_model_input_tensor_layout = nullptr;
   get_compiled_model_output_tensor_layouts = nullptr;
   resize_input_tensor_non_strict = nullptr;
-  create_tensor_buffer_from_host_memory = nullptr;
+  create_managed_tensor_buffer = nullptr;
   destroy_tensor_buffer = nullptr;
   get_tensor_buffer_host_memory = nullptr;
   run_compiled_model = nullptr;

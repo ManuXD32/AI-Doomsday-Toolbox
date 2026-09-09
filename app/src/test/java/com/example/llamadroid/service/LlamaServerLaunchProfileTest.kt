@@ -127,6 +127,79 @@ class LlamaServerLaunchProfileTest {
     }
 
     @Test
+    fun `video profile fields migrate to bounded schema six values`() {
+        val restored = requireNotNull(
+            LlamaServerLaunchProfile.decode(
+                """{"schemaVersion":4,"modelPath":"/models/video.gguf","mmprojPath":"/models/video.mmproj","videoEnabled":true,"videoFps":9,"videoTimestampIntervalMs":1}"""
+            )
+        )
+
+        assertEquals(LlamaServerLaunchProfile.SCHEMA_VERSION, restored.schemaVersion)
+        assertTrue(restored.videoEnabled)
+        assertEquals(2f, restored.videoFps, 0.001f)
+        assertEquals(250, restored.videoTimestampIntervalMs)
+        assertTrue(restored.toLlamaConfig().videoEnabled)
+        assertEquals("/models/video.mmproj", restored.toLlamaConfig().mmprojPath)
+    }
+
+    @Test
+    fun `new video profile policy fields round trip and stay bounded`() {
+        val profile = LlamaServerLaunchProfile(
+            modelPath = "/models/video.gguf",
+            videoEnabled = true,
+            videoSegmentSeconds = 12,
+            videoMaxFrames = 18,
+            videoMaxFps = 1.5f,
+            videoAudioEnabled = true,
+            videoWhisperParallelEnabled = true
+        )
+
+        val restored = requireNotNull(LlamaServerLaunchProfile.decode(LlamaServerLaunchProfile.encode(profile)))
+
+        assertEquals(LlamaServerLaunchProfile.SCHEMA_VERSION, restored.schemaVersion)
+        assertEquals(12, restored.videoSegmentSeconds)
+        assertEquals(18, restored.videoMaxFrames)
+        assertEquals(1.5f, restored.videoMaxFps, 0.001f)
+        assertTrue(restored.videoAudioEnabled)
+        assertTrue(restored.videoWhisperParallelEnabled)
+    }
+
+    @Test
+    fun `encoding clamps new video policy fields`() {
+        val restored = requireNotNull(
+            LlamaServerLaunchProfile.decode(
+                LlamaServerLaunchProfile.encode(
+                    LlamaServerLaunchProfile(
+                        modelPath = "/models/video.gguf",
+                        videoSegmentSeconds = 99,
+                        videoMaxFrames = 99,
+                        videoMaxFps = 99f
+                    )
+                )
+            )
+        )
+
+        assertEquals(LlamaVideoProfileLimits.MAX_SEGMENT_SECONDS, restored.videoSegmentSeconds)
+        assertEquals(LlamaVideoProfileLimits.MAX_MAX_FRAMES, restored.videoMaxFrames)
+        assertEquals(LlamaVideoProfileLimits.MAX_MAX_FPS, restored.videoMaxFps)
+    }
+
+    @Test
+    fun `legacy video profile gets historical segment and safe audio default`() {
+        val restored = requireNotNull(
+            LlamaServerLaunchProfile.decode(
+                """{"schemaVersion":5,"modelPath":"/models/legacy-video.gguf","videoEnabled":true}"""
+            )
+        )
+
+        assertEquals(LlamaVideoProfileLimits.LEGACY_SEGMENT_SECONDS, restored.videoSegmentSeconds)
+        assertEquals(LlamaVideoProfileLimits.DEFAULT_MAX_FRAMES, restored.videoMaxFrames)
+        assertEquals(LlamaVideoProfileLimits.DEFAULT_MAX_FPS, restored.videoMaxFps)
+        assertFalse(restored.videoAudioEnabled)
+        assertFalse(restored.videoWhisperParallelEnabled)
+    }
+
+    @Test
     fun `MTP separate model toggle changes only the generated draft model arguments`() {
         val withoutSeparateModel = LlamaServerLaunchProfile(
             modelPath = "/models/main.gguf",

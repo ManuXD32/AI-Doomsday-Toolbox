@@ -93,17 +93,49 @@ class LlamaRepositoryTest {
     }
 }
 
-private class FakeLlamaServerDao : LlamaServerDao {
-    override fun getAllServers(): Flow<List<LlamaServerEntity>> = flowOf(emptyList())
-    override suspend fun getServerById(id: Long): LlamaServerEntity? = null
-    override suspend fun insertServer(server: LlamaServerEntity): Long = server.id
-    override suspend fun deleteServer(server: LlamaServerEntity) = Unit
-    override suspend fun updateLastUsed(id: Long, timestamp: Long) = Unit
-    override suspend fun getLastUsedServer(): LlamaServerEntity? = null
-    override suspend fun updateSupportsVision(id: Long, supportsVision: Boolean) = Unit
-    override suspend fun updateModelName(id: Long, modelName: String?) = Unit
-    override suspend fun updateModelMetadata(id: Long, modelName: String?, supportsVision: Boolean, supportsAudio: Boolean) = Unit
-    override suspend fun updateServer(server: LlamaServerEntity) = Unit
+private class FakeLlamaServerDao(
+    private val servers: MutableMap<Long, LlamaServerEntity> = mutableMapOf()
+) : LlamaServerDao {
+    private var nextId = (servers.keys.maxOrNull() ?: 0L) + 1L
+
+    override fun getAllServers(): Flow<List<LlamaServerEntity>> = flowOf(servers.values.toList())
+    override suspend fun getServerById(id: Long): LlamaServerEntity? = servers[id]
+    override suspend fun insertServer(server: LlamaServerEntity): Long {
+        val id = server.id.takeIf { it != 0L } ?: nextId++
+        servers[id] = server.copy(id = id)
+        return id
+    }
+    override suspend fun deleteServer(server: LlamaServerEntity) {
+        servers.remove(server.id)
+    }
+    override suspend fun updateLastUsed(id: Long, timestamp: Long) {
+        servers[id] = servers.getValue(id).copy(lastUsed = timestamp)
+    }
+    override suspend fun getLastUsedServer(): LlamaServerEntity? =
+        servers.values.maxByOrNull { it.lastUsed }
+    override suspend fun updateSupportsVision(id: Long, supportsVision: Boolean) {
+        servers[id] = servers.getValue(id).copy(supportsVision = supportsVision)
+    }
+    override suspend fun updateModelName(id: Long, modelName: String?) {
+        servers[id] = servers.getValue(id).copy(modelName = modelName)
+    }
+    override suspend fun updateModelMetadata(
+        id: Long,
+        modelName: String?,
+        supportsVision: Boolean,
+        supportsAudio: Boolean,
+        supportsVideo: Boolean
+    ) {
+        servers[id] = servers.getValue(id).copy(
+            modelName = modelName,
+            supportsVision = supportsVision,
+            supportsAudio = supportsAudio,
+            supportsVideo = supportsVideo
+        )
+    }
+    override suspend fun updateServer(server: LlamaServerEntity) {
+        servers[server.id] = server
+    }
 }
 
 private class FakeLlamaFolderDao(

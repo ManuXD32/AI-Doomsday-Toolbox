@@ -1709,10 +1709,7 @@ fun DiscoverTab(viewModel: ModelManagerViewModel) {
                 item(key = "phase_c_llama_curated_bundles") {
                     val context = LocalContext.current
                     val settings = remember { com.example.llamadroid.data.SettingsRepository(context) }
-                    com.example.llamadroid.ui.components.CuratedModelBundleSection(
-                        title = stringResource(R.string.phase_c_llama_bundles_title),
-                        description = stringResource(R.string.llama_bundles_desc),
-                        bundles = com.example.llamadroid.data.model.LlamaCuratedBundleCatalog.bundles,
+                    com.example.llamadroid.ui.components.LlamaBundleFolders(
                         onUseBundle = { _, models, _ ->
                             models.firstOrNull { it.type == ModelType.LLM }?.let { settings.setSelectedModelPath(it.path) }
                             models.firstOrNull { it.type == ModelType.VISION_PROJECTOR }?.let {
@@ -1724,13 +1721,6 @@ fun DiscoverTab(viewModel: ModelManagerViewModel) {
                                 settings.setSpeculativeMode(com.example.llamadroid.service.LlamaSpeculativeMode.DRAFT_MTP)
                             }
                         }
-                    )
-                }
-                item(key = "audio_curated_bundles") {
-                    com.example.llamadroid.ui.components.CuratedModelBundleSection(
-                        title = stringResource(R.string.audio_models_curated_title),
-                        description = stringResource(R.string.audio_models_curated_description),
-                        bundles = com.example.llamadroid.data.model.AudioCuratedBundleCatalog.bundles
                     )
                 }
             }

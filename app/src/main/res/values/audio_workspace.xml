@@ -141,10 +141,14 @@
     <string name="audio_workspace_voice_metadata">%1$s · %2$.1f s</string>
     <string name="audio_workspace_voice_incompatible">This profile does not match the selected model requirements.</string>
     <string name="audio_workspace_preview_voice">Preview voice</string>
+    <string name="audio_workspace_pause_voice">Pause preview</string>
+    <string name="audio_workspace_resume_voice">Resume preview</string>
+    <string name="audio_workspace_stop_voice">Stop preview</string>
     <string name="audio_workspace_import_voice_title">Save reference voice</string>
     <string name="audio_workspace_voice_name">Voice name</string>
     <string name="audio_workspace_default_voice_name">My voice</string>
     <string name="audio_workspace_voice_import_format">The runtime converts the source to a compatible local reference format.</string>
+    <string name="audio_workspace_reference_quality_hint">For a clearer reference, record 3–10 seconds in a quiet room with one speaker, a steady distance, and no music or echo. Normalization and denoising are optional cleanup steps; they cannot replace a clean recording.</string>
     <string name="audio_workspace_save_voice">Save voice</string>
     <string name="audio_voice_rename_title">Rename voice</string>
     <string name="audio_workspace_history_title">Generated audio</string>

@@ -93,6 +93,16 @@ object AgentRunConfigParser {
             "console", "terminal", "log" -> AgentRunUiMode.CONSOLE
             else -> error("ui must be console or web")
         }
+        val expectedUi = if (runtime == AgentLocalRuntimeType.WEB) {
+            AgentRunUiMode.WEB
+        } else {
+            AgentRunUiMode.CONSOLE
+        }
+        require(uiMode == expectedUi) {
+            "RUN_CONFIG_RUNTIME_UI_MISMATCH: runtime " +
+                runtime.name.lowercase(Locale.US) +
+                " requires ui " + expectedUi.name.lowercase(Locale.US) + "."
+        }
         val entrypoint = obj.optString("entrypoint").trim()
         require(entrypoint.isNotBlank()) { "entrypoint is required" }
         require(AgentLocalWorkspaceSupport.isSafeRelativePath(entrypoint)) {

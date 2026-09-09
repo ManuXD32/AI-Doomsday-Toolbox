@@ -17,9 +17,14 @@ import com.example.llamadroid.onnx.OnnxRuntimeBackend
 import com.example.llamadroid.service.LlamaSpeculativeMode
 import com.example.llamadroid.service.LlamaLoadMode
 import com.example.llamadroid.service.LlamaLoraSpec
+import com.example.llamadroid.service.LlamaVideoProfileLimits
+import com.example.llamadroid.service.NativeLlamaVideoSupport
 import com.example.llamadroid.service.ProcessController
 import com.example.llamadroid.service.migrateLegacyLlamaManagedSettings
 import com.example.llamadroid.service.AgentPromptComparisonStore
+import com.example.llamadroid.service.AgentHarnessPolicy
+import com.example.llamadroid.service.AgentHarnessPolicySpec
+import com.example.llamadroid.service.AgentHarnessProfile
 import com.example.llamadroid.service.WhisperOutputFormat
 import com.example.llamadroid.service.WhisperVadAssetStore
 import com.example.llamadroid.service.WhisperVadConfig
@@ -1088,6 +1093,111 @@ class SettingsRepository(private val context: Context) {
     fun setEnableVision(enabled: Boolean) {
         prefs.edit().putBoolean("enable_vision", enabled).apply()
         _enableVision.value = enabled
+    }
+
+    // Native llama.cpp video profile settings. The profile JSON is the durable
+    // saved-command representation; these preferences provide the defaults used
+    // when a new command is captured from the global LLM settings screen.
+    private val _llamaVideoEnabled = MutableStateFlow(
+        prefs.getBoolean("llama_video_enabled", false)
+    )
+    val llamaVideoEnabled = _llamaVideoEnabled.asStateFlow()
+
+    fun setLlamaVideoEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("llama_video_enabled", enabled).apply()
+        _llamaVideoEnabled.value = enabled
+    }
+
+    private val _llamaVideoFps = MutableStateFlow(
+        NativeLlamaVideoSupport.normalizeFps(
+            prefs.getFloat("llama_video_fps", NativeLlamaVideoSupport.DEFAULT_VIDEO_FPS)
+        )
+    )
+    val llamaVideoFps = _llamaVideoFps.asStateFlow()
+
+    fun setLlamaVideoFps(value: Float) {
+        val normalized = NativeLlamaVideoSupport.normalizeFps(value)
+        prefs.edit().putFloat("llama_video_fps", normalized).apply()
+        _llamaVideoFps.value = normalized
+    }
+
+    private val _llamaVideoTimestampIntervalMs = MutableStateFlow(
+        NativeLlamaVideoSupport.normalizeTimestampIntervalMs(
+            prefs.getInt(
+                "llama_video_timestamp_interval_ms",
+                NativeLlamaVideoSupport.DEFAULT_TIMESTAMP_INTERVAL_MS
+            )
+        )
+    )
+    val llamaVideoTimestampIntervalMs = _llamaVideoTimestampIntervalMs.asStateFlow()
+
+    fun setLlamaVideoTimestampIntervalMs(value: Int) {
+        val normalized = NativeLlamaVideoSupport.normalizeTimestampIntervalMs(value)
+        prefs.edit().putInt("llama_video_timestamp_interval_ms", normalized).apply()
+        _llamaVideoTimestampIntervalMs.value = normalized
+    }
+
+    private val _llamaVideoSegmentSeconds = MutableStateFlow(
+        LlamaVideoProfileLimits.normalizeSegmentSeconds(
+            prefs.getInt(
+                "llama_video_segment_seconds",
+                LlamaVideoProfileLimits.DEFAULT_SEGMENT_SECONDS
+            )
+        )
+    )
+    val llamaVideoSegmentSeconds = _llamaVideoSegmentSeconds.asStateFlow()
+
+    fun setLlamaVideoSegmentSeconds(value: Int) {
+        val normalized = LlamaVideoProfileLimits.normalizeSegmentSeconds(value)
+        prefs.edit().putInt("llama_video_segment_seconds", normalized).apply()
+        _llamaVideoSegmentSeconds.value = normalized
+    }
+
+    private val _llamaVideoMaxFrames = MutableStateFlow(
+        LlamaVideoProfileLimits.normalizeMaxFrames(
+            prefs.getInt("llama_video_max_frames", LlamaVideoProfileLimits.DEFAULT_MAX_FRAMES)
+        )
+    )
+    val llamaVideoMaxFrames = _llamaVideoMaxFrames.asStateFlow()
+
+    fun setLlamaVideoMaxFrames(value: Int) {
+        val normalized = LlamaVideoProfileLimits.normalizeMaxFrames(value)
+        prefs.edit().putInt("llama_video_max_frames", normalized).apply()
+        _llamaVideoMaxFrames.value = normalized
+    }
+
+    private val _llamaVideoMaxFps = MutableStateFlow(
+        LlamaVideoProfileLimits.normalizeMaxFps(
+            prefs.getFloat("llama_video_max_fps", LlamaVideoProfileLimits.DEFAULT_MAX_FPS)
+        )
+    )
+    val llamaVideoMaxFps = _llamaVideoMaxFps.asStateFlow()
+
+    fun setLlamaVideoMaxFps(value: Float) {
+        val normalized = LlamaVideoProfileLimits.normalizeMaxFps(value)
+        prefs.edit().putFloat("llama_video_max_fps", normalized).apply()
+        _llamaVideoMaxFps.value = normalized
+    }
+
+    /** New video settings include audio by default; callers may explicitly opt out. */
+    private val _llamaVideoAudioEnabled = MutableStateFlow(
+        prefs.getBoolean("llama_video_audio_enabled", true)
+    )
+    val llamaVideoAudioEnabled = _llamaVideoAudioEnabled.asStateFlow()
+
+    fun setLlamaVideoAudioEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("llama_video_audio_enabled", enabled).apply()
+        _llamaVideoAudioEnabled.value = enabled
+    }
+
+    private val _llamaVideoWhisperParallelEnabled = MutableStateFlow(
+        prefs.getBoolean("llama_video_whisper_parallel_enabled", false)
+    )
+    val llamaVideoWhisperParallelEnabled = _llamaVideoWhisperParallelEnabled.asStateFlow()
+
+    fun setLlamaVideoWhisperParallelEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("llama_video_whisper_parallel_enabled", enabled).apply()
+        _llamaVideoWhisperParallelEnabled.value = enabled
     }
     
     // Selected mmproj (vision projector) path
@@ -3936,6 +4046,206 @@ class SettingsRepository(private val context: Context) {
     }
     
     // ========== AI Agent Web Search Settings ==========
+
+    // ========== AI Agent Harness Settings ==========
+
+    /**
+     * Optional explicit thinking choice for the optimized harness. A nullable
+     * value is intentional: absent means that the active role/backend setting
+     * remains authoritative, while false is still a real user choice.
+     */
+    private val _agentHarnessThinkingOverride = MutableStateFlow(
+        if (prefs.contains(PREF_AGENT_HARNESS_THINKING_OVERRIDE)) {
+            prefs.getBoolean(PREF_AGENT_HARNESS_THINKING_OVERRIDE, false)
+        } else {
+            null
+        }
+    )
+    val agentHarnessThinkingOverride = _agentHarnessThinkingOverride.asStateFlow()
+
+    /** Whether the user explicitly set a harness thinking value. */
+    val hasExplicitAgentHarnessThinkingOverride: Boolean
+        get() = prefs.contains(PREF_AGENT_HARNESS_THINKING_OVERRIDE)
+
+    fun setAgentHarnessThinkingOverride(enabled: Boolean?) {
+        prefs.edit().apply {
+            if (enabled == null) {
+                remove(PREF_AGENT_HARNESS_THINKING_OVERRIDE)
+            } else {
+                putBoolean(PREF_AGENT_HARNESS_THINKING_OVERRIDE, enabled)
+            }
+        }.apply()
+        _agentHarnessThinkingOverride.value = enabled
+    }
+
+    /** Name-aligned aliases for callers that use the full setting wording. */
+    val agentHarnessThinkingEnabledOverride = agentHarnessThinkingOverride
+    val hasExplicitAgentHarnessThinkingEnabledOverride: Boolean
+        get() = hasExplicitAgentHarnessThinkingOverride
+
+    fun setAgentHarnessThinkingEnabledOverride(enabled: Boolean?) =
+        setAgentHarnessThinkingOverride(enabled)
+
+    /**
+     * Return the role preference only when it was explicitly persisted. This
+     * lets an optimized policy preserve an explicit role choice while leaving
+     * an omitted preference to the backend's current default.
+     */
+    fun getExplicitAgentThinkingEnabledForRole(role: String): Boolean? {
+        if (
+            prefs.getBoolean(PREF_AGENT_GLOBAL_OVERRIDE_ENABLED, false) &&
+            prefs.contains(PREF_AGENT_GLOBAL_OVERRIDE_THINKING_ENABLED)
+        ) {
+            return prefs.getBoolean(PREF_AGENT_GLOBAL_OVERRIDE_THINKING_ENABLED, false)
+        }
+        val key = when (role.trim().uppercase(Locale.US)) {
+            "ORCHESTRATOR" -> "agent_orchestrator_thinking_enabled"
+            "CODEBASE_SCOUT" -> "agent_codebase_scout_thinking_enabled"
+            "RESEARCHER" -> "agent_researcher_thinking_enabled"
+            "PLANNER" -> "agent_planner_thinking_enabled"
+            "CODER" -> "agent_coder_thinking_enabled"
+            "REVIEWER" -> "agent_reviewer_thinking_enabled"
+            "EXECUTOR" -> "agent_executor_thinking_enabled"
+            "SUMMARIZER" -> "agent_summarizer_thinking_enabled"
+            "VISUAL_TESTER" -> "agent_visual_tester_thinking_enabled"
+            else -> return agentHarnessThinkingOverride.value
+        }
+        return prefs.getBoolean(key, false).takeIf { prefs.contains(key) }
+            ?: agentHarnessThinkingOverride.value
+    }
+
+    private fun agentContextPreferenceKey(role: String): String? = when (
+        role.trim().uppercase(Locale.US)
+    ) {
+        "ORCHESTRATOR" -> "agent_orchestrator_ctx"
+        "CODEBASE_SCOUT" -> "agent_codebase_scout_ctx"
+        "RESEARCHER" -> "agent_researcher_ctx"
+        "PLANNER" -> "agent_planner_ctx"
+        "CODER" -> "agent_coder_ctx"
+        "REVIEWER" -> "agent_reviewer_ctx"
+        "EXECUTOR" -> "agent_executor_ctx"
+        "SUMMARIZER" -> "agent_summarizer_ctx"
+        "VISUAL_TESTER" -> "agent_visual_tester_ctx"
+        // Custom/unknown roles already inherit the Orchestrator setting in
+        // getAgentContextForRole; use the same key for explicitness detection.
+        else -> "agent_orchestrator_ctx"
+    }
+
+    private fun agentMaxOutputPreferenceKey(role: String): String? = when (
+        role.trim().uppercase(Locale.US)
+    ) {
+        "ORCHESTRATOR" -> "agent_orchestrator_max_output_tokens"
+        "CODEBASE_SCOUT" -> "agent_codebase_scout_max_output_tokens"
+        "RESEARCHER" -> "agent_researcher_max_output_tokens"
+        "PLANNER" -> "agent_planner_max_output_tokens"
+        "CODER" -> "agent_coder_max_output_tokens"
+        "REVIEWER" -> "agent_reviewer_max_output_tokens"
+        "EXECUTOR" -> "agent_executor_max_output_tokens"
+        "SUMMARIZER" -> "agent_summarizer_max_output_tokens"
+        "VISUAL_TESTER" -> "agent_visual_tester_max_output_tokens"
+        // Keep this aligned with getAgentMaxOutputTokensForRole so custom
+        // roles do not discard an explicitly saved Orchestrator limit.
+        else -> "agent_orchestrator_max_output_tokens"
+    }
+
+    fun hasExplicitAgentContextForRole(role: String): Boolean =
+        agentContextPreferenceKey(role)?.let(prefs::contains) == true
+
+    /** Whether a role-specific output limit was explicitly saved by the user. */
+    fun hasExplicitAgentMaxOutputTokensForRole(role: String): Boolean =
+        agentMaxOutputPreferenceKey(role)?.let(prefs::contains) == true
+
+    /** Name-aligned alias for callers that use the shorter output-limit wording. */
+    fun hasExplicitAgentOutputLimitForRole(role: String): Boolean =
+        hasExplicitAgentMaxOutputTokensForRole(role)
+
+    /** Whether the General card has an explicitly saved context value. */
+    fun hasExplicitAgentGlobalOverrideContextSize(): Boolean =
+        prefs.contains(PREF_AGENT_GLOBAL_OVERRIDE_CONTEXT_SIZE)
+
+    /** Whether the General card has an explicitly saved output value. */
+    fun hasExplicitAgentGlobalOverrideMaxOutputTokens(): Boolean =
+        prefs.contains(PREF_AGENT_GLOBAL_OVERRIDE_MAX_OUTPUT_TOKENS)
+
+    /**
+     * Resolve the optimized context recommendation without rewriting the
+     * stored role value. A saved role value or enabled General override is
+     * explicit and is retained without the old optimized hard ceiling.
+     */
+    fun resolveAgentHarnessContext(
+        profileId: String?,
+        role: String,
+        configuredContextSize: Int = getAgentContextForRole(role),
+        explicitContextSize: Boolean = hasExplicitAgentContextForRole(role)
+    ): Int {
+        val normalized = configuredContextSize.coerceAtLeast(AgentHarnessPolicy.MIN_CONTEXT_TOKENS)
+        val policy = resolveAgentHarnessPolicy(profileId)
+        val explicit = explicitContextSize ||
+            prefs.getBoolean(PREF_AGENT_GLOBAL_OVERRIDE_ENABLED, false)
+        return policy.resolveContextTokens(normalized, explicit)
+    }
+
+    /**
+     * Resolve an optimized output recommendation for one role. Explicit
+     * role/global values remain authoritative; the three-argument overload
+     * below is retained for callers that already have an explicit value.
+     */
+    fun resolveAgentHarnessOutputTokens(
+        profileId: String?,
+        role: String,
+        stage: com.example.llamadroid.service.AgentHarnessStage,
+        configuredMaxOutputTokens: Int,
+        explicitMaxOutputTokens: Boolean = hasExplicitAgentMaxOutputTokensForRole(role)
+    ): Int {
+        val normalized = configuredMaxOutputTokens.coerceAtLeast(AgentHarnessPolicy.MIN_OUTPUT_TOKENS)
+        val explicit = explicitMaxOutputTokens ||
+            prefs.getBoolean(PREF_AGENT_GLOBAL_OVERRIDE_ENABLED, false)
+        return resolveAgentHarnessPolicy(profileId)
+            .resolveOutputTokens(stage, normalized, explicit)
+    }
+
+    /**
+     * Compatibility overload for callers whose configured value is already
+     * known to be explicit. New dispatch code should use the role-aware
+     * overload so Optimized recommendations can apply only when a value is
+     * absent.
+     */
+    fun resolveAgentHarnessOutputTokens(
+        profileId: String?,
+        stage: com.example.llamadroid.service.AgentHarnessStage,
+        configuredMaxOutputTokens: Int
+    ): Int = resolveAgentHarnessPolicy(profileId)
+        .resolveOutputTokens(
+            stage = stage,
+            configuredOutputTokens = configuredMaxOutputTokens,
+            explicit = true
+        )
+
+    /** Optimized defaults to no thinking, while explicit role/global choices win. */
+    fun resolveAgentHarnessThinkingEnabled(
+        profileId: String?,
+        role: String,
+        configuredThinkingEnabled: Boolean = getAgentThinkingEnabledForRole(role)
+    ): Boolean {
+        val policy = resolveAgentHarnessPolicy(profileId)
+        if (!policy.isOptimized) return configuredThinkingEnabled
+        return getExplicitAgentThinkingEnabledForRole(role)
+            ?: policy.thinkingOverride
+            ?: false
+    }
+
+    /** Resolve policy without making the policy depend on Android preferences. */
+    fun resolveAgentHarnessPolicy(profileId: String?): AgentHarnessPolicySpec =
+        AgentHarnessPolicy.forProfile(
+            profileId = profileId,
+            explicitThinkingEnabled = agentHarnessThinkingOverride.value
+        )
+
+    fun resolveAgentHarnessPolicy(profile: AgentHarnessProfile): AgentHarnessPolicySpec =
+        AgentHarnessPolicy.forProfile(
+            profile = profile,
+            explicitThinkingEnabled = agentHarnessThinkingOverride.value
+        )
     
     // Web Search Enabled
     private val _agentWebSearchEnabled = MutableStateFlow(prefs.getBoolean("agent_web_search_enabled", true))
@@ -4695,6 +5005,7 @@ class SettingsRepository(private val context: Context) {
         private const val PREF_AGENT_GLOBAL_OVERRIDE_MAX_OUTPUT_TOKENS = "agent_global_override_max_output_tokens"
         private const val PREF_AGENT_GLOBAL_OVERRIDE_THINKING_ENABLED = "agent_global_override_thinking_enabled"
         private const val PREF_AGENT_GLOBAL_OVERRIDE_VISION_ENABLED = "agent_global_override_vision_enabled"
+        private const val PREF_AGENT_HARNESS_THINKING_OVERRIDE = "agent_harness_thinking_override"
         const val PDF_BACKEND_OLLAMA = "ollama"
         const val PDF_BACKEND_LLAMA_SERVER = "llama-server"
         const val PDF_BACKEND_LLAMA_SWAP = "llama-swap"

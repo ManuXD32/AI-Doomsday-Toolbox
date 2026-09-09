@@ -145,6 +145,9 @@ fun AudioWorkspaceScreen(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
+    DisposableEffect(controller, viewModel.section) {
+        onDispose { controller.stopVoicePreview() }
+    }
     LaunchedEffect(draftStore) {
         viewModel.restoreDraft(draftStore.load())
     }
@@ -316,7 +319,10 @@ fun AudioWorkspaceScreen(
                     },
                     onRename = { showVoiceRenameDialog = it },
                     onDelete = { profileId -> pendingVoiceDelete = runtimeState.voiceProfiles.firstOrNull { it.id == profileId } },
-                    onPreview = controller::previewVoice
+                    onPreview = controller::previewVoice,
+                    onPause = controller::pauseVoicePreview,
+                    onResume = controller::resumeVoicePreview,
+                    onStop = controller::stopVoicePreview
                 )
                 AudioWorkspaceSection.HISTORY -> com.example.llamadroid.ui.audio.library.AudioLibraryScreen(
                     onUseAsInput = { path, mediaKind ->
@@ -1141,7 +1147,10 @@ private fun VoicesWorkspace(
     onRecord: () -> Unit,
     onRename: (AudioVoiceProfileUi) -> Unit,
     onDelete: (String) -> Unit,
-    onPreview: (String) -> Unit
+    onPreview: (String) -> Unit,
+    onPause: (String) -> Unit,
+    onResume: (String) -> Unit,
+    onStop: () -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1196,7 +1205,17 @@ private fun VoicesWorkspace(
             }
         } else {
             items(runtimeState.voiceProfiles, key = { it.id }) { profile ->
-                VoiceProfileCard(profile, onRename, onDelete, onPreview)
+                VoiceProfileCard(
+                    profile = profile,
+                    activeProfileId = runtimeState.activeVoiceProfileId,
+                    playbackState = runtimeState.voicePlaybackState,
+                    onRename = onRename,
+                    onDelete = onDelete,
+                    onPreview = onPreview,
+                    onPause = onPause,
+                    onResume = onResume,
+                    onStop = onStop
+                )
             }
         }
     }
@@ -1205,10 +1224,16 @@ private fun VoicesWorkspace(
 @Composable
 private fun VoiceProfileCard(
     profile: AudioVoiceProfileUi,
+    activeProfileId: String?,
+    playbackState: AudioVoicePlaybackState,
     onRename: (AudioVoiceProfileUi) -> Unit,
     onDelete: (String) -> Unit,
-    onPreview: (String) -> Unit
+    onPreview: (String) -> Unit,
+    onPause: (String) -> Unit,
+    onResume: (String) -> Unit,
+    onStop: () -> Unit
 ) {
+    val isActive = activeProfileId == profile.id && playbackState != AudioVoicePlaybackState.IDLE
     AppSectionCard(shape = AppChromeDefaults.InnerCardShape) {
         Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = AppChromeDefaults.CompactShape) {
@@ -1224,8 +1249,49 @@ private fun VoiceProfileCard(
                 Text(profile.sourceLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (!profile.isCompatible) Text(stringResource(R.string.audio_workspace_voice_incompatible), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
             }
-            IconButton(onClick = { onPreview(profile.id) }) { Icon(Icons.Default.PlayArrow, contentDescription = stringResource(R.string.audio_workspace_preview_voice)) }
         }
+        ResponsiveActionGroup(
+            actions = buildList {
+                when {
+                    !isActive || playbackState == AudioVoicePlaybackState.IDLE -> add(
+                        ResponsiveAction(
+                            label = stringResource(R.string.audio_workspace_preview_voice),
+                            onClick = { onPreview(profile.id) },
+                            icon = Icons.Default.PlayArrow,
+                            contentDescription = stringResource(R.string.audio_workspace_preview_voice),
+                            style = ResponsiveActionStyle.Secondary
+                        )
+                    )
+                    playbackState == AudioVoicePlaybackState.PLAYING -> add(
+                        ResponsiveAction(
+                            label = stringResource(R.string.audio_workspace_pause_voice),
+                            onClick = { onPause(profile.id) },
+                            icon = Icons.Default.Pause,
+                            contentDescription = stringResource(R.string.audio_workspace_pause_voice),
+                            style = ResponsiveActionStyle.Secondary
+                        )
+                    )
+                    playbackState == AudioVoicePlaybackState.PAUSED -> add(
+                        ResponsiveAction(
+                            label = stringResource(R.string.audio_workspace_resume_voice),
+                            onClick = { onResume(profile.id) },
+                            icon = Icons.Default.PlayArrow,
+                            contentDescription = stringResource(R.string.audio_workspace_resume_voice),
+                            style = ResponsiveActionStyle.Secondary
+                        )
+                    )
+                }
+                if (isActive) add(
+                    ResponsiveAction(
+                        label = stringResource(R.string.audio_workspace_stop_voice),
+                        onClick = onStop,
+                        icon = Icons.Default.Stop,
+                        contentDescription = stringResource(R.string.audio_workspace_stop_voice),
+                        style = ResponsiveActionStyle.Text
+                    )
+                )
+            }
+        )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             TextButton(onClick = { onRename(profile) }) { Icon(Icons.Default.Edit, contentDescription = null); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.action_rename)) }
             TextButton(onClick = { onDelete(profile.id) }) { Icon(Icons.Default.Delete, contentDescription = null); Spacer(Modifier.width(4.dp)); Text(stringResource(R.string.action_delete)) }
@@ -1266,6 +1332,7 @@ private fun VoiceImportDialog(
                 SwitchRow(stringResource(R.string.audio_workspace_normalize), stringResource(R.string.audio_workspace_normalize_hint), normalize) { normalize = it }
                 SwitchRow(stringResource(R.string.audio_workspace_denoise), stringResource(R.string.audio_workspace_denoise_hint), denoise) { denoise = it }
                 Text(stringResource(R.string.audio_workspace_voice_import_format), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.audio_workspace_reference_quality_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         },
         confirmButton = {

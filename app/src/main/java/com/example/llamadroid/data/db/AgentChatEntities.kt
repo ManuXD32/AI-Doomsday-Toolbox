@@ -26,6 +26,8 @@ data class AgentConversationEntity(
     val runEntrypointPath: String? = null,
     val runUiMode: String = "CONSOLE",
     val lastRunProfileJson: String = "",
+    /** Conversation-scoped execution policy. Existing rows migrate to legacy. */
+    val executionProfile: String = AgentExecutionProfile.LEGACY,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )

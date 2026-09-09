@@ -21,6 +21,8 @@ data class CuratedBundleFile(
     val sizeBytes: Long,
     val sha256: String,
     val license: String,
+    /** Runtime vision capability for the model represented by this file. */
+    val isVision: Boolean = false,
     val strictSize: Boolean = false,
     val note: String = "",
     val downloadUrlOverride: String? = null,
@@ -63,6 +65,15 @@ data class CuratedBundleFile(
     /** Payload digest retained separately from source identity for verification. */
     val artifactDigest: String get() = sha256
 
+    /**
+     * Capability passed to the download finalizer. Projector rows retain the
+     * historical type-based marker; curated main files opt in explicitly so
+     * video/vision bundles cannot lose the capability at install time.
+     */
+    val runtimeIsVision: Boolean
+        get() = isVision || type == ModelType.VISION_PROJECTOR ||
+            type == ModelType.MMPROJ || type == ModelType.VISION
+
     fun installedFilename(prefix: String): String {
         val cleanPrefix = sanitizeCuratedBundlePrefix(prefix)
         // Shared components use a digest-derived canonical name so a second
@@ -98,7 +109,9 @@ data class CuratedModelBundle(
     @StringRes val descriptionRes: Int,
     val files: List<CuratedBundleFile>,
     val capabilityRes: List<Int> = emptyList(),
-    val defaultPrefix: String = ""
+    val defaultPrefix: String = "",
+    /** Runtime capability, independent of translated titles and install prefixes. */
+    val videoPolicy: VideoRecognitionPolicy? = null
 ) {
     init {
         require(id.matches(Regex("[a-z0-9][a-z0-9_-]*")))
@@ -108,6 +121,39 @@ data class CuratedModelBundle(
     }
 
     val totalBytes: Long get() = files.sumOf { it.sizeBytes }
+}
+
+/**
+ * A bundle carries vision provenance when it includes a vision projector (or
+ * an equivalent vision model type) or when it has an explicit video policy.
+ * This is derived from the catalog relationship, rather than UI labels.
+ */
+val CuratedModelBundle.isVisionCapable: Boolean
+    get() = videoPolicy != null || files.any {
+        it.type == ModelType.VISION_PROJECTOR ||
+            it.type == ModelType.MMPROJ ||
+            it.type == ModelType.VISION
+    }
+
+/** Returns the vision marker that should be carried into installed metadata. */
+fun CuratedModelBundle.runtimeIsVision(file: CuratedBundleFile): Boolean =
+    file.runtimeIsVision || (isVisionCapable && file.type == ModelType.LLM)
+
+/**
+ * Finds already-installed curated vision rows whose durable marker predates
+ * the catalog capability contract. Matching still requires the same verified
+ * filename, type, size, and downloaded state used by the bundle UI.
+ */
+fun curatedVisionRepairTargets(
+    bundle: CuratedModelBundle,
+    prefix: String,
+    installedModels: List<ModelEntity>
+): List<ModelEntity> = bundle.files.mapNotNull { file ->
+    if (!bundle.runtimeIsVision(file)) return@mapNotNull null
+    val expectedName = file.installedFilename(prefix)
+    installedModels.firstOrNull { model ->
+        !model.isVision && file.matchesVerifiedInstalledModel(expectedName, model)
+    }
 }
 
 fun sanitizeCuratedBundlePrefix(value: String): String {

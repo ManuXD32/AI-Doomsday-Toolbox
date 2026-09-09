@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="llm_video_settings_title">Entrada de vídeo</string>
+    <string name="llm_video_settings_desc">Activar la entrada de vídeo para este modelo compatible con visión.</string>
+    <string name="llm_video_server_fps">FPS de vídeo del servidor: %1$.1f</string>
+    <string name="llm_video_timestamp_interval">Intervalo de marcas de tiempo: %1$d ms</string>
+    <string name="llm_video_segment_seconds">Duración del segmento de vídeo largo: %1$d segundos</string>
+    <string name="llm_video_segment_recommendation">Recomendado para teléfonos sencillos: %1$d segundos mantienen acotada cada solicitud.</string>
+    <string name="llm_video_max_frames">Fotogramas máximos por segmento: %1$d</string>
+    <string name="llm_video_max_fps">FPS máximos de extracción: %1$.1f</string>
+    <string name="llm_video_audio_title">Incluir audio del vídeo</string>
+    <string name="llm_video_audio_desc">Enviar la pista de audio cuando el servidor seleccionado admita audio directo.</string>
+    <string name="llm_video_whisper_parallel_title">Procesar el audio con Whisper en paralelo</string>
+    <string name="llm_video_whisper_parallel_desc">Usar Whisper junto al procesamiento visual cuando haya un modelo Whisper configurado.</string>
+    <string name="llm_video_low_end_warning">Los segmentos largos, más fotogramas y el audio en paralelo usan más memoria en teléfonos sencillos.</string>
+    <string name="video_profile_fps">Frecuencia de muestreo: %1$.1f FPS</string>
+    <string name="video_profile_timestamp">Intervalo de marcas de tiempo: %1$d ms</string>
+    <string name="video_profile_sampling_hint">Se guarda con este servidor local. Los vídeos largos pueden usar una frecuencia menor para respetar los límites de fotogramas y contexto.</string>
+</resources>

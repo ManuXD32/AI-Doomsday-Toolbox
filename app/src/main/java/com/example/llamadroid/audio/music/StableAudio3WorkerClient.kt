@@ -30,6 +30,7 @@ internal class StableAudio3WorkerClient(private val context: Context) {
         var remote: Messenger? = null
         var bound = false
         val workerPid = java.util.concurrent.atomic.AtomicInteger(0)
+        var lastStage = "starting"
         val reply = Messenger(object : Handler(Looper.getMainLooper()) {
             override fun handleMessage(message: Message) {
                 if (!StableAudio3WorkerProtocol.accepted(message) || StableAudio3WorkerProtocol.requestId(message) != id) return
@@ -38,18 +39,23 @@ internal class StableAudio3WorkerClient(private val context: Context) {
                     .takeIf { it > 0 && it != Process.myPid() }
                     ?.let { workerPid.set(it) }
                 when (message.what) {
-                    StableAudio3WorkerProtocol.MSG_PROGRESS -> progress.trySend(Triple(
-                        data.getString(StableAudio3WorkerProtocol.KEY_STAGE).orEmpty(),
+                    StableAudio3WorkerProtocol.MSG_PROGRESS -> {
+                        lastStage = data.getString(StableAudio3WorkerProtocol.KEY_STAGE).orEmpty()
+                        progress.trySend(Triple(lastStage,
                         data.getInt(StableAudio3WorkerProtocol.KEY_COMPLETED).coerceAtLeast(0),
                         data.getInt(StableAudio3WorkerProtocol.KEY_TOTAL).coerceAtLeast(0)))
+                    }
                     StableAudio3WorkerProtocol.MSG_COMPLETE -> try {
                         result.complete(StableAudio3Result.fromJson(JSONObject(
                             data.getString(StableAudio3WorkerProtocol.KEY_RESULT_JSON) ?: error("output_invalid"))))
-                    } catch (_: Exception) { result.completeExceptionally(IllegalStateException("output_invalid")) }
+                    } catch (_: Exception) { result.completeExceptionally(StableAudio3Failure.fromNative("output_invalid", lastStage)) }
                     StableAudio3WorkerProtocol.MSG_ERROR -> {
                         val code = data.getString(StableAudio3WorkerProtocol.KEY_ERROR_CODE).orEmpty()
                         if (code == StableAudio3WorkerProtocol.ERROR_CANCELLED) result.completeExceptionally(CancellationException("Audio cancelled"))
-                        else result.completeExceptionally(IllegalStateException(code.takeIf { it.matches(Regex("[a-z0-9_:-]{1,100}")) } ?: "native_pipeline_failed"))
+                        else result.completeExceptionally(StableAudio3Failure.fromWire(code,
+                            data.getString(StableAudio3WorkerProtocol.KEY_STAGE) ?: lastStage,
+                            if (data.containsKey(StableAudio3WorkerProtocol.KEY_NATIVE_STATUS))
+                                data.getInt(StableAudio3WorkerProtocol.KEY_NATIVE_STATUS) else null))
                     }
                 }
             }
@@ -60,7 +66,7 @@ internal class StableAudio3WorkerClient(private val context: Context) {
             override fun onBindingDied(name: ComponentName) { disconnected() }
             override fun onNullBinding(name: ComponentName) { disconnected() }
             private fun disconnected() {
-                val error = IllegalStateException("worker_process_died")
+                val error = StableAudio3Failure.fromNative("worker_process_died", lastStage)
                 connected.completeExceptionally(error)
                 result.completeExceptionally(error)
             }

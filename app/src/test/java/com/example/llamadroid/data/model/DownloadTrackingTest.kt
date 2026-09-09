@@ -55,6 +55,43 @@ class DownloadTrackingTest {
     }
 
     @Test
+    fun `vision capability survives persisted pending task recovery`() {
+        val pending = PendingDownload(
+            filename = "video-model.gguf",
+            repoId = "ggml-org/video-model",
+            progressKey = "video-task",
+            type = ModelType.LLM,
+            destPath = "/tmp/video-model.gguf",
+            isVision = true
+        )
+
+        val persisted = pending.toDownloadTaskEntity(
+            downloadId = "video-task",
+            url = "https://example.invalid/video-model.gguf"
+        )
+
+        assertTrue(persisted.isVision)
+        assertTrue(persisted.toPendingDownload().isVision)
+
+        val audioPending = pending.copy(
+            filename = "speech-model.gguf",
+            repoId = "ggml-org/speech-model",
+            progressKey = "speech-task",
+            type = ModelType.LLAMA_TTS,
+            destPath = "/tmp/speech-model.gguf",
+            isVision = false,
+            artifactFamily = AudioModelSupport.FAMILY_POCKET_TTS,
+            artifactRole = AudioModelSupport.ROLE_MAIN
+        )
+        val persistedAudio = audioPending.toDownloadTaskEntity(
+            downloadId = "speech-task",
+            url = "https://example.invalid/speech-model.gguf"
+        )
+        assertEquals(AudioModelSupport.FAMILY_POCKET_TTS, persistedAudio.artifactFamily)
+        assertEquals(AudioModelSupport.ROLE_MAIN, persistedAudio.toPendingDownload().artifactRole)
+    }
+
+    @Test
     fun `litert pending download keeps exact progress key for cancellation`() {
         val progressKey = "litert:live|owner/repo|model.litertlm"
 

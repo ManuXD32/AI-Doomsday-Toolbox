@@ -8,6 +8,9 @@ import androidx.room.Query
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
+/** Maximum number of persisted chat messages hydrated into one UI history page. */
+const val AGENT_CONVERSATION_HISTORY_PAGE_SIZE = 200
+
 @Dao
 interface AgentChatDao {
     
@@ -60,8 +63,27 @@ interface AgentChatDao {
     @Query("UPDATE agent_conversations SET planningModeEnabled = :enabled, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updatePlanningMode(id: Long, enabled: Boolean, updatedAt: Long = System.currentTimeMillis())
 
+    @Query("UPDATE agent_conversations SET executionProfile = :executionProfile, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateExecutionProfile(
+        id: Long,
+        executionProfile: String,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
     @Query("UPDATE agent_conversations SET resumeState = :resumeState, lastStopReason = :reason, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateResumeState(id: Long, resumeState: String, reason: String?, updatedAt: Long = System.currentTimeMillis())
+
+    /** Conditional projection update: idle cleanup must never erase a committed pause or question. */
+    @Query(
+        "UPDATE agent_conversations SET resumeState = :resumeState, lastStopReason = :reason, updatedAt = :updatedAt " +
+            "WHERE id = :id AND resumeState = 'IDLE'"
+    )
+    suspend fun updateResumeStateIfIdle(
+        id: Long,
+        resumeState: String,
+        reason: String?,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
     
     @Query("UPDATE agent_conversations SET updatedAt = :updatedAt WHERE id = :id")
     suspend fun touchConversation(id: Long, updatedAt: Long = System.currentTimeMillis())
@@ -128,6 +150,81 @@ interface AgentChatDao {
     @Query("SELECT * FROM agent_messages WHERE conversationId = :conversationId ORDER BY sequenceNumber ASC")
     suspend fun getMessagesForConversationSync(conversationId: Long): List<AgentMessageEntity>
 
+    /**
+     * Returns the newest bounded page in descending order. The caller requests one extra
+     * row to determine whether an older page exists; the full history query above remains
+     * available for exports and legacy restoration.
+     */
+    @Query(
+        "SELECT * FROM agent_messages " +
+            "WHERE conversationId = :conversationId " +
+            "ORDER BY sequenceNumber DESC, id DESC LIMIT :limit"
+    )
+    fun getRecentMessagesForConversation(conversationId: Long, limit: Int): Flow<List<AgentMessageEntity>>
+
+    @Query(
+        "SELECT * FROM agent_messages " +
+            "WHERE conversationId = :conversationId " +
+            "ORDER BY sequenceNumber DESC, id DESC LIMIT :limit"
+    )
+    suspend fun getRecentMessagesForConversationSync(
+        conversationId: Long,
+        limit: Int
+    ): List<AgentMessageEntity>
+
+    /** Returns rows older than the supplied inclusive timeline cursor, newest first. */
+    @Query(
+        "SELECT * FROM agent_messages " +
+            "WHERE conversationId = :conversationId AND " +
+            "(sequenceNumber < :beforeSequenceNumber OR " +
+            "(sequenceNumber = :beforeSequenceNumber AND id < :beforeMessageId)) " +
+            "ORDER BY sequenceNumber DESC, id DESC LIMIT :limit"
+    )
+    suspend fun getOlderMessagesForConversation(
+        conversationId: Long,
+        beforeSequenceNumber: Int,
+        beforeMessageId: Long,
+        limit: Int
+    ): List<AgentMessageEntity>
+
+    /** Returns rows newer than the supplied inclusive timeline cursor, oldest first. */
+    @Query(
+        "SELECT * FROM agent_messages " +
+            "WHERE conversationId = :conversationId AND " +
+            "(sequenceNumber > :afterSequenceNumber OR " +
+            "(sequenceNumber = :afterSequenceNumber AND id > :afterMessageId)) " +
+            "ORDER BY sequenceNumber ASC, id ASC LIMIT :limit"
+    )
+    suspend fun getNewerMessagesForConversation(
+        conversationId: Long,
+        afterSequenceNumber: Int,
+        afterMessageId: Long,
+        limit: Int
+    ): List<AgentMessageEntity>
+
+    @Query("SELECT * FROM agent_messages WHERE originalId = :originalId LIMIT 1")
+    suspend fun getMessageByOriginalId(originalId: String): AgentMessageEntity?
+
+    @Query(
+        "SELECT * FROM agent_messages WHERE conversationId = :conversationId " +
+            "AND role = 'tool' AND toolName = :toolName AND toolCallId = :toolCallId LIMIT 1"
+    )
+    suspend fun getToolMessage(
+        conversationId: Long,
+        toolName: String,
+        toolCallId: String
+    ): AgentMessageEntity?
+
+    /** Clears only tool approval cards that have not received a user decision. */
+    @Query(
+        "UPDATE agent_messages SET needsApproval = 0, isApproved = 0 " +
+            "WHERE conversationId = :conversationId AND needsApproval = 1 AND isApproved IS NULL"
+    )
+    suspend fun cancelPendingToolApprovals(conversationId: Long): Int
+
+    @Query("SELECT COALESCE(MAX(sequenceNumber), 0) FROM agent_messages WHERE conversationId = :conversationId")
+    suspend fun getMaxMessageSequence(conversationId: Long): Int
+
     @Query("SELECT * FROM agent_messages WHERE invocationId = :invocationId ORDER BY sequenceNumber ASC")
     fun observeMessagesForInvocation(invocationId: String): Flow<List<AgentMessageEntity>>
 
@@ -160,6 +257,23 @@ interface AgentChatDao {
     
     @Query("DELETE FROM agent_messages WHERE conversationId = :conversationId AND timestamp >= :afterTimestamp")
     suspend fun deleteMessagesAfter(conversationId: Long, afterTimestamp: Long)
+
+    /**
+     * Deletes the selected message and every later message using the same stable ordering as
+     * history paging. The comparison is inclusive at the supplied (sequenceNumber, id) cursor;
+     * callers that retain the selected message can pass the next message's cursor instead.
+     */
+    @Query(
+        "DELETE FROM agent_messages " +
+            "WHERE conversationId = :conversationId AND " +
+            "(sequenceNumber > :fromSequenceNumber OR " +
+            "(sequenceNumber = :fromSequenceNumber AND id >= :fromMessageId))"
+    )
+    suspend fun deleteMessagesAtOrAfter(
+        conversationId: Long,
+        fromSequenceNumber: Int,
+        fromMessageId: Long
+    ): Int
     
     // ========== Utilities ==========
     
@@ -228,6 +342,36 @@ interface AgentChatDao {
         conversationId: Long,
         limit: Int = 100
     ): List<AgentProjectEventEntity>
+
+    /**
+     * Returns the latest persisted model/tool boundary used by cold recovery.
+     * UI/debug events are intentionally excluded so a later screen event cannot
+     * hide an interrupted generation, while a completed generation suppresses
+     * stale open turn contexts.
+     */
+    @Query(
+        """
+        SELECT * FROM agent_project_events
+        WHERE conversationId = :conversationId
+          AND eventType IN (
+              'chat_message_assistant',
+              'generation_finished',
+              'tool_call',
+              'tool_output_prepared',
+              'tool_result',
+              'tool_success',
+              'tool_failure',
+              'tool_error',
+              'agent_session_end',
+              'agent_stop'
+          )
+        ORDER BY timestamp DESC, id DESC
+        LIMIT 1
+        """
+    )
+    suspend fun getLatestAgentTurnBoundaryEvent(
+        conversationId: Long
+    ): AgentProjectEventEntity?
 
     @Query(
         """

@@ -165,6 +165,12 @@ class ProcessController {
             }
         }
 
+        // MTMD video settings are emitted only for an explicitly video-enabled
+        // launch.  The runtime directories are resolved by LlamaService and are
+        // intentionally passed as private session paths rather than inferred from
+        // a fixed app-data location in the command builder.
+        args.addAll(NativeLlamaVideoSupport.commandArgs(config))
+
         if (config.effectiveLoraSpecs().isNotEmpty() && !managedCustomFlags.containsLoraFlag) {
             args.addAll(buildLlamaLoraArgs(config.effectiveLoraSpecs()))
         }
@@ -421,7 +427,18 @@ class ProcessController {
                 containsLoraFlag = managedArgs.containsLoraFlag
             )
                 .let { withLoras ->
-                    normalizeManagedLlamaLoadModeArgs(withLoras, managedArgs.loadMode)
+                    appendVideoArgsIfNeeded(
+                        args = withLoras,
+                        config = config,
+                        // The helper removes and re-adds typed flags, so it is
+                        // safe to run even when the template already expands
+                        // {video_args}; this also replaces stale flags that
+                        // appear alongside the placeholder.
+                        enabled = config.videoEnabled
+                    )
+                }
+                .let { withVideo ->
+                    normalizeManagedLlamaLoadModeArgs(withVideo, managedArgs.loadMode)
                 }
         }
         if (renderedArgs.isEmpty()) return defaultArgs
@@ -470,6 +487,7 @@ class ProcessController {
         val speculativeArgs = buildSpeculativeArgs(speculativeConfig)
         val mtpArgs = if (config.speculativeMode == LlamaSpeculativeMode.DRAFT_MTP) speculativeArgs else emptyList()
         val nativeToolsArgs = buildNativeToolsArgs(config.nativeToolsEnabled)
+        val videoArgs = NativeLlamaVideoSupport.commandArgs(config)
         // Preserve the historical rule: any explicit custom LoRA flag owns the
         // adapter selection. This matters for legacy templates that expand both
         // {custom_flags} and {lora_args} before their profile is saved again.
@@ -524,6 +542,7 @@ class ProcessController {
             "{speculative_args}" to buildCommandString(speculativeArgs),
             "{mtp_args}" to buildCommandString(mtpArgs),
             "{native_tools_args}" to buildCommandString(nativeToolsArgs),
+            "{video_args}" to buildCommandString(videoArgs),
             "{lora_args}" to buildCommandString(loraArgs),
             "{load_mode_args}" to buildCommandString(loadModeArgs),
             "{load_mode}" to managedCustomFlags.loadMode.value,
@@ -698,6 +717,61 @@ class ProcessController {
     private fun appendNativeToolsArgsIfNeeded(args: List<String>, enabled: Boolean): List<String> {
         if (!enabled || hasAnyCommandFlag(args, setOf("--tools"))) return args
         return args + buildNativeToolsArgs(enabled = true)
+    }
+
+    internal fun appendVideoArgsIfNeeded(
+        args: List<String>,
+        config: LlamaConfig,
+        enabled: Boolean
+    ): List<String> {
+        if (!enabled) return args
+        val generated = NativeLlamaVideoSupport.commandArgs(config)
+        if (generated.isEmpty()) return args
+
+        // Typed video values own the flags they emit.  A custom command can be
+        // reused for several keyed sessions, so remove an older typed value
+        // before appending the current session's value.  Runtime directory
+        // flags are emitted only when the typed config owns that directory;
+        // this deliberately leaves keyed-session custom paths intact when the
+        // typed path is null.
+        val managedFlags = buildSet {
+            var generatedIndex = 0
+            while (generatedIndex < generated.size) {
+                add(generated[generatedIndex].substringBefore('='))
+                generatedIndex += if (generatedIndex + 1 < generated.size) 2 else 1
+            }
+        }
+        val filtered = mutableListOf<String>()
+        var inputIndex = 0
+        while (inputIndex < args.size) {
+            val argument = args[inputIndex]
+            val flagName = argument.substringBefore('=')
+            if (flagName !in managedFlags) {
+                filtered += argument
+                inputIndex += 1
+                continue
+            }
+
+            // Inline values are contained in the flag.  For the separated
+            // spelling, consume one following value only when it is present
+            // and does not look like another option, preserving malformed
+            // input for the native parser to report.
+            val hasInlineValue = '=' in argument
+            val hasSeparatedValue = !hasInlineValue && inputIndex + 1 < args.size &&
+                !args[inputIndex + 1].startsWith("-")
+            inputIndex += if (hasSeparatedValue) 2 else 1
+        }
+
+        val result = filtered.toMutableList()
+        var index = 0
+        while (index < generated.size) {
+            val flag = generated[index]
+            val value = generated.getOrNull(index + 1)
+            result += flag
+            if (value != null) result += value
+            index += if (value == null) 1 else 2
+        }
+        return result
     }
 
     fun binarySupportsMtpSpeculative(binaryFile: File): Boolean {
@@ -889,7 +963,9 @@ class ProcessController {
             launchGeneration
         }
         
-        val args = customArgs ?: getCommand(binaryPath, config)
+        val args = customArgs?.let {
+            appendVideoArgsIfNeeded(it, config, enabled = config.videoEnabled)
+        } ?: getCommand(binaryPath, config)
         val ownershipWorkingDir = runtimeWorkingDir
             ?: nativeToolsWorkspaceDir?.takeIf { config.nativeToolsEnabled }
             ?: filesDir
@@ -1619,6 +1695,16 @@ internal fun migrateLegacyLlamaManagedSettings(
 internal fun filterManagedLlamaCustomFlags(
     args: List<String>,
     config: LlamaConfig
+): List<String> = filterManagedLlamaCustomFlags(
+    args = args,
+    config = config,
+    stripVideoRuntimePaths = false
+)
+
+internal fun filterManagedLlamaCustomFlags(
+    args: List<String>,
+    config: LlamaConfig,
+    stripVideoRuntimePaths: Boolean
 ): List<String> {
     val loadAndLora = resolveManagedLlamaCustomFlags(
         args = args,
@@ -1626,6 +1712,19 @@ internal fun filterManagedLlamaCustomFlags(
     )
     val valueFlags = buildSet {
         add("--sleep-idle-seconds")
+        if (config.videoEnabled) {
+            add("--video-fps")
+            add("--video-timestamp-interval")
+        }
+        // A durable launch snapshot must never retain the cache paths used by
+        // a short-lived video runtime.  Runtime IPC leaves the flags owned by
+        // a keyed custom command intact when the typed path is null.
+        if (stripVideoRuntimePaths || (config.videoEnabled && !config.videoFfmpegDir.isNullOrBlank())) {
+            add("--video-ffmpeg-dir")
+        }
+        if (stripVideoRuntimePaths || (config.videoEnabled && !config.mediaPath.isNullOrBlank())) {
+            add("--media-path")
+        }
         if (config.parallel != null) {
             add("--parallel")
             add("-np")

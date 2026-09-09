@@ -6,9 +6,27 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
+import java.io.StringReader
 
 class LlamaServerChatServiceTest {
+    @Test
+    fun `required action request keeps one tool and leaves ordinary requests unchanged`() {
+        val tools = listOf(AgentTool("question", "Ask a blocker", emptyMap(), emptyList()))
+        fun payload(required: Boolean, available: List<AgentTool> = tools) =
+            buildLlamaServerChatRequestPayload(
+                messages = emptyList(), tools = available, thinkingEnabled = false,
+                requestOptions = LlamaServerRequestOptions(requireToolCall = required)
+            )
+        val required = payload(true)
+        assertEquals("required", required["tool_choice"])
+        assertEquals(false, required["parallel_tool_calls"])
+        assertEquals("auto", payload(false)["tool_choice"])
+        assertFalse(payload(false).containsKey("parallel_tool_calls"))
+        assertFalse(payload(true, emptyList()).containsKey("tool_choice"))
+    }
+
     @Test
     fun `SSE failure classification never labels cancellation as malformed JSON`() {
         assertEquals(
@@ -23,6 +41,86 @@ class LlamaServerChatServiceTest {
             SseProcessingFailureKind.PROCESSING,
             classifySseProcessingFailure(IllegalStateException("callback failed"))
         )
+    }
+
+    @Test
+    fun `cumulative message fallback contributes only its new suffix`() {
+        assertEquals("first", llamaServerFallbackSnapshotDelta("", "first"))
+        assertEquals(" second", llamaServerFallbackSnapshotDelta("first", "first second"))
+        assertEquals("", llamaServerFallbackSnapshotDelta("first second", "first second"))
+        assertEquals("", llamaServerFallbackSnapshotDelta("first second", "first"))
+        assertEquals("independent", llamaServerFallbackSnapshotDelta("first", "independent"))
+    }
+
+    @Test
+    fun `terminal finish reasons are recognized before a server can overrun the stream`() {
+        assertTrue(isTerminalLlamaServerFinishReason("stop"))
+        assertTrue(isTerminalLlamaServerFinishReason("tool_calls"))
+        assertTrue(isTerminalLlamaServerFinishReason("length"))
+        assertTrue(isTerminalLlamaServerFinishReason("max_tokens"))
+        assertFalse(isTerminalLlamaServerFinishReason("null"))
+        assertFalse(isTerminalLlamaServerFinishReason(null))
+    }
+
+    @Test
+    fun `post-terminal non-data lines stop before the wire limit`() {
+        assertEquals(
+            LlamaServerTerminalLineAction.SKIP_BLANK,
+            classifyLlamaServerTerminalLine("", blankLinesSeen = 0)
+        )
+        assertEquals(
+            LlamaServerTerminalLineAction.SKIP_BLANK,
+            classifyLlamaServerTerminalLine("\r", blankLinesSeen = 31)
+        )
+        assertEquals(
+            LlamaServerTerminalLineAction.STOP,
+            classifyLlamaServerTerminalLine("", blankLinesSeen = 32)
+        )
+        assertEquals(
+            LlamaServerTerminalLineAction.STOP,
+            classifyLlamaServerTerminalLine(": heartbeat", blankLinesSeen = 0)
+        )
+        assertEquals(
+            LlamaServerTerminalLineAction.PARSE_USAGE,
+            classifyLlamaServerTerminalLine("data: {\"usage\":{}}", blankLinesSeen = 0)
+        )
+        assertEquals(
+            LlamaServerTerminalLineAction.STOP,
+            classifyLlamaServerTerminalLine("data: [DONE]", blankLinesSeen = 0)
+        )
+    }
+
+    @Test
+    fun `bounded SSE reader preserves a line and records wire characters`() {
+        val budget = LlamaServerSseResponseBudget(maxTokens = 1)
+        val line = readBoundedLlamaServerSseLine(StringReader("data: ok\n"), budget)
+
+        assertEquals("data: ok", line.text)
+        assertFalse(line.reachedEof)
+        assertEquals(8L, budget.wireCharacters)
+    }
+
+    @Test
+    fun `bounded SSE reader rejects a line before retaining extra characters`() {
+        val budget = LlamaServerSseResponseBudget(maxTokens = 1)
+        val error = assertThrows(LlamaServerSseLimitException::class.java) {
+            readBoundedLlamaServerSseLine(StringReader("12345\n"), budget, maxLineCharacters = 4)
+        }
+
+        assertEquals(LlamaServerSseLimitKind.LINE, error.kind)
+        assertEquals(5L, error.receivedCharacters)
+    }
+
+    @Test
+    fun `semantic output budget has a hard upper bound`() {
+        val budget = LlamaServerSseResponseBudget(maxTokens = 1)
+        budget.accountSemanticCharacters(LlamaServerSseLimits.MIN_SEMANTIC_OUTPUT_CHARS.toInt())
+
+        val error = assertThrows(LlamaServerSseLimitException::class.java) {
+            budget.accountSemanticCharacters(1)
+        }
+
+        assertEquals(LlamaServerSseLimitKind.OUTPUT, error.kind)
     }
 
     @Test
@@ -207,6 +305,100 @@ class LlamaServerChatServiceTest {
         assertEquals(2, payload["id_slot"])
         assertEquals(true, payload["return_progress"])
         assertEquals(2, payload["sse_ping_interval"])
+    }
+
+    @Test
+    fun `choice payload prefers delta even when message also exists`() {
+        val selected = selectLlamaServerChoicePayload(
+            JSONObject(
+                """{"delta":{},"message":{"content":"full message"}}"""
+            )
+        )
+
+        assertNotNull(selected)
+        assertEquals(LlamaServerChoiceSource.DELTA, selected?.source)
+        assertEquals(null, selected?.payload?.optString("content", null))
+    }
+
+    @Test
+    fun `choice payload falls back to message when delta is absent`() {
+        val selected = selectLlamaServerChoicePayload(
+            JSONObject("""{"message":{"content":"full message"}}""")
+        )
+
+        assertNotNull(selected)
+        assertEquals(LlamaServerChoiceSource.MESSAGE_FALLBACK, selected?.source)
+        assertEquals("full message", selected?.payload?.optString("content"))
+    }
+
+    @Test
+    fun `choice payload does not fallback when delta is present but malformed`() {
+        val malformed = selectLlamaServerChoicePayload(
+            JSONObject("""{"delta":"malformed","message":{"content":"full message"}}""")
+        )
+        val explicitNull = selectLlamaServerChoicePayload(
+            JSONObject("""{"delta":null,"message":{"content":"full message"}}""")
+        )
+
+        assertEquals(null, malformed)
+        assertEquals(null, explicitNull)
+    }
+
+    @Test
+    fun `string reasoning aliases are ordered and non-string values are ignored`() {
+        val payload = JSONObject(
+            """{"reasoning_content":{},"thinking":"thought channel","reasoning":"later channel"}"""
+        )
+
+        val channel = firstLlamaServerStringChannel(
+            payload,
+            "reasoning_content",
+            "thinking",
+            "reasoning"
+        )
+
+        assertEquals(LlamaServerStringChannel("thinking", "thought channel"), channel)
+        assertEquals(
+            LlamaServerStringChannel("reasoning_content", "dedicated channel"),
+            firstLlamaServerStringChannel(
+                JSONObject("""{"reasoning_content":"dedicated channel"}"""),
+                "reasoning_content",
+                "thinking",
+                "reasoning"
+            )
+        )
+        assertEquals(
+            LlamaServerStringChannel("reasoning", "reasoning alias"),
+            firstLlamaServerStringChannel(
+                JSONObject("""{"reasoning":"reasoning alias"}"""),
+                "reasoning_content",
+                "thinking",
+                "reasoning"
+            )
+        )
+        assertEquals(
+            null,
+            firstLlamaServerStringChannel(JSONObject("""{"reasoning":123}"""), "reasoning")
+        )
+    }
+
+    @Test
+    fun `stream channel counts carry metadata without response text`() {
+        val counts = LlamaServerStreamChannelCounts(
+            deltaChoiceChunks = 2,
+            messageFallbackChoiceChunks = 1,
+            reasoningContentChannelChunks = 3,
+            thinkingChannelChunks = 4,
+            reasoningChannelChunks = 5,
+            toolCallChannelChunks = 6
+        )
+
+        assertEquals(2, counts.deltaChoiceChunks)
+        assertEquals(1, counts.messageFallbackChoiceChunks)
+        assertEquals(3, counts.reasoningContentChannelChunks)
+        assertEquals(4, counts.thinkingChannelChunks)
+        assertEquals(5, counts.reasoningChannelChunks)
+        assertEquals(6, counts.toolCallChannelChunks)
     }
 
     @Test

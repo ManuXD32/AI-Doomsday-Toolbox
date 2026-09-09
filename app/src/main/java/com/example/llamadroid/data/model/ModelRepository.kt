@@ -2080,6 +2080,14 @@ data class PendingDownload(
 
 object PendingDownloadHolder {
     private val pendingDownloads = java.util.concurrent.ConcurrentHashMap<String, PendingDownload>()
+
+    /** Re-registers a recovered task after a catalog has refreshed its metadata. */
+    internal fun putPending(downloadId: String, pending: PendingDownload) {
+        pendingDownloads[downloadId] = pending
+        if (downloadId != pending.filename) {
+            pendingDownloads[pending.filename] = pending
+        }
+    }
     
     fun addPending(
         downloadId: String? = null,
@@ -2151,10 +2159,7 @@ object PendingDownloadHolder {
             pendingArtifactId = pendingArtifactId,
             stageOnly = stageOnly
         )
-        pendingDownloads[taskId] = pending
-        if (taskId != filename) {
-            pendingDownloads[filename] = pending
-        }
+        putPending(taskId, pending)
     }
     
     fun getPending(downloadId: String): PendingDownload? = pendingDownloads[downloadId]

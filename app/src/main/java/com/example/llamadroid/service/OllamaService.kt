@@ -277,7 +277,8 @@ class OllamaService(context: Context) {
         val message: ChatMessage,
         val done: Boolean,
         val toolCalls: List<ToolCall>? = null,
-        val usage: ChatUsage? = null
+        val usage: ChatUsage? = null,
+        val finishReason: String? = null
     )
 
     data class ChatUsage(

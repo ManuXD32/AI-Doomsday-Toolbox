@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="audio_native_detail_unknown">No disponible</string>
+    <string name="audio_native_failure_details">Código: %1$s\nEtapa: %2$s\nOperación: %3$s\nEstado de LiteRT: %4$s</string>
+</resources>

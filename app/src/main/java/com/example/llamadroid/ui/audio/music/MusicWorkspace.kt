@@ -8,6 +8,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -15,6 +16,9 @@ import com.example.llamadroid.R
 import com.example.llamadroid.ui.audio.audioComponentLabel
 import com.example.llamadroid.ui.audio.AudioComponentDetails
 import com.example.llamadroid.ui.components.AppSectionCard
+import com.example.llamadroid.ui.components.CuratedModelBundlePicker
+import com.example.llamadroid.data.model.CuratedModelBundleRegistry
+import com.example.llamadroid.data.model.StableAudioModelSupport
 
 /** Guided and advanced views edit exactly the same draft. */
 @Composable
@@ -40,6 +44,15 @@ fun MusicWorkspace(
     var step by rememberSaveable(draft.kind) { mutableIntStateOf(0) }
     var tab by rememberSaveable(draft.kind) { mutableIntStateOf(0) }
     fun value(key: String, value: String) = onChange(draft.withValue(key, value))
+    val context = LocalContext.current
+    val audioBundleFamily = if (draft.kind == "sfx") {
+        StableAudioModelSupport.FAMILY_SFX
+    } else {
+        StableAudioModelSupport.FAMILY_MUSIC
+    }
+    val audioBundles = remember(context, audioBundleFamily) {
+        runCatching { CuratedModelBundleRegistry.bundles(context) }.getOrDefault(emptyList())
+    }
     val guided = listOf(R.string.audio_music_step_model, R.string.audio_music_step_prompt,
         R.string.audio_music_step_input, R.string.audio_music_step_generate)
     val advancedTabs = listOf(R.string.audio_music_components, R.string.audio_music_generation,
@@ -63,26 +76,42 @@ fun MusicWorkspace(
                 AppSectionCard {
                     when {
                         (!advanced && step == 0) || (advanced && tab == 0) -> {
-                            Text(stringResource(R.string.audio_music_empty_models), style = MaterialTheme.typography.bodyMedium)
-                            OutlinedButton(onClick = onManageModels, modifier = Modifier.fillMaxWidth()) {
-                                Text(stringResource(R.string.audio_music_manage), maxLines = 2)
-                            }
-                            listOf("dit", "textEncoder", "tokenizer", "codecEncoder", "codecDecoder").forEach { role ->
-                                val candidates = choices.filter { it.role == role }
-                                val label = when (role) {
-                                    "dit" -> R.string.audio_music_role_dit
-                                    "textEncoder" -> R.string.audio_music_role_textEncoder
-                                    "tokenizer" -> R.string.audio_music_role_tokenizer
-                                    "codecEncoder" -> R.string.audio_music_role_codecEncoder
-                                    else -> R.string.audio_music_role_codecDecoder
+                            if (!advanced) {
+                                Text(stringResource(R.string.audio_music_empty_models), style = MaterialTheme.typography.bodyMedium)
+                                CuratedModelBundlePicker(
+                                    bundles = audioBundles,
+                                    family = audioBundleFamily,
+                                    selectedComponents = draft.components,
+                                    onUseBundle = { _, components ->
+                                        // Bundle selection only replaces compatible model paths;
+                                        // prompts, operation, input, and advanced values stay intact.
+                                        onChange(draft.copy(components = components))
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                OutlinedButton(onClick = onManageModels, modifier = Modifier.fillMaxWidth()) {
+                                    Text(stringResource(R.string.audio_music_manage), maxLines = 2)
                                 }
-                                MusicChoice(stringResource(label), draft.components[role].orEmpty(),
-                                    candidates.map { it.path }, { path ->
-                                        candidates.firstOrNull { it.path == path }?.name ?: audioComponentLabel(path)
-                                    }) { selected -> onChange(draft.copy(components = draft.components + (role to selected))) }
-                                draft.components[role]?.takeIf { it.isNotBlank() }?.let { AudioComponentDetails(it) }
-                            }
-                            if (advanced) {
+                            } else {
+                                Text(stringResource(R.string.audio_music_empty_models), style = MaterialTheme.typography.bodyMedium)
+                                OutlinedButton(onClick = onManageModels, modifier = Modifier.fillMaxWidth()) {
+                                    Text(stringResource(R.string.audio_music_manage), maxLines = 2)
+                                }
+                                listOf("dit", "textEncoder", "tokenizer", "codecEncoder", "codecDecoder").forEach { role ->
+                                    val candidates = choices.filter { it.role == role }
+                                    val label = when (role) {
+                                        "dit" -> R.string.audio_music_role_dit
+                                        "textEncoder" -> R.string.audio_music_role_textEncoder
+                                        "tokenizer" -> R.string.audio_music_role_tokenizer
+                                        "codecEncoder" -> R.string.audio_music_role_codecEncoder
+                                        else -> R.string.audio_music_role_codecDecoder
+                                    }
+                                    MusicChoice(stringResource(label), draft.components[role].orEmpty(),
+                                        candidates.map { it.path }, { path ->
+                                            candidates.firstOrNull { it.path == path }?.name ?: audioComponentLabel(path)
+                                        }) { selected -> onChange(draft.copy(components = draft.components + (role to selected))) }
+                                    draft.components[role]?.takeIf { it.isNotBlank() }?.let { AudioComponentDetails(it) }
+                                }
                                 MusicChoice(stringResource(R.string.audio_music_dit_precision), draft["ditPrecision"],
                                     listOf("fp32", "w16a32", "w8a32", "w8a8-dyn")) { value("ditPrecision", it) }
                                 MusicChoice(stringResource(R.string.audio_music_decoder_precision), draft["decoderPrecision"],

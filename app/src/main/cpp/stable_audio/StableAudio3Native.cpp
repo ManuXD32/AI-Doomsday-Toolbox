@@ -58,7 +58,8 @@ void check_litert(litert::Status status, const litert::Api& api, const char* ope
   // containing private paths or prompt text.
   __android_log_print(ANDROID_LOG_ERROR, kLogTag, "LiteRT operation failed: %s (%d)",
                       operation, status);
-  throw NativeError(std::string("litert_") + operation + "_failed");
+  throw NativeError(std::string("litert_") + operation + "_failed:" +
+                    std::to_string(status));
 }
 
 bool check_cancelled(void*) {
@@ -279,7 +280,7 @@ class LiteRtGraph final {
                      compiled_, signature_index, output_count, output_layouts.data(), true),
                  *api_, "query_output_layouts");
     std::vector<void*> output_tensors(output_count, nullptr);
-    std::vector<std::vector<uint8_t>> output_storage(output_count);
+    std::vector<std::size_t> output_sizes(output_count);
     for (std::size_t i = 0; i < output_count; ++i) {
       check_litert(api_->get_signature_output_tensor_by_index(
                        signature(signature_index), i, &output_tensors[i]),
@@ -289,22 +290,30 @@ class LiteRtGraph final {
       output_types[i].layout = output_layouts[i];
       const std::size_t required =
           num_elements(output_types[i]) * element_size(output_types[i].element_type);
-      output_storage[i].resize(required);
+      output_sizes[i] = required;
     }
 
     std::vector<void*> input_buffers(input_count, nullptr);
     std::vector<void*> output_buffers(output_count, nullptr);
     try {
       for (std::size_t i = 0; i < input_count; ++i) {
-        check_litert(api_->create_tensor_buffer_from_host_memory(
-                         &input_types[i], const_cast<uint8_t*>(inputs[i].bytes.data()),
-                         inputs[i].bytes.size(), nullptr, &input_buffers[i]),
+        // LiteRT host buffers require 64-byte alignment and XNNPACK tail
+        // padding. std::vector does not guarantee either; let LiteRT own the
+        // allocation and release it through destroy_buffers on every path.
+        check_litert(api_->create_managed_tensor_buffer(
+                         environment_, litert::kHostMemory, &input_types[i],
+                         inputs[i].bytes.size(), &input_buffers[i]),
                      *api_, "create_input_buffer");
+        void* memory = nullptr;
+        check_litert(api_->get_tensor_buffer_host_memory(input_buffers[i], &memory),
+                     *api_, "map_input_buffer");
+        check_not_null(memory, "input_buffer_unavailable");
+        std::memcpy(memory, inputs[i].bytes.data(), inputs[i].bytes.size());
       }
       for (std::size_t i = 0; i < output_count; ++i) {
-        check_litert(api_->create_tensor_buffer_from_host_memory(
-                         &output_types[i], output_storage[i].data(), output_storage[i].size(),
-                         nullptr, &output_buffers[i]),
+        check_litert(api_->create_managed_tensor_buffer(
+                         environment_, litert::kHostMemory, &output_types[i],
+                         output_sizes[i], &output_buffers[i]),
                      *api_, "create_output_buffer");
       }
       check_litert(api_->run_compiled_model(compiled_, signature_index, input_buffers.size(),
@@ -317,7 +326,8 @@ class LiteRtGraph final {
         check_litert(api_->get_tensor_buffer_host_memory(output_buffers[i], &memory), *api_,
                      "read_output");
         result[i].type = output_types[i];
-        result[i].bytes.resize(output_storage[i].size());
+        check_not_null(memory, "output_buffer_unavailable");
+        result[i].bytes.resize(output_sizes[i]);
         std::memcpy(result[i].bytes.data(), memory, result[i].bytes.size());
       }
       destroy_buffers(input_buffers, output_buffers);
@@ -1613,11 +1623,17 @@ NativeGenerationResult run_generation(
 
   litert::Api api;
   std::string api_error;
-  if (!api.load(&api_error)) throw NativeError("litert_library_unavailable");
+  if (!api.load(&api_error)) {
+    // Symbol names are diagnostic constants, but keep the wire code bounded
+    // and lowercase; dynamic-loader messages can contain private paths.
+    throw NativeError(api_error.rfind("litert_symbol_missing:", 0) == 0
+                          ? "litert_symbol_missing" : "litert_library_unavailable");
+  }
   try {
     progress->emit("tokenizing", 0, 0);
     SentencePieceTokenizer tokenizer(tokenizer_path);
     const TokenBatch positive_tokens = tokenize(tokenizer, prompt);
+    progress->emit("conditioning", 0, 0);
     std::vector<float> positive_hidden;
     std::unique_ptr<TextEncoder> retained_text_encoder;
     if (!free_models) {
@@ -1867,6 +1883,9 @@ Java_com_example_llamadroid_audio_music_StableAudio3Native_nativeRun(
     return env->NewStringUTF(json.c_str());
   } catch (const NativeError& error) {
     throw_java(env, error.code().c_str());
+    return nullptr;
+  } catch (const std::bad_alloc&) {
+    throw_java(env, "native_memory_exhausted");
     return nullptr;
   } catch (const std::exception& error) {
     throw_java(env, "stable_audio_native_failed");

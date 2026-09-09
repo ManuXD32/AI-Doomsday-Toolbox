@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="agent_structured_task_completed">Task completed. Summary: %1$s</string>
+    <string name="agent_structured_task_incomplete">The task is incomplete. %1$s</string>
+    <string name="agent_structured_action_required">The model did not return a single structured next action. The task is still incomplete; requesting one tool call.</string>
+    <string name="agent_structured_action_paused">The model still did not call the required action after one retry. Your work is saved. Select Continue to resume; plans and questions must use their interactive tools.</string>
+    <string name="agent_structured_action_output_limit">The model reached its output limit without a structured action after one retry. Your work is saved. Adjust the output limit in Agent Settings if needed, then select Continue.</string>
+</resources>

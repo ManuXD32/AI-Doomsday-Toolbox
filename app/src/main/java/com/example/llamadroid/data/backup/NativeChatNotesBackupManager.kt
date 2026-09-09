@@ -94,6 +94,11 @@ object NativeChatNotesBackupManager {
                     kind = NativeBackupMediaKind.CHAT_AUDIO,
                     owner = "message_${message.id}"
                 )
+                val videoMedia = collector.register(
+                    originalPath = message.videoPath,
+                    kind = NativeBackupMediaKind.CHAT_VIDEO,
+                    owner = "message_${message.id}"
+                )
                 LlamaMessageBackup(
                     oldId = message.id,
                     chatOldId = message.chatId,
@@ -103,6 +108,8 @@ object NativeChatNotesBackupManager {
                     imageMediaKey = imageMedia?.entry?.key,
                     audioPath = message.audioPath,
                     audioMediaKey = audioMedia?.entry?.key,
+                    videoPath = message.videoPath,
+                    videoMediaKey = videoMedia?.entry?.key,
                     timestamp = message.timestamp,
                     isError = message.isError,
                     isTruncated = message.isTruncated,
@@ -333,7 +340,10 @@ object NativeChatNotesBackupManager {
                             message.toEntity(
                                 chatId = newChatId,
                                 imagePath = message.imageMediaKey?.let { importedMediaPaths[it] },
-                                audioPath = message.audioMediaKey?.let { importedMediaPaths[it] }
+                                audioPath = message.audioMediaKey?.let { importedMediaPaths[it] },
+                                videoPath = message.videoMediaKey
+                                    ?.let { importedMediaPaths[it] }
+                                    ?: message.missingVideoAttachmentPath()
                             )
                         )
                         importedMessages += 1
@@ -633,6 +643,7 @@ object NativeChatNotesBackupManager {
         engine = engine,
         supportsVision = supportsVision,
         supportsAudio = supportsAudio,
+        supportsVideo = supportsVideo,
         modelName = modelName,
         whisperModelPath = whisperModelPath,
         whisperLanguage = whisperLanguage,
@@ -673,6 +684,7 @@ object NativeChatNotesBackupManager {
         engine = engine,
         supportsVision = supportsVision,
         supportsAudio = supportsAudio,
+        supportsVideo = supportsVideo,
         modelName = modelName,
         whisperModelPath = whisperModelPath,
         whisperLanguage = whisperLanguage,
@@ -707,13 +719,15 @@ object NativeChatNotesBackupManager {
     private fun LlamaMessageBackup.toEntity(
         chatId: Long,
         imagePath: String?,
-        audioPath: String?
+        audioPath: String?,
+        videoPath: String?
     ): LlamaMessageEntity = LlamaMessageEntity(
         chatId = chatId,
         role = role,
         content = content,
         imagePath = imagePath,
         audioPath = audioPath,
+        videoPath = videoPath,
         timestamp = timestamp,
         isError = isError,
         isTruncated = isTruncated,
@@ -847,6 +861,14 @@ object NativeChatNotesBackupManager {
             updatedAt = updatedAt,
             lastRunAtMillis = lastRunAtMillis
         )
+
+    /** Keep a visible, retryable attachment marker when a backup omitted its video bytes. */
+    private fun LlamaMessageBackup.missingVideoAttachmentPath(): String? {
+        if (videoMediaKey.isNullOrBlank() && videoPath.isNullOrBlank()) return null
+        // Never restore an inaccessible absolute/content URI from a backup. The chat UI and
+        // request validator intentionally render this marker as a missing attachment.
+        return "missing://native-chat-video/$oldId"
+    }
 
     private fun LlamaScheduledTaskLogEntity.toBackup(): LlamaScheduledTaskLogBackup =
         LlamaScheduledTaskLogBackup(
@@ -1048,6 +1070,7 @@ private enum class NativeBackupMediaKind(
 ) {
     CHAT_IMAGE("chat_images", "chat_image", "jpg", true),
     CHAT_AUDIO("chat_audio", "chat_audio", "m4a", false),
+    CHAT_VIDEO("chat_videos", "chat_video", "mp4", false),
     NOTE_IMAGE("note_images", "note_image", "png", true),
     NOTE_AUDIO("note_audio", "note_audio", "m4a", false),
     ONNX_GALLERY_IMAGE("onnx_gallery", "onnx_image", "png", true)
@@ -1115,6 +1138,7 @@ data class LlamaServerBackup(
     val engine: String = LlamaServerEntity.ENGINE_LLAMA_SERVER,
     val supportsVision: Boolean = false,
     val supportsAudio: Boolean = false,
+    val supportsVideo: Boolean = false,
     val modelName: String? = null,
     val whisperModelPath: String? = null,
     val whisperLanguage: String = LlamaServerEntity.DEFAULT_WHISPER_LANGUAGE,
@@ -1160,6 +1184,8 @@ data class LlamaMessageBackup(
     val imageMediaKey: String? = null,
     val audioPath: String? = null,
     val audioMediaKey: String? = null,
+    val videoPath: String? = null,
+    val videoMediaKey: String? = null,
     val timestamp: Long = 0,
     val isError: Boolean = false,
     val isTruncated: Boolean = false,

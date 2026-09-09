@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="agent_harness_profile_title">Execution profile</string>
+    <string name="agent_harness_profile_desc">Choose the workflow policy for this project. The choice is saved with the project and does not change its model or endpoint.</string>
+    <string name="agent_harness_profile_optimized">Optimized</string>
+    <string name="agent_harness_profile_optimized_desc">One direct agent for Plan and Build, focused research, and verification. Existing specialists stay available as optional sequential helpers.</string>
+    <string name="agent_harness_profile_legacy">Legacy</string>
+    <string name="agent_harness_profile_legacy_desc">Keep the existing multi-agent workflow and role settings for this project.</string>
+    <string name="agent_harness_profile_budget_note">Optimized recommends a %1$d-token context (%2$d is a conservative device target) and phase output budgets of %3$d control, %4$d Build, and %5$d summary tokens. Edit context and output in the General or role cards; saved values are respected and are not silently capped.</string>
+    <string name="agent_harness_general_output_recommendation">Optimized recommendation when General is unset: %1$d control tokens; Orchestrator and Coder use %2$d during Build. Saved values are used as entered.</string>
+    <string name="agent_harness_control_output_recommendation">Optimized recommendation when this role is unset: %1$d control tokens. Saved values are used as entered.</string>
+    <string name="agent_harness_build_output_recommendation">Optimized recommendation when this role is unset: %1$d Plan/control tokens and %2$d during Build. Saved values are used as entered.</string>
+    <string name="agent_harness_summary_output_recommendation">Optimized recommendation when this role is unset: %1$d summary tokens. Saved values are used as entered.</string>
+    <string name="agent_harness_research_limit">Research is bounded for this profile. Continue with the available evidence or ask for direction.</string>
+    <string name="agent_harness_no_progress">The agent paused because the workflow made no progress. Continue after reviewing the current state.</string>
+    <string name="agent_harness_capacity_limit">Required task state cannot fit this context. Narrow the task, then Continue.</string>
+    <string name="agent_harness_older_messages">Older messages</string>
+    <string name="agent_harness_newer_messages">Newer messages</string>
+    <string name="agent_harness_history_load_failed">Could not load that history page. The current page is still available.</string>
+    <string name="agent_harness_questions_suppressed">The user requested no more questions. Resolve this blocker using the saved decisions or provide direction, then Continue.</string>
+    <string name="agent_harness_local_plan_unsupported">The plan still requires an unavailable local backend. Review the supported runtimes, then Continue.</string>
+    <string name="agent_harness_no_scout">Codebase scouting is disabled by the saved project instructions.</string>
+    <string name="agent_harness_no_scout_hint">Use the saved task state and relevant research, then propose the plan. Do not list or search the codebase.</string>
+    <string name="agent_harness_local_ready">Local project **%1$s** is ready. Describe the task to begin. Files are relative to this project; use `.` for its root.</string>
+</resources>

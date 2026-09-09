@@ -13,6 +13,16 @@ data class LlamaConfig(
     val temperature: Float = 0.8f,
     val host: String = "0.0.0.0",
     val mmprojPath: String? = null, // Vision model projector path
+    /** Enable llama.cpp's MTMD video input path for this server session. */
+    val videoEnabled: Boolean = false,
+    /** Target video sampling rate. Native video input is deliberately capped at two fps. */
+    val videoFps: Float = NativeLlamaVideoSupport.DEFAULT_VIDEO_FPS,
+    /** Milliseconds between timestamp markers emitted for video input. */
+    val videoTimestampIntervalMs: Int = NativeLlamaVideoSupport.DEFAULT_TIMESTAMP_INTERVAL_MS,
+    /** Private, session-scoped media directory passed to llama-server via --media-path. */
+    val mediaPath: String? = null,
+    /** Private directory containing ffmpeg and ffprobe symlinks for MTMD video decoding. */
+    val videoFfmpegDir: String? = null,
     /** null keeps llama.cpp's default; false emits --no-mmproj-offload. */
     val mmprojOffload: Boolean? = null,
     /**

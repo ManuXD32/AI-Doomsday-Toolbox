@@ -251,7 +251,8 @@ fun AgentWorkspaceConsoleHeader(
     onPlanningModeChanged: (Boolean) -> Unit,
     onShowAgentSettings: () -> Unit,
     onShowKnowledgeBases: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    idleStatusText: String? = null
 ) {
     val hasProject = !projectPath.isNullOrBlank()
     var expanded by rememberSaveable { mutableStateOf(false) }
@@ -265,7 +266,8 @@ fun AgentWorkspaceConsoleHeader(
     val runtimeLabel = if (isRunning) {
         statusText.takeIf { it.isNotBlank() } ?: stringResource(R.string.agent_console_running)
     } else {
-        stringResource(R.string.agent_console_ready)
+        idleStatusText?.takeIf { it.isNotBlank() }
+            ?: stringResource(R.string.agent_console_ready)
     }
     val contextLabel = contextSnapshot?.let { snapshot ->
         val promptTokens = snapshot.actualPromptTokens ?: snapshot.calibratedRequestTokens ?: snapshot.packedEstimatedTokens

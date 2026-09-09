@@ -96,6 +96,13 @@ data class AudioVoiceProfileUi(
     val isCompatible: Boolean = true
 )
 
+/** Lifecycle of the single voice preview owned by the Audio workspace controller. */
+enum class AudioVoicePlaybackState {
+    IDLE,
+    PLAYING,
+    PAUSED
+}
+
 data class AudioHistoryItemUi(
     val id: String,
     val title: String,
@@ -180,6 +187,8 @@ data class AudioWorkspaceUiState(
     val isRecording: Boolean = false,
     val recordingSeconds: Int = 0,
     val pendingRecordedUri: String? = null,
+    val activeVoiceProfileId: String? = null,
+    val voicePlaybackState: AudioVoicePlaybackState = AudioVoicePlaybackState.IDLE,
     val loadError: AudioWorkspaceLoadError? = null,
     val operationError: Boolean = false
 )
@@ -215,6 +224,9 @@ interface AudioWorkspaceController {
     fun deleteVoice(profileId: String) {}
     fun renameVoice(profileId: String, name: String) {}
     fun previewVoice(profileId: String) {}
+    fun pauseVoicePreview(profileId: String) {}
+    fun resumeVoicePreview(profileId: String) {}
+    fun stopVoicePreview() {}
 
     fun playHistory(itemId: String) {}
     fun pauseHistory(itemId: String) {}

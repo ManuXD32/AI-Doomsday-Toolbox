@@ -44,7 +44,7 @@ class AgentPromptBudgetTest {
     }
 
     @Test
-    fun `output budget refuses a useless one-token request`() {
+    fun `output budget refuses a request that cannot reserve configured output`() {
         val capacity = resolveAgentPromptCapacity(
             configuredContextTokens = 8_192,
             reportedContextTokens = 8_192,
@@ -57,9 +57,33 @@ class AgentPromptBudgetTest {
         )
 
         assertFalse(budget.canSend)
+        assertEquals(0, budget.effectiveMaxOutputTokens)
+        assertEquals(
+            AgentPromptBudgetFailureReason.CONFIGURED_OUTPUT_DOES_NOT_FIT,
+            budget.cannotSendReason
+        )
         assertTrue(
             budget.effectiveMaxOutputTokens < budget.minimumUsefulOutputTokens
         )
+    }
+
+    @Test
+    fun `output budget keeps configured reservation when it fits`() {
+        val capacity = resolveAgentPromptCapacity(
+            configuredContextTokens = 8_192,
+            reportedContextTokens = 8_192,
+            exactCountingAvailable = true
+        )
+        val budget = resolveAgentPromptOutputBudget(
+            configuredMaxOutputTokens = 2_048,
+            capacity = capacity,
+            authoritativeInputTokens = 4_000
+        )
+
+        assertTrue(budget.canSend)
+        assertEquals(2_048, budget.reservedOutputTokens)
+        assertEquals(2_048, budget.effectiveMaxOutputTokens)
+        assertEquals(4_000 + capacity.safetyReserveTokens + 2_048, budget.requiredContextTokens)
     }
 
     @Test
