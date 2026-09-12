@@ -111,6 +111,7 @@ class Converters {
         AgentProjectContractEntity::class,
         AgentDecisionEntity::class,
         AgentContinuationOutboxEntity::class,
+        AgentSleepWakeEntity::class,
         // Custom tools/agents
         CustomToolEntity::class,
         CustomAgentEntity::class,
@@ -173,7 +174,7 @@ class Converters {
         com.example.llamadroid.data.model.library.ModelDeletionJournalOperationEntity::class,
         com.example.llamadroid.data.model.library.ModelDeletionJournalPathEntity::class
     ], 
-    version = 117,
+    version = 118,
     exportSchema = true
 )
 @TypeConverters(Converters::class)

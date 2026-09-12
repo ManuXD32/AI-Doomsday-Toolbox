@@ -8,6 +8,7 @@ import com.example.llamadroid.audio.music.*
 import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelEntity
+import com.example.llamadroid.data.model.StableAudioModelSupport
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import org.json.JSONObject
@@ -56,7 +57,22 @@ class MusicWorkspaceController(context: Context, val kind: String) {
         scope.launch { store.error.collect { error -> mutableState.update { it.copy(draftError = error) } } }
         scope.launch {
             db.modelDao().getAllModels().map { rows -> withContext(Dispatchers.IO) {
-                rows.filter { row -> row.isDownloaded && row.audioFamily?.startsWith("stable_audio") == true && File(row.path).isFile }
+                val manifest = StableAudio3ManifestLoader.load(app)
+                val entry = StableAudio3ModelDoctor.entryFor(
+                    manifest,
+                    if (kind == "sfx") StableAudio3Kind.SFX else StableAudio3Kind.MUSIC
+                )
+                rows.filter { row ->
+                    val role = StableAudioModelSupport.canonicalRole(row.audioComponentRole)
+                    val expected = role?.let { entry.component(it) }
+                    expected != null &&
+                        StableAudio3ModelDoctor.isCanonicalInstalledModel(
+                            if (kind == "sfx") StableAudio3Kind.SFX else StableAudio3Kind.MUSIC,
+                            entry,
+                            expected,
+                            row
+                        ) && File(row.path).isFile && File(row.path).canRead()
+                }
             } }.catch { error -> if (error is CancellationException) throw error; fail() }.collect { rows ->
                 models = rows.associateBy { it.path }
                 val choices = rows.mapNotNull { row ->
@@ -97,7 +113,8 @@ class MusicWorkspaceController(context: Context, val kind: String) {
         if (required.any { role -> state.value.choices.none { it.role == role && it.path == state.value.draft.components[role] } }) {
             return app.getString(R.string.audio_music_complete_components)
         }
-        return try { buildRequest(state.value.draft).validate(supportsExtend = true); null }
+        return try { buildRequest(state.value.draft).validate(requireDigests = true, supportsExtend = true); null }
+        catch (_: StableAudio3ValidationException) { app.getString(R.string.audio_music_error_model_stale) }
         catch (_: IllegalArgumentException) { app.getString(R.string.audio_music_invalid_settings) }
         catch (_: IllegalStateException) { app.getString(R.string.audio_music_complete_components) }
     }
@@ -130,16 +147,32 @@ class MusicWorkspaceController(context: Context, val kind: String) {
     }
 
     private fun buildRequest(draft: MusicWorkspaceDraft): StableAudio3Request {
+        val kindValue = if (kind == "sfx") StableAudio3Kind.SFX else StableAudio3Kind.MUSIC
+        val manifest = StableAudio3ManifestLoader.load(app)
+        val entry = StableAudio3ModelDoctor.entryFor(
+            manifest = manifest,
+            kind = kindValue,
+            ditPrecision = StableAudio3DitPrecision.fromWire(draft["ditPrecision"]),
+            decoderPrecision = StableAudio3CodecPrecision.fromWire(draft["decoderPrecision"]),
+            encoderPrecision = StableAudio3CodecPrecision.fromWire(draft["encoderPrecision"])
+        )
         fun component(role: String): StableAudio3ComponentRef {
             val path = draft.components[role] ?: error("Missing component")
-            require(state.value.choices.any { it.path == path && it.role == role })
             val model = models[path] ?: error("Missing model")
-            return StableAudio3ComponentRef(path, model.audioArtifactIdentity?.takeIf { it.startsWith("sha256:") }?.removePrefix("sha256:"), model.sizeBytes,
-                model.audioArtifactIdentity)
+            val expected = StableAudio3ModelDoctor.canonicalComponent(kindValue, entry, role)
+            require(StableAudio3ModelDoctor.isCanonicalInstalledModel(kindValue, entry, expected, model)) {
+                "Stable Audio ${role} is stale; re-download the curated component"
+            }
+            return StableAudio3ComponentRef(
+                path = model.path,
+                sha256 = expected.sha256,
+                sizeBytes = expected.sizeBytes,
+                sourceIdentity = "sha256:${expected.sha256}"
+            )
         }
         val operation = StableAudio3Operation.fromWire(draft["operation"])
         return StableAudio3Request(
-            kind = if (kind == "sfx") StableAudio3Kind.SFX else StableAudio3Kind.MUSIC,
+            kind = kindValue,
             operation = operation,
             components = StableAudio3Components(component("tokenizer"), component("textEncoder"), component("dit"),
                 component("codecDecoder"), if (operation != StableAudio3Operation.GENERATE) component("codecEncoder") else null),

@@ -1551,13 +1551,17 @@ internal object AgentRuntimeSupport {
     fun parseCustomToolParameterSpecs(parametersJson: String): Map<String, CustomToolParameterSpec> {
         return runCatching {
             val json = JSONObject(parametersJson)
+            val parameterObject = json.optJSONObject("properties")
+                ?.takeIf { json.optString("type").equals("object", ignoreCase = true) }
+                ?: json
             buildMap {
-                json.keys().forEach { key ->
-                    val node = json.opt(key)
+                parameterObject.keys().forEach { key ->
+                    val node = parameterObject.opt(key)
                     val spec = when (node) {
                         is JSONObject -> CustomToolParameterSpec(
                             description = node.optString("description", key),
-                            maxLength = node.optInt("maxLength").takeIf { it > 0 },
+                            maxLength = node.optInt("maxLength").takeIf { it > 0 }
+                                ?: node.optInt("max_length").takeIf { it > 0 },
                             enumValues = node.optJSONArray("enum")?.toStringList().orEmpty()
                         )
                         else -> CustomToolParameterSpec(description = node?.toString().orEmpty().ifBlank { key })

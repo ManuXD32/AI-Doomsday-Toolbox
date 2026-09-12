@@ -1,5 +1,6 @@
 package com.example.llamadroid.service
 
+import com.example.llamadroid.R
 import com.example.llamadroid.data.HttpEndpointUrlSupport
 import com.example.llamadroid.data.binary.BinaryRepository
 import kotlinx.coroutines.CancellationException
@@ -58,6 +59,14 @@ class NativeVideoRecognitionRuntime(
         onProgress("Preparing video segment ${request.segment.index}/${request.segment.total}", 0.08f)
         return when (request.target.kind) {
             VideoRecognitionTarget.Kind.LOCAL_BUNDLE -> {
+                // Keep direct input_video requests within llama.cpp's twelve-second decoder
+                // limit. Longer user-selected segments still work through the same bounded
+                // client-side frame path and never send an oversized clip to MTMD.
+                if (request.segment.durationSeconds * 1_000L >
+                    NativeLlamaVideoSupport.MAX_DIRECT_VIDEO_DURATION_MS
+                ) {
+                    return summarizeFramesFallback(request, onProgress)
+                }
                 // A context budget that permits only one frame cannot satisfy the native
                 // decoder's practical 0.1fps floor across a long segment. Use the shared
                 // timestamped-frame path so the <=maxFrames contract remains exact.
@@ -368,6 +377,15 @@ class NativeVideoRecognitionRuntime(
         onProgress: (String, Float) -> Unit
     ): File? {
         if (!request.includeAudio || !request.target.supportsAudio) return null
+        if (request.segment.durationSeconds * 1_000L >
+            NativeLlamaVideoSupport.MAX_DIRECT_VIDEO_DURATION_MS
+        ) {
+            onProgress(
+                appContext.getString(R.string.video_recognition_audio_skipped_direct_limit),
+                0.2f
+            )
+            return null
+        }
         val destination = File(directory, "segment_${request.segment.index}.wav")
         return try {
             onProgress("Preparing bounded audio", 0.16f)

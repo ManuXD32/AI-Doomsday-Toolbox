@@ -85,14 +85,14 @@ class SettingsRepositoryHarnessTest {
         assertTrue(settings.hasExplicitAgentContextForRole("ORCHESTRATOR"))
         assertTrue(settings.hasExplicitAgentMaxOutputTokensForRole("ORCHESTRATOR"))
         assertEquals(
-            32_768,
+            AgentHarnessPolicy.MAX_CONTEXT_TOKENS,
             settings.resolveAgentHarnessContext(
                 profileId = AgentHarnessPolicy.OPTIMIZED,
                 role = "ORCHESTRATOR"
             )
         )
         assertEquals(
-            12_345,
+            AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS,
             settings.resolveAgentHarnessOutputTokens(
                 profileId = AgentHarnessPolicy.OPTIMIZED,
                 role = "ORCHESTRATOR",
@@ -114,14 +114,14 @@ class SettingsRepositoryHarnessTest {
         assertTrue(settings.hasExplicitAgentContextForRole("CUSTOM:writer"))
         assertTrue(settings.hasExplicitAgentMaxOutputTokensForRole("CUSTOM:writer"))
         assertEquals(
-            32_768,
+            AgentHarnessPolicy.MAX_CONTEXT_TOKENS,
             settings.resolveAgentHarnessContext(
                 profileId = AgentHarnessPolicy.OPTIMIZED,
                 role = "CUSTOM:writer"
             )
         )
         assertEquals(
-            12_345,
+            AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS,
             settings.resolveAgentHarnessOutputTokens(
                 profileId = AgentHarnessPolicy.OPTIMIZED,
                 role = "CUSTOM:writer",

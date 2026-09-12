@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="agent_details_title">Detalles del agente</string>
+    <string name="agent_details_project_section">Proyecto</string>
+    <string name="agent_details_runtime_section">Runtime</string>
+    <string name="agent_details_settings_section">Ajustes</string>
+    <string name="agent_details_no_project">No hay ningún proyecto seleccionado</string>
+    <string name="agent_details_no_value">No disponible</string>
+    <string name="agent_details_project_name">Nombre</string>
+    <string name="agent_details_project_id">ID del proyecto</string>
+    <string name="agent_details_workspace_type">Tipo de espacio</string>
+    <string name="agent_details_project_path">Ruta del proyecto</string>
+    <string name="agent_details_resume_state">Estado de reanudación</string>
+    <string name="agent_details_backend">Backend</string>
+    <string name="agent_details_model">Modelo</string>
+    <string name="agent_details_endpoint">Endpoint</string>
+    <string name="agent_details_connection">Conexión</string>
+    <string name="agent_details_agent">Agente</string>
+    <string name="agent_details_execution_profile">Perfil de ejecución</string>
+    <string name="agent_details_planning_mode">Modo de planificación</string>
+    <string name="agent_details_knowledge_bases">Bases de conocimiento</string>
+    <string name="agent_details_extra_output">Salida adicional</string>
+    <string name="agent_details_enabled">Activado</string>
+    <string name="agent_details_disabled">Desactivado</string>
+    <string name="agent_details_plan">Plan</string>
+    <string name="agent_details_build">Construir</string>
+    <string name="agent_details_phase">Fase del flujo</string>
+    <string name="agent_details_finish_reason">Último motivo de finalización o error</string>
+    <string name="agent_details_context_limit">Límite de contexto</string>
+    <string name="agent_details_output_limit">Límite de salida</string>
+    <string name="agent_details_token_usage">Tokens: entrada / salida / total</string>
+    <string name="agent_details_cache_packet">Datos de empaquetado/caché</string>
+    <string name="agent_details_active_tools">Herramientas activas</string>
+    <string name="agent_details_active_skills">Habilidades cargadas en este turno</string>
+    <string name="agent_details_global_scope">Valores globales</string>
+    <string name="agent_details_project_scope">Proyecto %1$d · agente %2$s</string>
+    <string name="agent_project_creating">Creando…</string>
+    <string name="agent_project_create_remote_error">Un proyecto remoto necesita una conexión SSH activa. Conéctate al espacio del agente e inténtalo de nuevo.%1$s</string>
+    <string name="agent_project_create_error">No se pudo crear el proyecto.%1$s</string>
+    <string name="agent_skill_scope_global">Valores globales de habilidades</string>
+    <string name="agent_skill_scope_project">Proyecto %1$d · agente %2$s</string>
+    <string name="agent_skill_scope_summary">%1$d instaladas · %2$d autorizadas para cargar</string>
+    <string name="agent_skill_status_activated">Activada para este proyecto</string>
+    <string name="agent_skill_status_approval">Se necesita aprobación antes de cargarla</string>
+    <string name="agent_skill_status_disabled">Desactivada para este proyecto</string>
+    <string name="agent_skill_status_installed">Instalada y disponible bajo petición</string>
+</resources>

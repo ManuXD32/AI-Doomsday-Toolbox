@@ -90,6 +90,11 @@ import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.data.model.PendingDownload
 import com.example.llamadroid.data.model.PendingDownloadHolder
 import com.example.llamadroid.data.model.StableAudioModelSupport
+import com.example.llamadroid.audio.music.StableAudio3ComponentHealth
+import com.example.llamadroid.audio.music.StableAudio3ModelDoctor
+import com.example.llamadroid.audio.music.StableAudio3ModelDoctorReport
+import com.example.llamadroid.audio.music.StableAudio3Kind
+import com.example.llamadroid.data.model.StableAudioCuratedBundleCatalog
 import com.example.llamadroid.data.model.currentLiteRtDeviceTargetInfo
 import com.example.llamadroid.data.model.defaultLiteRtEngineMaxTokens
 import com.example.llamadroid.data.model.liteRtAudioSupportFromText
@@ -115,6 +120,7 @@ import com.example.llamadroid.ui.components.AppScrollableTabRow
 import com.example.llamadroid.ui.components.DownloadTaskSection
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
 
@@ -175,8 +181,7 @@ fun LiteRtModelsScreen(navController: NavController, initialTab: String? = null)
     val stableAudioModels = remember(managedModels) {
         managedModels.filter { model ->
             model.type.isStableAudioComponentType() &&
-                model.isDownloaded &&
-                File(model.path).isFile
+                model.isDownloaded
         }
     }
     val downloadTasksFlow = remember(db) { db.downloadTaskDao().observeAll() }
@@ -208,10 +213,14 @@ fun LiteRtModelsScreen(navController: NavController, initialTab: String? = null)
     var sourceAsset by remember { mutableStateOf<com.example.llamadroid.data.model.library.InstalledModelAsset?>(null) }
     var pendingDelete by remember { mutableStateOf<LiteRtModelEntity?>(null) }
     var pendingAudioDelete by remember { mutableStateOf<ModelEntity?>(null) }
+    var pendingAudioRepair by remember { mutableStateOf<ModelEntity?>(null) }
     var pendingExport by remember { mutableStateOf<LiteRtModelEntity?>(null) }
     var doctorDetails by remember { mutableStateOf<LiteRtBackendDoctorResult?>(null) }
+    var stableDoctorDetails by remember { mutableStateOf<StableAudio3ModelDoctorReport?>(null) }
     var huggingFaceToken by remember { mutableStateOf(repository.huggingFaceToken()) }
     val doctorResults = remember { mutableStateMapOf<Long, List<LiteRtBackendDoctorResult>>() }
+    val stableDoctorResults = remember { mutableStateMapOf<String, StableAudio3ModelDoctorReport>() }
+    val stableDoctorBusy = remember { mutableStateMapOf<String, Boolean>() }
 
     LaunchedEffect(models) {
         models.forEach { model ->
@@ -381,7 +390,34 @@ fun LiteRtModelsScreen(navController: NavController, initialTab: String? = null)
                         onOpenAudio = { kind ->
                             navController.navigate(Screen.AudioWorkspace.createRoute(kind))
                         },
-                        onDoctorDetails = { doctorDetails = it }
+                        onDoctorDetails = { doctorDetails = it },
+                        stableDoctorResults = stableDoctorResults,
+                        stableDoctorBusy = stableDoctorBusy,
+                        onInspectAudio = { model ->
+                            if (stableDoctorBusy[model.filename] != true) {
+                                stableDoctorBusy[model.filename] = true
+                                scope.launch {
+                                    val report = runCatching {
+                                        withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                            StableAudio3ModelDoctor.inspectInstalled(context, model)
+                                        }
+                                    }
+                                    report.getOrNull()?.let {
+                                        stableDoctorResults[model.filename] = it
+                                        stableDoctorDetails = it
+                                    }
+                                    report.exceptionOrNull()?.let { error ->
+                                        toast(error.message ?: resources.getString(R.string.audio_music_error_model_stale))
+                                    }
+                                    stableDoctorBusy.remove(model.filename)
+                                }
+                            }
+                        },
+                        onRepairAudio = {
+                            stableDoctorResults.remove(it.filename)
+                            stableDoctorBusy.remove(it.filename)
+                            pendingAudioRepair = it
+                        }
                     )
                     1 -> LiteRtDownloadingTab(
                         progress = progress,
@@ -771,6 +807,66 @@ fun LiteRtModelsScreen(navController: NavController, initialTab: String? = null)
         )
     }
 
+    pendingAudioRepair?.let { model ->
+        AlertDialog(
+            onDismissRequest = { pendingAudioRepair = null },
+            title = { Text(stringResource(R.string.audio_stable_doctor_redownload)) },
+            text = { Text(stringResource(R.string.audio_stable_doctor_redownload_confirm, model.filename)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val target = model
+                        pendingAudioRepair = null
+                        scope.launch {
+                            val result = runCatching {
+                                val kind = if (target.audioFamily == StableAudioModelSupport.FAMILY_SFX) {
+                                    StableAudio3Kind.SFX
+                                } else {
+                                    StableAudio3Kind.MUSIC
+                                }
+                                val role = StableAudioModelSupport.canonicalRole(target.audioComponentRole)
+                                    ?: error(resources.getString(R.string.audio_music_error_model_stale))
+                                val bundle = StableAudioCuratedBundleCatalog.bundles(context)
+                                    .firstOrNull { candidate ->
+                                        candidate.files.any { file ->
+                                            file.componentRole == role &&
+                                                (role != StableAudioModelSupport.ROLE_DIT ||
+                                                    file.audioFamily == kind.family)
+                                        }
+                                    } ?: error(resources.getString(R.string.audio_music_error_model_stale))
+                                val file = bundle.files.first { it.componentRole == role }
+                                val deleted = modelRepository.deleteModelWithResult(target)
+                                check(deleted.status == com.example.llamadroid.data.model.library.ModelDeletionStatus.COMPLETED) {
+                                    deleted.errorMessage ?: resources.getString(R.string.models_delete_result_retry)
+                                }
+                                modelRepository.startDownloadAsync(
+                                    repoId = file.repoId,
+                                    filename = file.remotePath,
+                                    type = file.type,
+                                    downloadUrlOverride = file.downloadUrl,
+                                    localFilenameOverride = file.installedFilename(bundle.defaultPrefix),
+                                    artifactFamily = file.audioFamily,
+                                    artifactRole = file.componentRole
+                                )
+                            }
+                            toast(
+                                result.fold(
+                                    onSuccess = { resources.getString(R.string.audio_stable_doctor_redownload_started) },
+                                    onFailure = { it.message ?: resources.getString(R.string.audio_music_error_model_stale) }
+                                )
+                            )
+                        }
+                    }
+                ) { Text(stringResource(R.string.audio_stable_doctor_redownload)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingAudioRepair = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+
     doctorDetails?.let { result ->
         AlertDialog(
             onDismissRequest = { doctorDetails = null },
@@ -802,6 +898,55 @@ fun LiteRtModelsScreen(navController: NavController, initialTab: String? = null)
             }
         )
     }
+
+    stableDoctorDetails?.let { report ->
+        val check = report.check
+        AlertDialog(
+            onDismissRequest = { stableDoctorDetails = null },
+            title = { Text(stringResource(R.string.audio_stable_doctor_title)) },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(stringResource(R.string.audio_stable_doctor_status, stableDoctorHealthLabel(check.health)))
+                    Text(stringResource(R.string.audio_stable_doctor_role, stableDoctorRoleName(report.role)))
+                    Text(stringResource(R.string.audio_stable_doctor_readable, if (check.readable) {
+                        stringResource(R.string.audio_stable_doctor_yes)
+                    } else {
+                        stringResource(R.string.audio_stable_doctor_no)
+                    }))
+                    Text(stringResource(R.string.audio_stable_doctor_parent, if (check.parentDirectoryAvailable) {
+                        stringResource(R.string.audio_stable_doctor_yes)
+                    } else {
+                        stringResource(R.string.audio_stable_doctor_no)
+                    }))
+                    Text(
+                        stringResource(
+                            R.string.audio_stable_doctor_size,
+                            check.actualSizeBytes?.let(FormatUtils::formatFileSize)
+                                ?: stringResource(R.string.audio_stable_doctor_unknown),
+                            FormatUtils.formatFileSize(check.expectedSizeBytes)
+                        )
+                    )
+                    Text(
+                        stringResource(
+                            R.string.audio_stable_doctor_digest,
+                            check.actualSha256?.take(12)
+                                ?: stringResource(R.string.audio_stable_doctor_unknown),
+                            check.expectedSha256.take(12)
+                        )
+                    )
+                    Text(stringResource(R.string.audio_stable_doctor_expected_file, check.expectedFilename))
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { stableDoctorDetails = null }) {
+                    Text(stringResource(R.string.action_ok))
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -819,7 +964,11 @@ private fun LiteRtInstalledTab(
     onRemoveAudio: (ModelEntity) -> Unit,
     onSourceAudio: (ModelEntity) -> Unit,
     onOpenAudio: (String) -> Unit,
-    onDoctorDetails: (LiteRtBackendDoctorResult) -> Unit
+    onDoctorDetails: (LiteRtBackendDoctorResult) -> Unit,
+    stableDoctorResults: Map<String, StableAudio3ModelDoctorReport>,
+    stableDoctorBusy: Map<String, Boolean>,
+    onInspectAudio: (ModelEntity) -> Unit,
+    onRepairAudio: (ModelEntity) -> Unit
 ) {
     val storageSnapshot = com.example.llamadroid.ui.components.rememberModelStorageInventory()
 
@@ -918,7 +1067,11 @@ private fun LiteRtInstalledTab(
                                 model = model,
                                 onRemove = { onRemoveAudio(model) },
                                 onOpenAudio = { onOpenAudio(stableAudioKind(model)) },
-                                onSource = { onSourceAudio(model) }
+                                onSource = { onSourceAudio(model) },
+                                report = stableDoctorResults[model.filename],
+                                checking = stableDoctorBusy[model.filename] == true,
+                                onInspect = { onInspectAudio(model) },
+                                onRepair = { onRepairAudio(model) }
                             )
                         }
                     }
@@ -954,7 +1107,11 @@ private fun StableAudioInstalledModelCard(
     model: ModelEntity,
     onRemove: () -> Unit,
     onSource: () -> Unit,
-    onOpenAudio: () -> Unit
+    onOpenAudio: () -> Unit,
+    report: StableAudio3ModelDoctorReport?,
+    checking: Boolean,
+    onInspect: () -> Unit,
+    onRepair: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         ModelCard(
@@ -967,6 +1124,43 @@ private fun StableAudioInstalledModelCard(
             onAction = onRemove,
             onSource = onSource
         )
+        report?.let { result ->
+            val statusColor = if (result.ready) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.error
+            }
+            Text(
+                stringResource(
+                    R.string.audio_stable_doctor_status,
+                    stableDoctorHealthLabel(result.check.health)
+                ),
+                color = statusColor,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(onClick = onInspect, enabled = !checking, modifier = Modifier.weight(1f)) {
+                Text(
+                    stringResource(
+                        if (checking) R.string.audio_stable_doctor_checking
+                        else R.string.audio_stable_doctor_check
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            TextButton(onClick = onRepair, modifier = Modifier.weight(1f)) {
+                Text(
+                    stringResource(R.string.audio_stable_doctor_redownload),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
         OutlinedButton(
             onClick = onOpenAudio,
             modifier = Modifier.fillMaxWidth()
@@ -976,6 +1170,28 @@ private fun StableAudioInstalledModelCard(
             Text(stringResource(R.string.audio_music_open_workspace))
         }
     }
+}
+
+@Composable
+private fun stableDoctorHealthLabel(health: StableAudio3ComponentHealth): String = when (health) {
+    StableAudio3ComponentHealth.READY -> stringResource(R.string.audio_stable_doctor_status_ready)
+    StableAudio3ComponentHealth.ROLE_MISMATCH -> stringResource(R.string.audio_stable_doctor_role_bad)
+    StableAudio3ComponentHealth.NON_CANONICAL -> stringResource(R.string.audio_stable_doctor_status_path)
+    StableAudio3ComponentHealth.MISSING -> stringResource(R.string.audio_stable_doctor_status_missing)
+    StableAudio3ComponentHealth.PARENT_UNAVAILABLE -> stringResource(R.string.audio_stable_doctor_status_parent)
+    StableAudio3ComponentHealth.UNREADABLE -> stringResource(R.string.audio_stable_doctor_status_unreadable)
+    StableAudio3ComponentHealth.SIZE_MISMATCH -> stringResource(R.string.audio_stable_doctor_status_size)
+    StableAudio3ComponentHealth.DIGEST_MISMATCH -> stringResource(R.string.audio_stable_doctor_status_digest)
+}
+
+@Composable
+private fun stableDoctorRoleName(role: String?): String = when (role) {
+    StableAudioModelSupport.ROLE_DIT -> stringResource(R.string.model_library_role_stable_audio_dit)
+    StableAudioModelSupport.ROLE_TEXT_ENCODER -> stringResource(R.string.model_library_role_stable_audio_text_encoder)
+    StableAudioModelSupport.ROLE_TOKENIZER -> stringResource(R.string.model_library_role_stable_audio_tokenizer)
+    StableAudioModelSupport.ROLE_CODEC_ENCODER -> stringResource(R.string.model_library_role_stable_audio_codec_encoder)
+    StableAudioModelSupport.ROLE_CODEC_DECODER -> stringResource(R.string.model_library_role_stable_audio_codec_decoder)
+    else -> stringResource(R.string.audio_stable_doctor_role_bad)
 }
 
 @Composable

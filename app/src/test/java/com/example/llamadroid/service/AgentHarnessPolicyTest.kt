@@ -130,11 +130,11 @@ class AgentHarnessPolicyTest {
     }
 
     @Test
-    fun `optimized budgets are recommendations when explicit values are provided`() {
+    fun `optimized budgets preserve explicit values within the low end limits`() {
         val policy = AgentHarnessPolicy.forProfile(AgentHarnessProfile.OPTIMIZED)
 
         assertEquals(
-            32_768,
+            AgentHarnessPolicy.MAX_CONTEXT_TOKENS,
             policy.resolveContextTokens(
                 configuredContextTokens = 32_768,
                 explicit = true
@@ -148,7 +148,7 @@ class AgentHarnessPolicyTest {
             )
         )
         assertEquals(
-            12_345,
+            AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS,
             policy.resolveOutputTokens(
                 stage = AgentHarnessStage.BUILD,
                 configuredOutputTokens = 12_345,

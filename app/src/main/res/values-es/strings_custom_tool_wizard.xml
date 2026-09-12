@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="custom_tool_wizard_intro">Completa las secciones numeradas. Escribe los parámetros entre {llaves}; el validador revisa el esquema antes de activar Guardar.</string>
+    <string name="custom_tool_step_identity">1. Nombre y propósito</string>
+    <string name="custom_tool_step_execution">2. Plantilla de API o comando</string>
+    <string name="custom_tool_step_schema">3. Parámetros y ejemplo</string>
+    <string name="custom_tool_step_permission">4. Aprobación y activación</string>
+    <string name="custom_tool_native_ready">Lista para Chat nativo cuando se active Herramientas API personalizadas.</string>
+    <string name="custom_tool_native_requirements">Chat nativo requiere una plantilla estilo curl y desactivar «Necesita aprobación». Las demás plantillas quedan disponibles para proyectos de Agente por SSH remoto conectado.</string>
+    <string name="custom_tool_enable_after_save">Activar después de guardar</string>
+    <string name="custom_tool_step_preview">5. Vista previa y prueba</string>
+    <string name="custom_tool_preview_empty">La vista previa de ejecución aparecerá aquí.</string>
+    <string name="custom_tool_test_definition">Probar definición</string>
+    <string name="custom_tool_definition_valid">La definición es válida y se puede guardar.</string>
+    <string name="custom_tool_definition_invalid">La definición está incompleta o no es válida. Revisa el nombre, esquema, campos obligatorios, marcadores y ejemplo.</string>
+</resources>

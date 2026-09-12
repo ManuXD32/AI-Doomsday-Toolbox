@@ -7,6 +7,7 @@ import com.example.llamadroid.data.db.OrganizerAlarmEntity
 import com.example.llamadroid.data.db.OrganizerDao
 import com.example.llamadroid.data.db.OrganizerEventEntity
 import com.example.llamadroid.data.db.OrganizerLlmSettingsEntity
+import com.example.llamadroid.data.db.CustomToolEntity
 import com.example.llamadroid.data.repository.KnowledgeBaseRepository
 import com.example.llamadroid.onnx.OnnxBackendOverride
 import com.example.llamadroid.onnx.OnnxExecutionMode
@@ -258,6 +259,8 @@ data class NativeChatToolConfig(
     val todoToolsEnabled: Boolean = false,
     val calendarToolsEnabled: Boolean = false,
     val alarmToolsEnabled: Boolean = false,
+    val fileToolsEnabled: Boolean = false,
+    val customToolsEnabled: Boolean = false,
     val knowledgeBaseEnabled: Boolean = false,
     val knowledgeBaseAutoContextEnabled: Boolean = false,
     val selectedKnowledgeBaseIds: List<Long> = emptyList(),
@@ -289,6 +292,8 @@ data class NativeChatToolConfig(
             todoToolsEnabled ||
             calendarToolsEnabled ||
             alarmToolsEnabled ||
+            fileToolsEnabled ||
+            customToolsEnabled ||
             knowledgeBaseEnabled ||
             imageGenerationEnabled ||
             backgroundRemovalEnabled
@@ -334,6 +339,8 @@ data class NativeChatToolConfig(
             todoToolsEnabled = effectiveChatToolsEnabled && todoToolsEnabled && serverDefaults.todoToolsEnabled && !pinnedNoteOnly,
             calendarToolsEnabled = effectiveChatToolsEnabled && calendarToolsEnabled && serverDefaults.calendarToolsEnabled,
             alarmToolsEnabled = effectiveChatToolsEnabled && alarmToolsEnabled && serverDefaults.alarmToolsEnabled,
+            fileToolsEnabled = effectiveChatToolsEnabled && fileToolsEnabled,
+            customToolsEnabled = effectiveChatToolsEnabled && customToolsEnabled,
             knowledgeBaseEnabled = effectiveKnowledgeBaseEnabled,
             knowledgeBaseAutoContextEnabled = forceChatDocumentKnowledgeBase || (
                 effectiveChatToolsEnabled &&
@@ -382,6 +389,8 @@ data class NativeChatToolConfig(
         put(KEY_TODO_TOOLS_ENABLED, todoToolsEnabled)
         put(KEY_CALENDAR_TOOLS_ENABLED, calendarToolsEnabled)
         put(KEY_ALARM_TOOLS_ENABLED, alarmToolsEnabled)
+        put(KEY_FILE_TOOLS_ENABLED, fileToolsEnabled)
+        put(KEY_CUSTOM_TOOLS_ENABLED, customToolsEnabled)
         put(KEY_KNOWLEDGE_BASE_ENABLED, knowledgeBaseEnabled)
         put(KEY_KNOWLEDGE_AUTO_CONTEXT_ENABLED, knowledgeBaseAutoContextEnabled)
         put(KEY_KNOWLEDGE_BASE_IDS, KnowledgeBaseRepository.selectedKnowledgeBaseIdsToCsv(selectedKnowledgeBaseIds))
@@ -432,6 +441,8 @@ data class NativeChatToolConfig(
         const val KEY_TODO_TOOLS_ENABLED = "tool_todo_tools_enabled"
         const val KEY_CALENDAR_TOOLS_ENABLED = "tool_calendar_tools_enabled"
         const val KEY_ALARM_TOOLS_ENABLED = "tool_alarm_tools_enabled"
+        const val KEY_FILE_TOOLS_ENABLED = "tool_file_tools_enabled"
+        const val KEY_CUSTOM_TOOLS_ENABLED = "tool_custom_tools_enabled"
         const val KEY_KNOWLEDGE_BASE_ENABLED = "tool_knowledge_base_enabled"
         const val KEY_KNOWLEDGE_AUTO_CONTEXT_ENABLED = "tool_knowledge_auto_context_enabled"
         const val KEY_KNOWLEDGE_BASE_IDS = "tool_knowledge_base_ids"
@@ -600,6 +611,8 @@ data class NativeChatToolConfig(
             todoToolsEnabled = booleanParam(params, KEY_TODO_TOOLS_ENABLED, false),
             calendarToolsEnabled = booleanParam(params, KEY_CALENDAR_TOOLS_ENABLED, false),
             alarmToolsEnabled = booleanParam(params, KEY_ALARM_TOOLS_ENABLED, false),
+            fileToolsEnabled = booleanParam(params, KEY_FILE_TOOLS_ENABLED, false),
+            customToolsEnabled = booleanParam(params, KEY_CUSTOM_TOOLS_ENABLED, false),
             knowledgeBaseEnabled = booleanParam(params, KEY_KNOWLEDGE_BASE_ENABLED, false),
             knowledgeBaseAutoContextEnabled = booleanParam(params, KEY_KNOWLEDGE_AUTO_CONTEXT_ENABLED, false),
             selectedKnowledgeBaseIds = knowledgeBaseIdsParam(params, KEY_KNOWLEDGE_BASE_IDS),
@@ -902,7 +915,10 @@ class NativeChatToolRuntime(
         )
     }
 
-    fun availableTools(config: NativeChatToolConfig): List<AgentTool> {
+    fun availableTools(
+        config: NativeChatToolConfig,
+        customTools: List<CustomToolEntity> = emptyList()
+    ): List<AgentTool> {
         if (!config.toolsEnabled) return emptyList()
         val currentYear = nowProvider().year
         return buildList {
@@ -1012,6 +1028,38 @@ class NativeChatToolRuntime(
                         requiredParams = listOf("expression")
                     )
                 )
+            }
+            if (config.fileToolsEnabled) {
+                add(AgentTool(TOOL_LIST_WORKSPACE_FILES, "List files and folders in this chat's private workspace.", mapOf("path" to "Optional workspace-relative directory")))
+                add(AgentTool(TOOL_READ_WORKSPACE_FILE, "Read a bounded UTF-8 file from this chat's private workspace.", mapOf("path" to "Workspace-relative file path"), listOf("path")))
+                add(AgentTool(TOOL_WRITE_WORKSPACE_FILE, "Write one bounded batch to a workspace file. Keep generated files focused and use append/edit for later batches.", mapOf("path" to "Workspace-relative file path", "content" to "Content, maximum 16 KiB"), listOf("path", "content")))
+                add(AgentTool(TOOL_APPEND_WORKSPACE_FILE, "Append one bounded batch to a workspace file.", mapOf("path" to "Workspace-relative file path", "content" to "Content, maximum 16 KiB"), listOf("path", "content")))
+                add(AgentTool(TOOL_EDIT_WORKSPACE_LINES, "Replace an exact line range after reading the file.", mapOf("path" to "Workspace-relative file path", "start_line" to "First line, 1-based", "end_line" to "Last line, inclusive", "content" to "Replacement content"), listOf("path", "start_line", "end_line", "content")))
+                add(AgentTool(TOOL_APPLY_WORKSPACE_PATCH, "Apply a bounded unified diff inside this chat workspace.", mapOf("patch" to "Unified diff, maximum 16 KiB"), listOf("patch")))
+            }
+            if (config.customToolsEnabled) {
+                customTools.asSequence()
+                    .filter { it.isEnabled && !it.needsApproval }
+                    .filter { AgentRuntimeSupport.inferCustomToolExecutionMode(it.commandTemplate) == CustomToolExecutionMode.ARGV }
+                    .filter { CustomToolHttpExecutor.supports(it.commandTemplate) }
+                    .forEach { tool ->
+                        val specs = AgentRuntimeSupport.parseCustomToolParameterSpecs(tool.parametersJson)
+                        add(
+                            AgentTool(
+                                name = tool.name,
+                                description = "${tool.description}\nLocal curl-style API tool enabled by the user. Example: ${tool.exampleUsage}",
+                                parameters = specs.mapValues { it.value.description },
+                                requiredParams = runCatching {
+                                    val array = JSONArray(tool.requiredParamsJson)
+                                    (0 until array.length()).map(array::getString)
+                                }.getOrDefault(emptyList()),
+                                schemaJson = CustomToolDefinitionValidator.canonicalSchemaJson(
+                                    tool.parametersJson,
+                                    tool.requiredParamsJson
+                                )
+                            )
+                        )
+                    }
             }
             val pinnedNoteOnly = config.pinnedNoteId?.let { it > 0 } == true
             if (config.noteToolsEnabled && !pinnedNoteOnly) {
@@ -1345,7 +1393,7 @@ class NativeChatToolRuntime(
                     )
                 )
             }
-        }
+        }.distinctBy { it.name.lowercase(Locale.ROOT) }
     }
 
     suspend fun buildKnowledgeBaseSelectionGuidance(config: NativeChatToolConfig): String? {
@@ -1407,6 +1455,7 @@ class NativeChatToolRuntime(
         toolCall: OllamaService.ToolCall,
         config: NativeChatToolConfig,
         chatId: Long? = null,
+        customTools: List<CustomToolEntity> = emptyList(),
         onProgress: (NativeChatToolProgress) -> Unit = {},
         searchSummarizer: (suspend (NativeChatSearchSummaryRequest) -> String)? = null
     ): Result<NativeChatToolResult> = withContext(Dispatchers.IO) {
@@ -1856,7 +1905,43 @@ class NativeChatToolRuntime(
                         config = config
                     )
                 }
-                else -> "tool_error: Unknown tool '${toolCall.name}'."
+                TOOL_LIST_WORKSPACE_FILES -> {
+                    require(config.toolsEnabled && config.fileToolsEnabled) { "Workspace file tools are disabled for this chat." }
+                    NativeChatWorkspaceSupport.list(requireNotNull(context), requireNotNull(chatId), toolCall.arguments["path"].orEmpty())
+                }
+                TOOL_READ_WORKSPACE_FILE -> {
+                    require(config.toolsEnabled && config.fileToolsEnabled) { "Workspace file tools are disabled for this chat." }
+                    NativeChatWorkspaceSupport.read(requireNotNull(context), requireNotNull(chatId), toolCall.arguments["path"].orEmpty())
+                }
+                TOOL_WRITE_WORKSPACE_FILE -> {
+                    require(config.toolsEnabled && config.fileToolsEnabled) { "Workspace file tools are disabled for this chat." }
+                    NativeChatWorkspaceSupport.write(requireNotNull(context), requireNotNull(chatId), toolCall.arguments["path"].orEmpty(), toolCall.arguments["content"].orEmpty(), append = false)
+                }
+                TOOL_APPEND_WORKSPACE_FILE -> {
+                    require(config.toolsEnabled && config.fileToolsEnabled) { "Workspace file tools are disabled for this chat." }
+                    NativeChatWorkspaceSupport.write(requireNotNull(context), requireNotNull(chatId), toolCall.arguments["path"].orEmpty(), toolCall.arguments["content"].orEmpty(), append = true)
+                }
+                TOOL_EDIT_WORKSPACE_LINES -> {
+                    require(config.toolsEnabled && config.fileToolsEnabled) { "Workspace file tools are disabled for this chat." }
+                    NativeChatWorkspaceSupport.editLines(
+                        requireNotNull(context), requireNotNull(chatId), toolCall.arguments["path"].orEmpty(),
+                        toolCall.arguments["start_line"]?.toIntOrNull() ?: error("start_line must be an integer"),
+                        toolCall.arguments["end_line"]?.toIntOrNull() ?: error("end_line must be an integer"),
+                        toolCall.arguments["content"].orEmpty()
+                    )
+                }
+                TOOL_APPLY_WORKSPACE_PATCH -> {
+                    require(config.toolsEnabled && config.fileToolsEnabled) { "Workspace file tools are disabled for this chat." }
+                    NativeChatWorkspaceSupport.applyPatch(requireNotNull(context), requireNotNull(chatId), toolCall.arguments["patch"].orEmpty())
+                }
+                else -> {
+                    val custom = customTools.firstOrNull { it.isEnabled && !it.needsApproval && it.name.equals(toolCall.name, ignoreCase = true) }
+                    if (config.toolsEnabled && config.customToolsEnabled && custom != null && CustomToolHttpExecutor.supports(custom.commandTemplate)) {
+                        CustomToolHttpExecutor.execute(custom, toolCall.arguments)
+                    } else {
+                        "tool_error: Unknown or unavailable tool '${toolCall.name}'."
+                    }
+                }
             }
             val normalizedResult = when (output) {
                     is NativeChatToolResult -> output
@@ -3350,6 +3435,12 @@ class NativeChatToolRuntime(
         const val TOOL_KB_LIST_SOURCES = "kb_list_sources"
         const val TOOL_GENERATE_IMAGE = "generate_image"
         const val TOOL_REMOVE_IMAGE_BACKGROUND = "remove_image_background"
+        const val TOOL_LIST_WORKSPACE_FILES = "list_workspace_files"
+        const val TOOL_READ_WORKSPACE_FILE = "read_workspace_file"
+        const val TOOL_WRITE_WORKSPACE_FILE = "write_workspace_file"
+        const val TOOL_APPEND_WORKSPACE_FILE = "append_workspace_file"
+        const val TOOL_EDIT_WORKSPACE_LINES = "edit_workspace_lines"
+        const val TOOL_APPLY_WORKSPACE_PATCH = "apply_workspace_patch"
 
         private const val USER_AGENT_HEADER = "User-Agent"
         private const val DEFAULT_USER_AGENT =

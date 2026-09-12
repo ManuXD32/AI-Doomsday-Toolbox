@@ -15,6 +15,11 @@ namespace stable_audio::litert {
 using Status = int;
 constexpr Status kOk = 0;
 constexpr Status kCancelled = 100;
+// Public LiteRT status values. Keep these here so Java receives a stable
+// repair class even when the dynamic ABI omits a status-to-string export.
+constexpr Status kMemoryAllocationFailure = 2;
+constexpr Status kFileIO = 500;
+constexpr Status kInvalidFlatbuffer = 501;
 constexpr int kCpu = 1;
 constexpr int kHostMemory = 1;
 

@@ -30,6 +30,7 @@ internal object StableAudio3WorkerProtocol {
     const val KEY_NATIVE_STATUS = "native_status"
 
     const val ERROR_BAD_REQUEST = "bad_request"
+    const val ERROR_MODEL_STALE = "stable_audio_model_stale"
     const val ERROR_BUSY = "worker_busy"
     const val ERROR_CANCELLED = "cancelled"
     const val ERROR_NATIVE_UNAVAILABLE = "native_pipeline_unavailable"

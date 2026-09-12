@@ -5,8 +5,46 @@ import com.example.llamadroid.ui.navigation.Screen
 
 /** The result is useful to keep the route transition policy testable without starting Agent. */
 internal enum class AgentBackNavigationResult {
+    RETURNED_TO_PROJECT_DASHBOARD,
     POPPED_PREVIOUS,
     FELL_BACK_TO_TOOLS
+}
+
+/**
+ * Agent has an in-route dashboard. Back from a selected project should return to that dashboard
+ * before the real navigation stack is touched. Keeping this policy pure makes the two-step exit
+ * behavior easy to exercise without creating a NavController or starting Agent.
+ */
+internal fun performAgentBackNavigationFromProject(
+    hasActiveProject: Boolean,
+    returnToProjectDashboard: () -> Unit,
+    popBackStack: () -> Boolean,
+    navigateToTools: () -> Unit
+): AgentBackNavigationResult {
+    if (hasActiveProject) {
+        returnToProjectDashboard()
+        return AgentBackNavigationResult.RETURNED_TO_PROJECT_DASHBOARD
+    }
+    return performAgentBackNavigation(
+        popBackStack = popBackStack,
+        navigateToTools = navigateToTools
+    )
+}
+
+/**
+ * Variant for callers that already own the complete NavController back operation. This keeps
+ * the project-first branch reusable without invoking a route pop twice on the dashboard path.
+ */
+internal fun performAgentBackNavigationFromProject(
+    hasActiveProject: Boolean,
+    returnToProjectDashboard: () -> Unit,
+    navigateBackToPreviousPage: () -> AgentBackNavigationResult
+): AgentBackNavigationResult {
+    if (hasActiveProject) {
+        returnToProjectDashboard()
+        return AgentBackNavigationResult.RETURNED_TO_PROJECT_DASHBOARD
+    }
+    return navigateBackToPreviousPage()
 }
 
 /**

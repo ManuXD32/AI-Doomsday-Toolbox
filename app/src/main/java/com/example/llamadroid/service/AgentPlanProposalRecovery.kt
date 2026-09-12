@@ -67,7 +67,7 @@ private val EXPLICIT_TOOL_SHAPE = Regex(
 
 /** Stable, compact Plan-phase contract appended to the optimized system prompt. */
 internal const val OPTIMIZED_PLAN_REQUIRED_ACTION_CONTRACT =
-    "Required action: native propose_plan(plan, summary), then wait; never approve or build."
+    "Required outcome: submit one plan and summary through propose_plan, then wait; never approve or build. A plain Markdown plan is auto-submitted by the harness."
 
 /**
  * Inspects a bounded Plan response for an explicit implementation-plan body.

@@ -22,7 +22,9 @@ fun AgentNewProjectDialog(
     backend: AgentWorkspaceBackendType,
     onBackendChange: (AgentWorkspaceBackendType) -> Unit,
     onCreate: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    errorMessage: String? = null,
+    isCreating: Boolean = false
 ) {
     Dialog(onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
@@ -32,10 +34,30 @@ fun AgentNewProjectDialog(
                     actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },title = { Text(stringResource(R.string.agent_new_project_title)) }) },
             bottomBar = {
                 AppTaskActionFooter {
-                    Button(onClick = onCreate, modifier = Modifier.fillMaxWidth()) {
-                        Text(stringResource(R.string.action_create))
+                    Button(
+                        onClick = onCreate,
+                        enabled = !isCreating,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (isCreating) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Text(
+                            stringResource(
+                                if (isCreating) R.string.agent_project_creating
+                                else R.string.action_create
+                            )
+                        )
                     }
-                    OutlinedButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        enabled = !isCreating,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         Text(stringResource(R.string.action_cancel))
                     }
                 }
@@ -65,6 +87,15 @@ fun AgentNewProjectDialog(
                     Text(stringResource(if (backend == AgentWorkspaceBackendType.LOCAL_SANDBOX)
                         R.string.agent_project_backend_local_desc else R.string.agent_project_backend_remote_desc),
                         style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                    item {
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
             }
         }

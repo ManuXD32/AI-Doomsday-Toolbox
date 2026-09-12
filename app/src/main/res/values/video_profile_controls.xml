@@ -2,6 +2,7 @@
 <resources>
     <string name="llm_video_settings_title">Video input</string>
     <string name="llm_video_settings_desc">Enable video input for this vision-capable model.</string>
+    <string name="llm_video_global_policy_hint">Segmenting, frame limits, direct audio, and Native Chat Whisper are controlled by the global video policy in Video Summary.</string>
     <string name="llm_video_server_fps">Server video FPS: %1$.1f</string>
     <string name="llm_video_timestamp_interval">Timestamp interval: %1$d ms</string>
     <string name="llm_video_segment_seconds">Long-video segment length: %1$d seconds</string>

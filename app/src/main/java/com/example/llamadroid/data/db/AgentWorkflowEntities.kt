@@ -638,6 +638,49 @@ data class AgentContinuationOutboxEntity(
     val updatedAt: Long = System.currentTimeMillis()
 )
 
+/**
+ * One durable wake request per Agent conversation. The row survives process
+ * recreation and its run epoch prevents an old alarm from reviving stopped or
+ * replaced work.
+ */
+@Entity(
+    tableName = "agent_sleep_wakes",
+    foreignKeys = [
+        ForeignKey(
+            entity = AgentConversationEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["conversationId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [
+        Index(value = ["conversationId"], unique = true),
+        Index("status"),
+        Index("wakeAtEpochMs")
+    ]
+)
+data class AgentSleepWakeEntity(
+    @PrimaryKey val id: String,
+    val conversationId: Long,
+    val rootTurnId: String? = null,
+    val runEpoch: Long,
+    val wakeAtEpochMs: Long,
+    val reason: String = "",
+    val status: String = AgentSleepWakeStatus.PENDING,
+    val approximate: Boolean = false,
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis(),
+    val firedAt: Long? = null,
+    val completedAt: Long? = null
+)
+
+object AgentSleepWakeStatus {
+    const val PENDING = "PENDING"
+    const val FIRED = "FIRED"
+    const val COMPLETED = "COMPLETED"
+    const val CANCELLED = "CANCELLED"
+}
+
 /** Stable execution profile identifiers persisted on conversations. */
 object AgentExecutionProfile {
     const val LEGACY = "legacy"

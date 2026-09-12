@@ -501,11 +501,6 @@ fun LLMSettingsScreen(navController: NavController) {
     val videoEnabled by settingsRepo.llamaVideoEnabled.collectAsState()
     val videoFps by settingsRepo.llamaVideoFps.collectAsState()
     val videoTimestampIntervalMs by settingsRepo.llamaVideoTimestampIntervalMs.collectAsState()
-    val videoSegmentSeconds by settingsRepo.llamaVideoSegmentSeconds.collectAsState()
-    val videoMaxFrames by settingsRepo.llamaVideoMaxFrames.collectAsState()
-    val videoMaxFps by settingsRepo.llamaVideoMaxFps.collectAsState()
-    val videoAudioEnabled by settingsRepo.llamaVideoAudioEnabled.collectAsState()
-    val videoWhisperParallelEnabled by settingsRepo.llamaVideoWhisperParallelEnabled.collectAsState()
     val llmNativeBinarySelection by settingsRepo.llmNativeBinarySelection.collectAsState()
     val llamaOpenClCpuTargetGpuDraft by settingsRepo.llamaOpenClCpuTargetGpuDraft.collectAsState()
     val effectiveLlmBinary = remember(llmNativeBinarySelection) {
@@ -2132,68 +2127,7 @@ fun LLMSettingsScreen(navController: NavController) {
                                         LlamaVideoProfileLimits.MAX_TIMESTAMP_INTERVAL_MS.toFloat()
                                 )
                                 Text(
-                                    stringResource(
-                                        R.string.llm_video_segment_seconds,
-                                        videoSegmentSeconds
-                                    ),
-                                    style = MaterialTheme.typography.labelLarge
-                                )
-                                Slider(
-                                    value = videoSegmentSeconds.toFloat(),
-                                    onValueChange = { settingsRepo.setLlamaVideoSegmentSeconds(it.toInt()) },
-                                    valueRange = LlamaVideoProfileLimits.MIN_SEGMENT_SECONDS.toFloat()..
-                                        LlamaVideoProfileLimits.MAX_SEGMENT_SECONDS.toFloat(),
-                                    steps = LlamaVideoProfileLimits.MAX_SEGMENT_SECONDS -
-                                        LlamaVideoProfileLimits.MIN_SEGMENT_SECONDS - 1
-                                )
-                                Text(
-                                    stringResource(
-                                        R.string.llm_video_segment_recommendation,
-                                        LlamaVideoProfileLimits.DEFAULT_SEGMENT_SECONDS
-                                    ),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    stringResource(R.string.llm_video_max_frames, videoMaxFrames),
-                                    style = MaterialTheme.typography.labelLarge
-                                )
-                                Slider(
-                                    value = videoMaxFrames.toFloat(),
-                                    onValueChange = { settingsRepo.setLlamaVideoMaxFrames(it.toInt()) },
-                                    valueRange = LlamaVideoProfileLimits.MIN_MAX_FRAMES.toFloat()..
-                                        LlamaVideoProfileLimits.MAX_MAX_FRAMES.toFloat(),
-                                    steps = LlamaVideoProfileLimits.MAX_MAX_FRAMES -
-                                        LlamaVideoProfileLimits.MIN_MAX_FRAMES - 1
-                                )
-                                Text(
-                                    stringResource(R.string.llm_video_max_fps, videoMaxFps),
-                                    style = MaterialTheme.typography.labelLarge
-                                )
-                                Slider(
-                                    value = videoMaxFps.coerceIn(
-                                        LlamaVideoProfileLimits.MIN_MAX_FPS,
-                                        LlamaVideoProfileLimits.MAX_MAX_FPS
-                                    ),
-                                    onValueChange = settingsRepo::setLlamaVideoMaxFps,
-                                    valueRange = LlamaVideoProfileLimits.MIN_MAX_FPS..
-                                        LlamaVideoProfileLimits.MAX_MAX_FPS,
-                                    steps = 18
-                                )
-                                LlmAdvancedToggle(
-                                    title = stringResource(R.string.llm_video_audio_title),
-                                    description = stringResource(R.string.llm_video_audio_desc),
-                                    checked = videoAudioEnabled,
-                                    onCheckedChange = settingsRepo::setLlamaVideoAudioEnabled
-                                )
-                                LlmAdvancedToggle(
-                                    title = stringResource(R.string.llm_video_whisper_parallel_title),
-                                    description = stringResource(R.string.llm_video_whisper_parallel_desc),
-                                    checked = videoWhisperParallelEnabled,
-                                    onCheckedChange = settingsRepo::setLlamaVideoWhisperParallelEnabled
-                                )
-                                Text(
-                                    stringResource(R.string.llm_video_low_end_warning),
+                                    stringResource(R.string.llm_video_global_policy_hint),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )

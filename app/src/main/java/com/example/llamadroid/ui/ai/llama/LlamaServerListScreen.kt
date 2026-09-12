@@ -85,6 +85,7 @@ import com.example.llamadroid.data.repository.LiteRtModelRepository
 import com.example.llamadroid.service.NativeChatToolConfig
 import com.example.llamadroid.service.LlamaServerLaunchProfile
 import com.example.llamadroid.service.LlamaVideoProfileLimits
+import com.example.llamadroid.service.VideoRecognitionSettingsRepository
 import com.example.llamadroid.service.WhisperLanguages
 import com.example.llamadroid.service.isNativeChatLoopbackHost
 import com.example.llamadroid.ui.components.DraftIntTextField
@@ -221,6 +222,8 @@ private fun LlamaServerDialog(
 ) {
     val dialogKey = initialServer?.id ?: -1L
     val scrollState = rememberScrollState()
+    val context = LocalContext.current
+    val globalVideoSettings = remember(context) { VideoRecognitionSettingsRepository(context) }
 
     var name by remember(dialogKey) { mutableStateOf(initialServer?.name ?: "") }
     var host by remember(dialogKey) { mutableStateOf(initialServer?.host ?: "") }
@@ -259,36 +262,6 @@ private fun LlamaServerDialog(
     }
     var videoEnabled by remember(dialogKey) {
         mutableStateOf(savedLaunchProfile?.videoEnabled ?: settingsRepository.llamaVideoEnabled.value)
-    }
-    var videoSegmentSeconds by remember(dialogKey) {
-        mutableStateOf(
-            savedLaunchProfile?.videoSegmentSeconds
-                ?: settingsRepository.llamaVideoSegmentSeconds.value
-        )
-    }
-    var videoMaxFrames by remember(dialogKey) {
-        mutableStateOf(
-            savedLaunchProfile?.videoMaxFrames
-                ?: settingsRepository.llamaVideoMaxFrames.value
-        )
-    }
-    var videoMaxFps by remember(dialogKey) {
-        mutableStateOf(
-            savedLaunchProfile?.videoMaxFps
-                ?: settingsRepository.llamaVideoMaxFps.value
-        )
-    }
-    var videoAudioEnabled by remember(dialogKey) {
-        mutableStateOf(
-            savedLaunchProfile?.videoAudioEnabled
-                ?: settingsRepository.llamaVideoAudioEnabled.value
-        )
-    }
-    var videoWhisperParallelEnabled by remember(dialogKey) {
-        mutableStateOf(
-            savedLaunchProfile?.videoWhisperParallelEnabled
-                ?: settingsRepository.llamaVideoWhisperParallelEnabled.value
-        )
     }
     var liteRtModelId by remember(dialogKey) { mutableStateOf(initialServer?.liteRtModelId) }
     var liteRtBackend by remember(dialogKey) {
@@ -760,98 +733,7 @@ private fun LlamaServerDialog(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
-                            stringResource(R.string.llm_video_segment_seconds, videoSegmentSeconds),
-                            style = MaterialTheme.typography.labelLarge
-                        )
-                        Slider(
-                            value = videoSegmentSeconds.toFloat().coerceIn(
-                                LlamaVideoProfileLimits.MIN_SEGMENT_SECONDS.toFloat(),
-                                LlamaVideoProfileLimits.MAX_SEGMENT_SECONDS.toFloat()
-                            ),
-                            onValueChange = { videoSegmentSeconds = it.toInt() },
-                            valueRange = LlamaVideoProfileLimits.MIN_SEGMENT_SECONDS.toFloat()..
-                                LlamaVideoProfileLimits.MAX_SEGMENT_SECONDS.toFloat(),
-                            steps = LlamaVideoProfileLimits.MAX_SEGMENT_SECONDS -
-                                LlamaVideoProfileLimits.MIN_SEGMENT_SECONDS - 1
-                        )
-                        Text(
-                            stringResource(
-                                R.string.llm_video_segment_recommendation,
-                                LlamaVideoProfileLimits.DEFAULT_SEGMENT_SECONDS
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            stringResource(R.string.llm_video_max_frames, videoMaxFrames),
-                            style = MaterialTheme.typography.labelLarge
-                        )
-                        Slider(
-                            value = videoMaxFrames.toFloat().coerceIn(
-                                LlamaVideoProfileLimits.MIN_MAX_FRAMES.toFloat(),
-                                LlamaVideoProfileLimits.MAX_MAX_FRAMES.toFloat()
-                            ),
-                            onValueChange = { videoMaxFrames = it.toInt() },
-                            valueRange = LlamaVideoProfileLimits.MIN_MAX_FRAMES.toFloat()..
-                                LlamaVideoProfileLimits.MAX_MAX_FRAMES.toFloat(),
-                            steps = LlamaVideoProfileLimits.MAX_MAX_FRAMES -
-                                LlamaVideoProfileLimits.MIN_MAX_FRAMES - 1
-                        )
-                        Text(
-                            stringResource(R.string.llm_video_max_fps, videoMaxFps),
-                            style = MaterialTheme.typography.labelLarge
-                        )
-                        Slider(
-                            value = videoMaxFps.coerceIn(
-                                LlamaVideoProfileLimits.MIN_MAX_FPS,
-                                LlamaVideoProfileLimits.MAX_MAX_FPS
-                            ),
-                            onValueChange = { videoMaxFps = it },
-                            valueRange = LlamaVideoProfileLimits.MIN_MAX_FPS..
-                                LlamaVideoProfileLimits.MAX_MAX_FPS,
-                            steps = 18
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(stringResource(R.string.llm_video_audio_title), fontWeight = FontWeight.Medium)
-                                Text(
-                                    stringResource(R.string.llm_video_audio_desc),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Switch(
-                                checked = videoAudioEnabled,
-                                onCheckedChange = { videoAudioEnabled = it }
-                            )
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    stringResource(R.string.llm_video_whisper_parallel_title),
-                                    fontWeight = FontWeight.Medium
-                                )
-                                Text(
-                                    stringResource(R.string.llm_video_whisper_parallel_desc),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Switch(
-                                checked = videoWhisperParallelEnabled,
-                                onCheckedChange = { videoWhisperParallelEnabled = it }
-                            )
-                        }
-                        Text(
-                            stringResource(R.string.llm_video_low_end_warning),
+                            stringResource(R.string.llm_video_global_policy_hint),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1347,6 +1229,7 @@ private fun LlamaServerDialog(
                                 maxToolRounds = defaultMaxToolRounds
                             ),
                             localLaunchProfileJson = if (isLocalLlamaServer && saveLocalLaunchProfile) {
+                                val globalVideoPolicy = globalVideoSettings.snapshot().processingPolicy
                                 LlamaServerLaunchProfile.encode(
                                     (savedLaunchProfile ?: LlamaServerLaunchProfile.capture(settingsRepository)).copy(
                                         // supportsVideo describes server capability;
@@ -1355,11 +1238,11 @@ private fun LlamaServerDialog(
                                         videoEnabled = videoEnabled,
                                         videoFps = videoFps,
                                         videoTimestampIntervalMs = videoTimestampIntervalMs,
-                                        videoSegmentSeconds = videoSegmentSeconds,
-                                        videoMaxFrames = videoMaxFrames,
-                                        videoMaxFps = videoMaxFps,
-                                        videoAudioEnabled = videoAudioEnabled,
-                                        videoWhisperParallelEnabled = videoWhisperParallelEnabled
+                                        videoSegmentSeconds = globalVideoPolicy.segmentSeconds,
+                                        videoMaxFrames = globalVideoPolicy.maxFrames,
+                                        videoMaxFps = globalVideoPolicy.maxFps,
+                                        videoAudioEnabled = globalVideoPolicy.directAudioEnabled,
+                                        videoWhisperParallelEnabled = globalVideoPolicy.nativeChatParallelWhisperEnabled
                                     )
                                 )
                             } else {

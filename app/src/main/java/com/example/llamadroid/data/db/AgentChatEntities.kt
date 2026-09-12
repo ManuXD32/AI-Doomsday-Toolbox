@@ -21,7 +21,7 @@ data class AgentConversationEntity(
     val lastAgentRole: String? = "ORCHESTRATOR",
     val lastTask: String? = null,
     val knowledgeBaseIds: String = "",
-    val workspaceBackend: String = "REMOTE_SSH",
+    val workspaceBackend: String = "LOCAL_SANDBOX",
     val runtimeCapabilitiesJson: String = "",
     val runEntrypointPath: String? = null,
     val runUiMode: String = "CONSOLE",

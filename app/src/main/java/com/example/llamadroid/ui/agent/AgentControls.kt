@@ -114,6 +114,7 @@ fun AgentTopBar(
     onShowSettings: () -> Unit,
     onShowSetupInfo: () -> Unit,
     onShowProjectManagement: () -> Unit,
+    onShowDetails: () -> Unit,
     onShowCustomTools: () -> Unit,
     onShowCustomAgents: () -> Unit,
     onShowSkills: () -> Unit,
@@ -199,6 +200,11 @@ fun AgentTopBar(
                         text = { Text(stringResource(R.string.agent_project_mgmt_title)) },
                         onClick = { showMenu = false; onShowProjectManagement() },
                         leadingIcon = { Icon(Icons.Default.Inventory, null) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.agent_details_title)) },
+                        onClick = { showMenu = false; onShowDetails() },
+                        leadingIcon = { Icon(Icons.Default.Info, null) }
                     )
                     HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                     DropdownMenuItem(

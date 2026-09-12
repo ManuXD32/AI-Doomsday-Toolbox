@@ -1183,7 +1183,8 @@ fun AgentSettingsDialog(
                         onChange = saveGlobalOverride,
                         contextSizeForDisplay = displayGlobalContext,
                         maxOutputTokensForDisplay = displayGlobalOutput,
-                        outputRecommendation = globalOutputRecommendation
+                        outputRecommendation = globalOutputRecommendation,
+                        optimizedLimits = optimizedHarnessSelected
                     )
                     if (currentProfile != null) {
                         AgentHarnessProfileCard(
@@ -1279,6 +1280,7 @@ fun AgentSettingsDialog(
                     maxOutputTokens = displayRoleOutput("ORCHESTRATOR", orchestratorMaxOutputTokens),
                     onMaxOutputTokensChange = settingsRepository::setAgentOrchestratorMaxOutputTokens,
                     outputRecommendation = outputRecommendationForRole("ORCHESTRATOR"),
+                    optimizedLimits = optimizedHarnessSelected,
                     thinkingEnabled = orchestratorThinking,
                     onThinkingChange = { settingsRepository.setAgentOrchestratorThinkingEnabled(it) },
                     visionEnabled = orchestratorVisionEnabled,
@@ -1310,6 +1312,7 @@ fun AgentSettingsDialog(
                     onMaxOutputTokensChange =
                         settingsRepository::setAgentCodebaseScoutMaxOutputTokens,
                     outputRecommendation = outputRecommendationForRole("CODEBASE_SCOUT"),
+                    optimizedLimits = optimizedHarnessSelected,
                     thinkingEnabled = codebaseScoutThinking,
                     onThinkingChange =
                         settingsRepository::setAgentCodebaseScoutThinkingEnabled,
@@ -1347,6 +1350,7 @@ fun AgentSettingsDialog(
                     onMaxOutputTokensChange =
                         settingsRepository::setAgentPlannerMaxOutputTokens,
                     outputRecommendation = outputRecommendationForRole("PLANNER"),
+                    optimizedLimits = optimizedHarnessSelected,
                     thinkingEnabled = plannerThinking,
                     onThinkingChange =
                         settingsRepository::setAgentPlannerThinkingEnabled,
@@ -1384,6 +1388,7 @@ fun AgentSettingsDialog(
                     onMaxOutputTokensChange =
                         settingsRepository::setAgentResearcherMaxOutputTokens,
                     outputRecommendation = outputRecommendationForRole("RESEARCHER"),
+                    optimizedLimits = optimizedHarnessSelected,
                     thinkingEnabled = researcherThinking,
                     onThinkingChange =
                         settingsRepository::setAgentResearcherThinkingEnabled,
@@ -1427,6 +1432,7 @@ fun AgentSettingsDialog(
                     maxOutputTokens = displayRoleOutput("CODER", coderMaxOutputTokens),
                     onMaxOutputTokensChange = settingsRepository::setAgentCoderMaxOutputTokens,
                     outputRecommendation = outputRecommendationForRole("CODER"),
+                    optimizedLimits = optimizedHarnessSelected,
                     thinkingEnabled = coderThinking,
                     onThinkingChange = { settingsRepository.setAgentCoderThinkingEnabled(it) },
                     visionEnabled = coderVisionEnabled,
@@ -1464,6 +1470,7 @@ fun AgentSettingsDialog(
                     maxOutputTokens = displayRoleOutput("EXECUTOR", executorMaxOutputTokens),
                     onMaxOutputTokensChange = settingsRepository::setAgentExecutorMaxOutputTokens,
                     outputRecommendation = outputRecommendationForRole("EXECUTOR"),
+                    optimizedLimits = optimizedHarnessSelected,
                     thinkingEnabled = executorThinking,
                     onThinkingChange = { settingsRepository.setAgentExecutorThinkingEnabled(it) },
                     visionEnabled = executorVisionEnabled,
@@ -1503,6 +1510,7 @@ fun AgentSettingsDialog(
                     maxOutputTokens = displayRoleOutput("REVIEWER", reviewerMaxOutputTokens),
                     onMaxOutputTokensChange = settingsRepository::setAgentReviewerMaxOutputTokens,
                     outputRecommendation = outputRecommendationForRole("REVIEWER"),
+                    optimizedLimits = optimizedHarnessSelected,
                     thinkingEnabled = reviewerThinking,
                     onThinkingChange = { settingsRepository.setAgentReviewerThinkingEnabled(it) },
                     visionEnabled = reviewerVisionEnabled,
@@ -1536,6 +1544,7 @@ fun AgentSettingsDialog(
                     onMaxOutputTokensChange =
                         settingsRepository::setAgentVisualTesterMaxOutputTokens,
                     outputRecommendation = outputRecommendationForRole("VISUAL_TESTER"),
+                    optimizedLimits = optimizedHarnessSelected,
                     thinkingEnabled = visualTesterThinking,
                     onThinkingChange =
                         settingsRepository::setAgentVisualTesterThinkingEnabled,
@@ -1586,6 +1595,7 @@ fun AgentSettingsDialog(
                     maxOutputTokens = displayRoleOutput("SUMMARIZER", summarizerMaxOutputTokens),
                     onMaxOutputTokensChange = settingsRepository::setAgentSummarizerMaxOutputTokens,
                     outputRecommendation = outputRecommendationForRole("SUMMARIZER"),
+                    optimizedLimits = optimizedHarnessSelected,
                     thinkingEnabled = summarizerThinking,
                     onThinkingChange = { settingsRepository.setAgentSummarizerThinkingEnabled(it) },
                     visionEnabled = summarizerVisionEnabled,
@@ -2513,7 +2523,8 @@ fun AgentGlobalOverrideCard(
     /** Optional display-only values for an active Optimized profile. */
     contextSizeForDisplay: Int? = null,
     maxOutputTokensForDisplay: Int? = null,
-    outputRecommendation: String? = null
+    outputRecommendation: String? = null,
+    optimizedLimits: Boolean = false
 ) {
     val backendOptions = AgentRuntimeBackend.entries.map { it.id }
     val backend = state.normalizedBackend
@@ -2791,18 +2802,31 @@ fun AgentGlobalOverrideCard(
 
             DraftIntTextField(
                 value = contextSizeForDisplay ?: state.contextSize,
-                onValueChange = { onChange(state.copy(contextSize = it)) },
+                onValueChange = {
+                    onChange(state.copy(contextSize = if (optimizedLimits) {
+                        it.coerceIn(AgentHarnessPolicy.MIN_CONTEXT_TOKENS, AgentHarnessPolicy.MAX_CONTEXT_TOKENS)
+                    } else it))
+                },
+                valueRange = if (optimizedLimits) {
+                    AgentHarnessPolicy.MIN_CONTEXT_TOKENS..AgentHarnessPolicy.MAX_CONTEXT_TOKENS
+                } else 1..1_048_576,
                 label = { Text(stringResource(R.string.agent_global_override_context_label)) },
                 modifier = Modifier.fillMaxWidth(),
-                blankValue = 0
+                blankValue = if (optimizedLimits) AgentHarnessPolicy.DEFAULT_CONTEXT_TOKENS else 0
             )
             DraftIntTextField(
                 value = maxOutputTokensForDisplay ?: state.maxOutputTokens,
-                onValueChange = { onChange(state.copy(maxOutputTokens = it)) },
-                valueRange = 1..1_048_576,
+                onValueChange = {
+                    onChange(state.copy(maxOutputTokens = if (optimizedLimits) {
+                        it.coerceIn(AgentHarnessPolicy.MIN_OUTPUT_TOKENS, AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS)
+                    } else it))
+                },
+                valueRange = if (optimizedLimits) {
+                    AgentHarnessPolicy.MIN_OUTPUT_TOKENS..AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS
+                } else 1..1_048_576,
                 label = { Text(stringResource(R.string.agent_global_override_max_output_label)) },
                 modifier = Modifier.fillMaxWidth(),
-                blankValue = 8096
+                blankValue = if (optimizedLimits) AgentHarnessPolicy.CONTROL_MAX_OUTPUT_TOKENS else 8096
             )
             outputRecommendation?.let { recommendation ->
                 Text(
@@ -2898,7 +2922,7 @@ private fun agentToolSettingGroups(): List<AgentToolSettingGroup> = listOf(
     ),
     AgentToolSettingGroup(
         R.string.agent_tool_category_mutation,
-        listOf("write_file", "edit_lines", "apply_patch", "create_folder")
+        listOf("write_file", "append_file", "edit_lines", "apply_patch", "create_folder")
     ),
     AgentToolSettingGroup(
         R.string.agent_tool_category_execution,
@@ -2953,7 +2977,8 @@ private fun agentToolSettingGroups(): List<AgentToolSettingGroup> = listOf(
             "skill",
             "read_skill_resource",
             "run_skill_script",
-            "get_datetime"
+            "get_datetime",
+            "sleep_until"
         )
     )
 )
@@ -3173,6 +3198,7 @@ private fun AgentTuningCard(
     maxOutputTokens: Int,
     onMaxOutputTokensChange: (Int) -> Unit,
     outputRecommendation: String? = null,
+    optimizedLimits: Boolean = false,
     thinkingEnabled: Boolean,
     onThinkingChange: (Boolean) -> Unit,
     visionEnabled: Boolean? = null,
@@ -3325,15 +3351,28 @@ private fun AgentTuningCard(
                     if (!isLiteRt && !isServer) {
                         DraftIntTextField(
                             value = contextSize,
-                            onValueChange = onContextSizeChange,
+                            onValueChange = {
+                                onContextSizeChange(if (optimizedLimits) {
+                                    it.coerceIn(AgentHarnessPolicy.MIN_CONTEXT_TOKENS, AgentHarnessPolicy.MAX_CONTEXT_TOKENS)
+                                } else it)
+                            },
+                            valueRange = if (optimizedLimits) {
+                                AgentHarnessPolicy.MIN_CONTEXT_TOKENS..AgentHarnessPolicy.MAX_CONTEXT_TOKENS
+                            } else 1..1_048_576,
                             label = { Text(stringResource(R.string.agent_context_label)) },
                             modifier = Modifier.fillMaxWidth(),
-                            blankValue = 0
+                            blankValue = if (optimizedLimits) AgentHarnessPolicy.DEFAULT_CONTEXT_TOKENS else 0
                         )
                         DraftIntTextField(
                             value = maxOutputTokens,
-                            onValueChange = onMaxOutputTokensChange,
-                            valueRange = 1..1_048_576,
+                            onValueChange = {
+                                onMaxOutputTokensChange(if (optimizedLimits) {
+                                    it.coerceIn(AgentHarnessPolicy.MIN_OUTPUT_TOKENS, AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS)
+                                } else it)
+                            },
+                            valueRange = if (optimizedLimits) {
+                                AgentHarnessPolicy.MIN_OUTPUT_TOKENS..AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS
+                            } else 1..1_048_576,
                             label = {
                                 Text(
                                     stringResource(
@@ -3342,7 +3381,7 @@ private fun AgentTuningCard(
                                 )
                             },
                             modifier = Modifier.fillMaxWidth(),
-                            blankValue = 8096
+                            blankValue = if (optimizedLimits) AgentHarnessPolicy.CONTROL_MAX_OUTPUT_TOKENS else 8096
                         )
                         outputRecommendation?.let { recommendation ->
                             Text(
@@ -3809,6 +3848,7 @@ fun AgentConfigCard(
     maxOutputTokens: Int,
     onMaxOutputTokensChange: (Int) -> Unit,
     outputRecommendation: String? = null,
+    optimizedLimits: Boolean = false,
     thinkingEnabled: Boolean,
     onThinkingChange: (Boolean) -> Unit,
     visionEnabled: Boolean,
@@ -3975,19 +4015,28 @@ fun AgentConfigCard(
                         DraftIntTextField(
                             value = contextSize,
                             onValueChange = onContextSizeChange,
+                            valueRange = if (optimizedLimits) {
+                                AgentHarnessPolicy.MIN_CONTEXT_TOKENS..AgentHarnessPolicy.MAX_CONTEXT_TOKENS
+                            } else {
+                                null
+                            },
                             label = { Text(stringResource(R.string.agent_context_label)) },
                             modifier = Modifier.fillMaxWidth(),
-                            blankValue = 0
+                            blankValue = if (optimizedLimits) AgentHarnessPolicy.DEFAULT_CONTEXT_TOKENS else 0
                         )
 
                         Spacer(modifier = Modifier.height(8.dp))
                         DraftIntTextField(
                             value = maxOutputTokens,
                             onValueChange = onMaxOutputTokensChange,
-                            valueRange = 1..1_048_576,
+                            valueRange = if (optimizedLimits) {
+                                AgentHarnessPolicy.MIN_OUTPUT_TOKENS..AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS
+                            } else {
+                                1..1_048_576
+                            },
                             label = { Text(stringResource(R.string.agent_max_output_tokens_label)) },
                             modifier = Modifier.fillMaxWidth(),
-                            blankValue = 8096
+                            blankValue = if (optimizedLimits) AgentHarnessPolicy.CONTROL_MAX_OUTPUT_TOKENS else 8096
                         )
                         outputRecommendation?.let { recommendation ->
                             Text(

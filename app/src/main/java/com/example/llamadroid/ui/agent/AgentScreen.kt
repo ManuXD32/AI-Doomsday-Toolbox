@@ -86,6 +86,7 @@ import com.example.llamadroid.service.AiRuntimeJobStore
 import com.example.llamadroid.service.AgentWorkspaceBackendType
 import com.example.llamadroid.service.AgentSkillRepository
 import com.example.llamadroid.service.AgentService
+import com.example.llamadroid.service.AgentSleepWakeScheduler
 import com.example.llamadroid.service.GenerationDiagnosticsStore
 import com.example.llamadroid.service.OllamaService
 import com.example.llamadroid.service.StagedFileCache
@@ -166,6 +167,8 @@ fun AgentScreen(
     val blankPlanText = stringResource(R.string.soft_studio_conversations_plan_blank)
     val wrongPlanProjectText = stringResource(R.string.soft_studio_conversations_plan_wrong_project)
     val defaultProjectName = stringResource(R.string.soft_studio_conversations_default_project)
+    val remoteProjectErrorFormat = stringResource(R.string.agent_project_create_remote_error)
+    val projectCreateErrorFormat = stringResource(R.string.agent_project_create_error)
     val scope = rememberCoroutineScope()
 
     // Services
@@ -213,6 +216,9 @@ fun AgentScreen(
     val currentProjectFolder by AgentService.currentProjectFolder.collectAsStateWithLifecycle()
     val currentWorkspaceBackend by AgentService.currentWorkspaceBackend.collectAsStateWithLifecycle()
     val currentPlanningModeEnabled by AgentService.currentPlanningModeEnabled.collectAsStateWithLifecycle()
+    val promptContextSnapshot by AgentService.promptContextSnapshot.collectAsStateWithLifecycle()
+    val lastFinishReason by AgentService.lastFinishReason.collectAsStateWithLifecycle()
+    val lastGenerationUsage by AgentService.lastGenerationUsage.collectAsStateWithLifecycle()
 
     // UI Local state
     var inputText by rememberSaveable { mutableStateOf("") }
@@ -486,6 +492,8 @@ fun AgentScreen(
     var showCustomTools by remember { mutableStateOf(false) } // Custom Tools screen
     var showCustomAgents by remember { mutableStateOf(false) } // Custom Agents screen
     var showSkillManager by remember { mutableStateOf(false) }
+    var showDetails by rememberSaveable { mutableStateOf(false) }
+    var detailsProjectId by rememberSaveable { mutableStateOf<Long?>(null) }
     var showCommands by remember { mutableStateOf(false) }
     var showTodos by rememberSaveable { mutableStateOf(false) }
     var showBuildSwitchOffer by remember { mutableStateOf(false) }
@@ -494,7 +502,9 @@ fun AgentScreen(
     var pendingDeleteFolder by remember { mutableStateOf<String?>(null) } // Folder to delete
     var pendingDeleteProject by remember { mutableStateOf<AgentConversationEntity?>(null) }
     var newProjectName by rememberSaveable { mutableStateOf("") }
-    var newProjectBackend by rememberSaveable { mutableStateOf(AgentWorkspaceBackendType.REMOTE_SSH) }
+    var newProjectBackend by rememberSaveable { mutableStateOf(AgentWorkspaceBackendType.LOCAL_SANDBOX) }
+    var newProjectError by remember { mutableStateOf<String?>(null) }
+    var isCreatingProject by remember { mutableStateOf(false) }
     var targetFolderForNewProject by rememberSaveable { mutableStateOf<Long?>(null) }
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var newFolderName by remember { mutableStateOf("") }
@@ -1205,7 +1215,6 @@ fun AgentScreen(
     // tool boundaries and made long remote runs substantially more fragile.
     
     val currentStatusText by AgentService.statusText.collectAsStateWithLifecycle()
-    val promptContextSnapshot by AgentService.promptContextSnapshot.collectAsStateWithLifecycle()
     val lastOrchestratorPromptSnapshot by AgentService.lastOrchestratorPromptSnapshot.collectAsStateWithLifecycle()
     fun triggerAgent(isRedo: Boolean = false) {
         AgentService.sendMessage(
@@ -1244,6 +1253,14 @@ fun AgentScreen(
         }
     }
 
+    fun handleAgentBack() {
+        performAgentBackNavigationFromProject(
+            hasActiveProject = selectedConversationId != null || runtimeConversationId != null,
+            returnToProjectDashboard = { returnToProjectDashboard() },
+            navigateBackToPreviousPage = { navController.navigateAgentBackToPreviousPage() }
+        )
+    }
+
     // Route Back is deliberately independent from the Projects dashboard action above. The
     // dashboard action changes the selected project; leaving this route must preserve that
     // selection and any active runtime continuation so re-entry can resume in place.
@@ -1255,6 +1272,7 @@ fun AgentScreen(
         showCustomTools ||
         showCustomAgents ||
         showSkillManager ||
+        showDetails ||
         showCommands ||
         showTodos ||
         showBuildSwitchOffer ||
@@ -1278,7 +1296,7 @@ fun AgentScreen(
             hasEditor = hasAgentEditor
         )
     ) {
-        navController.navigateAgentBackToPreviousPage()
+        handleAgentBack()
     }
 
     fun handleApproval(approved: Boolean, msg: AgentService.Companion.ChatMessage, denyReason: String = "") {
@@ -1390,73 +1408,101 @@ fun AgentScreen(
 
     fun createNewConversation(
         projectName: String = projectDefaultPrefixText + System.currentTimeMillis(),
-        backend: AgentWorkspaceBackendType = AgentWorkspaceBackendType.REMOTE_SSH,
-        parentFolderId: Long? = null
+        backend: AgentWorkspaceBackendType = AgentWorkspaceBackendType.LOCAL_SANDBOX,
+        parentFolderId: Long? = null,
+        onCreated: () -> Unit = {},
+        onFailed: (Throwable) -> Unit = {}
     ) {
         scope.launch {
-            val safeName = projectName.trim().replace(Regex("[^a-zA-Z0-9_-]"), "_").take(50).ifBlank { projectDefaultPrefixText + System.currentTimeMillis() }
-            val sortOrder = (conversations.filter { it.projectFolderId == parentFolderId }.maxOfOrNull { it.sortOrder } ?: -1) + 1
-            val newId = db.agentChatDao().insertConversation(
-                AgentConversationEntity(
-                    title = projectName,
-                    projectFolder = safeName,
-                    projectFolderId = parentFolderId,
-                    sortOrder = sortOrder,
-                    planningModeEnabled = true,
-                    workspaceBackend = backend.name,
-                    executionProfile = AgentExecutionProfile.OPTIMIZED
-                )
-            )
-            restoreToken += 1
-            runtimeConversationId = newId
-            selectedConversationId = newId
-            AgentService.setPreferredConversationId(newId)
-            isConversationRestoring = false
-            initialConversationRestorePending = false
-            hydratingConversationTitle = projectName
-            AgentService.setActiveCustomAgent(null)
-            AgentService.setCurrentWorkspaceBackend(backend)
-            AgentService.setCurrentRuntimeCapabilities(AgentLocalRuntimeCapabilities())
-            AgentService.setCurrentPlanningModeEnabled(true)
-            
-            if (backend == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
-                withContext(Dispatchers.IO) {
-                    AgentLocalWorkspaceSupport.rootForProject(context.applicationContext, safeName)
-                    AgentLocalWorkspaceSupport.resolvePath(context.applicationContext, safeName, "brain")
-                        .mkdirs()
-                }
-            } else {
-                if (!AgentService.isConnected.value) agentService.connect()
-            }
-            if (backend == AgentWorkspaceBackendType.REMOTE_SSH && AgentService.isConnected.value) {
-                agentService.executeRawCommand("mkdir -p /workspace/$safeName/brain")
-            }
-            
-            val initialMessages = listOf(
-                AgentService.Companion.ChatMessage(
-                    role = "system",
-                    content = if (backend == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
-                        formatAgentString(localReadyMessageFormat, projectName)
-                    } else {
-                        formatAgentString(readyMessageFormat, projectName, safeName)
+            try {
+                val safeName = projectName.trim()
+                    .replace(Regex("[^a-zA-Z0-9_-]"), "_")
+                    .take(50)
+                    .ifBlank { projectDefaultPrefixText + System.currentTimeMillis() }
+
+                // A remote project can only bind to an SSH environment the user already
+                // connected. Project creation never starts or guesses a connection.
+                if (backend == AgentWorkspaceBackendType.REMOTE_SSH) {
+                    val previousBackend = AgentService.currentWorkspaceBackend.value
+                    if (!AgentService.isConnected.value) {
+                        throw IllegalStateException("SSH_CONNECTION_REQUIRED")
                     }
+                    AgentService.setCurrentWorkspaceBackend(AgentWorkspaceBackendType.REMOTE_SSH)
+                    val connectionResult = agentService.executeRawCommand("true").map { Unit }
+                    if (connectionResult.isFailure || !AgentService.isConnected.value) {
+                        AgentService.setCurrentWorkspaceBackend(previousBackend)
+                        throw IllegalStateException(
+                            "SSH_CONNECTION_REQUIRED",
+                            connectionResult.exceptionOrNull()
+                        )
+                    }
+                }
+
+                val sortOrder = (conversations.filter { it.projectFolderId == parentFolderId }
+                    .maxOfOrNull { it.sortOrder } ?: -1) + 1
+                val newId = db.agentChatDao().insertConversation(
+                    AgentConversationEntity(
+                        title = projectName,
+                        projectFolder = safeName,
+                        projectFolderId = parentFolderId,
+                        sortOrder = sortOrder,
+                        planningModeEnabled = true,
+                        workspaceBackend = backend.name,
+                        executionProfile = AgentExecutionProfile.OPTIMIZED
+                    )
                 )
-            )
-            activateConversationRuntime(
-                conversationId = newId,
-                projectFolder = safeName,
-                conversationTitle = projectName,
-                restoredRole = AgentService.Companion.AgentRole.ORCHESTRATOR,
-                restoredTask = null,
-                restoredMessages = initialMessages,
-                workspaceBackend = backend,
-                runtimeCapabilities = AgentLocalRuntimeCapabilities(),
-                planningModeEnabled = true,
-                executionProfile = AgentExecutionProfile.OPTIMIZED,
-                dismissPicker = true
-            )
-            agentService.persistVisibleRuntimeStateNow("Created new project conversation $safeName.")
-            showConversations = false
+                restoreToken += 1
+                runtimeConversationId = newId
+                selectedConversationId = newId
+                AgentService.setPreferredConversationId(newId)
+                isConversationRestoring = false
+                initialConversationRestorePending = false
+                hydratingConversationTitle = projectName
+                AgentService.setActiveCustomAgent(null)
+                AgentService.setCurrentWorkspaceBackend(backend)
+                AgentService.setCurrentRuntimeCapabilities(AgentLocalRuntimeCapabilities())
+                AgentService.setCurrentPlanningModeEnabled(true)
+
+                if (backend == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
+                    withContext(Dispatchers.IO) {
+                        AgentLocalWorkspaceSupport.rootForProject(context.applicationContext, safeName)
+                        AgentLocalWorkspaceSupport.resolvePath(context.applicationContext, safeName, "brain")
+                            .mkdirs()
+                    }
+                }
+                if (backend == AgentWorkspaceBackendType.REMOTE_SSH) {
+                    agentService.executeRawCommand("mkdir -p /workspace/$safeName/brain")
+                }
+
+                val initialMessages = listOf(
+                    AgentService.Companion.ChatMessage(
+                        role = "system",
+                        content = if (backend == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
+                            formatAgentString(localReadyMessageFormat, projectName)
+                        } else {
+                            formatAgentString(readyMessageFormat, projectName, safeName)
+                        }
+                    )
+                )
+                activateConversationRuntime(
+                    conversationId = newId,
+                    projectFolder = safeName,
+                    conversationTitle = projectName,
+                    restoredRole = AgentService.Companion.AgentRole.ORCHESTRATOR,
+                    restoredTask = null,
+                    restoredMessages = initialMessages,
+                    workspaceBackend = backend,
+                    runtimeCapabilities = AgentLocalRuntimeCapabilities(),
+                    planningModeEnabled = true,
+                    executionProfile = AgentExecutionProfile.OPTIMIZED,
+                    dismissPicker = true
+                )
+                agentService.persistVisibleRuntimeStateNow("Created new project conversation $safeName.")
+                showConversations = false
+                onCreated()
+            } catch (error: Throwable) {
+                onFailed(error)
+            }
         }
     }
 
@@ -1474,6 +1520,7 @@ fun AgentScreen(
                     agentService.stopLocalProjectRun(force = true)
                 }
             }
+            AgentSleepWakeScheduler.cancelConversation(context.applicationContext, convId)
             AiRuntimeJobStore.deleteByConversationId(context.applicationContext, convId)
             db.agentChatDao().deleteProjectRuns(convId)
             db.agentChatDao().deleteConversationById(convId)
@@ -1672,6 +1719,10 @@ fun AgentScreen(
         return when (command) {
             "/details" -> {
                 showAllOutput = true
+                detailsProjectId = selectedConversationId
+                    ?: runtimeConversationId
+                    ?: runtimeActiveConversationId
+                showDetails = true
                 clearDraftIfRequested()
                 true
             }
@@ -1711,6 +1762,11 @@ fun AgentScreen(
     }
 
     fun sendMessage() {
+        val immediateCommand = inputText.trim().substringBefore(' ').lowercase()
+        // View commands are available from the project dashboard as well as an active chat.
+        // Handle them before conversation/loading guards because they do not start a model turn.
+        if (inputText.isNotBlank() && handleImmediateViewCommand(immediateCommand, clearDraft = true)) return
+
         val currentConversation = selectedConversationId?.let { selectedId ->
             runtimeConversationId?.takeIf { it == selectedId }
                 ?: runtimeActiveConversationId?.takeIf { it == selectedId }
@@ -1720,9 +1776,6 @@ fun AgentScreen(
         var outgoingText = inputText.trim()
         val command = outgoingText.substringBefore(' ').lowercase()
         val commandRemainder = outgoingText.substringAfter(' ', "").trim()
-        // View commands are intentionally handled before approval/loading gates.
-        // They never alter the active model turn and remain useful while it runs.
-        if (handleImmediateViewCommand(command, clearDraft = true)) return
         if (AgentService.hasPendingPlanApproval()) {
             Toast.makeText(context, R.string.agent_status_awaiting_approval, Toast.LENGTH_SHORT).show()
             return
@@ -2132,12 +2185,16 @@ fun AgentScreen(
         contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
         topBar = {
             AgentTopBar(
-                onNavigateBack = { navController.navigateAgentBackToPreviousPage() },
+                onNavigateBack = { handleAgentBack() },
                 onShowAgentSettings = { showAgentSettings = true },
                 onShowToolSettings = { showToolSettings = true },
                 onShowSettings = { showConnectionSettings = true },
                 onShowSetupInfo = { showSetupInfo = true },
                 onShowProjectManagement = { showProjectManagement = true },
+                onShowDetails = {
+                    detailsProjectId = activeUiConversationId ?: selectedConversationId
+                    showDetails = true
+                },
                 onShowCustomTools = { showCustomTools = true },
                 onShowCustomAgents = { showCustomAgents = true },
                 onShowSkills = { showSkillManager = true },
@@ -2439,9 +2496,15 @@ fun AgentScreen(
                         agentIsLoading = visibleAgentIsWorking,
                         onOpenProject = { loadConversation(it.id) },
                         onContinueProject = { continueConversation(it) },
+                        onShowProjectDetails = { project ->
+                            detailsProjectId = project.id
+                            showDetails = true
+                        },
                         onCreateProject = { parentId ->
                             newProjectName = ""
-                            newProjectBackend = AgentWorkspaceBackendType.REMOTE_SSH
+                            newProjectBackend = AgentWorkspaceBackendType.LOCAL_SANDBOX
+                            newProjectError = null
+                            isCreatingProject = false
                             targetFolderForNewProject = parentId
                             showNewProjectDialog = true
                         },
@@ -2653,6 +2716,108 @@ fun AgentScreen(
                 TextButton(onClick = { showBuildSwitchOffer = false }) {
                     Text(stringResource(R.string.agent_mode_plan))
                 }
+            }
+        )
+    }
+    if (showDetails) {
+        val detailsProject = detailsProjectId?.let { id ->
+            conversations.firstOrNull { it.id == id }
+        } ?: activeProjectConversation
+        val detailsBackend = detailsProject?.let {
+            AgentWorkspaceBackendType.fromStored(it.workspaceBackend)
+        }
+        val detailsPath = detailsProject?.projectFolder?.let { folder ->
+            if (detailsBackend == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
+                AgentLocalWorkspaceSupport.displayRoot(folder)
+            } else {
+                "/workspace/$folder"
+            }
+        }
+        val detailsKnowledgeBaseCount = detailsProject?.knowledgeBaseIds
+            ?.split(',')
+            ?.count { it.trim().toLongOrNull()?.let { id -> id > 0L } == true }
+            ?: selectedKnowledgeBaseIds.size
+        val detailsPlanningMode = detailsProject?.planningModeEnabled
+            ?: currentPlanningModeEnabled
+        val detailAgentName = activeCustomAgent?.name ?: currentAgent.name
+        val detailProfile = detailsProject?.executionProfile ?: AgentExecutionProfile.LEGACY
+        val detailPhase = AgentService.currentHarnessPhase()
+        val detailContextLimit = settingsRepository.resolveAgentHarnessContext(
+            detailProfile,
+            detailAgentName
+        )
+        val detailOutputLimit = settingsRepository.resolveAgentHarnessOutputTokens(
+            detailProfile,
+            detailAgentName,
+            when (detailPhase) {
+                com.example.llamadroid.service.AgentHarnessPhase.PLAN -> com.example.llamadroid.service.AgentHarnessStage.CONTROL
+                com.example.llamadroid.service.AgentHarnessPhase.BUILD -> com.example.llamadroid.service.AgentHarnessStage.BUILD
+                com.example.llamadroid.service.AgentHarnessPhase.VERIFY -> com.example.llamadroid.service.AgentHarnessStage.CONTROL
+            },
+            settingsRepository.getAgentMaxOutputTokensForRole(detailAgentName)
+        )
+        val detailToolNames = AgentService.getAgentTools(currentAgent, activeCustomAgent, settingsRepository)
+            .map { it.name }
+            .distinct()
+            .sorted()
+        val detailSkillIds = AgentService.currentLoadedSkillIds()
+        AgentProjectDetailsDialog(
+            title = stringResource(R.string.agent_details_title),
+            scopeDescription = detailsProject?.let {
+                stringResource(R.string.agent_details_project_scope, it.id, detailAgentName)
+            } ?: stringResource(R.string.agent_details_global_scope),
+            projectFields = listOf(
+                stringResource(R.string.agent_details_project_name) to
+                    (detailsProject?.title ?: stringResource(R.string.agent_details_no_project)),
+                stringResource(R.string.agent_details_project_id) to
+                    (detailsProject?.id?.toString() ?: stringResource(R.string.agent_details_no_value)),
+                stringResource(R.string.agent_details_workspace_type) to when (detailsBackend) {
+                    AgentWorkspaceBackendType.LOCAL_SANDBOX -> stringResource(R.string.agent_project_backend_local)
+                    AgentWorkspaceBackendType.REMOTE_SSH -> stringResource(R.string.agent_project_backend_remote)
+                    null -> stringResource(R.string.agent_details_no_value)
+                },
+                stringResource(R.string.agent_details_project_path) to
+                    (detailsPath ?: stringResource(R.string.agent_details_no_value)),
+                stringResource(R.string.agent_details_resume_state) to
+                    (detailsProject?.resumeState ?: stringResource(R.string.agent_details_no_value))
+            ),
+            runtimeFields = listOf(
+                stringResource(R.string.agent_details_backend) to backendLabel,
+                stringResource(R.string.agent_details_model) to modelLabel,
+                stringResource(R.string.agent_details_endpoint) to
+                    (activeEndpointBaseUrl?.takeIf { it.isNotBlank() }
+                        ?: stringResource(R.string.agent_details_no_value)),
+                stringResource(R.string.agent_details_connection) to connectionLabel,
+                stringResource(R.string.agent_details_agent) to detailAgentName,
+                stringResource(R.string.agent_details_execution_profile) to
+                    detailProfile,
+                stringResource(R.string.agent_details_phase) to detailPhase.name,
+                stringResource(R.string.agent_details_finish_reason) to
+                    (lastFinishReason ?: stringResource(R.string.agent_details_no_value))
+            ),
+            settingsFields = listOf(
+                stringResource(R.string.agent_details_planning_mode) to
+                    stringResource(if (detailsPlanningMode) R.string.agent_details_plan else R.string.agent_details_build),
+                stringResource(R.string.agent_details_knowledge_bases) to
+                    detailsKnowledgeBaseCount.toString(),
+                stringResource(R.string.agent_details_extra_output) to
+                    stringResource(if (showAllOutput) R.string.agent_details_enabled else R.string.agent_details_disabled),
+                stringResource(R.string.agent_details_context_limit) to detailContextLimit.toString(),
+                stringResource(R.string.agent_details_output_limit) to detailOutputLimit.toString(),
+                stringResource(R.string.agent_details_token_usage) to lastGenerationUsage?.let { usage ->
+                    "${usage.promptTokens ?: 0} / ${usage.completionTokens ?: 0} / ${usage.totalTokens ?: 0}"
+                }.orEmpty().ifBlank { stringResource(R.string.agent_details_no_value) },
+                stringResource(R.string.agent_details_cache_packet) to promptContextSnapshot?.let { snapshot ->
+                    "${snapshot.rawEstimatedTokens} → ${snapshot.packedEstimatedTokens}; ${snapshot.countSource.orEmpty()}"
+                }.orEmpty().ifBlank { stringResource(R.string.agent_details_no_value) },
+                stringResource(R.string.agent_details_active_tools) to
+                    detailToolNames.joinToString(", ").ifBlank { stringResource(R.string.agent_details_no_value) },
+                stringResource(R.string.agent_details_active_skills) to
+                    detailSkillIds.joinToString(", ").ifBlank { stringResource(R.string.agent_details_no_value) }
+            ),
+            onDismiss = {
+                showDetails = false
+                detailsProjectId = null
             }
         )
     }
@@ -2902,18 +3067,45 @@ fun AgentScreen(
             backend = newProjectBackend,
             onBackendChange = { newProjectBackend = it },
             onCreate = {
+                newProjectError = null
+                isCreatingProject = true
                 createNewConversation(
                     projectName = newProjectName.trim().ifBlank { defaultProjectName },
                     backend = newProjectBackend,
-                    parentFolderId = targetFolderForNewProject
+                    parentFolderId = targetFolderForNewProject,
+                    onCreated = {
+                        isCreatingProject = false
+                        showNewProjectDialog = false
+                        targetFolderForNewProject = null
+                    },
+                    onFailed = { error ->
+                        isCreatingProject = false
+                        val detail = error.message
+                            ?.trim()
+                            ?.takeUnless { it == "SSH_CONNECTION_REQUIRED" }
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { "\n\n${it.take(220)}" }
+                            .orEmpty()
+                        newProjectError = formatAgentString(
+                            if (newProjectBackend == AgentWorkspaceBackendType.REMOTE_SSH) {
+                                remoteProjectErrorFormat
+                            } else {
+                                projectCreateErrorFormat
+                            },
+                            detail
+                        )
+                    }
                 )
-                showNewProjectDialog = false
-                targetFolderForNewProject = null
             },
             onDismiss = {
-                showNewProjectDialog = false
-                targetFolderForNewProject = null
-            }
+                if (!isCreatingProject) {
+                    showNewProjectDialog = false
+                    targetFolderForNewProject = null
+                    newProjectError = null
+                }
+            },
+            errorMessage = newProjectError,
+            isCreating = isCreatingProject
         )
     }
 
@@ -3114,9 +3306,16 @@ fun AgentScreen(
                         showConversations = false
                         continueConversation(conv)
                     },
+                    onShowProjectDetails = { project ->
+                        showConversations = false
+                        detailsProjectId = project.id
+                        showDetails = true
+                    },
                     onCreateProject = { parentId ->
                         newProjectName = ""
-                        newProjectBackend = AgentWorkspaceBackendType.REMOTE_SSH
+                        newProjectBackend = AgentWorkspaceBackendType.LOCAL_SANDBOX
+                        newProjectError = null
+                        isCreatingProject = false
                         targetFolderForNewProject = parentId
                         showConversations = false
                         showNewProjectDialog = true
@@ -3327,6 +3526,7 @@ private fun AgentProjectDashboard(
     agentIsLoading: Boolean,
     onOpenProject: (AgentConversationEntity) -> Unit,
     onContinueProject: (AgentConversationEntity) -> Unit,
+    onShowProjectDetails: (AgentConversationEntity) -> Unit,
     onCreateProject: (Long?) -> Unit,
     onCreateFolder: (Long?) -> Unit,
     onToggleFolder: (AgentProjectFolderEntity) -> Unit,
@@ -3517,7 +3717,8 @@ private fun AgentProjectDashboard(
                 AgentDashboardFolderRow(
                     folder = folder,
                     onOpen = { currentFolderId = folder.id },
-                    onLongPress = { actionTarget = AgentDashboardActionTarget(folder = folder) }
+                    onLongPress = { actionTarget = AgentDashboardActionTarget(folder = folder) },
+                    onMoreOptions = { actionTarget = AgentDashboardActionTarget(folder = folder) }
                 )
             }
             items(childProjects, key = { project -> "project-${project.id}" }) { project ->
@@ -3550,6 +3751,11 @@ private fun AgentProjectDashboard(
                         if (selectionMode) {
                             selectedProjectIds = (selectedProjectIds + project.id).distinct()
                         } else {
+                            actionTarget = AgentDashboardActionTarget(project = project)
+                        }
+                    },
+                    onMoreOptions = {
+                        if (!selectionMode) {
                             actionTarget = AgentDashboardActionTarget(project = project)
                         }
                     }
@@ -3614,6 +3820,10 @@ private fun AgentProjectDashboard(
                     actionTarget = null
                     walkthroughTargets?.recordEvent("agent.project")
                     onOpenProject(project)
+                }
+                AgentDashboardActionItem(Icons.Default.Info, R.string.agent_details_title) {
+                    actionTarget = null
+                    onShowProjectDetails(project)
                 }
                 if (resumable) {
                     AgentDashboardActionItem(
@@ -3704,7 +3914,8 @@ private fun AgentDashboardActionItem(
 private fun AgentDashboardFolderRow(
     folder: AgentProjectFolderEntity,
     onOpen: () -> Unit,
-    onLongPress: () -> Unit
+    onLongPress: () -> Unit,
+    onMoreOptions: () -> Unit
 ) {
     Card(
         modifier = Modifier
@@ -3723,7 +3934,13 @@ private fun AgentDashboardFolderRow(
         ) {
             Icon(Icons.Default.Folder, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(36.dp))
             Text(folder.name, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
-            Icon(Icons.Default.MoreVert, stringResource(R.string.agent_dashboard_item_options), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            IconButton(onClick = onMoreOptions) {
+                Icon(
+                    Icons.Default.MoreVert,
+                    contentDescription = stringResource(R.string.agent_dashboard_item_options),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
@@ -3737,7 +3954,8 @@ private fun AgentDashboardProjectRow(
     selectionMode: Boolean,
     selected: Boolean,
     onOpen: () -> Unit,
-    onLongPress: () -> Unit
+    onLongPress: () -> Unit,
+    onMoreOptions: () -> Unit
 ) {
     Card(
         modifier = Modifier
@@ -3771,7 +3989,16 @@ private fun AgentDashboardProjectRow(
             }
             if (localRunning) AgentStatusPill(stringResource(R.string.agent_dashboard_running), MaterialTheme.colorScheme.primary)
             if (llmWorking) AgentStatusPill(stringResource(R.string.agent_dashboard_llm_working), MaterialTheme.colorScheme.tertiary)
-            Icon(Icons.Default.MoreVert, stringResource(R.string.agent_dashboard_item_options), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            IconButton(
+                onClick = onMoreOptions,
+                enabled = !selectionMode
+            ) {
+                Icon(
+                    Icons.Default.MoreVert,
+                    contentDescription = stringResource(R.string.agent_dashboard_item_options),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
@@ -3982,6 +4209,118 @@ fun AgentKnowledgeBaseSelector(
                                 Text(kb.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Bounded, selectable project/runtime details used by both the chat and project dashboard. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AgentProjectDetailsDialog(
+    title: String,
+    scopeDescription: String,
+    projectFields: List<Pair<String, String>>,
+    runtimeFields: List<Pair<String, String>>,
+    settingsFields: List<Pair<String, String>>,
+    onDismiss: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.96f)
+                .fillMaxHeight(0.9f),
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surface
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                TopAppBar(
+                    title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    navigationIcon = {
+                        IconButton(onClick = onDismiss) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = stringResource(R.string.action_close)
+                            )
+                        }
+                    },
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() }
+                )
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    item {
+                        Text(
+                            scopeDescription,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    item {
+                        AgentDetailsSection(
+                            title = stringResource(R.string.agent_details_project_section),
+                            fields = projectFields
+                        )
+                    }
+                    item {
+                        AgentDetailsSection(
+                            title = stringResource(R.string.agent_details_runtime_section),
+                            fields = runtimeFields
+                        )
+                    }
+                    item {
+                        AgentDetailsSection(
+                            title = stringResource(R.string.agent_details_settings_section),
+                            fields = settingsFields
+                        )
+                    }
+                }
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .align(Alignment.End)
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Text(stringResource(R.string.action_close))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentDetailsSection(
+    title: String,
+    fields: List<Pair<String, String>>
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            fields.forEach { (label, value) ->
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    SelectionContainer {
+                        Text(value, style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }

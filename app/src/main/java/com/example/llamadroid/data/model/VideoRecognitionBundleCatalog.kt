@@ -7,7 +7,7 @@ import com.example.llamadroid.data.db.ModelType
 /** Explicit video-recognition policy; image capability alone is insufficient. */
 data class VideoRecognitionPolicy(
     val preferredVideoFps: Float = 2f,
-    val segmentSeconds: Int = 30,
+    val segmentSeconds: Int = 12,
     val maxFrames: Int = 24,
     val recommendedContext: Int = 8192,
     val supportsVideoAudio: Boolean = false,

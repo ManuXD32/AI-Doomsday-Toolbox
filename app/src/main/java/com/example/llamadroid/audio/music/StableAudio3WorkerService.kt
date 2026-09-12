@@ -9,6 +9,7 @@ import android.os.Message
 import android.os.Messenger
 import android.os.Process
 import com.example.llamadroid.audio.AudioFileInspector
+import com.example.llamadroid.data.model.library.StableAudioModelLease
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -82,7 +83,12 @@ class StableAudio3WorkerService : Service() {
             return
         }
         val request = try {
-            StableAudio3Request.fromJsonString(raw).validate(supportsExtend = true)
+            val parsed = StableAudio3Request.fromJsonString(raw)
+            StableAudio3ModelDoctor.resolveRequest(this@StableAudio3WorkerService, parsed)
+                .validate(requireDigests = true, supportsExtend = true)
+        } catch (_: StableAudio3ValidationException) {
+            sendError(reply, requestId, StableAudio3WorkerProtocol.ERROR_MODEL_STALE)
+            return
         } catch (_: Throwable) {
             sendError(reply, requestId, StableAudio3WorkerProtocol.ERROR_BAD_REQUEST)
             return
@@ -103,24 +109,28 @@ class StableAudio3WorkerService : Service() {
                         putInt(StableAudio3WorkerProtocol.KEY_TOTAL, 0)
                     }
                 )
-                withContext(Dispatchers.IO) {
-                    verifyComponents(request)
-                }
-                if (cancellationRequested) throw CancellationException("Audio cancelled")
-                lastStage = "loading"
-                val result = StableAudio3Native.run(request, object : StableAudio3Native.ProgressSink {
-                    override fun onProgress(stage: String, completed: Int, total: Int) {
-                        lastStage = stage
-                        val progress = StableAudio3WorkerProtocol.newMessage(
-                            StableAudio3WorkerProtocol.MSG_PROGRESS, requestId
-                        ) {
-                            putString(StableAudio3WorkerProtocol.KEY_STAGE, stage)
-                            putInt(StableAudio3WorkerProtocol.KEY_COMPLETED, completed)
-                            putInt(StableAudio3WorkerProtocol.KEY_TOTAL, total)
-                        }
-                        runCatching { reply.send(progress) }
+                val modelPaths = request.components.all().map { it.second.path } +
+                    request.loras.map { it.path }
+                val result = StableAudioModelLease.withLease(modelPaths) {
+                    withContext(Dispatchers.IO) {
+                        verifyComponents(request)
                     }
-                })
+                    if (cancellationRequested) throw CancellationException("Audio cancelled")
+                    lastStage = "loading"
+                    StableAudio3Native.run(request, object : StableAudio3Native.ProgressSink {
+                        override fun onProgress(stage: String, completed: Int, total: Int) {
+                            lastStage = stage
+                            val progress = StableAudio3WorkerProtocol.newMessage(
+                                StableAudio3WorkerProtocol.MSG_PROGRESS, requestId
+                            ) {
+                                putString(StableAudio3WorkerProtocol.KEY_STAGE, stage)
+                                putInt(StableAudio3WorkerProtocol.KEY_COMPLETED, completed)
+                                putInt(StableAudio3WorkerProtocol.KEY_TOTAL, total)
+                            }
+                            runCatching { reply.send(progress) }
+                        }
+                    })
+                }
                 ensureActive()
                 reply.send(
                     StableAudio3WorkerProtocol.newMessage(
@@ -129,6 +139,8 @@ class StableAudio3WorkerService : Service() {
                 )
             } catch (cancelled: CancellationException) {
                 sendError(reply, requestId, StableAudio3WorkerProtocol.ERROR_CANCELLED, lastStage)
+            } catch (_: StableAudio3ValidationException) {
+                sendError(reply, requestId, StableAudio3WorkerProtocol.ERROR_MODEL_STALE, lastStage)
             } catch (_: IllegalArgumentException) {
                 sendError(reply, requestId, StableAudio3WorkerProtocol.ERROR_BAD_REQUEST, lastStage)
             } catch (error: Throwable) {
@@ -177,19 +189,44 @@ class StableAudio3WorkerService : Service() {
     private suspend fun verifyComponents(request: StableAudio3Request) {
         checkCancellation()
         val needsEncoder = request.operation != StableAudio3Operation.GENERATE
-        request.components.validate(requireEncoder = needsEncoder)
+        val canonical = StableAudio3ModelDoctor.resolveRequest(this, request)
+        canonical.components.validate(requireEncoder = needsEncoder, requireDigests = true)
         if (request.operation == StableAudio3Operation.EXTEND) {
             require(request.maskStartSeconds != null && request.maskEndSeconds != null) {
                 "extension mask must be prepared before worker start"
             }
         }
-        for ((role, component) in request.components.all()) {
+        for ((role, component) in canonical.components.all()) {
             coroutineContext.ensureActive()
             checkCancellation()
             val file = File(component.path)
-            require(file.isFile && file.length() > 0L) { "$role component is unavailable" }
-            component.sizeBytes?.let { require(file.length() == it) { "$role component size changed" } }
-            component.sha256?.let { require(digest(file) == it.lowercase()) { "$role component digest changed" } }
+            requireModel(file.parentFile?.isDirectory == true) { "$role component parent is unavailable" }
+            requireModel(file.isFile && file.length() > 0L && file.canRead()) { "$role component is unreadable" }
+            try {
+                file.inputStream().buffered().use { input ->
+                    val probe = ByteArray(4096)
+                    requireModel(input.read(probe) > 0) { "$role component cannot be read" }
+                }
+            } catch (error: StableAudio3ValidationException) {
+                throw error
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                throw StableAudio3ValidationException("$role component cannot be read")
+            }
+            component.sizeBytes?.let { expected ->
+                requireModel(file.length() == expected) { "$role component size changed" }
+            }
+            component.sha256?.let { expected ->
+                val actual = try {
+                    digest(file)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    throw StableAudio3ValidationException("$role component digest cannot be read")
+                }
+                requireModel(actual == expected.lowercase()) { "$role component digest changed" }
+            }
         }
         request.initAudioPath?.let {
             val file = File(it)
@@ -206,6 +243,10 @@ class StableAudio3WorkerService : Service() {
 
     private fun checkCancellation() {
         if (cancellationRequested) throw CancellationException("Audio cancelled")
+    }
+
+    private fun requireModel(condition: Boolean, message: () -> String) {
+        if (!condition) throw StableAudio3ValidationException(message())
     }
 
     private suspend fun digest(file: File): String {

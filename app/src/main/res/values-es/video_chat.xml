@@ -14,5 +14,7 @@
     <string name="llama_video_open_failed">No se pudo abrir el vídeo seleccionado.</string>
     <string name="llama_video_duration_unavailable">No se pudo leer la duración del vídeo, por lo que no se envió.</string>
     <string name="llama_video_segment_prompt">Describe únicamente los eventos, personas, objetos, textos y cambios observables de este segmento de vídeo en orden cronológico.</string>
-    <string name="llama_video_observation_disclosure">Vídeo analizado en segmentos acotados de 30 segundos. Observaciones del modelo para esta solicitud (el adjunto original sigue disponible para turnos futuros): %1$s</string>
+    <string name="llama_video_observation_disclosure">Vídeo analizado en segmentos acotados de 12 segundos. Observaciones del modelo para esta solicitud (el adjunto original sigue disponible para turnos futuros): %1$s</string>
+    <string name="llama_video_transcript_disclosure">Transcripción del vídeo preparada por Whisper para esta solicitud (el adjunto original sigue disponible para turnos futuros): %1$s</string>
+    <string name="llama_video_whisper_unavailable">El modo de vídeo heredado seleccionado requiere Whisper, pero no hay un modelo de voz utilizable.</string>
 </resources>

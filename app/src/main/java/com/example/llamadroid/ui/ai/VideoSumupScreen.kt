@@ -45,11 +45,11 @@ import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.db.NoteType
 import com.example.llamadroid.data.model.VideoRecognitionBundleCatalog
-import com.example.llamadroid.service.RemoteSummaryClientFactory
 import com.example.llamadroid.service.VideoSummaryStateHolder
 import com.example.llamadroid.service.VideoSumupService
 import com.example.llamadroid.service.VideoRecognitionAudioFallbackRequest
 import com.example.llamadroid.service.VideoRecognitionLimits
+import com.example.llamadroid.service.VideoProcessingMode
 import com.example.llamadroid.service.VideoRecognitionSettingsRepository
 import com.example.llamadroid.service.VideoRecognitionSummaryRequest
 import com.example.llamadroid.service.VideoRecognitionSummaryService
@@ -62,7 +62,6 @@ import com.example.llamadroid.service.WhisperVadAssetStore
 import com.example.llamadroid.ui.components.IntInputField
 import com.example.llamadroid.ui.components.IntSliderWithInput
 import com.example.llamadroid.ui.components.WhisperVadInlineControl
-import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.ui.components.SliderWithInput
 import com.example.llamadroid.ui.components.SummaryMarkdownCard
 import com.example.llamadroid.ui.components.AppTaskActionFooter
@@ -106,6 +105,7 @@ fun VideoSumupScreen(navController: NavController) {
     // hierarchical merging and only exposes the latest observations as a progress preview.
     val visualPartialSummaries = visualState.partialSummaries.takeLast(3)
     val videoSavedTargetId by videoRecognitionSettings.savedTargetId.collectAsState()
+    val videoProcessingMode by videoRecognitionSettings.processingMode.collectAsState()
     val videoRemoteEnabled by videoRecognitionSettings.remoteEnabled.collectAsState()
     val videoAudioEnabled by videoRecognitionSettings.audioEnabled.collectAsState()
     val videoParallelWhisperEnabled by videoRecognitionSettings.parallelWhisperEnabled.collectAsState()
@@ -157,13 +157,6 @@ fun VideoSumupScreen(navController: NavController) {
     val whisperThreads by settingsRepo.videoSummaryWhisperThreads.collectAsState()
     val whisperVad by settingsRepo.whisperVadConfig.collectAsState()
     val effectiveWhisperVadPath = WhisperVadAssetStore.resolvePath(context, whisperVad.modelPath)
-    val backend by settingsRepo.videoSummaryBackend.collectAsState()
-    val ollamaUrl by settingsRepo.videoSummaryOllamaUrl.collectAsState()
-    val llamaServerUrl by settingsRepo.videoSummaryLlamaServerUrl.collectAsState()
-    val llamaSwapUrl by settingsRepo.videoSummaryLlamaSwapUrl.collectAsState()
-    val ollamaModel by settingsRepo.videoSummaryOllamaModel.collectAsState()
-    val llamaSwapModel by settingsRepo.videoSummaryLlamaSwapModel.collectAsState()
-    val thinkingEnabled by settingsRepo.videoSummaryThinkingEnabled.collectAsState()
     val videoSummaryPrompt by settingsRepo.videoSummaryPrompt.collectAsState()
     val targetLanguage by settingsRepo.videoSummaryTargetLanguage.collectAsState()
     val chunkContext by settingsRepo.videoSummaryChunkContext.collectAsState()
@@ -172,12 +165,7 @@ fun VideoSumupScreen(navController: NavController) {
     val mergeMaxTokens by settingsRepo.videoSummaryMergeMaxTokens.collectAsState()
     val temperature by settingsRepo.videoSummaryTemperature.collectAsState()
     val timeoutMinutes by settingsRepo.videoSummaryTimeoutMinutes.collectAsState()
-    val serverModelLabel by settingsRepo.videoSummaryLlamaServerModelLabel.collectAsState()
-    val serverContextLabel by settingsRepo.videoSummaryLlamaServerContextLabel.collectAsState()
-    val serverContextTokens by settingsRepo.videoSummaryLlamaServerContextTokens.collectAsState()
-    val liteRtModelId by settingsRepo.videoSummaryLiteRtModelId.collectAsState()
-    val liteRtBackend by settingsRepo.videoSummaryLiteRtBackend.collectAsState()
-    val liteRtMtpEnabled by settingsRepo.videoSummaryLiteRtMtpEnabled.collectAsState()
+    val thinkingEnabled by settingsRepo.videoSummaryThinkingEnabled.collectAsState()
 
     LaunchedEffect(whisperModels) {
         val selectedStillExists = whisperModels.any { it.path == selectedWhisperPath }
@@ -207,25 +195,10 @@ fun VideoSumupScreen(navController: NavController) {
         }
     }
 
-    val backendReady = when (SettingsRepository.normalizeOllamaOrLlamaBackend(backend)) {
-        SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> llamaServerUrl.isNotBlank()
-        SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> llamaSwapUrl.isNotBlank() && !llamaSwapModel.isNullOrBlank()
-        SettingsRepository.PDF_BACKEND_LITERT -> liteRtModelId?.let { it > 0L } == true
-        else -> ollamaUrl.isNotBlank() && !ollamaModel.isNullOrBlank()
-    }
-
     val anySummaryRunning = isRunning || visualState.isRunning
     val visualTargetAvailable = selectedVisualTarget != null
-    val audioFallbackAvailable = selectedWhisperPath != null && backendReady &&
+    val audioFallbackAvailable = selectedWhisperPath != null &&
         (!whisperVad.enabled || effectiveWhisperVadPath != null)
-
-    fun persistMetadata(metadata: com.example.llamadroid.service.RemoteSummaryMetadata) {
-        if (SettingsRepository.isLlamaServerBackend(metadata.backend)) {
-            settingsRepo.setVideoSummaryLlamaServerModelLabel(metadata.serverModelLabel)
-            settingsRepo.setVideoSummaryLlamaServerContextTokens(metadata.serverContextTokens)
-            settingsRepo.setVideoSummaryLlamaServerContextLabel(metadata.serverContextLabel)
-        }
-    }
 
     fun startSummary(forceAudioFallback: Boolean = false) {
         val selectedUri = selectedVideoString?.let(Uri::parse) ?: return
@@ -301,6 +274,52 @@ fun VideoSumupScreen(navController: NavController) {
                     )
                     Text(
                         stringResource(R.string.video_recognition_description),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    var modeMenuExpanded by remember { mutableStateOf(false) }
+                    ExposedDropdownMenuBox(
+                        expanded = modeMenuExpanded,
+                        onExpandedChange = { if (!isRunning && !visualState.isRunning) modeMenuExpanded = it }
+                    ) {
+                        OutlinedTextField(
+                            value = when (videoProcessingMode) {
+                                VideoProcessingMode.AUTO_MULTIMODAL ->
+                                    stringResource(R.string.video_recognition_mode_auto)
+                                VideoProcessingMode.VISUAL_WHISPER ->
+                                    stringResource(R.string.video_recognition_mode_visual_whisper)
+                                VideoProcessingMode.LEGACY_TRANSCRIPT ->
+                                    stringResource(R.string.video_recognition_mode_legacy)
+                            },
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text(stringResource(R.string.video_recognition_processing_mode)) },
+                            trailingIcon = {
+                                ExposedDropdownMenuDefaults.TrailingIcon(expanded = modeMenuExpanded)
+                            },
+                            modifier = Modifier.menuAnchor().fillMaxWidth()
+                        )
+                        ExposedDropdownMenu(
+                            expanded = modeMenuExpanded,
+                            onDismissRequest = { modeMenuExpanded = false }
+                        ) {
+                            listOf(
+                                VideoProcessingMode.AUTO_MULTIMODAL to R.string.video_recognition_mode_auto,
+                                VideoProcessingMode.VISUAL_WHISPER to R.string.video_recognition_mode_visual_whisper,
+                                VideoProcessingMode.LEGACY_TRANSCRIPT to R.string.video_recognition_mode_legacy
+                            ).forEach { (mode, labelRes) ->
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(labelRes)) },
+                                    onClick = {
+                                        videoRecognitionSettings.setProcessingMode(mode)
+                                        modeMenuExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        stringResource(R.string.video_recognition_processing_mode_help),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -436,7 +455,9 @@ fun VideoSumupScreen(navController: NavController) {
                         Switch(
                             checked = videoAudioEnabled,
                             onCheckedChange = videoRecognitionSettings::setAudioEnabled,
-                            enabled = !anySummaryRunning && visualTargetAvailable
+                            enabled = !anySummaryRunning &&
+                                visualTargetAvailable &&
+                                videoProcessingMode == VideoProcessingMode.AUTO_MULTIMODAL
                         )
                     }
                     Text(
@@ -463,7 +484,7 @@ fun VideoSumupScreen(navController: NavController) {
                         Switch(
                             checked = videoParallelWhisperEnabled,
                             onCheckedChange = videoRecognitionSettings::setParallelWhisperEnabled,
-                            enabled = !anySummaryRunning && visualTargetAvailable && audioFallbackAvailable
+                            enabled = !anySummaryRunning && audioFallbackAvailable
                         )
                     }
                     Text(
@@ -474,7 +495,7 @@ fun VideoSumupScreen(navController: NavController) {
                     IntSliderWithInput(
                         value = videoSegmentSeconds,
                         onValueChange = videoRecognitionSettings::setSegmentSeconds,
-                        valueRange = 5..VideoRecognitionLimits.DEFAULT_SEGMENT_SECONDS,
+                        valueRange = 5..VideoRecognitionLimits.MAX_SEGMENT_SECONDS,
                         label = stringResource(R.string.video_recognition_segment_seconds)
                     )
                     IntSliderWithInput(
@@ -486,7 +507,7 @@ fun VideoSumupScreen(navController: NavController) {
                     SliderWithInput(
                         value = videoMaxFps,
                         onValueChange = videoRecognitionSettings::setMaxFps,
-                        valueRange = 0.25f..VideoRecognitionLimits.DEFAULT_MAX_FPS,
+                        valueRange = 0.1f..VideoRecognitionLimits.DEFAULT_MAX_FPS,
                         label = stringResource(R.string.video_recognition_max_fps),
                         decimalPlaces = 2
                     )
@@ -600,40 +621,8 @@ fun VideoSumupScreen(navController: NavController) {
                 }
             }
 
-            RemoteSummaryBackendEditor(
-                title = stringResource(R.string.video_summary_remote_settings_title),
-                backend = backend,
-                onBackendChange = settingsRepo::setVideoSummaryBackend,
-                ollamaUrl = ollamaUrl,
-                onOllamaUrlChange = settingsRepo::setVideoSummaryOllamaUrl,
-                llamaServerUrl = llamaServerUrl,
-                onLlamaServerUrlChange = settingsRepo::setVideoSummaryLlamaServerUrl,
-                llamaSwapUrl = llamaSwapUrl,
-                onLlamaSwapUrlChange = settingsRepo::setVideoSummaryLlamaSwapUrl,
-                ollamaModel = ollamaModel,
-                onOllamaModelSelected = settingsRepo::setVideoSummaryOllamaModel,
-                llamaSwapModel = llamaSwapModel,
-                onLlamaSwapModelSelected = settingsRepo::setVideoSummaryLlamaSwapModel,
-                llamaServerModelLabel = serverModelLabel,
-                llamaServerContextLabel = serverContextLabel,
-                llamaServerContextTokens = serverContextTokens,
-                requestedContextForWarning = mergeContext,
-                liteRtModelId = liteRtModelId.takeIf { it > 0L },
-                onLiteRtModelSelected = settingsRepo::setVideoSummaryLiteRtModelId,
-                liteRtBackend = liteRtBackend,
-                onLiteRtBackendChange = settingsRepo::setVideoSummaryLiteRtBackend,
-                liteRtMtpEnabled = liteRtMtpEnabled,
-                onLiteRtMtpEnabledChange = settingsRepo::setVideoSummaryLiteRtMtpEnabled,
-                liteRtThinkingEnabled = thinkingEnabled,
-                onLiteRtThinkingEnabledChange = settingsRepo::setVideoSummaryThinkingEnabled,
-                fetchMetadata = {
-                    RemoteSummaryClientFactory.fromSnapshot(context, settingsRepo.videoSummarySettings.snapshot())
-                        .fetchMetadata()
-                },
-                onMetadataLoaded = ::persistMetadata
-            )
-
-            Card(modifier = Modifier.fillMaxWidth()) {
+            if (videoProcessingMode == VideoProcessingMode.LEGACY_TRANSCRIPT) {
+                Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(stringResource(R.string.workflow_step_summarize), fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(8.dp))
@@ -699,6 +688,7 @@ fun VideoSumupScreen(navController: NavController) {
                             onCheckedChange = settingsRepo::setVideoSummaryThinkingEnabled
                         )
                     }
+                }
                 }
             }
 
@@ -793,6 +783,30 @@ fun VideoSumupScreen(navController: NavController) {
                             LinearProgressIndicator(
                                 progress = { visualState.progress.coerceIn(0f, 1f) },
                                 modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        if (visualState.visualPhase.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                stringResource(
+                                    R.string.video_recognition_visual_phase,
+                                    visualState.visualPhase
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2
+                            )
+                        }
+                        if (visualState.audioPhase.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                stringResource(
+                                    R.string.video_recognition_audio_phase,
+                                    visualState.audioPhase
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2
                             )
                         }
                         if (visualState.sourceDurationSeconds > 0.0) {

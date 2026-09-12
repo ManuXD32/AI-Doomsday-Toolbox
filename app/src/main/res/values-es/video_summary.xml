@@ -2,6 +2,11 @@
 <resources>
     <string name="video_recognition_title">Resumen visual del vídeo</string>
     <string name="video_recognition_description">Usa un paquete instalado con capacidad de vídeo o un servidor remoto habilitado explícitamente para vídeo. Si no hay un modelo de vídeo listo, el resumen Whisper existente sigue disponible.</string>
+    <string name="video_recognition_processing_mode">Modo global de procesamiento de vídeo</string>
+    <string name="video_recognition_processing_mode_help">Esta política se comparte entre Resumen de vídeo y Native Chat. Los clips directos se mantienen en doce segundos; los vídeos largos se segmentan en el dispositivo.</string>
+    <string name="video_recognition_mode_auto">Multimodal automático</string>
+    <string name="video_recognition_mode_visual_whisper">Visual más Whisper</string>
+    <string name="video_recognition_mode_legacy">Transcripción heredada</string>
     <string name="video_recognition_local_target">Paquete de vídeo instalado</string>
     <string name="video_recognition_remote_target">Servidor de vídeo remoto</string>
     <string name="video_recognition_remote_server_placeholder">Elige un servidor con vídeo habilitado</string>
@@ -18,9 +23,9 @@
     <string name="video_recognition_remote_not_configured">El destino remoto de vídeo está incompleto o no está habilitado explícitamente para vídeo.</string>
     <string name="video_recognition_audio_enabled">Incluir audio cuando el modelo seleccionado lo admita</string>
     <string name="video_recognition_audio_enabled_help">El audio solo se adjunta a un destino que anuncie explícitamente entrada de audio directa. Los demás destinos siguen siendo solo visuales.</string>
-    <string name="video_recognition_audio_unsupported">Este destino solo admite visión. Activa Whisper paralelo abajo para añadir una transcripción independiente.</string>
-    <string name="video_recognition_parallel_whisper">Ejecutar Whisper junto al análisis visual</string>
-    <string name="video_recognition_parallel_whisper_help">Para destinos solo visuales, transcribe una vez en paralelo y combina la transcripción con el resultado visual. Usa un proceso de CPU adicional.</string>
+    <string name="video_recognition_audio_unsupported">Este destino solo admite visión. Native Chat puede mostrar un fallback de Whisper cuando se activa su conmutador paralelo independiente.</string>
+    <string name="video_recognition_parallel_whisper">Whisper paralelo de Native Chat</string>
+    <string name="video_recognition_parallel_whisper_help">Cuando se activa, Native Chat ejecuta un trabajo de Whisper junto a la preparación visual y combina la transcripción con la evidencia final. El Resumen de vídeo usa el modo superior.</string>
     <string name="video_recognition_segment_seconds">Duración del segmento (segundos)</string>
     <string name="video_recognition_max_frames">Máximo de fotogramas por segmento</string>
     <string name="video_recognition_max_fps">FPS máximo del vídeo</string>
@@ -43,8 +48,12 @@
     <string name="video_recognition_audio_transcribing">Transcribiendo audio con Whisper…</string>
     <string name="video_recognition_audio_complete">Transcripción de audio completada</string>
     <string name="video_recognition_audio_extract_failed">No se pudo extraer el audio de este vídeo.</string>
+    <string name="video_recognition_audio_unavailable">El audio directo no está disponible para este destino; se continúa con el fallback visible.</string>
+    <string name="video_recognition_audio_skipped_direct_limit">El audio directo se omite en segmentos de más de doce segundos.</string>
     <string name="video_recognition_whisper_failed">Whisper falló con el código de salida %1$d.</string>
     <string name="video_recognition_processed_percentage">Medios procesados: %1$.1f%% (%2$.1f / %3$.1f s)</string>
+    <string name="video_recognition_visual_phase">Fase visual: %1$s</string>
+    <string name="video_recognition_audio_phase">Fase de audio: %1$s</string>
     <string name="video_recognition_notification_title">Resumen visual del vídeo: %1$s</string>
     <string name="video_recognition_run_timed_out">El reconocimiento de vídeo superó el límite de una hora.</string>
     <string name="video_recognition_audio_fallback_active">No hay un modelo de vídeo disponible. Ejecutando el resumen de audio Whisper existente.</string>

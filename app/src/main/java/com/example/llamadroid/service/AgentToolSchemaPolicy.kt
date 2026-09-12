@@ -191,12 +191,14 @@ object AgentToolSchemaPolicy {
         "propose_plan",
         "question",
         "finish_task",
-        "tool_help"
+        "tool_help",
+        "sleep_until"
     )
 
     private val BUILD_CORE_TOOL_NAMES = setOf(
         "read_file",
         "write_file",
+        "append_file",
         "edit_lines",
         "run_project",
         "check_project_run",
@@ -207,6 +209,7 @@ object AgentToolSchemaPolicy {
         "report_progress",
         "finish_task",
         "tool_help",
+        "sleep_until",
         "observe_preview",
         "interact_preview"
     )
@@ -219,6 +222,7 @@ object AgentToolSchemaPolicy {
     private val CODER_BUILD_CORE_TOOL_NAMES = setOf(
         "read_file",
         "write_file",
+        "append_file",
         "edit_lines",
         "run_project",
         "check_project_run",
@@ -226,11 +230,13 @@ object AgentToolSchemaPolicy {
         "run_command",
         "check_command",
         "finish_task",
-        "tool_help"
+        "tool_help",
+        "sleep_until"
     )
 
     private val VERIFY_CORE_TOOL_NAMES = BUILD_CORE_TOOL_NAMES - setOf(
         "write_file",
+        "append_file",
         "edit_lines"
     )
 
@@ -240,6 +246,7 @@ object AgentToolSchemaPolicy {
     private val TOOL_DESCRIPTION_HINTS = mapOf(
         "agent_report_read" to "Read one specialist report by report_id.",
         "apply_patch" to "Apply an approved unified diff patch.",
+        "append_file" to "Append one bounded batch to a project file.",
         "call_agent" to "Start one sequential specialist; Build calls require todo_id.",
         "cancel_command" to "Cancel a tracked background command.",
         "check_command" to "Check a background command's status and output.",
@@ -254,6 +261,7 @@ object AgentToolSchemaPolicy {
         "force_stop_project_run" to "Force-stop the local project.",
         "generate_image" to "Generate a PNG inside the project workspace.",
         "get_datetime" to "Get the current date and time.",
+        "sleep_until" to "Pause this conversation until one durable Android alarm fires.",
         "interact_preview" to "Perform one action in the active WebUI preview.",
         "install_python_dependency" to "Install an approved project-local pure-Python wheel.",
         "kb_list_sources" to "List selected knowledge-base sources.",
@@ -292,6 +300,7 @@ object AgentToolSchemaPolicy {
         "wait_command" to "Wait for a background command and return output.",
         "web_search" to "Search the web and return cited results.",
         "write_file" to "Write content to a project-relative file.",
+        "append_file" to "Append content to a project-relative file.",
         "write_memory" to "Append content to an agent memory file.",
         "rewrite_memory" to "Replace an agent memory file after reading it."
     )
@@ -308,7 +317,8 @@ object AgentToolSchemaPolicy {
         ("question" to "questions") to "Structured blocker questions.",
         ("read_skill_resource" to "path") to "Relative resource path inside the skill.",
         ("run_tools_sequential" to "tools_json") to "JSON array of read-only tool calls.",
-        ("write_file" to "content") to "Complete file content."
+        ("write_file" to "content") to "Complete file content.",
+        ("append_file" to "content") to "Bounded text batch to append."
     )
 
     private val PARAMETER_HINTS = mapOf(

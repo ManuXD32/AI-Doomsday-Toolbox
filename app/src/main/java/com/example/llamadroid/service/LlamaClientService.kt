@@ -69,14 +69,14 @@ import kotlin.math.roundToInt
 // Native MTMD defaults to 2 fps. Keeping direct input to twelve seconds caps the
 // decoded frame budget at 24 even when a remote server has no app-managed fps
 // profile. Longer videos go through the bounded, sequential recognition path.
-private const val NATIVE_CHAT_MAX_DIRECT_VIDEO_DURATION_MS = 12_000L
-private const val NATIVE_CHAT_VIDEO_SEGMENT_MAX_FRAMES = 24
-private const val NATIVE_CHAT_VIDEO_SEGMENT_MAX_FPS = 2.0f
+private const val NATIVE_CHAT_MAX_DIRECT_VIDEO_DURATION_MS = MAX_DIRECT_VIDEO_DURATION_MS
 private const val NATIVE_CHAT_VIDEO_MAX_TOKENS = 512
 private const val NATIVE_CHAT_VIDEO_TIMEOUT_MINUTES = 10
 private const val NATIVE_CHAT_VIDEO_WHOLE_TIMEOUT_MS = 60L * 60L * 1_000L
 private const val NATIVE_CHAT_VIDEO_MERGE_OBSERVATION_CHARS = 3_500
 private const val NATIVE_CHAT_VIDEO_QUESTION_MAX_CHARS = 2_000
+private const val NATIVE_CHAT_VIDEO_TRANSCRIPT_MAX_CHARS = 12_000
+private const val NATIVE_CHAT_VIDEO_PHASE_MAX_CHARS = 120
 
 private data class NativeChatVideoPayload(
     val streamVideo: Boolean = false,
@@ -192,15 +192,13 @@ private fun LlamaServerEntity.supportsNativeVideoInput(): Boolean {
  * video-enabled profile (or an explicit video-capable remote row) is the
  * compatibility default, while a JSON false value always disables it.
  */
-private fun LlamaServerEntity.allowsNativeChatVideoAudio(): Boolean {
-    if (!supportsNativeVideoInput() || !supportsDirectAudioInput()) return false
-    val profile = LlamaServerLaunchProfile.decode(localLaunchProfileJson)
-    val compatibilityDefault = profile?.videoEnabled ?: supportsVideo
-    return nativeLlamaVideoAudioEnabled(
-        profileJson = localLaunchProfileJson,
-        compatibilityDefault = compatibilityDefault
-    )
-}
+private fun LlamaServerEntity.allowsNativeChatVideoAudio(): Boolean =
+    // Processing preferences live in VideoRecognitionSettingsRepository. A launch profile may
+    // still contain the old audio flag for decoding, but it must not override the global policy.
+    supportsNativeVideoInput() && supportsDirectAudioInput()
+
+private fun VideoProcessingPolicy.usesLegacyTranscriptRoute(): Boolean =
+    mode == VideoProcessingMode.LEGACY_TRANSCRIPT
 
 /** Inline video is safe only for an app-managed loopback profile with a verified bounded FPS. */
 private fun LlamaServerEntity.allowsSafeNativeChatVideoStream(): Boolean {
@@ -358,6 +356,15 @@ internal fun nativeChatToolAwarenessMessages(
     )
     val currentYear = java.time.LocalDate.now().year
 
+    if (toolConfig.fileToolsEnabled) {
+        add(
+            OllamaService.ChatMessage(
+                role = "system",
+                content = "A private workspace is available for this saved chat. Use list/read before editing existing files. Keep files focused, write at most one bounded batch per call, then use append_workspace_file, edit_workspace_lines, or apply_workspace_patch. Do not claim access to files outside this chat workspace."
+            )
+        )
+    }
+
     if (toolConfig.noteToolsEnabled || toolConfig.todoToolsEnabled) {
         val noteGuidance = if (toolConfig.noteToolsEnabled) {
             "When the user asks you to write, save, create, update, or improve a note, call the appropriate note tool in this turn instead of only saying that you will do it. Use create_note to save durable findings and long research notes with source citations. Use list_notes to discover whitelisted note IDs, then read_note to inspect exact note content before editing. Do not ask the user to provide note IDs when list_notes/read_note can find them. Use update_note or replace_note_text to revise notes later, and read_note to recover previous research instead of forgetting it."
@@ -494,6 +501,8 @@ class LlamaClientService : Service() {
     // Repository to save messages
     private lateinit var repository: LlamaRepository
     private lateinit var settingsRepo: SettingsRepository
+    /** Shared policy used by Video Summary and Native Chat video preparation. */
+    private lateinit var videoSettingsRepo: VideoRecognitionSettingsRepository
     private lateinit var ollamaService: OllamaService
     private lateinit var database: AppDatabase
     private val llamaServerChatService = LlamaServerChatService()
@@ -515,6 +524,7 @@ class LlamaClientService : Service() {
             database.llamaMessageDao()
         )
         settingsRepo = SettingsRepository(applicationContext)
+        videoSettingsRepo = VideoRecognitionSettingsRepository(applicationContext)
         ollamaService = OllamaService(applicationContext)
         liteRtLmChatService = LiteRtLmChatService(applicationContext)
         liteRtLmWorkerClient = LiteRtLmWorkerClient(applicationContext)
@@ -639,7 +649,10 @@ class LlamaClientService : Service() {
                         .asReversed()
                         .firstOrNull { !it.videoPath.isNullOrBlank() }
                         ?.videoPath
-                if (!historyVideoPath.isNullOrBlank() && !server.supportsNativeVideoInput()) {
+                if (!historyVideoPath.isNullOrBlank() &&
+                    !server.supportsNativeVideoInput() &&
+                    !videoSettingsRepo.snapshot().processingPolicy.usesLegacyTranscriptRoute()
+                ) {
                     throw IllegalStateException(getString(R.string.llama_video_unsupported))
                 }
                 ensureLocalLlamaServerReadyIfNeeded(
@@ -670,7 +683,12 @@ class LlamaClientService : Service() {
                     )
                 }
 
-                val history = prepareHistoryForServer(chatId, server)
+                val history = prepareHistoryForServer(
+                    chatId = chatId,
+                    taskId = taskId,
+                    server = server,
+                    progress = progress
+                )
                 if (history.isEmpty()) throw Exception("Chat history is empty")
 
                 val isContinuation = !preparedUserTurn.shouldPersist() && history.last().role == "assistant"
@@ -972,7 +990,10 @@ class LlamaClientService : Service() {
         val persistedVideoPath = videoPath
             ?.takeIf { it.isNotBlank() }
             ?.also(::requireVideoAttachment)
-        if (persistedVideoPath != null && !server.supportsNativeVideoInput()) {
+        if (persistedVideoPath != null &&
+            !server.supportsNativeVideoInput() &&
+            !videoSettingsRepo.snapshot().processingPolicy.usesLegacyTranscriptRoute()
+        ) {
             throw IllegalStateException(getString(R.string.llama_video_unsupported))
         }
         if (originalAudioPath == null) {
@@ -1059,12 +1080,81 @@ class LlamaClientService : Service() {
 
     private suspend fun prepareHistoryForServer(
         chatId: Long,
-        server: LlamaServerEntity
+        taskId: Int,
+        server: LlamaServerEntity,
+        progress: StreamingProgress
     ): List<LlamaMessageEntity> {
         val messages = repository.getMessages(chatId).first().filterNot { it.isError }
+        val videoPolicy = videoSettingsRepo.snapshot().processingPolicy
+        if (videoPolicy.usesLegacyTranscriptRoute()) {
+            val videoMessages = messages.filter { !it.videoPath.isNullOrBlank() }
+            if (videoMessages.isNotEmpty()) {
+                val whisperModelPath = resolveWhisperModelPath(server)
+                    ?: throw IllegalStateException(getString(R.string.llama_video_whisper_unavailable))
+                val transcriber = VideoRecognitionWhisperTranscriber(
+                    context = applicationContext,
+                    runId = System.nanoTime()
+                )
+                return messages.map { message ->
+                    val videoPath = message.videoPath?.takeIf { it.isNotBlank() }
+                    if (videoPath == null) {
+                        message
+                    } else {
+                        val transcript = transcriber.transcribe(
+                            sourceFile = File(videoPath),
+                            request = VideoRecognitionAudioFallbackRequest(
+                                whisperModelPath = whisperModelPath,
+                                language = server.whisperLanguage.ifBlank {
+                                    LlamaServerEntity.DEFAULT_WHISPER_LANGUAGE
+                                },
+                                threads = settingsRepo.whisperThreads.value,
+                                vadConfig = settingsRepo.whisperVadConfigSnapshot(),
+                                settingsOverride = null,
+                                saveToNotes = false
+                            )
+                        ) { label, fraction ->
+                            publishNativeChatVideoProgress(
+                                chatId = chatId,
+                                taskId = taskId,
+                                progress = progress,
+                                visualFraction = fraction,
+                                audioFraction = fraction,
+                                visualPhase = getString(R.string.video_recognition_mode_legacy),
+                                audioPhase = label,
+                                audioExpected = true
+                            )
+                        }.trim().take(NATIVE_CHAT_VIDEO_TRANSCRIPT_MAX_CHARS)
+                        if (transcript.isBlank()) {
+                            throw IllegalStateException(getString(R.string.llama_video_whisper_unavailable))
+                        }
+                        message.copy(
+                            content = listOf(
+                                message.content.trim(),
+                                getString(R.string.llama_video_transcript_disclosure, transcript)
+                            ).filter { it.isNotBlank() }.joinToString("\n\n"),
+                            videoPath = null
+                        )
+                    }
+                }.also {
+                    publishNativeChatVideoProgress(
+                        chatId = chatId,
+                        taskId = taskId,
+                        progress = progress,
+                        visualFraction = 1f,
+                        audioFraction = 1f,
+                        visualPhase = getString(R.string.video_recognition_mode_legacy),
+                        audioPhase = getString(R.string.video_recognition_audio_complete),
+                        audioExpected = true
+                    )
+                }
+            }
+        }
         messages.forEach { message ->
             message.videoPath?.takeIf { it.isNotBlank() }?.let(::requireVideoAttachment)
-            if (!message.videoPath.isNullOrBlank() && !server.supportsNativeVideoInput()) {
+            if (!message.videoPath.isNullOrBlank() &&
+                !server.supportsNativeVideoInput() &&
+                !videoSettingsRepo.snapshot().processingPolicy.usesLegacyTranscriptRoute()
+            ) {
                 throw IllegalStateException(getString(R.string.llama_video_unsupported))
             }
         }
@@ -1239,6 +1329,8 @@ class LlamaClientService : Service() {
         server: LlamaServerEntity,
         contextSize: Int,
         params: Map<String, Any>,
+        taskId: Int,
+        progress: StreamingProgress,
         forceBoundedVideo: Boolean = false
     ): NativeChatVideoPreparation {
         if (history.none { !it.videoPath.isNullOrBlank() }) {
@@ -1250,6 +1342,12 @@ class LlamaClientService : Service() {
                 stagedRuntimeFiles = emptyList()
             )
         }
+        val policy = videoSettingsRepo.snapshot().processingPolicy
+        val wantsIndependentWhisper = when (policy.mode) {
+            VideoProcessingMode.VISUAL_WHISPER,
+            VideoProcessingMode.LEGACY_TRANSCRIPT -> true
+            VideoProcessingMode.AUTO_MULTIMODAL -> policy.nativeChatParallelWhisperEnabled
+        }
         val payloads = mutableListOf<NativeChatVideoPayload>()
         val streamedMediaPaths = mutableListOf<String>()
         val stagedRuntimeFiles = mutableListOf<File>()
@@ -1260,12 +1358,15 @@ class LlamaClientService : Service() {
         var mediaDependenciesChecked = false
         var mediaDependenciesAvailable = false
         var streamingRoot: File? = null
-        val canUseSafeDirectStream = server.allowsSafeNativeChatVideoStream() &&
+        val canUseSafeDirectStream = policy.mode == VideoProcessingMode.AUTO_MULTIMODAL &&
+            server.allowsSafeNativeChatVideoStream() &&
             NativeLlamaVideoSupport.activeRuntimeDirectories(
                 context = applicationContext,
                 serverPort = server.port
             ) != null
-        val canAttachVideoAudio = server.allowsNativeChatVideoAudio()
+        val canAttachVideoAudio = policy.mode == VideoProcessingMode.AUTO_MULTIMODAL &&
+            policy.directAudioEnabled &&
+            server.allowsNativeChatVideoAudio()
 
         suspend fun prepareVideoAudio(source: File, durationMs: Long, messageId: Long): String? {
             if (!canAttachVideoAudio ||
@@ -1301,6 +1402,83 @@ class LlamaClientService : Service() {
                 }
             )
         }
+        var visualFraction = 0f
+        var audioFraction = 0f
+        var parallelWhisperJob: Deferred<String?>? = null
+        var parallelWhisperPayloadIndex: Int? = null
+        var parallelWhisperMerged = false
+        fun publishVideoProgress(
+            visual: Float = visualFraction,
+            audio: Float = audioFraction,
+            visualPhase: String? = null,
+            audioPhase: String? = null
+        ) {
+            visualFraction = visual.coerceIn(0f, 1f)
+            audioFraction = audio.coerceIn(0f, 1f)
+            publishNativeChatVideoProgress(
+                chatId = chatId,
+                taskId = taskId,
+                progress = progress,
+                visualFraction = visualFraction,
+                audioFraction = audioFraction,
+                visualPhase = visualPhase,
+                audioPhase = audioPhase,
+                audioExpected = wantsIndependentWhisper
+            )
+        }
+
+        if (policy.mode == VideoProcessingMode.AUTO_MULTIMODAL &&
+            policy.directAudioEnabled &&
+            !canAttachVideoAudio
+        ) {
+            publishVideoProgress(
+                audioPhase = getString(R.string.video_recognition_audio_unavailable)
+            )
+        }
+
+        suspend fun startParallelWhisper(source: File): Deferred<String?>? {
+            if (!wantsIndependentWhisper) return null
+            val modelPath = resolveWhisperModelPath(server)
+            if (modelPath.isNullOrBlank()) {
+                publishVideoProgress(
+                    audio = 0f,
+                    audioPhase = getString(R.string.video_recognition_audio_unavailable)
+                )
+                return null
+            }
+            return serviceScope.async {
+                runCatching {
+                    VideoRecognitionWhisperTranscriber(
+                        context = applicationContext,
+                        runId = System.nanoTime()
+                    ).transcribe(
+                        sourceFile = source,
+                        request = VideoRecognitionAudioFallbackRequest(
+                            whisperModelPath = modelPath,
+                            language = server.whisperLanguage.ifBlank {
+                                LlamaServerEntity.DEFAULT_WHISPER_LANGUAGE
+                            },
+                            threads = settingsRepo.whisperThreads.value,
+                            vadConfig = settingsRepo.whisperVadConfigSnapshot(),
+                            settingsOverride = null,
+                            saveToNotes = false
+                        )
+                    ) { label, fraction ->
+                        publishVideoProgress(audio = fraction, audioPhase = label)
+                    }
+                }.onFailure { error ->
+                    DebugLog.log(
+                        "LlamaClientService: Native Chat Whisper video branch failed: " +
+                            (error.message ?: error.javaClass.simpleName)
+                    )
+                    publishVideoProgress(
+                        audio = 0f,
+                        audioPhase = getString(R.string.video_recognition_audio_unavailable)
+                    )
+                }.getOrNull()
+            }
+        }
+
         val latestUserQuestion = history
             .asReversed()
             .firstOrNull { it.role == "user" }
@@ -1308,7 +1486,9 @@ class LlamaClientService : Service() {
             ?.trim()
             ?.take(NATIVE_CHAT_VIDEO_QUESTION_MAX_CHARS)
         val target = VideoRecognitionTarget.fromServer(server)
-            ?: throw IllegalStateException(getString(R.string.llama_video_unsupported))
+        if (!policy.usesLegacyTranscriptRoute() && target == null) {
+            throw IllegalStateException(getString(R.string.llama_video_unsupported))
+        }
         try {
             history.forEach { message ->
                 val sourcePath = message.videoPath?.takeIf { it.isNotBlank() }
@@ -1320,7 +1500,31 @@ class LlamaClientService : Service() {
                 val source = File(sourcePath)
                 val durationMs = readNativeChatVideoDurationMs(source)
                     ?: throw IllegalStateException(getString(R.string.llama_video_duration_unavailable))
+                if (parallelWhisperJob == null) {
+                    parallelWhisperJob = startParallelWhisper(source)
+                    if (parallelWhisperJob != null) {
+                        parallelWhisperPayloadIndex = payloads.size
+                    }
+                }
+
+                if (policy.usesLegacyTranscriptRoute()) {
+                    val transcript = parallelWhisperJob?.await()?.trim()
+                        ?.take(NATIVE_CHAT_VIDEO_TRANSCRIPT_MAX_CHARS)
+                    if (transcript.isNullOrBlank()) {
+                        throw IllegalStateException(getString(R.string.llama_video_whisper_unavailable))
+                    }
+                    payloads += NativeChatVideoPayload(
+                        videoObservation = getString(
+                            R.string.llama_video_transcript_disclosure,
+                            transcript
+                        )
+                    )
+                    parallelWhisperMerged = true
+                    return@forEach
+                }
+
                 if (!forceBoundedVideo &&
+                    policy.mode == VideoProcessingMode.AUTO_MULTIMODAL &&
                     durationMs <= NATIVE_CHAT_MAX_DIRECT_VIDEO_DURATION_MS &&
                     canUseManagedLocalRuntime
                 ) {
@@ -1344,7 +1548,9 @@ class LlamaClientService : Service() {
                                 source = source,
                                 mediaDirectory = mediaDirectory,
                                 durationMs = durationMs,
-                                preferredName = "chat_${message.id}_${source.name}"
+                                preferredName = "chat_${message.id}_${source.name}",
+                                maxFrames = policy.maxFrames,
+                                maxFps = policy.maxFps
                             )
                         } catch (cancelled: CancellationException) {
                             throw cancelled
@@ -1358,9 +1564,18 @@ class LlamaClientService : Service() {
                         if (staged != null) {
                             stagedRuntimeFiles += staged.file
                             val videoAudioPath = prepareVideoAudio(source, durationMs, message.id)
+                            if (policy.directAudioEnabled && canAttachVideoAudio && videoAudioPath == null) {
+                                publishVideoProgress(
+                                    audioPhase = getString(R.string.video_recognition_audio_unavailable)
+                                )
+                            }
                             payloads += NativeChatVideoPayload(
                                 localVideoData = staged.relativeFileUrl,
                                 videoAudioPath = videoAudioPath
+                            )
+                            publishVideoProgress(
+                                visual = 1f,
+                                visualPhase = getString(R.string.video_recognition_progress_complete)
                             )
                             return@forEach
                         }
@@ -1372,6 +1587,7 @@ class LlamaClientService : Service() {
                 // streaming branch is reserved for an app-managed loopback profile whose FPS
                 // is verified.
                 if (!forceBoundedVideo &&
+                    policy.mode == VideoProcessingMode.AUTO_MULTIMODAL &&
                     canUseSafeDirectStream &&
                     durationMs <= NATIVE_CHAT_MAX_DIRECT_VIDEO_DURATION_MS
                 ) {
@@ -1399,7 +1615,9 @@ class LlamaClientService : Service() {
                                 source = source,
                                 mediaDirectory = mediaDirectory,
                                 durationMs = durationMs,
-                                preferredName = "chat_${message.id}_${source.name}"
+                                preferredName = "chat_${message.id}_${source.name}",
+                                maxFrames = policy.maxFrames,
+                                maxFps = policy.maxFps
                             )
                         } catch (cancelled: CancellationException) {
                             throw cancelled
@@ -1414,9 +1632,18 @@ class LlamaClientService : Service() {
                             stagedRuntimeFiles += staged.file
                             streamedMediaPaths += staged.file.absolutePath
                             val videoAudioPath = prepareVideoAudio(source, durationMs, message.id)
+                            if (policy.directAudioEnabled && canAttachVideoAudio && videoAudioPath == null) {
+                                publishVideoProgress(
+                                    audioPhase = getString(R.string.video_recognition_audio_unavailable)
+                                )
+                            }
                             payloads += NativeChatVideoPayload(
                                 streamVideo = true,
                                 videoAudioPath = videoAudioPath
+                            )
+                            publishVideoProgress(
+                                visual = 1f,
+                                visualPhase = getString(R.string.video_recognition_progress_complete)
                             )
                             return@forEach
                         }
@@ -1441,16 +1668,22 @@ class LlamaClientService : Service() {
                 val observations = withTimeout(NATIVE_CHAT_VIDEO_WHOLE_TIMEOUT_MS) {
                     summarizeNativeChatVideo(
                         runtime = runtime,
-                        target = target,
+                        target = requireNotNull(target),
                         source = source,
                         chatId = chatId,
                         messageId = message.id,
                         durationMs = durationMs,
                         contextSize = contextSize,
                         params = params,
-                        latestUserQuestion = latestUserQuestion
+                        latestUserQuestion = latestUserQuestion,
+                        policy = policy,
+                        parallelWhisperJob = parallelWhisperJob,
+                        onProgress = { visual, phase ->
+                            publishVideoProgress(visual = visual, visualPhase = phase)
+                        }
                     )
                 }
+                parallelWhisperMerged = parallelWhisperJob != null
                 payloads += NativeChatVideoPayload(
                     videoObservation = getString(
                         R.string.llama_video_observation_disclosure,
@@ -1458,6 +1691,37 @@ class LlamaClientService : Service() {
                     )
                 )
             }
+            if (parallelWhisperJob != null && !parallelWhisperMerged) {
+                val transcript = parallelWhisperJob?.await()
+                    ?.trim()
+                    ?.take(NATIVE_CHAT_VIDEO_TRANSCRIPT_MAX_CHARS)
+                if (!transcript.isNullOrBlank()) {
+                    val payloadIndex = parallelWhisperPayloadIndex
+                    if (payloadIndex != null && payloadIndex in payloads.indices) {
+                        val payload = payloads[payloadIndex]
+                        payloads[payloadIndex] = payload.copy(
+                            videoObservation = listOf(
+                                payload.videoObservation,
+                                getString(
+                                    R.string.llama_video_transcript_disclosure,
+                                    transcript
+                                )
+                            ).filter { !it.isNullOrBlank() }.joinToString("\n\n")
+                        )
+                    }
+                    parallelWhisperMerged = true
+                    publishVideoProgress(
+                        audio = 1f,
+                        audioPhase = getString(R.string.video_recognition_audio_complete),
+                        visual = visualFraction
+                    )
+                }
+            }
+            publishVideoProgress(
+                visual = 1f,
+                audio = if (parallelWhisperJob != null) audioFraction else 0f,
+                visualPhase = getString(R.string.video_recognition_progress_complete)
+            )
             return NativeChatVideoPreparation(
                 payloads = payloads,
                 streamedMediaPaths = streamedMediaPaths,
@@ -1466,6 +1730,7 @@ class LlamaClientService : Service() {
                 stagedRuntimeFiles = stagedRuntimeFiles.toList()
             )
         } catch (error: Throwable) {
+            parallelWhisperJob?.cancel()
             stagedRuntimeFiles.forEach { file -> file.delete() }
             streamingRoot?.deleteRecursively()
             transientAudioRoot?.deleteRecursively()
@@ -1476,7 +1741,8 @@ class LlamaClientService : Service() {
     }
 
     /**
-     * Recognize each 30-second segment in order using the exact selected server endpoint,
+     * Recognize each globally configured segment (capped to twelve seconds for Native Chat) in
+     * order using the exact selected server endpoint,
      * then merge observations hierarchically with that same model. The runtime receives a
      * REMOTE_SERVER target even for a managed localhost server, so this path never launches
      * a second local model session for a Native Chat turn.
@@ -1490,18 +1756,20 @@ class LlamaClientService : Service() {
         durationMs: Long,
         contextSize: Int,
         params: Map<String, Any>,
-        latestUserQuestion: String?
+        latestUserQuestion: String?,
+        policy: VideoProcessingPolicy,
+        parallelWhisperJob: Deferred<String?>? = null,
+        onProgress: (visualFraction: Float, phase: String) -> Unit = { _, _ -> }
     ): String {
-        val profile = target.launchProfile
-        val segmentSeconds = profile?.videoSegmentSeconds
-            ?: settingsRepo.llamaVideoSegmentSeconds.value
-        val segmentMaxFramesSetting = profile?.videoMaxFrames
-            ?: settingsRepo.llamaVideoMaxFrames.value
-        val segmentMaxFps = profile?.videoMaxFps
-            ?: settingsRepo.llamaVideoMaxFps.value
-        val includeSegmentAudio = target.supportsAudio && (
-            profile?.videoAudioEnabled ?: settingsRepo.llamaVideoAudioEnabled.value
+        // Native MTMD accepts at most a twelve-second direct clip. Longer videos are segmented
+        // client-side even when the global policy allows larger Video Summary windows.
+        val segmentSeconds = policy.segmentSeconds.coerceAtMost(
+            NATIVE_CHAT_MAX_DIRECT_VIDEO_DURATION_MS.toInt() / 1_000
         )
+        val segmentMaxFramesSetting = policy.maxFrames
+        val segmentMaxFps = policy.maxFps
+        val includeSegmentAudio = policy.mode == VideoProcessingMode.AUTO_MULTIMODAL &&
+            policy.directAudioEnabled && target.supportsAudio
         val mediaProcessor = VideoMediaProcessor(
             context = applicationContext,
             policy = NativeLlamaVideoPolicy(
@@ -1579,7 +1847,11 @@ class LlamaClientService : Service() {
             // localhost. The shared runtime therefore extracts timestamped JPEGs and bounds
             // the remote request before it is sent; it does not expose the Android source path
             // or let an arbitrary server-side fps setting decode the whole clip.
-            val summary = runtime.summarizeSegment(segmentRequest) { _, _ -> }.trim()
+            val summary = runtime.summarizeSegment(segmentRequest) { label, fraction ->
+                val completed = ((segment.index + fraction.coerceIn(0f, 1f)) / segments.size)
+                    .coerceIn(0f, 1f)
+                onProgress(completed, label.take(NATIVE_CHAT_VIDEO_PHASE_MAX_CHARS))
+            }.trim()
             if (summary.isBlank()) {
                 throw IllegalStateException(getString(R.string.llama_video_sampling_failed))
             }
@@ -1622,7 +1894,13 @@ class LlamaClientService : Service() {
                             timeoutMinutes = NATIVE_CHAT_VIDEO_TIMEOUT_MINUTES,
                             segmentRanges = batch.map { it.range }
                         )
-                    ) { _, _ -> }.trim()
+                    ) { label, fraction ->
+                        onProgress(
+                            (0.9f + ((batchIndex + fraction.coerceIn(0f, 1f)) / batches.size) * 0.1f)
+                                .coerceIn(0f, 1f),
+                            label.take(NATIVE_CHAT_VIDEO_PHASE_MAX_CHARS)
+                        )
+                    }.trim()
                     if (merged.isBlank()) {
                         throw IllegalStateException(getString(R.string.llama_video_sampling_failed))
                     }
@@ -1633,7 +1911,34 @@ class LlamaClientService : Service() {
                 }
             }
         }
-        return level.single().text
+        val visualSummary = level.single().text
+        val transcript = parallelWhisperJob?.await()
+            ?.trim()
+            ?.take(NATIVE_CHAT_VIDEO_TRANSCRIPT_MAX_CHARS)
+        if (transcript.isNullOrBlank()) return visualSummary
+
+        onProgress(0.98f, getString(R.string.video_recognition_progress_multimodal_merge))
+        val merged = runtime.mergeMultimodalSummary(
+            VideoRecognitionMultimodalMergeRequest(
+                sessionKey = "native-chat-video:$chatId:$messageId:${target.id}",
+                target = target,
+                sourceName = source.name,
+                visualSummary = visualSummary,
+                transcript = transcript,
+                targetLanguage = targetLanguage,
+                prompt = prompt,
+                contextSize = contextSize.takeIf { it > 0 } ?: target.preferredContextSize,
+                maxTokens = maxTokens,
+                temperature = temperature,
+                timeoutMinutes = NATIVE_CHAT_VIDEO_TIMEOUT_MINUTES
+            )
+        ) { label, fraction ->
+            onProgress(
+                (0.98f + fraction.coerceIn(0f, 1f) * 0.02f).coerceIn(0f, 1f),
+                label.take(NATIVE_CHAT_VIDEO_PHASE_MAX_CHARS)
+            )
+        }.trim()
+        return merged.ifBlank { visualSummary }
     }
 
     /** Keep merge input inside the selected context after reserving output/system tokens. */
@@ -1692,7 +1997,9 @@ class LlamaClientService : Service() {
         source: File,
         mediaDirectory: File,
         durationMs: Long,
-        preferredName: String
+        preferredName: String,
+        maxFrames: Int,
+        maxFps: Float
     ): StagedVideoMedia = withContext(Dispatchers.IO) {
         require(durationMs in 1L..NATIVE_CHAT_MAX_DIRECT_VIDEO_DURATION_MS) {
             "Direct Native Chat video duration is outside the bounded range"
@@ -1704,13 +2011,15 @@ class LlamaClientService : Service() {
             "Unable to create native video media directory"
         }
         val durationSeconds = durationMs / 1_000.0
-        val frameLimit = ceil(durationSeconds * NativeLlamaVideoSupport.DEFAULT_VIDEO_FPS)
+        val normalizedMaxFrames = VideoRecognitionLimits.normalizeMaxFrames(maxFrames)
+        val normalizedMaxFps = VideoRecognitionLimits.normalizeMaxFps(maxFps)
+        val frameLimit = ceil(durationSeconds * normalizedMaxFps)
             .toInt()
-            .coerceIn(1, NativeLlamaVideoSupport.MAX_FRAMES_PER_SEGMENT)
+            .coerceIn(1, normalizedMaxFrames)
         val boundedFps = minOf(
-            NativeLlamaVideoSupport.MAX_VIDEO_FPS,
+            normalizedMaxFps,
             frameLimit / durationSeconds.toFloat()
-        ).coerceIn(0.1f, NativeLlamaVideoSupport.MAX_VIDEO_FPS)
+        ).coerceIn(0.1f, normalizedMaxFps)
         val safeStem = NativeLlamaVideoSupport.sanitizeMediaFileName(preferredName)
             .substringBeforeLast('.', preferredName)
         val output = File(
@@ -1838,6 +2147,8 @@ class LlamaClientService : Service() {
             server = server,
             contextSize = chat.contextSize,
             params = params,
+            taskId = taskId,
+            progress = progress,
             forceBoundedVideo = videoFallbackAttempted
         )
         try {
@@ -2381,7 +2692,12 @@ class LlamaClientService : Service() {
         progress: StreamingProgress
     ) {
         val effectiveToolConfig = nativeChatToolRuntime.configWithOrganizerPermissions(toolConfig)
-        val tools = nativeChatToolRuntime.availableTools(effectiveToolConfig)
+        val customTools = if (effectiveToolConfig.customToolsEnabled) {
+            database.customToolDao().getEnabledToolsOnce()
+        } else {
+            emptyList()
+        }
+        val tools = nativeChatToolRuntime.availableTools(effectiveToolConfig, customTools)
         if (tools.isEmpty()) {
             if (server.isOllamaEngine()) {
                 streamOllamaResponse(
@@ -2462,6 +2778,8 @@ class LlamaClientService : Service() {
                 server = server,
                 contextSize = chat.contextSize,
                 params = params,
+                taskId = taskId,
+                progress = progress,
                 forceBoundedVideo = true
             )
         } else {
@@ -2667,6 +2985,7 @@ class LlamaClientService : Service() {
                         toolCall = toolCall,
                         config = effectiveToolConfig,
                         chatId = chatId,
+                        customTools = customTools,
                         onProgress = { toolProgress ->
                             publishToolActivity(
                                 chatId = chatId,
@@ -3498,7 +3817,19 @@ class LlamaClientService : Service() {
         }
 
         val byName = tools.associateBy { it.name }
-        val selected = wanted.mapNotNull { byName[it] }.toMutableList()
+        val selected = tools.filter { tool ->
+            tool.name in setOf(
+                NativeChatToolRuntime.TOOL_LIST_WORKSPACE_FILES,
+                NativeChatToolRuntime.TOOL_READ_WORKSPACE_FILE,
+                NativeChatToolRuntime.TOOL_WRITE_WORKSPACE_FILE,
+                NativeChatToolRuntime.TOOL_APPEND_WORKSPACE_FILE,
+                NativeChatToolRuntime.TOOL_EDIT_WORKSPACE_LINES,
+                NativeChatToolRuntime.TOOL_APPLY_WORKSPACE_PATCH
+            ) || tool.description.contains("Local curl-style API tool enabled by the user.")
+        }.toMutableList()
+        wanted.mapNotNullTo(selected) { name ->
+            byName[name]?.takeIf { tool -> selected.none { it.name == tool.name } }
+        }
         val fallbackOrder = listOf(
             NativeChatToolRuntime.TOOL_WEB_SEARCH,
             NativeChatToolRuntime.TOOL_FETCH_URL,
@@ -4180,6 +4511,11 @@ class LlamaClientService : Service() {
                     promptProcessed = progress.promptProcessed,
                     promptTotal = progress.promptTotal,
                     promptCached = progress.promptCached,
+                    videoProgress = progress.videoProgress,
+                    videoVisualProgress = progress.videoVisualProgress,
+                    videoAudioProgress = progress.videoAudioProgress,
+                    videoVisualPhase = progress.videoVisualPhase,
+                    videoAudioPhase = progress.videoAudioPhase,
                     toolEvents = progress.toolEvents.toList()
                 )
             )
@@ -4216,6 +4552,66 @@ class LlamaClientService : Service() {
         return System.currentTimeMillis()
     }
 
+    /**
+     * Publish bounded preparation state while Native Chat is still assembling its request.
+     * The visual and audio branches report independently; the overall value is a weighted
+     * fraction so a parallel Whisper process cannot make a long visual run appear complete.
+     */
+    private fun publishNativeChatVideoProgress(
+        chatId: Long,
+        taskId: Int,
+        progress: StreamingProgress,
+        visualFraction: Float,
+        audioFraction: Float,
+        visualPhase: String? = null,
+        audioPhase: String? = null,
+        audioExpected: Boolean
+    ) {
+        val visual = visualFraction.coerceIn(0f, 1f)
+        val audio = audioFraction.coerceIn(0f, 1f)
+        val overall = if (audioExpected) {
+            (visual * 0.75f + audio * 0.25f).coerceIn(0f, 1f)
+        } else {
+            visual
+        }
+        progress.videoProgress = overall
+        progress.videoVisualProgress = visual
+        progress.videoAudioProgress = audio
+        visualPhase?.trim()?.takeIf { it.isNotBlank() }?.let {
+            progress.videoVisualPhase = it.take(NATIVE_CHAT_VIDEO_PHASE_MAX_CHARS)
+        }
+        audioPhase?.trim()?.takeIf { it.isNotBlank() }?.let {
+            progress.videoAudioPhase = it.take(NATIVE_CHAT_VIDEO_PHASE_MAX_CHARS)
+        }
+        progress.statusText = progress.videoVisualPhase ?: progress.videoAudioPhase
+        val current = Companion.generationState.value as? GenerationState.Generating
+        Companion.updateState(
+            GenerationState.Generating(
+                chatId = chatId,
+                content = progress.content,
+                thinking = progress.thinking.takeIf { it.isNotBlank() },
+                tokenCount = progress.tokenCount,
+                tokensPerSecond = progress.reportedTokensPerSecond ?: 0.0,
+                statusText = progress.statusText,
+                promptProgress = progress.promptProgress,
+                promptProcessed = progress.promptProcessed,
+                promptTotal = progress.promptTotal,
+                promptCached = progress.promptCached,
+                videoProgress = progress.videoProgress,
+                videoVisualProgress = progress.videoVisualProgress,
+                videoAudioProgress = progress.videoAudioProgress,
+                videoVisualPhase = progress.videoVisualPhase,
+                videoAudioPhase = progress.videoAudioPhase,
+                toolEvents = current?.toolEvents ?: progress.toolEvents.toList()
+            )
+        )
+        UnifiedNotificationManager.updateProgress(
+            taskId,
+            (0.05f + overall * 0.4f).coerceIn(0.05f, 0.45f),
+            progress.statusText ?: getString(R.string.video_recognition_progress_preparing)
+        )
+    }
+
     private fun shouldPublishStreamingProgress(
         progress: StreamingProgress,
         lastPersistMs: Long,
@@ -4239,6 +4635,11 @@ class LlamaClientService : Service() {
                 tokenCount = progress.tokenCount,
                 tokensPerSecond = 0.0,
                 statusText = statusText,
+                videoProgress = progress.videoProgress,
+                videoVisualProgress = progress.videoVisualProgress,
+                videoAudioProgress = progress.videoAudioProgress,
+                videoVisualPhase = progress.videoVisualPhase,
+                videoAudioPhase = progress.videoAudioPhase,
                 toolEvents = progress.toolEvents.toList()
             )
         )
@@ -4768,6 +5169,12 @@ class LlamaClientService : Service() {
         var promptProcessed: Int = 0,
         var promptTotal: Int = 0,
         var promptCached: Int = 0,
+        /** Bounded Native Chat video preparation progress exposed to the chat UI. */
+        var videoProgress: Float? = null,
+        var videoVisualProgress: Float = 0f,
+        var videoAudioProgress: Float = 0f,
+        var videoVisualPhase: String? = null,
+        var videoAudioPhase: String? = null,
         val toolEvents: MutableList<ToolActivityEvent> = mutableListOf(),
         val generatedImagePaths: MutableList<String> = mutableListOf(),
         var lastPowerDiagnosticMs: Long = 0L,
@@ -4880,6 +5287,11 @@ class LlamaClientService : Service() {
             val promptProcessed: Int = 0,
             val promptTotal: Int = 0,
             val promptCached: Int = 0,
+            val videoProgress: Float? = null,
+            val videoVisualProgress: Float = 0f,
+            val videoAudioProgress: Float = 0f,
+            val videoVisualPhase: String? = null,
+            val videoAudioPhase: String? = null,
             val toolEvents: List<ToolActivityEvent> = emptyList()
         ) : GenerationState()
         data class Completed(

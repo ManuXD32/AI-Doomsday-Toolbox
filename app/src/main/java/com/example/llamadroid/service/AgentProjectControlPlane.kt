@@ -617,6 +617,7 @@ internal object AgentProjectControlPlane {
             "fetch_url",
             "file_line_count",
             "get_datetime",
+            "sleep_until",
             "kb_list_sources",
             "kb_read_chunk",
             "kb_search",
@@ -1172,6 +1173,7 @@ internal object AgentProjectControlPlane {
         return when (roleName) {
             "ORCHESTRATOR" -> commonState + setOf(
                 "question",
+                "sleep_until",
                 "todo_write",
                 "todo_transition",
                 "todo_reconcile",
@@ -1201,6 +1203,7 @@ internal object AgentProjectControlPlane {
 
             "CODER" -> commonState + codeRead + memoryRead + setOf(
                 "write_file",
+                "append_file",
                 "edit_lines",
                 "apply_patch",
                 "create_folder",

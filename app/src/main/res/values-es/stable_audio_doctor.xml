@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="audio_music_error_model_stale">Esta fila de modelo de Stable Audio está obsoleta o es antigua. Vuelve a descargar el componente seleccionado del catálogo de LiteRT.</string>
+    <string name="audio_music_error_file_io">Stable Audio no pudo leer un archivo de modelo al cargarlo. Revisa el doctor del modelo y vuelve a descargar el componente afectado.</string>
+    <string name="audio_music_error_invalid_model">Stable Audio encontró datos de modelo no válidos. Vuelve a descargar el componente seleccionado.</string>
+    <string name="audio_music_error_native_memory">Stable Audio se quedó sin memoria al cargar un modelo. Cierra otras tareas o reduce la duración solicitada y reintenta.</string>
+    <string name="audio_stable_doctor_title">Doctor de modelos de Stable Audio</string>
+    <string name="audio_stable_doctor_check">Comprobar modelo</string>
+    <string name="audio_stable_doctor_checking">Comprobando modelo…</string>
+    <string name="audio_stable_doctor_redownload">Volver a descargar componente</string>
+    <string name="audio_stable_doctor_redownload_confirm">¿Quieres eliminar la fila %1$s actual y volver a descargar el componente canónico exacto?</string>
+    <string name="audio_stable_doctor_redownload_started">Ha comenzado la descarga del componente canónico.</string>
+    <string name="audio_stable_doctor_ready">Listo</string>
+    <string name="audio_stable_doctor_repair">Requiere reparación</string>
+    <string name="audio_stable_doctor_role">Rol: %1$s</string>
+    <string name="audio_stable_doctor_readable">Legible: %1$s</string>
+    <string name="audio_stable_doctor_parent">Directorio padre: %1$s</string>
+    <string name="audio_stable_doctor_size">Tamaño: %1$s / %2$s</string>
+    <string name="audio_stable_doctor_digest">Resumen: %1$s / %2$s</string>
+    <string name="audio_stable_doctor_status">Estado: %1$s</string>
+    <string name="audio_stable_doctor_yes">sí</string>
+    <string name="audio_stable_doctor_no">no</string>
+    <string name="audio_stable_doctor_unknown">sin comprobar</string>
+    <string name="audio_stable_doctor_role_ok">canónico</string>
+    <string name="audio_stable_doctor_role_bad">obsoleto o desconocido</string>
+    <string name="audio_stable_doctor_status_missing">falta</string>
+    <string name="audio_stable_doctor_status_unreadable">ilegible</string>
+    <string name="audio_stable_doctor_status_size">tamaño incorrecto</string>
+    <string name="audio_stable_doctor_status_digest">resumen incorrecto</string>
+    <string name="audio_stable_doctor_status_path">ruta no canónica</string>
+    <string name="audio_stable_doctor_status_parent">directorio padre no disponible</string>
+    <string name="audio_stable_doctor_status_ready">listo</string>
+    <string name="audio_stable_doctor_expected_file">Archivo esperado: %1$s</string>
+</resources>

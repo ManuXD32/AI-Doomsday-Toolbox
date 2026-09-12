@@ -39,6 +39,7 @@ class AgentViewModel(
     private val db: AppDatabase,
     private val settingsRepository: SettingsRepository
 ) : ViewModel() {
+    private val appContext = context.applicationContext
     // Services
     val ollamaService = OllamaService(context.applicationContext)
     val agentService = AgentService(context.applicationContext)
@@ -257,6 +258,10 @@ class AgentViewModel(
         level = DeprecationLevel.WARNING
     )
     suspend fun deleteConversation(conversationId: Long, projectFolder: String?) {
+        com.example.llamadroid.service.AgentSleepWakeScheduler.cancelConversation(
+            appContext,
+            conversationId
+        )
         db.agentChatDao().deleteConversationById(conversationId)
         
         if (projectFolder != null) {

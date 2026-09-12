@@ -2,6 +2,7 @@ package com.example.llamadroid.service
 
 import android.content.Context
 import android.net.Uri
+import androidx.annotation.StringRes
 import com.example.llamadroid.R
 import com.example.llamadroid.data.RemoteSummarySettingsSnapshot
 import com.example.llamadroid.data.db.AppDatabase
@@ -127,8 +128,8 @@ data class VideoRecognitionTarget(
                 label = server.name,
                 serverId = server.id,
                 engine = server.normalizedEngine(),
-                // Capability comes only from the server's explicit audio declaration. The
-                // profile's videoAudioEnabled value is an execution preference below.
+                // Capability comes only from the server's explicit audio declaration and its
+                // current direct-input preference. The global policy decides whether to attach it.
                 supportsAudio = server.supportsDirectAudioInput()
             ).copy(
                 preferredContextSize = profile?.contextSize?.takeIf { it > 0 }
@@ -431,7 +432,10 @@ data class VideoRecognitionSummaryState(
     val processedSeconds: Double = 0.0,
     val processedFraction: Float = 0f,
     val audioProgress: Float = 0f,
-    val visualProgress: Float = 0f
+    val visualProgress: Float = 0f,
+    /** Bounded phase labels for the visual and audio branches. */
+    val visualPhase: String = "",
+    val audioPhase: String = ""
 ) {
     val isRunning: Boolean
         get() = status in setOf(
@@ -452,6 +456,23 @@ object VideoRecognitionSummaryService {
     private const val MERGE_FAN_IN = 4
     private const val MAX_SEGMENTS_PER_RUN = 120
     private const val WHOLE_RUN_TIMEOUT_MS = 60L * 60L * 1_000L
+    private const val PHASE_LABEL_MAX_CHARS = 120
+
+    /**
+     * Real app builds resolve every message from the localized resource table. The fallback keeps
+     * service state usable in stripped host-test contexts where Robolectric exposes an R id but
+     * does not load the matching packaged string.
+     */
+    private fun localizedString(context: Context, @StringRes id: Int, vararg args: Any): String =
+        runCatching { context.getString(id, *args) }.getOrElse {
+            when (id) {
+                R.string.video_recognition_progress_preparing -> "Preparing video recognition…"
+                R.string.video_recognition_cancelled -> "Video processing cancelled."
+                R.string.video_recognition_notification_title ->
+                    "Visual video summary: ${args.firstOrNull()?.toString().orEmpty()}"
+                else -> "Video processing"
+            }
+        }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val runCounter = AtomicLong(0L)
@@ -536,12 +557,12 @@ object VideoRecognitionSummaryService {
             status = VideoRecognitionSummaryStatus.PREPARING,
             runId = runId,
             sourceName = request.sourceName,
-            message = context.getString(R.string.video_recognition_progress_preparing),
+            message = localizedString(context, R.string.video_recognition_progress_preparing),
             canUseAudioFallback = request.audioFallback?.isConfigured == true
         )
         notificationTaskId = UnifiedNotificationManager.startTask(
             UnifiedNotificationManager.TaskType.TRANSCRIPTION,
-            context.getString(R.string.video_recognition_notification_title, request.sourceName)
+            localizedString(context, R.string.video_recognition_notification_title, request.sourceName)
         )
         notificationRunId = runId
         currentJob = serviceScope.launch {
@@ -556,7 +577,7 @@ object VideoRecognitionSummaryService {
                 if (isCurrent(runId)) {
                     fail(
                         request,
-                        context.getString(R.string.video_recognition_run_timed_out),
+                        localizedString(context, R.string.video_recognition_run_timed_out),
                         runId
                     )
                 }
@@ -564,7 +585,7 @@ object VideoRecognitionSummaryService {
                 if (isCurrent(runId)) {
                     _state.value = _state.value.copy(
                         status = VideoRecognitionSummaryStatus.CANCELLED,
-                        message = context.getString(R.string.video_recognition_cancelled),
+                        message = localizedString(context, R.string.video_recognition_cancelled),
                         progress = 0f,
                         canRetry = false
                     )
@@ -649,7 +670,8 @@ object VideoRecognitionSummaryService {
     ) {
         val source = materializeSource(context, request)
         val fallback = request.audioFallback
-        val target = if (request.forceAudioFallback) {
+        val policy = request.settings.processingPolicy
+        val target = if (request.forceAudioFallback || policy.isLegacyTranscript) {
             VideoRecognitionTargetSelection(target = null, savedTargetMissing = false)
         } else {
             VideoRecognitionTargetSelector.selectConfigured(
@@ -667,19 +689,21 @@ object VideoRecognitionSummaryService {
                 source.cleanup()
                 fail(
                     request,
-                    context.getString(R.string.video_recognition_saved_target_unavailable),
+                    localizedString(context, R.string.video_recognition_saved_target_unavailable),
                     runId
                 )
                 return
             }
-            if (fallback?.isConfigured == true) {
+            if (fallback?.isConfigured == true &&
+                (request.forceAudioFallback || policy.mode != VideoProcessingMode.VISUAL_WHISPER)
+            ) {
                 startLegacyFallback(context, request, source, runId)
             } else {
                 source.cleanup()
                 val message = if (request.settings.remoteEnabled) {
-                    context.getString(R.string.video_recognition_remote_not_configured)
+                    localizedString(context, R.string.video_recognition_remote_not_configured)
                 } else {
-                    context.getString(R.string.video_recognition_no_model_audio_unavailable)
+                    localizedString(context, R.string.video_recognition_no_model_audio_unavailable)
                 }
                 fail(request, message, runId)
             }
@@ -707,31 +731,22 @@ object VideoRecognitionSummaryService {
             publish(runId) {
                 copy(
                     status = VideoRecognitionSummaryStatus.PREPARING,
-                    message = context.getString(R.string.video_recognition_progress_analyzing),
+                    message = localizedString(context, R.string.video_recognition_progress_analyzing),
                     progress = 0.02f,
                     canUseAudioFallback = fallback?.isConfigured == true
                 )
             }
             val duration = runtime.probeDurationSeconds(source.file)
                 .takeIf { it.isFinite() && it > 0.0 }
-                ?: throw IllegalStateException(context.getString(R.string.video_recognition_duration_failed))
-            val launchProfile = selectedTarget.launchProfile
-            val effectiveSegmentSeconds = launchProfile?.videoSegmentSeconds
-                ?: request.settings.segmentSeconds
-            val effectiveMaxFrames = launchProfile?.videoMaxFrames
-                ?: request.settings.maxFrames
-            val effectiveMaxFps = launchProfile?.videoMaxFps
-                ?: request.settings.maxFps
-            val effectiveContextSize = launchProfile?.contextSize?.takeIf { it > 0 }
-                ?: request.settings.contextSize.takeIf { it > 0 }
+                ?: throw IllegalStateException(localizedString(context, R.string.video_recognition_duration_failed))
+            // Processing policy is global. A server launch profile may describe how the
+            // endpoint was started, but it cannot override segmentation or evidence choices.
+            val effectiveSegmentSeconds = policy.segmentSeconds
+            val effectiveMaxFrames = policy.maxFrames
+            val effectiveMaxFps = policy.maxFps
+            val effectiveContextSize = request.settings.contextSize.takeIf { it > 0 }
                 ?: selectedTarget.preferredContextSize
-            val effectiveTemperature = launchProfile?.temperature
-                ?.takeIf { it.isFinite() }
-                ?: request.settings.temperature
-            val effectiveAudioEnabled = launchProfile?.videoAudioEnabled
-                ?: request.settings.audioEnabled
-            val effectiveParallelWhisperEnabled = launchProfile?.videoWhisperParallelEnabled
-                ?: request.settings.parallelWhisperEnabled
+            val effectiveTemperature = request.settings.temperature
             val segments = planSegments(context, duration, effectiveSegmentSeconds)
             publish(runId) {
                 copy(
@@ -739,19 +754,34 @@ object VideoRecognitionSummaryService {
                     processedSeconds = 0.0,
                     processedFraction = 0f,
                     visualProgress = 0f,
-                    audioProgress = 0f
+                    audioProgress = 0f,
+                    visualPhase = localizedString(context, R.string.video_recognition_progress_preparing),
+                    audioPhase = ""
                 )
             }
-            val canRunParallelAudio = effectiveParallelWhisperEnabled &&
-                !selectedTarget.supportsAudio &&
-                fallback?.isConfigured == true
+            val directAudioNeedsFallback = selectedTarget.supportsAudio && segments.any {
+                it.durationSeconds * 1_000L > NativeLlamaVideoSupport.MAX_DIRECT_VIDEO_DURATION_MS
+            }
+            val canRunParallelAudio = fallback?.isConfigured == true && when (policy.mode) {
+                VideoProcessingMode.VISUAL_WHISPER -> true
+                // AUTO uses Whisper as the summary fallback whenever the selected target cannot
+                // accept direct audio or the user-selected segment exceeds the native direct
+                // clip limit. Native Chat's explicit parallel toggle is separate.
+                VideoProcessingMode.AUTO_MULTIMODAL -> !selectedTarget.supportsAudio || directAudioNeedsFallback
+                VideoProcessingMode.LEGACY_TRANSCRIPT -> false
+            }
             val audioJob: Deferred<String>? = if (canRunParallelAudio) {
                 serviceScope.async {
                     VideoRecognitionWhisperTranscriber(context, runId).transcribe(
                         sourceFile = source.file,
                         request = requireNotNull(fallback)
-                    ) { _, fraction ->
-                        publish(runId) { copy(audioProgress = fraction.coerceIn(0f, 1f)) }
+                    ) { label, fraction ->
+                        publish(runId) {
+                            copy(
+                                audioProgress = fraction.coerceIn(0f, 1f),
+                                audioPhase = label.take(PHASE_LABEL_MAX_CHARS)
+                            )
+                        }
                     }
                 }.also { currentAudioJob = it }
             } else {
@@ -787,12 +817,13 @@ object VideoRecognitionSummaryService {
                     maxTokens = request.settings.maxTokens,
                     temperature = effectiveTemperature,
                     timeoutMinutes = request.settings.timeoutMinutes,
-                    includeAudio = effectiveAudioEnabled && selectedTarget.supportsAudio
+                    includeAudio = policy.mode == VideoProcessingMode.AUTO_MULTIMODAL &&
+                        policy.directAudioEnabled && selectedTarget.supportsAudio
                 )
                 publish(runId) {
                     copy(
                         status = VideoRecognitionSummaryStatus.VISUAL,
-                        message = context.getString(
+                        message = localizedString(context,
                             R.string.video_recognition_progress_segment,
                             segment.index,
                             segment.total
@@ -808,11 +839,11 @@ object VideoRecognitionSummaryService {
                     )
                 }
                 val segmentSummary = try {
-                    runtime.summarizeSegment(segmentRequest) { _, fraction ->
+                    runtime.summarizeSegment(segmentRequest) { label, fraction ->
                         publish(runId) {
                             copy(
                                 status = VideoRecognitionSummaryStatus.VISUAL,
-                                message = context.getString(
+                                message = localizedString(context,
                                     R.string.video_recognition_progress_segment,
                                     segment.index,
                                     segment.total
@@ -824,7 +855,8 @@ object VideoRecognitionSummaryService {
                                 usedFrameFallback = usedFrameFallback,
                                 processedSeconds = processedBefore,
                                 processedFraction = durationWeightedProgress(duration, processedBefore),
-                                visualProgress = segmentProgress(segment, fraction)
+                                visualProgress = segmentProgress(segment, fraction),
+                                visualPhase = label.take(PHASE_LABEL_MAX_CHARS)
                             )
                         }
                     }
@@ -833,7 +865,7 @@ object VideoRecognitionSummaryService {
                     publish(runId) {
                         copy(
                             status = VideoRecognitionSummaryStatus.FRAME_FALLBACK,
-                            message = context.getString(R.string.video_recognition_progress_frame_fallback),
+                            message = localizedString(context, R.string.video_recognition_progress_frame_fallback),
                             progress = segmentProgress(segment, 0.5f),
                             currentSegment = segment.index,
                             totalSegments = segment.total,
@@ -845,11 +877,11 @@ object VideoRecognitionSummaryService {
                         )
                     }
                     usedFrameFallback = true
-                    runtime.summarizeFramesFallback(segmentRequest) { _, fraction ->
+                    runtime.summarizeFramesFallback(segmentRequest) { label, fraction ->
                         publish(runId) {
                             copy(
                                 status = VideoRecognitionSummaryStatus.FRAME_FALLBACK,
-                                message = context.getString(R.string.video_recognition_progress_frame_fallback),
+                                message = localizedString(context, R.string.video_recognition_progress_frame_fallback),
                                 progress = segmentProgress(segment, fraction),
                                 currentSegment = segment.index,
                                 totalSegments = segment.total,
@@ -857,14 +889,15 @@ object VideoRecognitionSummaryService {
                                 usedFrameFallback = true,
                                 processedSeconds = processedBefore,
                                 processedFraction = durationWeightedProgress(duration, processedBefore),
-                                visualProgress = segmentProgress(segment, fraction)
+                                visualProgress = segmentProgress(segment, fraction),
+                                visualPhase = label.take(PHASE_LABEL_MAX_CHARS)
                             )
                         }
                     }
                 }
                 val cleanSummary = segmentSummary.trim()
                 if (cleanSummary.isBlank()) {
-                    throw IllegalStateException(context.getString(R.string.video_recognition_empty_segment))
+                    throw IllegalStateException(localizedString(context, R.string.video_recognition_empty_segment))
                 }
                 summaries += cleanSummary
                 val processedAfter = processedSecondsForSegments(
@@ -901,7 +934,7 @@ object VideoRecognitionSummaryService {
                         publish(runId) {
                             copy(
                                 status = VideoRecognitionSummaryStatus.MERGING,
-                                message = context.getString(
+                                message = localizedString(context,
                                     R.string.video_recognition_progress_merge,
                                     round,
                                     batchIndex + 1,
@@ -934,7 +967,7 @@ object VideoRecognitionSummaryService {
                             publish(runId) {
                                 copy(
                                     status = VideoRecognitionSummaryStatus.MERGING,
-                                    message = context.getString(
+                                    message = localizedString(context,
                                         R.string.video_recognition_progress_merge,
                                         round,
                                         batchIndex + 1,
@@ -949,7 +982,7 @@ object VideoRecognitionSummaryService {
                             }
                         }.trim().also { merged ->
                             if (merged.isBlank()) {
-                                throw IllegalStateException(context.getString(R.string.video_recognition_empty_merge))
+                                throw IllegalStateException(localizedString(context, R.string.video_recognition_empty_merge))
                             }
                         }
                         val first = batch.first().segment
@@ -971,7 +1004,7 @@ object VideoRecognitionSummaryService {
             }
 
                 val visualSummary = level.singleOrNull()?.text?.trim()
-                    ?: throw IllegalStateException(context.getString(R.string.video_recognition_empty_summary))
+                    ?: throw IllegalStateException(localizedString(context, R.string.video_recognition_empty_summary))
                 val transcript = audioJob?.let { job ->
                     awaitAudioOrNull(job)
                 }
@@ -979,10 +1012,11 @@ object VideoRecognitionSummaryService {
                     publish(runId) {
                         copy(
                             status = VideoRecognitionSummaryStatus.MERGING,
-                            message = context.getString(R.string.video_recognition_progress_multimodal_merge),
+                            message = localizedString(context, R.string.video_recognition_progress_multimodal_merge),
                             progress = 0.99f,
                             transcript = transcript,
-                            audioProgress = 1f
+                            audioProgress = 1f,
+                            audioPhase = localizedString(context, R.string.video_recognition_audio_complete)
                         )
                     }
                     runtime.mergeMultimodalSummary(
@@ -999,14 +1033,16 @@ object VideoRecognitionSummaryService {
                             temperature = effectiveTemperature,
                             timeoutMinutes = request.settings.timeoutMinutes
                         )
-                    ) { _, fraction ->
+                        ) { label, fraction ->
                         publish(runId) {
                             copy(
                                 status = VideoRecognitionSummaryStatus.MERGING,
-                                message = context.getString(R.string.video_recognition_progress_multimodal_merge),
+                                message = localizedString(context, R.string.video_recognition_progress_multimodal_merge),
                                 progress = (0.99f + fraction.coerceIn(0f, 1f) * 0.01f).coerceIn(0f, 1f),
                                 transcript = transcript,
-                                audioProgress = 1f
+                                audioProgress = 1f,
+                                audioPhase = localizedString(context, R.string.video_recognition_audio_complete),
+                                visualPhase = label.take(PHASE_LABEL_MAX_CHARS)
                             )
                         }
                     }.trim().ifBlank { visualSummary }
@@ -1020,9 +1056,9 @@ object VideoRecognitionSummaryService {
                     copy(
                         status = VideoRecognitionSummaryStatus.SUCCESS,
                         message = if (audioJob != null && transcript == null) {
-                            context.getString(R.string.video_recognition_visual_complete_audio_unavailable)
+                            localizedString(context, R.string.video_recognition_visual_complete_audio_unavailable)
                         } else {
-                            context.getString(R.string.video_recognition_progress_complete)
+                            localizedString(context, R.string.video_recognition_progress_complete)
                         },
                         progress = 1f,
                         currentSegment = segments.size,
@@ -1038,7 +1074,13 @@ object VideoRecognitionSummaryService {
                         processedFraction = durationWeightedProgress(duration, duration),
                         sourceDurationSeconds = duration,
                         visualProgress = 1f,
-                        audioProgress = if (audioJob != null) 1f else 0f
+                        audioProgress = if (audioJob != null) 1f else 0f,
+                        visualPhase = localizedString(context, R.string.video_recognition_progress_complete),
+                        audioPhase = if (audioJob != null) {
+                            localizedString(context, R.string.video_recognition_audio_complete)
+                        } else {
+                            ""
+                        }
                     )
                 }
             } catch (error: Throwable) {
@@ -1050,7 +1092,7 @@ object VideoRecognitionSummaryService {
                     publish(runId) {
                         copy(
                             status = VideoRecognitionSummaryStatus.SUCCESS,
-                            message = context.getString(R.string.video_recognition_audio_only_complete),
+                            message = localizedString(context, R.string.video_recognition_audio_only_complete),
                             progress = 1f,
                             summary = "",
                             transcript = audioOnlyTranscript,
@@ -1060,7 +1102,8 @@ object VideoRecognitionSummaryService {
                             processedSeconds = duration,
                             processedFraction = durationWeightedProgress(duration, duration),
                             sourceDurationSeconds = duration,
-                            audioProgress = 1f
+                            audioProgress = 1f,
+                            audioPhase = localizedString(context, R.string.video_recognition_audio_complete)
                         )
                     }
                 } else {
@@ -1092,15 +1135,15 @@ object VideoRecognitionSummaryService {
         runId: Long
     ) {
         val fallback = request.audioFallback
-            ?: throw IllegalStateException(context.getString(R.string.video_recognition_no_model_audio_unavailable))
+            ?: throw IllegalStateException(localizedString(context, R.string.video_recognition_no_model_audio_unavailable))
         if (!fallback.isConfigured) {
-            fail(request, context.getString(R.string.video_recognition_no_model_audio_unavailable), runId)
+            fail(request, localizedString(context, R.string.video_recognition_no_model_audio_unavailable), runId)
             return
         }
         publish(runId) {
             copy(
                 status = VideoRecognitionSummaryStatus.AUDIO_FALLBACK,
-                message = context.getString(R.string.video_recognition_audio_fallback_active),
+                message = localizedString(context, R.string.video_recognition_audio_fallback_active),
                 progress = 0.05f,
                 canUseAudioFallback = false,
                 canRetry = false
@@ -1150,7 +1193,7 @@ object VideoRecognitionSummaryService {
                 publish(runId) {
                     copy(
                         status = VideoRecognitionSummaryStatus.SUCCESS,
-                        message = context.getString(R.string.video_recognition_progress_complete),
+                        message = localizedString(context, R.string.video_recognition_progress_complete),
                         progress = 1f,
                         // The legacy holder renders the Whisper result below; keep the
                         // coordinator state terminal without duplicating that card.
@@ -1164,14 +1207,14 @@ object VideoRecognitionSummaryService {
                 publish(runId) {
                     copy(
                         status = VideoRecognitionSummaryStatus.CANCELLED,
-                        message = context.getString(R.string.video_recognition_cancelled),
+                        message = localizedString(context, R.string.video_recognition_cancelled),
                         progress = 0f,
                         canRetry = false,
                         canUseAudioFallback = false
                     )
                 }
             } else {
-                fail(request, error ?: context.getString(R.string.error_generic), runId)
+                fail(request, error ?: localizedString(context, R.string.error_generic), runId)
             }
         }
         legacyFallbackJob = monitor
@@ -1194,12 +1237,12 @@ object VideoRecognitionSummaryService {
         val existing = request.sourcePath?.trim()?.takeIf { it.isNotBlank() }?.let(::File)
         if (existing?.isFile == true) {
             if (existing.length() > VideoMediaProcessor.MAX_STAGED_VIDEO_BYTES) {
-                throw IllegalStateException(context.getString(R.string.video_recognition_source_too_large))
+                throw IllegalStateException(localizedString(context, R.string.video_recognition_source_too_large))
             }
             return@withContext PreparedSource(existing, owned = false)
         }
         val uri = request.sourceUri
-            ?: throw IllegalArgumentException(context.getString(R.string.video_recognition_source_missing))
+            ?: throw IllegalArgumentException(localizedString(context, R.string.video_recognition_source_missing))
         val extension = request.sourceName.substringAfterLast('.', "mp4")
             .lowercase(Locale.US)
             .replace(Regex("[^a-z0-9]"), "")
@@ -1211,7 +1254,7 @@ object VideoRecognitionSummaryService {
             throw cancelled
         } catch (error: Throwable) {
             throw IllegalStateException(
-                context.getString(R.string.video_recognition_source_unreadable),
+                localizedString(context, R.string.video_recognition_source_unreadable),
                 error
             )
         }
@@ -1226,8 +1269,8 @@ object VideoRecognitionSummaryService {
         runCatching {
             AppDatabase.getDatabase(context).noteDao().insert(
                 NoteEntity(
-                    title = context.getString(R.string.video_recognition_note_title, request.sourceName),
-                    content = context.getString(
+                    title = localizedString(context, R.string.video_recognition_note_title, request.sourceName),
+                    content = localizedString(context,
                         R.string.video_recognition_note_content,
                         summary
                     ),
@@ -1250,11 +1293,11 @@ object VideoRecognitionSummaryService {
         runCatching {
             AppDatabase.getDatabase(context).noteDao().insert(
                 NoteEntity(
-                    title = context.getString(
+                    title = localizedString(context,
                         R.string.video_recognition_audio_note_title,
                         request.sourceName
                     ),
-                    content = context.getString(
+                    content = localizedString(context,
                         R.string.video_recognition_audio_note_content,
                         summary
                     ),
@@ -1357,14 +1400,14 @@ object VideoRecognitionSummaryService {
         segmentSeconds: Int
     ): List<VideoRecognitionSegment> {
         if (!durationSeconds.isFinite()) {
-            throw IllegalStateException(context.getString(R.string.video_recognition_duration_failed))
+            throw IllegalStateException(localizedString(context, R.string.video_recognition_duration_failed))
         }
         val safeDuration = max(1.0, durationSeconds)
         val segmentLength = VideoRecognitionLimits.normalizeSegmentSeconds(segmentSeconds)
         val totalAsDouble = ceil(safeDuration / segmentLength)
         if (!totalAsDouble.isFinite() || totalAsDouble > MAX_SEGMENTS_PER_RUN) {
             throw IllegalStateException(
-                context.getString(
+                localizedString(context,
                     R.string.video_recognition_duration_too_long,
                     MAX_SEGMENTS_PER_RUN * segmentLength / 60
                 )

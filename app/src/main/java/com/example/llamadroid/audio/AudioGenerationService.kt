@@ -10,6 +10,7 @@ import com.example.llamadroid.R
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.onnx.extractReadableTextFromUri
 import com.example.llamadroid.service.UnifiedNotificationManager
+import com.example.llamadroid.service.GenerationDiagnosticsStore
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.WakeLockManager
 import kotlinx.coroutines.CancellationException
@@ -431,10 +432,26 @@ class AudioGenerationService : Service() {
             notificationTaskId?.let { UnifiedNotificationManager.dismissTask(it) }
         } catch (error: Throwable) {
             val failedAt = System.currentTimeMillis()
-            val message = localizeError(error)
             val nativeFailure = error as? com.example.llamadroid.audio.music.StableAudio3Failure
+            val message = localizeError(error)
             DebugLog.log("[AUDIO] Generation failed adapter=${initial.adapterId} job=${initial.id}: ${error.javaClass.simpleName}" +
                 (nativeFailure?.let { " ${it.diagnosticMetadata()}" } ?: ""))
+            if (initial.adapterId == com.example.llamadroid.audio.music.StableAudio3Ids.ADAPTER_ID &&
+                nativeFailure != null
+            ) {
+                runCatching {
+                    // Keep this breadcrumb deliberately metadata-only. The
+                    // failure object strips native paths and prompt text.
+                    GenerationDiagnosticsStore.init(applicationContext)
+                    GenerationDiagnosticsStore.recordBreadcrumb(
+                        source = "audio_stable_audio",
+                        mode = initial.family,
+                        event = "stable_audio_model_failure",
+                        phase = nativeFailure.stage,
+                        details = nativeFailure.diagnosticMetadata()
+                    )
+                }
+            }
             withContext(NonCancellable) {
                 try {
                     val current = dao.getJob(initial.id) ?: initial
@@ -501,7 +518,18 @@ class AudioGenerationService : Service() {
 
     private fun localizeError(error: Throwable): String {
         val raw = error.message.orEmpty().lowercase()
+        val failure = error as? com.example.llamadroid.audio.music.StableAudio3Failure
         val summary = when {
+            failure?.code == com.example.llamadroid.audio.music.StableAudio3WorkerProtocol.ERROR_MODEL_STALE ->
+                getString(R.string.audio_music_error_model_stale)
+            failure?.nativeStatus == 500 || failure?.code == "litert_file_io_failed" ->
+                getString(R.string.audio_music_error_file_io)
+            failure?.nativeStatus == 501 || failure?.code == "litert_invalid_data_failed" ->
+                getString(R.string.audio_music_error_invalid_model)
+            failure?.nativeStatus == 2 || failure?.code == "litert_memory_failed" ->
+                getString(R.string.audio_music_error_native_memory)
+            failure?.code == "stable_audio_model_lease_unavailable" ->
+                getString(R.string.audio_music_error_file_io)
             "worker_process_died" in raw || "timeout" in raw -> getString(R.string.audio_music_error_worker)
             "not enough memory" in raw || "native_memory_exhausted" in raw -> getString(R.string.audio_music_error_memory)
             "lora" in raw || "adapter" in raw || "fp16" in raw -> getString(R.string.audio_music_error_lora)
@@ -526,11 +554,11 @@ class AudioGenerationService : Service() {
             "shared output export" in raw -> getString(R.string.audio_runtime_error_generic)
             else -> getString(R.string.audio_runtime_error_generic)
         }
-        val failure = error as? com.example.llamadroid.audio.music.StableAudio3Failure ?: return summary
+        val nativeFailure = failure ?: return summary
         val unknown = getString(R.string.audio_native_detail_unknown)
         return summary + "\n" + getString(R.string.audio_native_failure_details,
-            failure.code, localizeStage(failure.stage), failure.operation ?: unknown,
-            failure.nativeStatus?.toString() ?: unknown)
+            nativeFailure.code, localizeStage(nativeFailure.stage), nativeFailure.operation ?: unknown,
+            nativeFailure.nativeStatus?.toString() ?: unknown)
     }
 
     companion object {

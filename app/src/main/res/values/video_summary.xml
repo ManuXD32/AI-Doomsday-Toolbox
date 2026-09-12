@@ -2,6 +2,11 @@
 <resources>
     <string name="video_recognition_title">Visual video summary</string>
     <string name="video_recognition_description">Use an installed video capable bundle or an explicitly video enabled remote server. If no video model is ready, the existing Whisper summary remains available.</string>
+    <string name="video_recognition_processing_mode">Global video processing mode</string>
+    <string name="video_recognition_processing_mode_help">This policy is shared by Video Summary and Native Chat. Direct clips stay at twelve seconds; longer videos are segmented on the device.</string>
+    <string name="video_recognition_mode_auto">Auto multimodal</string>
+    <string name="video_recognition_mode_visual_whisper">Visual plus Whisper</string>
+    <string name="video_recognition_mode_legacy">Legacy transcript</string>
     <string name="video_recognition_local_target">Installed video bundle</string>
     <string name="video_recognition_remote_target">Remote video server</string>
     <string name="video_recognition_remote_server_placeholder">Choose a video enabled server</string>
@@ -18,9 +23,9 @@
     <string name="video_recognition_remote_not_configured">The remote video target is incomplete or is not explicitly video enabled.</string>
     <string name="video_recognition_audio_enabled">Include audio when the selected model supports it</string>
     <string name="video_recognition_audio_enabled_help">Audio is attached only to a target that explicitly advertises direct audio input. Other targets stay visual-only.</string>
-    <string name="video_recognition_audio_unsupported">This target is visual-only. Enable parallel Whisper below to add a separate transcript.</string>
-    <string name="video_recognition_parallel_whisper">Run Whisper alongside visual analysis</string>
-    <string name="video_recognition_parallel_whisper_help">For visual-only targets, transcribe once in parallel and merge the transcript with the visual result. This uses one additional CPU process.</string>
+    <string name="video_recognition_audio_unsupported">This target is visual-only. Native Chat can show a Whisper fallback when its separate parallel toggle is enabled.</string>
+    <string name="video_recognition_parallel_whisper">Native Chat parallel Whisper</string>
+    <string name="video_recognition_parallel_whisper_help">When enabled, Native Chat runs one Whisper job beside visual preparation and merges the transcript into the final evidence. Video Summary uses its mode above.</string>
     <string name="video_recognition_segment_seconds">Segment length (seconds)</string>
     <string name="video_recognition_max_frames">Maximum frames per segment</string>
     <string name="video_recognition_max_fps">Maximum video FPS</string>
@@ -43,8 +48,12 @@
     <string name="video_recognition_audio_transcribing">Transcribing audio with Whisper…</string>
     <string name="video_recognition_audio_complete">Audio transcription complete</string>
     <string name="video_recognition_audio_extract_failed">Could not extract audio from this video.</string>
+    <string name="video_recognition_audio_unavailable">Direct audio is unavailable for this target; continuing with the visible fallback.</string>
+    <string name="video_recognition_audio_skipped_direct_limit">Direct audio is skipped for segments longer than twelve seconds.</string>
     <string name="video_recognition_whisper_failed">Whisper failed with exit code %1$d.</string>
     <string name="video_recognition_processed_percentage">Processed media: %1$.1f%% (%2$.1f / %3$.1f s)</string>
+    <string name="video_recognition_visual_phase">Visual phase: %1$s</string>
+    <string name="video_recognition_audio_phase">Audio phase: %1$s</string>
     <string name="video_recognition_notification_title">Visual video summary: %1$s</string>
     <string name="video_recognition_run_timed_out">Video recognition exceeded the one hour run limit.</string>
     <string name="video_recognition_audio_fallback_active">No video model is available. Running the existing Whisper audio summary.</string>

@@ -391,6 +391,10 @@
             android:exported="false" />
 
         <receiver
+            android:name=".service.AgentSleepWakeReceiver"
+            android:exported="false" />
+
+        <receiver
             android:name=".service.LlamaScheduledTaskBootReceiver"
             android:exported="false">
             <intent-filter>

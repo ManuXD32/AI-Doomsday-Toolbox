@@ -28,4 +28,16 @@ class StableAudio3FailureTest {
         assertNull(StableAudio3Failure.fromNative("litert_run_model_failed:secret", "sampling").nativeStatus)
         assertEquals(-1, StableAudio3Failure.fromNative("litert_run_model_failed:-1", "sampling").nativeStatus)
     }
+
+    @Test fun `LiteRT file, invalid data, and memory statuses keep separate repair classes`() {
+        val file = StableAudio3Failure.fromNative("litert_file_io_failed:500", "conditioning")
+        val invalid = StableAudio3Failure.fromNative("litert_invalid_data_failed:501", "loading")
+        val memory = StableAudio3Failure.fromNative("litert_memory_failed:2", "loading")
+        assertEquals("file_io", file.operation)
+        assertEquals(500, file.nativeStatus)
+        assertEquals("invalid_data", invalid.operation)
+        assertEquals(501, invalid.nativeStatus)
+        assertEquals("memory", memory.operation)
+        assertEquals(2, memory.nativeStatus)
+    }
 }

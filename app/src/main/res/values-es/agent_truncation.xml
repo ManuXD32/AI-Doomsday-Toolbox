@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="agent_generation_truncated_suffix">[Se alcanzó el límite de salida. El resultado parcial guardado continuará con llamadas de herramienta más pequeñas.]</string>
+    <string name="agent_generation_truncated_summary">La salida anterior del modelo se truncó antes de completar la acción.</string>
+    <string name="agent_generation_truncated_instruction">Continúa desde el resultado parcial guardado. Usa una sola llamada, escritura, adición o parche pequeño cada vez y no repitas el trabajo completado.</string>
+</resources>

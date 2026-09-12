@@ -15,8 +15,8 @@ import com.google.gson.JsonParser
  */
 object LlamaVideoProfileLimits {
     const val MIN_SEGMENT_SECONDS: Int = 5
-    const val MAX_SEGMENT_SECONDS: Int = 30
-    /** Recommended value for new profiles; legacy profiles retain 30 seconds. */
+    const val MAX_SEGMENT_SECONDS: Int = 60
+    /** Kept for decoding old per-server profiles; global video policy wins at request time. */
     const val DEFAULT_SEGMENT_SECONDS: Int = 12
     const val LEGACY_SEGMENT_SECONDS: Int = 30
     const val MIN_MAX_FRAMES: Int = 1
@@ -57,11 +57,11 @@ data class LlamaServerLaunchProfile(
     val videoEnabled: Boolean = false,
     val videoFps: Float = NativeLlamaVideoSupport.DEFAULT_VIDEO_FPS,
     val videoTimestampIntervalMs: Int = NativeLlamaVideoSupport.DEFAULT_TIMESTAMP_INTERVAL_MS,
-    /** App-side long-video segment duration; old profiles keep the historical 30 seconds. */
+    /** Compatibility mirror for persistence; the global video policy controls request segments. */
     val videoSegmentSeconds: Int = LlamaVideoProfileLimits.LEGACY_SEGMENT_SECONDS,
     val videoMaxFrames: Int = LlamaVideoProfileLimits.DEFAULT_MAX_FRAMES,
     val videoMaxFps: Float = LlamaVideoProfileLimits.DEFAULT_MAX_FPS,
-    /** New video profiles include audio by default; legacy JSON is normalized to false. */
+    /** Compatibility mirror; the global video policy controls direct audio at request time. */
     val videoAudioEnabled: Boolean = true,
     val videoWhisperParallelEnabled: Boolean = false,
     /** Session-private MTMD media directory; supplied only in short-lived runtime IPC. */

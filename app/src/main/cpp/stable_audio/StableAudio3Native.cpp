@@ -8,9 +8,11 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cerrno>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <fcntl.h>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -20,10 +22,13 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <unistd.h>
 
 namespace stable_audio {
 namespace {
@@ -58,8 +63,61 @@ void check_litert(litert::Status status, const litert::Api& api, const char* ope
   // containing private paths or prompt text.
   __android_log_print(ANDROID_LOG_ERROR, kLogTag, "LiteRT operation failed: %s (%d)",
                       operation, status);
-  throw NativeError(std::string("litert_") + operation + "_failed:" +
-                    std::to_string(status));
+  const char* code = nullptr;
+  switch (status) {
+    case litert::kMemoryAllocationFailure:
+      code = "litert_memory_failed";
+      break;
+    case litert::kFileIO:
+      code = "litert_file_io_failed";
+      break;
+    case litert::kInvalidFlatbuffer:
+      code = "litert_invalid_data_failed";
+      break;
+    default:
+      break;
+  }
+  throw NativeError(std::string(code == nullptr ? "litert_" : code) +
+                    (code == nullptr ? std::string(operation) + "_failed" : "") +
+                    ":" + std::to_string(status));
+}
+
+/**
+ * Classify file-system failures before LiteRT opens a graph. Only a bounded
+ * probe is performed; the full payload is still owned by LiteRT. Error codes
+ * intentionally contain no path because they cross the isolated-process
+ * boundary and are persisted in user-visible diagnostics.
+ */
+void preflight_model_file(const std::string& path) {
+  const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd < 0) throw NativeError("litert_file_io_failed:500");
+
+  struct stat info {};
+  if (fstat(fd, &info) != 0) {
+    close(fd);
+    throw NativeError("litert_file_io_failed:500");
+  }
+  if (!S_ISREG(info.st_mode) || info.st_size <= 0) {
+    close(fd);
+    throw NativeError("litert_invalid_data_failed:501");
+  }
+
+  std::uint8_t probe[4096];
+  const ssize_t count = read(fd, probe, sizeof(probe));
+  if (count <= 0) {
+    close(fd);
+    throw NativeError("litert_file_io_failed:500");
+  }
+
+  const std::size_t map_length = static_cast<std::size_t>(
+      std::min<off_t>(info.st_size, static_cast<off_t>(sizeof(probe))));
+  void* mapped = mmap(nullptr, map_length, PROT_READ, MAP_PRIVATE, fd, 0);
+  if (mapped == MAP_FAILED) {
+    close(fd);
+    throw NativeError("litert_file_io_failed:500");
+  }
+  munmap(mapped, map_length);
+  close(fd);
 }
 
 bool check_cancelled(void*) {
@@ -136,6 +194,7 @@ class LiteRtGraph final {
       if (!api_->set_cpu_threads(options_, threads, &cpu_options_error)) {
         throw NativeError(cpu_options_error.empty() ? "set_cpu_threads" : cpu_options_error);
       }
+      preflight_model_file(path);
       check_litert(api_->create_model_from_file(environment_, path.c_str(), &model_), *api_,
                    "load_model");
       check_litert(api_->create_compiled_model(environment_, model_, options_, &compiled_),

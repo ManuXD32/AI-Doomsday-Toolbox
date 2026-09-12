@@ -58,11 +58,13 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Square
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -142,6 +144,7 @@ import com.example.llamadroid.service.NativeChatImageToolParams
 import com.example.llamadroid.service.NativeChatSdImageToolParams
 import com.example.llamadroid.service.NativeChatBackgroundRemovalToolParams
 import com.example.llamadroid.service.NativeChatToolConfig
+import com.example.llamadroid.ui.agent.CustomToolsScreen
 import com.example.llamadroid.service.SamplingMethod
 import com.example.llamadroid.service.supportsSdTxt2Img
 import com.example.llamadroid.ui.components.DraftFloatTextField
@@ -674,6 +677,14 @@ fun LlamaChatScreen(
     var alarmToolsEnabled by remember(currentChat?.apiParams) {
         mutableStateOf(parseParam(currentChat?.apiParams, NativeChatToolConfig.KEY_ALARM_TOOLS_ENABLED, false))
     }
+    var fileToolsEnabled by remember(currentChat?.apiParams) {
+        mutableStateOf(parseParam(currentChat?.apiParams, NativeChatToolConfig.KEY_FILE_TOOLS_ENABLED, false))
+    }
+    var customToolsEnabled by remember(currentChat?.apiParams) {
+        mutableStateOf(parseParam(currentChat?.apiParams, NativeChatToolConfig.KEY_CUSTOM_TOOLS_ENABLED, false))
+    }
+    var showWorkspaceDialog by rememberSaveable { mutableStateOf(false) }
+    var showCustomToolsManager by rememberSaveable { mutableStateOf(false) }
     var knowledgeBaseEnabled by remember(currentChat?.apiParams) {
         mutableStateOf(parseParam(currentChat?.apiParams, NativeChatToolConfig.KEY_KNOWLEDGE_BASE_ENABLED, false))
     }
@@ -1062,6 +1073,8 @@ fun LlamaChatScreen(
                     todoToolsEnabled = todoToolsEnabled,
                     calendarToolsEnabled = calendarToolsEnabled,
                     alarmToolsEnabled = alarmToolsEnabled,
+                    fileToolsEnabled = fileToolsEnabled,
+                    customToolsEnabled = customToolsEnabled,
                     knowledgeBaseEnabled = nextKnowledgeBaseEnabled,
                     knowledgeBaseAutoContextEnabled = nextKnowledgeBaseAutoContextEnabled,
                     selectedKnowledgeBaseIds = selectedKnowledgeBaseIds,
@@ -1166,6 +1179,8 @@ fun LlamaChatScreen(
                     todoToolsEnabled = todoToolsEnabled,
                     calendarToolsEnabled = calendarToolsEnabled,
                     alarmToolsEnabled = alarmToolsEnabled,
+                    fileToolsEnabled = fileToolsEnabled,
+                    customToolsEnabled = customToolsEnabled,
                     knowledgeBaseEnabled = nextKnowledgeBaseEnabled,
                     knowledgeBaseAutoContextEnabled = nextKnowledgeBaseAutoContextEnabled,
                     selectedKnowledgeBaseIds = selectedKnowledgeBaseIds,
@@ -1304,6 +1319,8 @@ fun LlamaChatScreen(
         todoToolsEnabled = parseParam(params, NativeChatToolConfig.KEY_TODO_TOOLS_ENABLED, false)
         calendarToolsEnabled = parseParam(params, NativeChatToolConfig.KEY_CALENDAR_TOOLS_ENABLED, false)
         alarmToolsEnabled = parseParam(params, NativeChatToolConfig.KEY_ALARM_TOOLS_ENABLED, false)
+        fileToolsEnabled = parseParam(params, NativeChatToolConfig.KEY_FILE_TOOLS_ENABLED, false)
+        customToolsEnabled = parseParam(params, NativeChatToolConfig.KEY_CUSTOM_TOOLS_ENABLED, false)
         knowledgeBaseEnabled = parseParam(params, NativeChatToolConfig.KEY_KNOWLEDGE_BASE_ENABLED, false)
         knowledgeBaseAutoContextEnabled = parseParam(params, NativeChatToolConfig.KEY_KNOWLEDGE_AUTO_CONTEXT_ENABLED, false)
         selectedKnowledgeBaseIds = NativeChatToolConfig.fromApiParams(params).selectedKnowledgeBaseIds
@@ -1486,11 +1503,20 @@ fun LlamaChatScreen(
         }
     )
     val videoPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia(),
+        // Keep video selection on the same persistable document contract as Video Summary. The
+        // staged private copy survives picker process recreation and is cleaned with the pending
+        // attachment lifecycle below.
+        contract = ActivityResultContracts.OpenDocument(),
         onResult = { uri ->
             if (uri != null) {
                 scope.launch {
                     try {
+                        runCatching {
+                            context.contentResolver.takePersistableUriPermission(
+                                uri,
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            )
+                        }
                         val path = withContext(Dispatchers.IO) {
                             persistContentUriToAppPrivateFile(
                                 context = context,
@@ -1892,6 +1918,11 @@ fun LlamaChatScreen(
                     }
                     IconButton(onClick = { showParams = !showParams }) {
                         Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.llama_parameters))
+                    }
+                    if (effectiveToolsEnabled && fileToolsEnabled && currentChat != null) {
+                        IconButton(onClick = { showWorkspaceDialog = true }) {
+                            Icon(Icons.Default.Folder, contentDescription = stringResource(R.string.native_chat_workspace_open))
+                        }
                     }
                     // Overflow menu
                     Box {
@@ -2597,6 +2628,26 @@ fun LlamaChatScreen(
                                 onCheckedChange = { alarmToolsEnabled = it }
                             )
                             LlamaToolToggleRow(
+                                label = stringResource(R.string.native_chat_file_tools),
+                                description = stringResource(R.string.native_chat_file_tools_desc),
+                                checked = fileToolsEnabled,
+                                enabled = true,
+                                onCheckedChange = { fileToolsEnabled = it }
+                            )
+                            LlamaToolToggleRow(
+                                label = stringResource(R.string.native_chat_custom_tools),
+                                description = stringResource(R.string.native_chat_custom_tools_desc),
+                                checked = customToolsEnabled,
+                                enabled = true,
+                                onCheckedChange = { customToolsEnabled = it }
+                            )
+                            OutlinedButton(
+                                onClick = { showCustomToolsManager = true },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(stringResource(R.string.native_chat_manage_custom_tools))
+                            }
+                            LlamaToolToggleRow(
                                 label = stringResource(R.string.llama_tool_image_generation),
                                 description = stringResource(R.string.llama_tool_image_generation_desc),
                                 checked = effectiveImageGenerationEnabled,
@@ -2997,6 +3048,46 @@ fun LlamaChatScreen(
                                     )
                                 }
 
+                                genState.videoProgress?.let { videoProgress ->
+                                    Column(
+                                        modifier = Modifier.padding(top = 6.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        LinearProgressIndicator(
+                                            progress = { videoProgress.coerceIn(0f, 1f) },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        genState.videoVisualPhase
+                                            ?.takeIf { it.isNotBlank() }
+                                            ?.let { phase ->
+                                                Text(
+                                                    stringResource(
+                                                        R.string.video_recognition_visual_phase,
+                                                        phase
+                                                    ),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        genState.videoAudioPhase
+                                            ?.takeIf { it.isNotBlank() }
+                                            ?.let { phase ->
+                                                Text(
+                                                    stringResource(
+                                                        R.string.video_recognition_audio_phase,
+                                                        phase
+                                                    ),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                    }
+                                }
+
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -3251,11 +3342,7 @@ fun LlamaChatScreen(
                                         },
                                         onClick = {
                                             showAttachmentMenu = false
-                                            videoPickerLauncher.launch(
-                                                androidx.activity.result.PickVisualMediaRequest(
-                                                    ActivityResultContracts.PickVisualMedia.VideoOnly
-                                                )
-                                            )
+                                            videoPickerLauncher.launch(arrayOf("video/*"))
                                         }
                                     )
                                 }
@@ -3399,6 +3486,23 @@ fun LlamaChatScreen(
                     onDismiss = { showToolActivity = false }
                 )
             }
+            if (showWorkspaceDialog && currentChat != null) {
+                NativeChatWorkspaceDialog(
+                    context = context,
+                    chatId = currentChat!!.id,
+                    onDismiss = { showWorkspaceDialog = false }
+                )
+            }
+            if (showCustomToolsManager) {
+                androidx.compose.ui.window.Dialog(
+                    onDismissRequest = { showCustomToolsManager = false },
+                    properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+                ) {
+                    androidx.compose.material3.Surface(modifier = Modifier.fillMaxSize()) {
+                        CustomToolsScreen(onBack = { showCustomToolsManager = false })
+                    }
+                }
+            }
         }
         messagePendingDelete?.let { messageToDelete ->
             LlamaDeleteMessageDialog(
@@ -3437,6 +3541,8 @@ fun LlamaChatScreen(
                             todoToolsEnabled ||
                             calendarToolsEnabled ||
                             alarmToolsEnabled ||
+                            fileToolsEnabled ||
+                            customToolsEnabled ||
                             imageGenerationEnabled
                         saveParams(chatDocumentKnowledgeBaseIdOverride = null)
                         chatDocumentBaseToDelete?.let { baseId ->

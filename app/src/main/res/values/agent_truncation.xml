@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="agent_generation_truncated_suffix">[Output limit reached. The saved partial result will be continued in smaller tool calls.]</string>
+    <string name="agent_generation_truncated_summary">The previous model output was truncated before it completed its action.</string>
+    <string name="agent_generation_truncated_instruction">Continue from the saved partial result. Use one smaller tool call, write, append, or patch at a time and do not repeat completed work.</string>
+</resources>

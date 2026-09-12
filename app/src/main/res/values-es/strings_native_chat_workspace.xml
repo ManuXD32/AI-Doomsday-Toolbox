@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="native_chat_file_tools">Herramientas de archivos</string>
+    <string name="native_chat_file_tools_desc">Permite que este chat cree, lea, amplíe, edite y parchee archivos en su espacio privado.</string>
+    <string name="native_chat_custom_tools">Herramientas API personalizadas</string>
+    <string name="native_chat_custom_tools_desc">Usa herramientas API estilo curl que hayas activado y marcado como que no requieren aprobación.</string>
+    <string name="native_chat_manage_custom_tools">Crear o gestionar herramientas personalizadas</string>
+    <string name="native_chat_workspace_open">Abrir espacio del chat</string>
+    <string name="native_chat_workspace_title">Espacio del chat</string>
+    <string name="native_chat_workspace_content">Contenido del archivo</string>
+    <string name="native_chat_workspace_io_error">La acción del espacio de trabajo falló. Revisa el nombre del archivo e inténtalo de nuevo.</string>
+    <string name="native_chat_workspace_new_file">Archivo nuevo</string>
+    <string name="native_chat_workspace_new_folder">Carpeta nueva</string>
+</resources>

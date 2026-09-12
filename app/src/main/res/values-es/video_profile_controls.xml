@@ -2,6 +2,7 @@
 <resources>
     <string name="llm_video_settings_title">Entrada de vídeo</string>
     <string name="llm_video_settings_desc">Activar la entrada de vídeo para este modelo compatible con visión.</string>
+    <string name="llm_video_global_policy_hint">La segmentación, los límites de fotogramas, el audio directo y Whisper de Native Chat se controlan desde la política de vídeo global de Resumen de vídeo.</string>
     <string name="llm_video_server_fps">FPS de vídeo del servidor: %1$.1f</string>
     <string name="llm_video_timestamp_interval">Intervalo de marcas de tiempo: %1$d ms</string>
     <string name="llm_video_segment_seconds">Duración del segmento de vídeo largo: %1$d segundos</string>

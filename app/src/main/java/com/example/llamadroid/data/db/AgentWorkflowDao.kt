@@ -11,6 +11,39 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface AgentWorkflowDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertSleepWake(wake: AgentSleepWakeEntity)
+
+    @Query("SELECT * FROM agent_sleep_wakes WHERE id = :id LIMIT 1")
+    suspend fun getSleepWake(id: String): AgentSleepWakeEntity?
+
+    @Query("SELECT * FROM agent_sleep_wakes WHERE conversationId = :conversationId LIMIT 1")
+    suspend fun getSleepWakeForConversation(conversationId: Long): AgentSleepWakeEntity?
+
+    @Query("SELECT * FROM agent_sleep_wakes WHERE status = 'PENDING' ORDER BY wakeAtEpochMs ASC")
+    suspend fun getPendingSleepWakes(): List<AgentSleepWakeEntity>
+
+    @Query(
+        "UPDATE agent_sleep_wakes SET status = 'FIRED', firedAt = :firedAt, updatedAt = :firedAt " +
+            "WHERE id = :id AND status = 'PENDING' AND runEpoch = :runEpoch"
+    )
+    suspend fun claimSleepWake(id: String, runEpoch: Long, firedAt: Long = System.currentTimeMillis()): Int
+
+    @Query(
+        "UPDATE agent_sleep_wakes SET status = 'COMPLETED', completedAt = :completedAt, updatedAt = :completedAt " +
+            "WHERE id = :id AND status = 'FIRED'"
+    )
+    suspend fun completeSleepWake(id: String, completedAt: Long = System.currentTimeMillis()): Int
+
+    @Query(
+        "UPDATE agent_sleep_wakes SET status = 'CANCELLED', completedAt = :cancelledAt, updatedAt = :cancelledAt " +
+            "WHERE conversationId = :conversationId AND status IN ('PENDING', 'FIRED')"
+    )
+    suspend fun cancelSleepWakeForConversation(
+        conversationId: Long,
+        cancelledAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertMessagePart(part: AgentMessagePartEntity)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -1143,6 +1176,7 @@ interface AgentWorkflowDao {
           AND (
               payloadJson LIKE '%"tool":"write_file"%'
               OR payloadJson LIKE '%"tool":"edit_lines"%'
+              OR payloadJson LIKE '%"tool":"append_file"%'
               OR payloadJson LIKE '%"tool":"apply_patch"%'
               OR payloadJson LIKE '%"tool":"delete_file"%'
           )

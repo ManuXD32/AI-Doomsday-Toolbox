@@ -4168,9 +4168,8 @@ class SettingsRepository(private val context: Context) {
         prefs.contains(PREF_AGENT_GLOBAL_OVERRIDE_MAX_OUTPUT_TOKENS)
 
     /**
-     * Resolve the optimized context recommendation without rewriting the
-     * stored role value. A saved role value or enabled General override is
-     * explicit and is retained without the old optimized hard ceiling.
+     * Resolve the optimized context value without rewriting the stored role
+     * value. Explicit values are retained within the profile's 2K–16K range.
      */
     fun resolveAgentHarnessContext(
         profileId: String?,
@@ -4178,7 +4177,7 @@ class SettingsRepository(private val context: Context) {
         configuredContextSize: Int = getAgentContextForRole(role),
         explicitContextSize: Boolean = hasExplicitAgentContextForRole(role)
     ): Int {
-        val normalized = configuredContextSize.coerceAtLeast(AgentHarnessPolicy.MIN_CONTEXT_TOKENS)
+        val normalized = configuredContextSize.coerceAtLeast(1)
         val policy = resolveAgentHarnessPolicy(profileId)
         val explicit = explicitContextSize ||
             prefs.getBoolean(PREF_AGENT_GLOBAL_OVERRIDE_ENABLED, false)
@@ -4197,7 +4196,7 @@ class SettingsRepository(private val context: Context) {
         configuredMaxOutputTokens: Int,
         explicitMaxOutputTokens: Boolean = hasExplicitAgentMaxOutputTokensForRole(role)
     ): Int {
-        val normalized = configuredMaxOutputTokens.coerceAtLeast(AgentHarnessPolicy.MIN_OUTPUT_TOKENS)
+        val normalized = configuredMaxOutputTokens.coerceAtLeast(1)
         val explicit = explicitMaxOutputTokens ||
             prefs.getBoolean(PREF_AGENT_GLOBAL_OVERRIDE_ENABLED, false)
         return resolveAgentHarnessPolicy(profileId)
@@ -4263,12 +4262,15 @@ class SettingsRepository(private val context: Context) {
         _agentWebSearchModel.value = model
     }
     
-    // Max results to fetch and summarize (1-8)
-    private val _agentWebSearchMaxResults = MutableStateFlow(prefs.getInt("agent_web_search_max_results", 3))
+    // User ceiling for model-selected web results. Keep this deliberately small for phones.
+    private val _agentWebSearchMaxResults = MutableStateFlow(
+        prefs.getInt("agent_web_search_max_results", 3).coerceIn(1, 5)
+    )
     val agentWebSearchMaxResults = _agentWebSearchMaxResults.asStateFlow()
     fun setAgentWebSearchMaxResults(count: Int) {
-        prefs.edit().putInt("agent_web_search_max_results", count.coerceAtLeast(1)).apply()
-        _agentWebSearchMaxResults.value = count.coerceAtLeast(1)
+        val normalized = count.coerceIn(1, 5)
+        prefs.edit().putInt("agent_web_search_max_results", normalized).apply()
+        _agentWebSearchMaxResults.value = normalized
     }
     
     // Max content chars to send to summarizer per page

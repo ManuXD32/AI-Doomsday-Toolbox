@@ -61,6 +61,8 @@ data class NativeLlamaVideoPolicy(
 }
 
 const val MAX_SEGMENT_DURATION_MS: Long = NativeLlamaVideoPolicy.MAX_SEGMENT_DURATION_MS
+/** Native MTMD accepts at most twelve seconds per direct video request. */
+const val MAX_DIRECT_VIDEO_DURATION_MS: Long = 12_000L
 const val MAX_FRAMES_PER_SEGMENT: Int = NativeLlamaVideoPolicy.MAX_FRAMES_PER_SEGMENT
 const val MAX_VIDEO_SEGMENTS_PER_RUN: Int = NativeLlamaVideoPolicy.MAX_VIDEO_SEGMENTS_PER_RUN
 const val MAX_VIDEO_FPS: Float = NativeLlamaVideoPolicy.MAX_VIDEO_FPS
@@ -108,6 +110,7 @@ object NativeLlamaVideoSupport {
     const val DEFAULT_TIMESTAMP_INTERVAL_MS: Int = NativeLlamaVideoPolicy.DEFAULT_TIMESTAMP_INTERVAL_MS
     const val MAX_VIDEO_FPS: Float = NativeLlamaVideoPolicy.MAX_VIDEO_FPS
     const val MAX_SEGMENT_DURATION_MS: Long = NativeLlamaVideoPolicy.MAX_SEGMENT_DURATION_MS
+    const val MAX_DIRECT_VIDEO_DURATION_MS: Long = com.example.llamadroid.service.MAX_DIRECT_VIDEO_DURATION_MS
     const val MAX_FRAMES_PER_SEGMENT: Int = NativeLlamaVideoPolicy.MAX_FRAMES_PER_SEGMENT
     const val MAX_VIDEO_FRAME_DIMENSION: Int = com.example.llamadroid.service.MAX_VIDEO_FRAME_DIMENSION
 

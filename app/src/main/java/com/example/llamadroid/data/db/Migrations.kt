@@ -3970,7 +3970,8 @@ object Migrations {
         MIGRATION_113_114,
         MIGRATION_114_115,
         MIGRATION_115_116,
-        VideoVisionMigration.MIGRATION_116_117
+        VideoVisionMigration.MIGRATION_116_117,
+        AgentSleepWakeMigration.MIGRATION_117_118
     )
     /**
      * Check if a column exists in a table.

@@ -2755,6 +2755,10 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
             return if (conversationId != null && AgentProjectControlPlane.cachedState(conversationId)?.mode == "VERIFY")
                 AgentHarnessPhase.VERIFY else AgentHarnessPhase.BUILD
         }
+        fun currentHarnessPhase(): AgentHarnessPhase = activeHarnessPhase()
+
+        fun currentLoadedSkillIds(): List<String> =
+            loadedSkillIdsByTurnBranch[turnBranchKey()]?.toList().orEmpty().sorted()
         private fun activeToolPaletteKey() = "${_activeConversationId.value}|${_currentAgent.value}|${activeHarnessPhase()}"
         private fun optimizedHarness() = AgentHarnessPolicy.isOptimized(_executionProfile.value)
         private suspend fun planningEpisode(context: Context, conversationId: Long): String =
@@ -2872,6 +2876,10 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
 
         private val _promptContextSnapshot = MutableStateFlow<PromptContextSnapshot?>(null)
         val promptContextSnapshot: StateFlow<PromptContextSnapshot?> = _promptContextSnapshot.asStateFlow()
+        private val _lastFinishReason = MutableStateFlow<String?>(null)
+        val lastFinishReason: StateFlow<String?> = _lastFinishReason.asStateFlow()
+        private val _lastGenerationUsage = MutableStateFlow<OllamaService.ChatUsage?>(null)
+        val lastGenerationUsage: StateFlow<OllamaService.ChatUsage?> = _lastGenerationUsage.asStateFlow()
         private val _lastOrchestratorPromptSnapshot = MutableStateFlow<PromptContextSnapshot?>(null)
         val lastOrchestratorPromptSnapshot: StateFlow<PromptContextSnapshot?> = _lastOrchestratorPromptSnapshot.asStateFlow()
         private val _llamaServerRuntimeState = MutableStateFlow(AgentLlamaServerRuntimeState())
@@ -5980,6 +5988,9 @@ TODO status. Return via finish_task with JSON:
 
         private fun currentRunEpoch(): Long = activeRunEpoch.get()
 
+        /** Snapshot used when persisting a delayed wake fence. */
+        internal fun currentRunEpochForScheduling(): Long = currentRunEpoch()
+
         private fun invalidateRunEpoch(): Long {
             val next = synchronized(activeRunEpoch) {
                 activeRunEpoch.incrementAndGet().also { blockAutomaticContinuations() }
@@ -6287,6 +6298,15 @@ TODO status. Return via finish_task with JSON:
             // Ensure WakeLock is released (defensive call before setIsLoading)
             releaseWakeLock()
             val appContext = com.example.llamadroid.LlamaApplication.instance
+            val stoppedReason = runCatching {
+                appContext.getString(R.string.agent_resume_reason_stopped_by_user)
+            }.getOrDefault("The previous run was stopped by the user.")
+            val interruptedStatus = runCatching {
+                appContext.getString(R.string.agent_status_interrupted)
+            }.getOrDefault("Interrupted")
+            val processStoppedMessage = runCatching {
+                appContext.getString(R.string.agent_process_stopped)
+            }.getOrDefault("Agent process stopped.")
             val stoppedConversationId = _activeConversationId.value ?: _preferredConversationId.value
             _pendingQuestionCount.value = 0
             _pendingPlanApprovalId.value = null
@@ -6304,7 +6324,7 @@ TODO status. Return via finish_task with JSON:
                         content = buildToolResultEnvelope(
                             toolName = toolName,
                             status = "cancelled",
-                            summary = appContext.getString(R.string.agent_resume_reason_stopped_by_user),
+                            summary = stoppedReason,
                             errorCode = "ACTION_CANCELLED",
                             nextHint = "This action was cancelled before approval; it did not execute. Follow the latest user instruction after explicit Continue."
                         )
@@ -6327,9 +6347,10 @@ TODO status. Return via finish_task with JSON:
                 pendingStopCommit = agentScope.launch(Dispatchers.IO) {
                     previousStopCommit?.join()
                     pendingInputJobs.forEach { it.join() }
+                    AgentSleepWakeScheduler.cancelConversation(appContext, conversationId)
                     val database = AppDatabase.getDatabase(appContext)
                     database.withTransaction {
-                        AgentDurableContractStore.cancelConversationWork(database, conversationId, appContext.getString(R.string.agent_resume_reason_stopped_by_user))
+                        AgentDurableContractStore.cancelConversationWork(database, conversationId, stoppedReason)
                         cancelledApprovalResults.forEach { cancelled ->
                             if (database.agentChatDao().getToolMessage(
                                     conversationId, cancelled.toolName.orEmpty(), cancelled.toolCallId.orEmpty()
@@ -6349,7 +6370,7 @@ TODO status. Return via finish_task with JSON:
                         AgentProjectControlPlane.cancelInvocationAndReleaseTodo(
                             context = appContext,
                             invocationId = invocationId,
-                            reason = appContext.getString(R.string.agent_resume_reason_stopped_by_user)
+                            reason = stoppedReason
                         )
                     }.onFailure { error ->
                         addDebugLog(
@@ -6359,19 +6380,19 @@ TODO status. Return via finish_task with JSON:
                     }
                 }
             }
-            setIsLoading(false, appContext.getString(R.string.agent_status_interrupted))
+            setIsLoading(false, interruptedStatus)
             addDebugLog("🛑 All jobs stopped by user. Reset to Orchestrator.")
             recordAgentEvent("agent_stop", "Stopped all running agent work", "User interrupted the active workflow.")
-            updateActiveConversationResumeState(RESUME_STATE_STOPPED_BY_USER, appContext.getString(R.string.agent_resume_reason_stopped_by_user))
+            updateActiveConversationResumeState(RESUME_STATE_STOPPED_BY_USER, stoppedReason)
             // Find the last streaming message and mark it as finished
             _messages.value.findLast { it.isStreaming }?.let { lastMsg ->
-                updateMessage(lastMsg.id) { it.copy(content = it.content + " [" + appContext.getString(R.string.agent_status_interrupted) + "]", isStreaming = false) }
+                updateMessage(lastMsg.id) { it.copy(content = it.content + " [$interruptedStatus]", isStreaming = false) }
             }
 
             // Add visible message in chat UI
             addMessage(ChatMessage(
                 role = "system",
-                content = appContext.getString(R.string.agent_process_stopped)
+                content = processStoppedMessage
             ))
 
             _streamingContent.value = ""
@@ -6446,6 +6467,94 @@ TODO status. Return via finish_task with JSON:
                 _isLoading.value = false
                 _statusText.value = idleStatusText(com.example.llamadroid.LlamaApplication.instance)
             }
+        }
+
+        /**
+         * Rehydrates one conversation after a durable sleep alarm and dispatches a fresh,
+         * authorized continuation. The alarm row is claimed before this method is called.
+         */
+        internal suspend fun resumeConversationFromSleepWake(
+            context: Context,
+            wake: com.example.llamadroid.data.db.AgentSleepWakeEntity
+        ) = withContext(Dispatchers.IO) {
+            val appContext = context.applicationContext
+            val database = AppDatabase.getDatabase(appContext)
+            val claimedWake = database.agentWorkflowDao().getSleepWake(wake.id)
+            require(claimedWake?.status == "FIRED" && claimedWake.runEpoch == wake.runEpoch) {
+                "Scheduled wake is no longer active"
+            }
+            if (_activeConversationId.value == null && _preferredConversationId.value == null) {
+                synchronized(activeRunEpoch) {
+                    activeRunEpoch.set(wake.runEpoch)
+                    allowAutomaticContinuations()
+                }
+            }
+            val conversation = database.agentChatDao().getConversation(wake.conversationId)
+                ?: throw IllegalStateException("Agent conversation no longer exists")
+            val reason = wake.reason.ifBlank { "scheduled wake" }
+            val wakeMessage = ChatMessage(
+                id = "sleep-wake:${wake.id}",
+                role = "system",
+                content = appContext.getString(R.string.agent_sleep_wake_message, reason),
+                toolName = "sleep_until",
+                sequenceNumber = database.agentChatDao().getMaxMessageSequence(conversation.id) + 1
+            )
+            if (database.agentChatDao().getMessageByOriginalId(wakeMessage.id) == null) {
+                database.agentChatDao().insertMessage(chatMessageToEntity(wakeMessage, conversation.id))
+            }
+            database.agentChatDao().updateResumeState(conversation.id, RESUME_STATE_IDLE, null)
+
+            val alreadyAttached = _activeConversationId.value == conversation.id && _messages.value.isNotEmpty()
+            if (alreadyAttached) {
+                resetMessageCounter(maxOf(_messageCounter.get(), wakeMessage.sequenceNumber))
+                if (_messages.value.none { it.id == wakeMessage.id }) addMessage(wakeMessage)
+            } else {
+                clearTransientConversationState()
+                clearAllSessions()
+                clearMessages()
+                setPreferredConversationId(conversation.id)
+                setActiveConversationId(conversation.id)
+                setCurrentWorkspaceBackend(
+                    runCatching { AgentWorkspaceBackendType.valueOf(conversation.workspaceBackend) }
+                        .getOrDefault(AgentWorkspaceBackendType.LOCAL_SANDBOX)
+                )
+                setCurrentProjectFolder(conversation.projectFolder)
+                setCurrentRuntimeCapabilities(AgentLocalRuntimeCapabilities.fromJson(conversation.runtimeCapabilitiesJson))
+                setCurrentPlanningModeEnabled(conversation.planningModeEnabled)
+                setExecutionProfile(com.example.llamadroid.data.db.AgentExecutionProfile.normalize(conversation.executionProfile))
+                clearPlanningImplementationUnlock()
+                setCurrentAgent(
+                    runCatching { AgentRole.valueOf(conversation.lastAgentRole ?: AgentRole.ORCHESTRATOR.name) }
+                        .getOrDefault(AgentRole.ORCHESTRATOR)
+                )
+                setCurrentTask(conversation.lastTask)
+                setSelectedKnowledgeBaseIdsCsv(conversation.knowledgeBaseIds)
+                val restored = database.agentChatDao().getMessagesForConversationSync(conversation.id)
+                    .map(::chatMessageFromEntity)
+                resetMessageCounter(restored.maxOfOrNull { it.sequenceNumber } ?: 0)
+                setMessages(restored)
+                restoreHardCompactionStateFromBrain().getOrThrow()
+            }
+
+            AgentForegroundService.start(
+                appContext,
+                status = appContext.getString(R.string.agent_status_working),
+                startSource = "sleep_until"
+            )
+            require(database.agentWorkflowDao().getSleepWake(wake.id)?.status == "FIRED") {
+                "Scheduled wake was cancelled"
+            }
+            val agentService = AgentForegroundService.getAgentService(appContext)
+            sendMessage(
+                context = appContext,
+                ollamaService = AgentForegroundService.getOllamaService(appContext),
+                settingsRepo = AgentForegroundService.getSettingsRepository(appContext),
+                agentService = agentService,
+                recoveryInstruction = wakeMessage.content,
+                recoveryMode = true,
+                userInitiated = false,
+                expectedRunEpoch = wake.runEpoch
+            )
         }
 
         /**
@@ -6649,6 +6758,8 @@ TODO status. Return via finish_task with JSON:
             clearPendingUrgentUserGuidance()
             _promptContextSnapshot.value = null
             _lastOrchestratorPromptSnapshot.value = null
+            _lastFinishReason.value = null
+            _lastGenerationUsage.value = null
             synchronized(recentCompactionEvents) {
                 recentCompactionEvents.clear()
             }
@@ -6684,6 +6795,8 @@ TODO status. Return via finish_task with JSON:
             }
             _promptContextSnapshot.value = null
             _lastOrchestratorPromptSnapshot.value = null
+            _lastFinishReason.value = null
+            _lastGenerationUsage.value = null
             _currentSessionId.value = null
             _activeConversationId.value = null
             _pendingPlanApprovalId.value = null
@@ -7510,21 +7623,25 @@ TODO status. Return via finish_task with JSON:
                 invocationId = activeInvocationId
             )
 
-            GenerationDiagnosticsStore.recordBreadcrumb(
-                source = "agent_journal",
-                mode = event.category,
-                event = event.eventType,
-                phase = event.phase,
-                details = buildString {
-                    append("conversationId=").append(conversationId)
-                    event.toolName?.let { append(" tool=").append(it) }
-                    event.toolCallId?.let { append(" toolId=").append(it.take(12)) }
-                    event.status?.let { append(" status=").append(it) }
-                    event.contentChars?.let { append(" contentChars=").append(it) }
-                    event.toolOutputChars?.let { append(" toolOutputChars=").append(it) }
-                    event.activeJobCount?.let { append(" activeJobs=").append(it) }
-                }
-            )
+            runCatching {
+                GenerationDiagnosticsStore.recordBreadcrumb(
+                    source = "agent_journal",
+                    mode = event.category,
+                    event = event.eventType,
+                    phase = event.phase,
+                    details = buildString {
+                        append("conversationId=").append(conversationId)
+                        event.toolName?.let { append(" tool=").append(it) }
+                        event.toolCallId?.let { append(" toolId=").append(it.take(12)) }
+                        event.status?.let { append(" status=").append(it) }
+                        event.contentChars?.let { append(" contentChars=").append(it) }
+                        event.toolOutputChars?.let { append(" toolOutputChars=").append(it) }
+                        event.activeJobCount?.let { append(" activeJobs=").append(it) }
+                    }
+                )
+            }.onFailure { error ->
+                DebugLog.log("[AgentJournal] Breadcrumb unavailable: ${error.javaClass.simpleName}")
+            }
 
             agentScope.launch(Dispatchers.IO) {
                 val appContext = com.example.llamadroid.LlamaApplication.instance
@@ -9495,6 +9612,7 @@ TODO status. Return via finish_task with JSON:
                             recordProjectJournalEvent(category = "LLM", eventType = "thinking_control_not_honored", status = "REASONING_RETURNED")
                         }
                         chatResponse.finishReason?.let { reason ->
+                            _lastFinishReason.value = reason
                             recordProjectJournalEvent(
                                 category = "LLM", eventType = "generation_finished", status = reason,
                                 metrics = mapOf(
@@ -9508,6 +9626,7 @@ TODO status. Return via finish_task with JSON:
                                 )
                             )
                         }
+                        _lastGenerationUsage.value = chatResponse.usage
                         val calibratedFactor = chatResponse.usage
                             ?.promptTokens
                             ?.takeIf { it > 0 }
@@ -9746,7 +9865,11 @@ TODO status. Return via finish_task with JSON:
                                     AgentHarnessPhase.BUILD -> "Continue the next unfinished approved action using its tool. If a required decision blocks execution, call question. Run supported checks and inspect the actual result before finish_task; a prose progress update is not completion."
                                     AgentHarnessPhase.VERIFY -> "Review the approved acceptance criteria against actual check results and inspect the changed artifacts. Use preview interaction for relevant WebUI behavior. Call finish_task only with actual artifacts and validation evidence; use question for an unresolved user decision or finish_task with BLOCKED for an execution blocker."
                                 }
-                                val exhausted = chatResponse.finishReason.equals("length", ignoreCase = true)
+                                val exhausted = chatResponse.finishReason
+                                    ?.trim()
+                                    ?.lowercase(java.util.Locale.ROOT) in setOf(
+                                        "length", "max_tokens", "token_limit", "max_output_tokens"
+                                    )
                                 val boundaryCode = when {
                                     multipleRootCalls -> "ONE_TOOL_CALL_REQUIRED"
                                     exhausted -> "GENERATION_OUTPUT_LIMIT"
@@ -9951,6 +10074,59 @@ TODO status. Return via finish_task with JSON:
                         }
 
                         val errorMessage = e.message ?: ""
+                        val truncationCode = when {
+                            e is LlamaServerSseLimitException -> e.kind.code
+                            errorMessage.contains("SSE_RESPONSE_LIMIT", ignoreCase = true) -> "SSE_RESPONSE_LIMIT"
+                            errorMessage.contains("SSE_OUTPUT_LIMIT", ignoreCase = true) -> "SSE_OUTPUT_LIMIT"
+                            errorMessage.contains("SSE_LINE_LIMIT", ignoreCase = true) -> "SSE_LINE_LIMIT"
+                            else -> null
+                        }
+                        if (truncationCode != null) {
+                            val summary = context.getString(R.string.agent_generation_truncated_summary)
+                            val instruction = context.getString(R.string.agent_generation_truncated_instruction)
+                            updateMessage(assistantMsgId) {
+                                val partial = (fullContent.ifBlank { it.content }).trimEnd()
+                                it.copy(
+                                    content = listOf(partial, context.getString(R.string.agent_generation_truncated_suffix))
+                                        .filter(String::isNotBlank)
+                                        .joinToString("\n\n"),
+                                    isStreaming = false
+                                )
+                            }
+                            addMessage(ChatMessage(
+                                role = "tool",
+                                toolName = "generation_boundary",
+                                content = buildToolResultEnvelope(
+                                    toolName = "generation_boundary",
+                                    status = "error",
+                                    summary = summary,
+                                    errorCode = truncationCode,
+                                    nextHint = instruction
+                                )
+                            ))
+                            recordProjectJournalEvent(
+                                category = "LLM",
+                                eventType = "generation_truncated",
+                                status = truncationCode,
+                                phase = activeHarnessPhase().name
+                            )
+                            if (!recoveryMode) {
+                                enqueueAgentContinuation(
+                                    context = context,
+                                    ollamaService = ollamaService,
+                                    settingsRepo = settingsRepo,
+                                    agentService = agentService,
+                                    reason = "generation truncation repair",
+                                    recoveryInstruction = instruction,
+                                    recoveryMode = true,
+                                    runEpoch = runEpoch
+                                )
+                            } else {
+                                pauseForNeedsDirection(context, context.getString(R.string.agent_structured_action_output_limit))
+                            }
+                            return@onFailure
+                        }
+
                         val cancellationLike = e is kotlinx.coroutines.CancellationException ||
                             e is java.util.concurrent.CancellationException ||
                             e.cause is java.util.concurrent.CancellationException ||
@@ -10537,6 +10713,9 @@ TODO status. Return via finish_task with JSON:
                             "write_file" -> {
                                 val path = effectiveToolCall.arguments["path"] ?: ""
                                 val content = effectiveToolCall.arguments["content"] ?: ""
+                                require(content.toByteArray(Charsets.UTF_8).size <= 16_384) {
+                                    "WRITE_BATCH_REQUIRED: content exceeds 16 KiB; use write_file once, then append_file or apply_patch in smaller batches."
+                                }
 
                                 if (!settingsRepo.autoMode.value && !isForced) {
                                     addMessage(ChatMessage(
@@ -10564,6 +10743,33 @@ TODO status. Return via finish_task with JSON:
                                 agentService.writeFile(path, content).getOrThrow()
                                 markMemoryDirty("Updated file $path.")
                                 context.getString(R.string.agent_file_written, path) + if (optimizedHarness()) "" else "\nREMINDER: Append what you just did and why to memory using write_memory."
+                            }
+                            "append_file" -> {
+                                val path = effectiveToolCall.arguments["path"] ?: ""
+                                val content = effectiveToolCall.arguments["content"] ?: ""
+                                val appendNewline = effectiveToolCall.arguments["append_newline"]?.toBooleanStrictOrNull() ?: false
+                                val appendBatch = if (appendNewline) "$content\n" else content
+                                require(appendBatch.toByteArray(Charsets.UTF_8).size <= 16_384) {
+                                    "WRITE_BATCH_REQUIRED: appended content exceeds 16 KiB after newline handling; split it into smaller batches."
+                                }
+                                if (!settingsRepo.autoMode.value && !isForced) {
+                                    addMessage(ChatMessage(
+                                        role = "assistant",
+                                        content = context.getString(R.string.agent_request_write, path),
+                                        toolName = toolCall.name,
+                                        toolArgs = effectiveToolCall.arguments,
+                                        needsApproval = true,
+                                        pendingToolCall = toolCall,
+                                        agentRole = assistantAgentRole,
+                                        customAgentName = assistantCustomAgentName
+                                    ))
+                                    setStatusText(context.getString(R.string.agent_status_awaiting_approval))
+                                    agentService.persistVisibleRuntimeStateNow("Append approval requested for $path.")
+                                    return@launch
+                                }
+                                agentService.appendFile(path, content, appendNewline).getOrThrow()
+                                markMemoryDirty("Appended a bounded batch to $path.")
+                                "Appended ${content.length} characters to $path."
                             }
                             "run_command" -> {
                                 val command = effectiveToolCall.arguments["command"] ?: ""
@@ -10763,6 +10969,9 @@ TODO status. Return via finish_task with JSON:
                                 val startLine = effectiveToolCall.arguments["start_line"]?.toIntOrNull() ?: 0
                                 val endLine = effectiveToolCall.arguments["end_line"]?.toIntOrNull() ?: 0
                                 val newContent = effectiveToolCall.arguments["new_content"] ?: ""
+                                require(newContent.toByteArray(Charsets.UTF_8).size <= 16_384) {
+                                    "WRITE_BATCH_REQUIRED: replacement exceeds 16 KiB; use smaller line edits."
+                                }
 
                                 if (!settingsRepo.autoMode.value && !isForced) {
                                     addMessage(ChatMessage(
@@ -10793,6 +11002,9 @@ TODO status. Return via finish_task with JSON:
                             }
                             "apply_patch" -> {
                                 val patch = effectiveToolCall.arguments["patch"] ?: ""
+                                require(patch.toByteArray(Charsets.UTF_8).size <= 16_384) {
+                                    "WRITE_BATCH_REQUIRED: patch exceeds 16 KiB; split it into smaller patches."
+                                }
 
                                 if (!settingsRepo.autoMode.value && !isForced) {
                                     val preview = patch.lineSequence().take(12).joinToString("\n").ifBlank { "[empty patch]" }
@@ -12036,6 +12248,44 @@ TODO status. Return via finish_task with JSON:
                             "get_datetime" -> {
                                 java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
                             }
+                            "sleep_until" -> {
+                                if (!settingsRepo.autoMode.value && !isForced) {
+                                    addMessage(ChatMessage(
+                                        role = "assistant",
+                                        content = agentService.buildApprovalRequestText("sleep_until", validatedToolCall),
+                                        toolName = toolCall.name,
+                                        toolArgs = validatedToolCall.normalizedArguments,
+                                        needsApproval = true,
+                                        pendingToolCall = validatedToolCall.toolCall,
+                                        agentRole = assistantAgentRole,
+                                        customAgentName = assistantCustomAgentName
+                                    ))
+                                    setStatusText(context.getString(R.string.agent_status_awaiting_approval))
+                                    agentService.persistVisibleRuntimeStateNow("Alarm scheduling approval requested.")
+                                    return@launch
+                                }
+                                val conversationId = _activeConversationId.value
+                                    ?: throw IllegalStateException("No active conversation is selected")
+                                val wakeAt = AgentSleepWakeTime.resolveEpochMillis(
+                                    effectiveToolCall.arguments,
+                                    System.currentTimeMillis()
+                                )
+                                val scheduled = AgentSleepWakeScheduler.schedule(
+                                    context = context,
+                                    conversationId = conversationId,
+                                    rootTurnId = currentRootTurnStorageId(_activeCustomAgent.value?.name ?: _currentAgent.value.name),
+                                    runEpoch = currentRunEpochForScheduling(),
+                                    wakeAtEpochMs = wakeAt,
+                                    reason = effectiveToolCall.arguments["reason"].orEmpty()
+                                )
+                                toolHandlesContinuation = true
+                                val instant = java.time.Instant.ofEpochMilli(wakeAt).toString()
+                                if (scheduled.exact) {
+                                    context.getString(R.string.agent_sleep_scheduled_exact, instant)
+                                } else {
+                                    context.getString(R.string.agent_sleep_scheduled_approximate, instant)
+                                }
+                            }
                             "file_line_count" -> {
                                 agentService.fileLineCount(effectiveToolCall.arguments["path"] ?: "").getOrThrow()
                             }
@@ -12047,7 +12297,8 @@ TODO status. Return via finish_task with JSON:
                             }
                             "web_search" -> {
                                 val query = effectiveToolCall.arguments["query"] ?: ""
-                                agentService.webSearch(query, ollamaService, settingsRepo).getOrThrow()
+                                val requestedResults = effectiveToolCall.arguments["max_results"]?.toIntOrNull()
+                                agentService.webSearch(query, ollamaService, settingsRepo, requestedResults).getOrThrow()
                             }
                             "kiwix_search" -> {
                                 val query = effectiveToolCall.arguments["query"] ?: ""
@@ -12194,7 +12445,12 @@ TODO status. Return via finish_task with JSON:
                                                     val eLine = nestedArgs["end_line"]?.toIntOrNull() ?: sLine + 50
                                                     agentService.readFileLines(nestedArgs["path"] ?: "", sLine, eLine).getOrThrow()
                                                 }
-                                                "web_search" -> agentService.webSearch(nestedArgs["query"] ?: "", ollamaService, settingsRepo).getOrThrow()
+                                                "web_search" -> agentService.webSearch(
+                                                    nestedArgs["query"] ?: "",
+                                                    ollamaService,
+                                                    settingsRepo,
+                                                    nestedArgs["max_results"]?.toIntOrNull()
+                                                ).getOrThrow()
                                                 "kiwix_search" -> agentService.kiwixSearch(nestedArgs["query"] ?: "", ollamaService, settingsRepo).getOrThrow()
                                                 "kb_search" -> {
                                                     val selectedIds = _selectedKnowledgeBaseIds.value
@@ -12704,7 +12960,8 @@ TODO status. Return via finish_task with JSON:
                     "list_memory",
                     "finish_task",
                     "reflection",
-                    "tool_help"
+                    "tool_help",
+                    "sleep_until"
                 )
             } else {
                 setOf(
@@ -12713,7 +12970,8 @@ TODO status. Return via finish_task with JSON:
                     "list_memory",
                     "finish_task",
                     "reflection",
-                    "tool_help"
+                    "tool_help",
+                    "sleep_until"
                 )
             }
         }
@@ -12729,6 +12987,7 @@ TODO status. Return via finish_task with JSON:
                 "apply_patch",
                 "edit_lines",
                 "write_file",
+                "append_file",
                 "read_memory",
                 "write_memory",
                 "list_memory",
@@ -13351,7 +13610,7 @@ TODO status. Return via finish_task with JSON:
         }
 
         private fun extractWorkspaceFileReferences(messages: List<ChatMessage>, mutatingOnly: Boolean): List<String> {
-            val mutatingTools = setOf("write_file", "edit_lines", "apply_patch", "create_folder", "generate_image", "remove_image_background", "run_project", "stop_project_run", "force_stop_project_run", "install_python_dependency")
+            val mutatingTools = setOf("write_file", "append_file", "edit_lines", "apply_patch", "create_folder", "generate_image", "remove_image_background", "run_project", "stop_project_run", "force_stop_project_run", "install_python_dependency")
             val readTools = setOf("read_file", "read_file_lines", "search_code", "list_directory", "view_image", "fetch_url", "web_search", "check_project_run")
             val pathKeys = setOf("path", "output_path", "file", "directory", "target")
             val pathPattern = Regex("""(?:^|[\s`'"])([A-Za-z0-9._@+/\-]+(?:\.[A-Za-z0-9]{1,12})?)(?=$|[\s`'",:)])""")
@@ -14611,6 +14870,7 @@ TODO status. Return via finish_task with JSON:
                 "cancel_command" -> "Stop a command that is no longer useful or is clearly stuck."
                 "send_command_input" -> "Send interactive stdin text to a running command."
                 "write_file" -> "Create or replace the target file with the required content."
+                "append_file" -> "Append one bounded content batch to the target file."
                 "edit_lines" -> "Apply a focused file edit to the requested line range."
                 "apply_patch" -> "Apply a precise unified diff to the requested files."
                 "create_folder" -> "Create the requested folder inside the project workspace."
@@ -15355,11 +15615,13 @@ TODO status. Return via finish_task with JSON:
                     "query", "url" -> 2048
                     "command" -> 4000
                     "task", "context", "summary" -> 12000
-                    "content", "new_content", "patch", "tools_json" -> 200_000
+                    "content", "new_content", "patch" -> 16_384
+                    "tools_json" -> 200_000
                     else -> 8_000
                 }
                 if (value.length > maxLength) {
-                    return Result.failure(IllegalArgumentException("Tool `${toolCall.name}` argument `$key` exceeds the maximum length of $maxLength characters."))
+                    val prefix = if (key in setOf("content", "new_content", "patch")) "WRITE_BATCH_REQUIRED: " else ""
+                    return Result.failure(IllegalArgumentException("${prefix}Tool `${toolCall.name}` argument `$key` exceeds the maximum length of $maxLength characters. Continue with smaller append_file, edit_lines, or apply_patch batches."))
                 }
             }
 
@@ -15514,7 +15776,7 @@ TODO status. Return via finish_task with JSON:
                 readOnlyPlanDelegation -> ToolRiskLevel.MEDIUM
                 customTool != null && customMode == CustomToolExecutionMode.SHELL -> ToolRiskLevel.CRITICAL
                 toolCall.name in setOf("run_command", "cancel_command", "send_command_input", "force_stop_project_run") -> ToolRiskLevel.HIGH
-                toolCall.name in setOf("write_file", "edit_lines", "apply_patch", "call_agent", "propose_plan", "generate_image", "remove_image_background", "create_folder", "run_project", "install_python_dependency") -> ToolRiskLevel.HIGH
+                toolCall.name in setOf("write_file", "append_file", "edit_lines", "apply_patch", "call_agent", "propose_plan", "sleep_until", "generate_image", "remove_image_background", "create_folder", "run_project", "install_python_dependency") -> ToolRiskLevel.HIGH
                 toolCall.name == "fetch_url" -> ToolRiskLevel.MEDIUM
                 customTool != null -> ToolRiskLevel.HIGH
                 else -> ToolRiskLevel.LOW
@@ -15524,7 +15786,7 @@ TODO status. Return via finish_task with JSON:
                     requireReadOnlyPlanDelegationApproval
                 customTool != null -> customTool.needsApproval || customMode == CustomToolExecutionMode.SHELL
                 toolCall.name == "run_command" -> true
-                toolCall.name in setOf("write_file", "edit_lines", "apply_patch", "call_agent", "propose_plan", "generate_image", "remove_image_background", "create_folder", "run_project", "force_stop_project_run", "install_python_dependency") -> true
+                toolCall.name in setOf("write_file", "append_file", "edit_lines", "apply_patch", "call_agent", "propose_plan", "sleep_until", "generate_image", "remove_image_background", "create_folder", "run_project", "force_stop_project_run", "install_python_dependency") -> true
                 else -> false
             }
 
@@ -15577,6 +15839,7 @@ TODO status. Return via finish_task with JSON:
                 "command_list" -> lines.firstOrNull() ?: "Listed tracked commands."
                 "send_command_input" -> lines.firstOrNull() ?: "Sent input to the running command."
                 "write_file" -> "File write completed."
+                "append_file" -> lines.firstOrNull() ?: "File append completed."
                 "edit_lines" -> lines.firstOrNull() ?: "Line edit completed."
                 "apply_patch" -> lines.firstOrNull() ?: "Patch applied."
                 "create_folder" -> lines.firstOrNull() ?: "Folder created."
@@ -15600,7 +15863,7 @@ TODO status. Return via finish_task with JSON:
         }
 
         private fun nextHintForTool(toolName: String, rawOutput: String): String? {
-            if (optimizedHarness() && toolName in setOf("write_file", "edit_lines", "apply_patch")) {
+            if (optimizedHarness() && toolName in setOf("write_file", "append_file", "edit_lines", "apply_patch")) {
                 return "Continue with the next unfinished artifact in the approved plan; use a focused check when the current increment is runnable."
             }
             val baseHint = when (toolName) {
@@ -15613,6 +15876,7 @@ TODO status. Return via finish_task with JSON:
                 "command_list" -> "Pick a command ID and use check_command, wait_command, cancel_command, or send_command_input as needed."
                 "send_command_input" -> "Use wait_command or check_command to inspect the command response after the input."
                 "write_file" -> "If the write looks correct, append a short memory note and reread the file or consult changed_files.md before editing it again."
+                "append_file" -> "Reread the appended boundary before adding another batch; split broad files into focused modules."
                 "edit_lines" -> "If the edit looks correct, append a short memory note and reread the file before making another edit to the same area."
                 "apply_patch" -> "If the patch looks correct, append a short memory note and reread the affected files or changed_files.md before patching again."
                 "create_folder" -> "Use list_directory or write_file next if you need to populate the new folder."
@@ -15736,10 +16000,20 @@ TODO status. Return via finish_task with JSON:
                 ),
                 AgentTool(
                     name = "write_file",
-                    description = "Write content to a file. Creates parent directories if needed. Use paths like 'src/app.py' without /workspace prefix. Read the current file first unless you are creating a new file, then reread it before editing it again.",
+                    description = "Write a focused file or first bounded batch. Creates parent directories. Keep files modular; use append_file, edit_lines, or apply_patch for later batches and reread after changes.",
                     parameters = mapOf(
                         "path" to "File path relative to project root, e.g., 'src/app.py' or 'lib/utils.js'",
                         "content" to "Content to write to the file"
+                    ),
+                    requiredParams = listOf("path", "content")
+                ),
+                AgentTool(
+                    name = "append_file",
+                    description = "Append one bounded text batch without rewriting earlier content. Use this for a larger new file, then reread the boundary before continuing.",
+                    parameters = mapOf(
+                        "path" to "File path relative to project root",
+                        "content" to "Text batch to append",
+                        "append_newline" to "Optional true to add a newline after this batch"
                     ),
                     requiredParams = listOf("path", "content")
                 ),
@@ -15907,6 +16181,16 @@ TODO status. Return via finish_task with JSON:
                     name = "get_datetime",
                     description = "Get the current date and time.",
                     parameters = emptyMap(),
+                    requiredParams = emptyList()
+                ),
+                AgentTool(
+                    name = "sleep_until",
+                    description = "Pause this Agent conversation and automatically resume it after one durable Android alarm. Provide exactly one ISO-8601 wake_at timestamp or delay_seconds from 10 seconds to 7 days. Scheduling follows normal tool authorization.",
+                    parameters = mapOf(
+                        "wake_at" to "Optional ISO-8601 timestamp including timezone",
+                        "delay_seconds" to "Optional whole-number delay from 10 to 604800 seconds",
+                        "reason" to "Short reason and exact action to resume"
+                    ),
                     requiredParams = emptyList()
                 ),
                 AgentTool(
@@ -16128,8 +16412,7 @@ TODO status. Return via finish_task with JSON:
                         "wait_command",
                         "command_list",
                         "cancel_command",
-                        "send_command_input",
-                        "apply_patch"
+                        "send_command_input"
                     )
                 }
                 tools.add(
@@ -16199,6 +16482,7 @@ TODO status. Return via finish_task with JSON:
                         description = "Search the web for information. Returns result titles, URLs, snippets, and Markdown citation links. Cite claims from web results with the returned citation links. Use this when you need up-to-date information, documentation, or answers that may not be in the project files.",
                         parameters = mapOf(
                             "query" to "Search query string",
+                            "max_results" to "Optional result count. The user's configured ceiling and the hard maximum of 5 always apply.",
                             "blocker_reason" to "Optional specific unresolved blocker requiring research beyond the default allowance; it is shown to the user"
                         ),
                         requiredParams = listOf("query")
@@ -16354,8 +16638,16 @@ TODO status. Return via finish_task with JSON:
                 )
             }
 
-            // Add custom tools loaded from database. Local sandbox hides arbitrary custom command templates.
-            if (!localBackend) loadedCustomTools.value.filter { it.isEnabled }.forEach { customTool ->
+            // Local projects expose the safe curl-style API subset. Shell templates remain SSH-only.
+            val availableCustomTools = loadedCustomTools.value.filter { customTool ->
+                customTool.isEnabled && (
+                    !localBackend || (
+                        AgentRuntimeSupport.inferCustomToolExecutionMode(customTool.commandTemplate) == CustomToolExecutionMode.ARGV &&
+                            CustomToolHttpExecutor.supports(customTool.commandTemplate)
+                        )
+                    )
+            }
+            availableCustomTools.forEach { customTool ->
                 try {
                     val paramMap = mutableMapOf<String, String>()
                     val paramSpecs = AgentRuntimeSupport.parseCustomToolParameterSpecs(customTool.parametersJson)
@@ -16386,7 +16678,11 @@ TODO status. Return via finish_task with JSON:
                                 append("\nExample: ${customTool.exampleUsage}")
                             },
                             parameters = paramMap,
-                            requiredParams = requiredList
+                            requiredParams = requiredList,
+                            schemaJson = CustomToolDefinitionValidator.canonicalSchemaJson(
+                                customTool.parametersJson,
+                                customTool.requiredParamsJson
+                            )
                         )
                     )
                 } catch (e: Exception) {
@@ -16399,7 +16695,8 @@ TODO status. Return via finish_task with JSON:
             }
             val filteredTools = if (optimizedHarness() && role == AgentRole.ORCHESTRATOR && activeCustom == null) {
                 val phase = activeHarnessPhase()
-                tools.filter { it.name in AgentHarnessPolicy.rootToolsForPhase(phase) }
+                val customNames = availableCustomTools.mapTo(mutableSetOf()) { it.name }
+                tools.filter { it.name in AgentHarnessPolicy.rootToolsForPhase(phase) || it.name in customNames }
             } else if (activeCustom != null) {
                 tools
                     .filter { tool ->
@@ -16922,6 +17219,19 @@ TODO status. Return via finish_task with JSON:
         cwd: String
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                if (!CustomToolHttpExecutor.supports(customTool.commandTemplate)) {
+                    return@withContext Result.failure(
+                        IllegalArgumentException(
+                            "Local custom tools must use a supported curl-style HTTP API template. " +
+                                "Use a connected Remote SSH project for other executables."
+                        )
+                    )
+                }
+                return@withContext runCatching {
+                    CustomToolHttpExecutor.execute(customTool, arguments)
+                }
+            }
             val argv = AgentRuntimeSupport.tokenizeArgvTemplate(customTool.commandTemplate, arguments)
             val payload = JSONObject().apply {
                 put("argv", JSONArray(argv))
@@ -17194,6 +17504,31 @@ sys.exit(proc.returncode)
             } else {
                 Result.failure(Exception("Failed to write file"))
             }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun appendFile(path: String, content: String, appendNewline: Boolean = false): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val batch = if (appendNewline) "$content\n" else content
+            require(batch.toByteArray(Charsets.UTF_8).size <= 16_384) {
+                "WRITE_BATCH_REQUIRED: append content exceeds 16 KiB; split it into smaller batches."
+            }
+            if (isLocalWorkspaceBackend()) {
+                val file = resolveLocalWorkspaceFile(path)
+                file.parentFile?.mkdirs()
+                file.appendText(batch, Charsets.UTF_8)
+            } else {
+                val safePath = sanitizePath(path)
+                val parentDir = safePath.substringBeforeLast("/")
+                executeCommand("mkdir -p '$parentDir'").getOrThrow()
+                val encoded = android.util.Base64.encodeToString(batch.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+                executeCommand("echo '$encoded' | base64 -d >> '$safePath'").getOrThrow()
+            }
+            appendChangedFilesLog(listOf(path), "append_file")
+                .onFailure { addDebugLog("⚠️ Failed to track appended file $path: ${it.message}") }
+            Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -17521,6 +17856,31 @@ sys.exit(proc.returncode)
                 if (path.startsWith("/") || path.contains("..")) {
                     return@withContext Result.failure(Exception("Unsafe patch path: $path"))
                 }
+            }
+
+            if (isLocalWorkspaceBackend()) {
+                val outputs = AgentLocalPatchSupport.apply(patch) { path ->
+                    val file = resolveLocalWorkspaceFile(path)
+                    file.takeIf { it.exists() && it.isFile }?.readText(Charsets.UTF_8)
+                }
+                outputs.forEach { output ->
+                    val file = resolveLocalWorkspaceFile(output.path)
+                    if (output.delete) {
+                        if (!file.delete()) throw IllegalStateException("Failed to delete ${output.path}")
+                    } else {
+                        file.parentFile?.mkdirs()
+                        file.writeText(output.content.orEmpty(), Charsets.UTF_8)
+                    }
+                }
+                appendChangedFilesLog(outputs.map { it.path }, "apply_patch")
+                    .onFailure { addDebugLog("⚠️ Failed to track local patch changes: ${it.message}") }
+                return@withContext Result.success(
+                    buildString {
+                        appendLine("Patch applied successfully.")
+                        appendLine("Files touched:")
+                        outputs.forEach { appendLine("- ${it.path}") }
+                    }.trimEnd()
+                )
             }
 
             val projectPath = sanitizePath(".")
@@ -18753,9 +19113,15 @@ sys.exit(proc.returncode)
     /**
      * Search the web using DuckDuckGo HTML, fetch each result page, and summarize via LLM
      */
-    suspend fun webSearch(query: String, ollamaService: OllamaService, settingsRepo: com.example.llamadroid.data.SettingsRepository): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun webSearch(
+        query: String,
+        ollamaService: OllamaService,
+        settingsRepo: com.example.llamadroid.data.SettingsRepository,
+        requestedMaxResults: Int? = null
+    ): Result<String> = withContext(Dispatchers.IO) {
         try {
-            val maxResults = settingsRepo.agentWebSearchMaxResults.value
+            val userCeiling = settingsRepo.agentWebSearchMaxResults.value.coerceIn(1, 5)
+            val maxResults = requestedMaxResults?.coerceIn(1, userCeiling) ?: userCeiling
             val maxChars = settingsRepo.agentWebSearchMaxChars.value
             val summarizerModel = settingsRepo.agentWebSearchModel.value
             val summarizerCtx = settingsRepo.agentWebSearchNumCtx.value
@@ -18794,7 +19160,7 @@ sys.exit(proc.returncode)
             }
 
             if (optimizedHarness()) {
-                val results = links.take(minOf(maxResults, 4)).mapIndexed { index, link ->
+                val results = links.take(maxResults).mapIndexed { index, link ->
                     val href = link.groupValues[1].replace("&amp;", "&")
                     val url = if (href.contains("uddg=")) java.net.URLDecoder.decode(href.substringAfter("uddg=").substringBefore("&"), "UTF-8") else href
                     val end = links.getOrNull(index + 1)?.range?.first ?: html.length

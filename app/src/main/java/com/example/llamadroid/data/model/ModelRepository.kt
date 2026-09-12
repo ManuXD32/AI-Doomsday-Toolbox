@@ -55,6 +55,7 @@ import com.example.llamadroid.data.model.library.RoomModelDeletionJournal
 import com.example.llamadroid.data.model.library.activeDownloadDependencies
 import com.example.llamadroid.data.model.library.activeAudioJobDependencies
 import com.example.llamadroid.data.model.library.modelDeletionOperationMutex
+import com.example.llamadroid.data.model.library.StableAudioModelLease
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.Downloader
 import kotlinx.coroutines.CoroutineScope
@@ -793,7 +794,13 @@ class ModelRepository(
     /** Performs a deletion and returns a recoverable typed result for UI callers. */
     suspend fun deleteModelWithResult(model: ModelEntity): ModelDeletionResult =
         modelDeletionOperationMutex.withLock {
-            deleteModelWithResultLocked(model, removeRuntimeRow = true)
+            if (model.type.isStableAudioComponentType()) {
+                StableAudioModelLease.withLease(listOf(model.path)) {
+                    deleteModelWithResultLocked(model, removeRuntimeRow = true)
+                }
+            } else {
+                deleteModelWithResultLocked(model, removeRuntimeRow = true)
+            }
         }
 
     /** Lists interrupted or recoverable model deletions for a Retry surface. */
@@ -965,7 +972,13 @@ class ModelRepository(
 
     suspend fun deleteModelArtifacts(model: ModelEntity) {
         val result = modelDeletionOperationMutex.withLock {
-            deleteModelWithResultLocked(model, removeRuntimeRow = false)
+            if (model.type.isStableAudioComponentType()) {
+                StableAudioModelLease.withLease(listOf(model.path)) {
+                    deleteModelWithResultLocked(model, removeRuntimeRow = false)
+                }
+            } else {
+                deleteModelWithResultLocked(model, removeRuntimeRow = false)
+            }
         }
         if (result.status != ModelDeletionStatus.COMPLETED) {
             throw ModelLibraryException(

@@ -22,6 +22,7 @@ import com.example.llamadroid.tama.data.PetSpeciesLine
 import com.example.llamadroid.tama.data.PetSpriteState
 import com.example.llamadroid.tama.data.TamaPet
 import com.example.llamadroid.tama.data.resolvePetSpriteAssetPath
+import com.example.llamadroid.util.DebugLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.ConcurrentHashMap
@@ -316,13 +317,21 @@ object UnifiedNotificationManager {
             type = type,
             title = title,
             progress = 0f,
-            progressText = if (::appContext.isInitialized) appContext.getString(R.string.dist_starting) else "Starting...",
+            progressText = if (::appContext.isInitialized) {
+                runCatching { appContext.getString(R.string.dist_starting) }.getOrDefault("Starting...")
+            } else {
+                "Starting..."
+            },
             completionAlertPolicy = completionAlertPolicy
         )
         _activeTasks[id] = task
         updateTasksFlow()
-        showTaskNotification(task)
-        updateSummaryNotification()
+        runCatching {
+            showTaskNotification(task)
+            updateSummaryNotification()
+        }.onFailure { error ->
+            DebugLog.log("[Notifications] Task notification unavailable: ${error.javaClass.simpleName}")
+        }
         return id
     }
     

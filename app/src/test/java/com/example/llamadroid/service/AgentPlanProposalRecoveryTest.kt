@@ -118,8 +118,8 @@ class AgentPlanProposalRecoveryTest {
         assertTrue(OPTIMIZED_PLAN_REQUIRED_ACTION_CONTRACT.contains("wait"))
         assertTrue(OPTIMIZED_PLAN_REQUIRED_ACTION_CONTRACT.contains("never approve"))
         val prompt = AgentHarnessPolicy.optimizedSystemPromptForPhase(AgentHarnessPhase.PLAN)
-        assertTrue(prompt.contains("native structured propose_plan"))
-        assertTrue(prompt.contains("required plan and summary"))
+        assertTrue(prompt.contains("return one clear Markdown plan"))
+        assertTrue(prompt.contains("harness submits it through propose_plan"))
         assertTrue(prompt.contains(OPTIMIZED_PLAN_REQUIRED_ACTION_CONTRACT))
     }
 }

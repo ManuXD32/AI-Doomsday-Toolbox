@@ -59,11 +59,7 @@ data class AgentHarnessResearchLimits(
 data class AgentHarnessPolicySpec(
     val profile: AgentHarnessProfile,
     val defaultContextTokens: Int?,
-    /**
-     * Conservative context ceiling recommended for small devices. This is a
-     * recommendation shown to users, not a runtime cap for an explicit
-     * setting.
-     */
+    /** Context ceiling enforced by the optimized low-end profile. */
     val maximumContextTokens: Int,
     val controlMaxOutputTokens: Int?,
     val buildMaxOutputTokens: Int?,
@@ -87,25 +83,20 @@ data class AgentHarnessPolicySpec(
         AgentHarnessStage.SUMMARY -> summaryMaxOutputTokens
     }
 
-    /** The optimized phase budget is a recommendation when no value is saved. */
+    /** The optimized phase budget is the recommendation used when no value is saved. */
     fun recommendedOutputTokens(stage: AgentHarnessStage): Int? = maxOutputTokens(stage)
 
     /**
-     * Resolve context without allowing an optimized recommendation to erase a
-     * user-selected value. The minimum protects malformed/partially edited
-     * fields; there is intentionally no optimized maximum here.
+     * Resolve the user-selected context inside the small-device range when the
+     * optimized profile is active. Legacy profiles retain their stored value.
      */
     fun resolveContextTokens(
         configuredContextTokens: Int,
         explicit: Boolean = true
     ): Int {
-        val normalized = configuredContextTokens.coerceAtLeast(AgentHarnessPolicy.MIN_CONTEXT_TOKENS)
-        return if (isOptimized && !explicit) {
-            (defaultContextTokens ?: normalized)
-                .coerceAtLeast(AgentHarnessPolicy.MIN_CONTEXT_TOKENS)
-        } else {
-            normalized
-        }
+        if (!isOptimized) return configuredContextTokens.coerceAtLeast(1)
+        val selected = if (explicit) configuredContextTokens else (defaultContextTokens ?: configuredContextTokens)
+        return selected.coerceIn(AgentHarnessPolicy.MIN_CONTEXT_TOKENS, maximumContextTokens)
     }
 
     /**
@@ -118,13 +109,9 @@ data class AgentHarnessPolicySpec(
         configuredOutputTokens: Int,
         explicit: Boolean = true
     ): Int {
-        val normalized = configuredOutputTokens.coerceAtLeast(AgentHarnessPolicy.MIN_OUTPUT_TOKENS)
-        return if (isOptimized && !explicit) {
-            (maxOutputTokens(stage) ?: normalized)
-                .coerceAtLeast(AgentHarnessPolicy.MIN_OUTPUT_TOKENS)
-        } else {
-            normalized
-        }
+        if (!isOptimized) return configuredOutputTokens.coerceAtLeast(1)
+        val selected = if (explicit) configuredOutputTokens else (maxOutputTokens(stage) ?: configuredOutputTokens)
+        return selected.coerceIn(AgentHarnessPolicy.MIN_OUTPUT_TOKENS, AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS)
     }
 
     /** True only for roles explicitly retained as optional sequential workers. */
@@ -180,13 +167,13 @@ object AgentHarnessPolicy {
     )
 
     const val DEFAULT_CONTEXT_TOKENS = 8_192
-    /** Conservative recommendation; explicit user values may exceed it. */
+    /** Maximum supported by the low-end optimized profile. */
     const val MAX_CONTEXT_TOKENS = 16_384
     const val CONTROL_MAX_OUTPUT_TOKENS = 2_048
     const val BUILD_MAX_OUTPUT_TOKENS = 4_096
     const val SUMMARY_MAX_OUTPUT_TOKENS = 512
-    const val MIN_CONTEXT_TOKENS = 1_024
-    const val MIN_OUTPUT_TOKENS = 1
+    const val MIN_CONTEXT_TOKENS = 2_048
+    const val MIN_OUTPUT_TOKENS = 256
     const val RESEARCH_MAX_SEARCH_CALLS = 2
     const val RESEARCH_MAX_FETCH_CALLS = 4
 
@@ -249,7 +236,7 @@ object AgentHarnessPolicy {
      * stated here so they survive history packing.
      */
     const val OPTIMIZED_SYSTEM_PROMPT =
-        "Act as one direct root agent. In Plan, use the provided project state; read project_state_read only if needed. For a declared greenfield project skip CODEBASE_SCOUT and inspect only relevant files. Research is optional and bounded: at most 2 search calls total (web_search or kiwix_search) and at most 4 fetch_url calls in this planning episode; use snippets/citations first, never repeat a sufficient search, and do not invoke an automatic summarizer. State exact formulas, runtime dependencies, bounded resource behavior, and concrete checks for requested features. As soon as the requirements and needed facts are adequate, call propose_plan with a plan of at most 500 words and wait for approval. Call question only for a real unresolved blocker, never for preferences. In Build, after approval make the required mutations, create .adt/run.json for LOCAL_SANDBOX, run run_project/check_project_run, and verify the result (use observe_preview/interact_preview for a web preview). All advertised tools remain available within their phase; optional specialists CODEBASE_SCOUT, RESEARCHER, PLANNER, CODER, REVIEWER, EXECUTOR, SUMMARIZER, and VISUAL_TESTER are retained, optional, and sequential."
+        "Act as one direct root agent. In Plan, use the provided project state; read project_state_read only if needed. For a declared greenfield project skip CODEBASE_SCOUT and inspect only relevant files. Research is optional and bounded: at most 2 search calls total (web_search or kiwix_search) and at most 4 fetch_url calls in this planning episode; use snippets/citations first, never repeat a sufficient search, and do not invoke an automatic summarizer. State exact formulas, runtime dependencies, bounded resource behavior, and concrete checks for requested features. As soon as the requirements and needed facts are adequate, return one clear Markdown plan of at most 500 words; the harness submits it through propose_plan and waits for approval. A native propose_plan call is also accepted. Call question only for a real unresolved blocker, never for preferences. In Build, after approval make the required mutations, create .adt/run.json for LOCAL_SANDBOX, run run_project/check_project_run, and verify the result (use observe_preview/interact_preview for a web preview). All advertised tools remain available within their phase; optional specialists CODEBASE_SCOUT, RESEARCHER, PLANNER, CODER, REVIEWER, EXECUTOR, SUMMARIZER, and VISUAL_TESTER are retained, optional, and sequential."
 
     /**
      * Stable phase-specific base prompts. Common authority, question, local
@@ -257,13 +244,13 @@ object AgentHarnessPolicy {
      */
     fun optimizedSystemPromptForPhase(phase: AgentHarnessPhase): String = when (phase) {
         AgentHarnessPhase.PLAN ->
-            "Direct root Plan. Use provided project state. Greenfield work skips codebase scouting. Research only unresolved facts: at most 2 search calls total, 4 fetches; use snippets/citations; never auto-summarize. State exact formulas, runtime dependencies, bounded resource behavior, concrete checks. When ready, emit native structured propose_plan with required plan and summary (at most 500 words, 4000 characters), then wait for approval. Example: propose_plan({plan: <body>, summary: <one line>}). Use question only for unresolved user decisions; prose cannot open controls. finish_task BLOCKED only for execution blockers. Do not mutate or run before approval. $OPTIMIZED_PLAN_REQUIRED_ACTION_CONTRACT"
+            "Direct root Plan. Use provided project state; greenfield skips scouting. Research only unresolved facts: at most 2 search calls total, 4 fetches; use snippets/citations and never auto-summarize. State exact formulas, runtime dependencies, bounded resource behavior, and concrete checks. When ready, return one clear Markdown plan under 500 words; the harness submits it through propose_plan, then wait for approval. Use question only for unresolved user decisions. Do not mutate or run. $OPTIMIZED_PLAN_REQUIRED_ACTION_CONTRACT"
 
         AgentHarnessPhase.BUILD ->
             "Direct root Build after explicit plan approval. Implement the approved next step. For greenfield work, create entry files first with write_file; for existing work, read only files relevant to that step before editing. Keep each increment runnable and run focused checks after changes. Preserve approved scope; report a concrete blocker when execution cannot continue."
 
         AgentHarnessPhase.VERIFY ->
-            "Direct root Verify. Review the changed artifacts against the approved acceptance criteria and inspect actual runtime or preview evidence. Check relevant behavior, not just that a server started. Reuse checks that still cover the current files; repeat a check after a related repair. Do not write, edit, patch, install dependencies, or start unrelated work. For a concrete defect, use report_progress with phase=build and a repair summary. Otherwise call finish_task with changed artifacts, validation evidence, and review findings only after passing checks. Use question for an unresolved user decision. Preserve the plan and TODO."
+            "Direct root Verify. Perform one bounded review of changed artifacts against the approved acceptance criteria and run only focused checks using actual runtime or preview evidence. Use tool_help only when a required tool contract is unclear. Reuse checks that still cover current files; repeat one after a related repair. Do not write, edit, patch, install dependencies, or start unrelated work. For a concrete defect, use report_progress with phase=build and a repair summary. Otherwise call finish_task with changed artifacts, validation evidence, and review findings after checks pass. Use question for an unresolved user decision. Preserve the plan and TODO."
     }
 
     /**
@@ -321,7 +308,8 @@ object AgentHarnessPolicy {
         "plan_read",
         "read_skill_resource",
         "tool_help",
-        "get_datetime"
+        "get_datetime",
+        "sleep_until"
     )
 
     /** File mutation and command tools for direct root Build work. */
@@ -344,6 +332,7 @@ object AgentHarnessPolicy {
         "write_memory",
         "list_memory",
         "write_file",
+        "append_file",
         "edit_lines",
         "apply_patch",
         "create_folder",
@@ -368,7 +357,8 @@ object AgentHarnessPolicy {
         "reflection",
         "finish_task",
         "tool_help",
-        "get_datetime"
+        "get_datetime",
+        "sleep_until"
     )
 
     /** Verification keeps reads, checks, and visual inspection available. */
@@ -404,7 +394,8 @@ object AgentHarnessPolicy {
         "reflection",
         "finish_task",
         "tool_help",
-        "get_datetime"
+        "get_datetime",
+        "sleep_until"
     )
 
     fun rootToolsForPhase(phase: AgentHarnessPhase): Set<String> = when (phase) {

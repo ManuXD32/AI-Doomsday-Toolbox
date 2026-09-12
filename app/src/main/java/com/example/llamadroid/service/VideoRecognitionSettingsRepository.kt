@@ -7,7 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Settings that belong only to visual video recognition.
+ * Global video preparation settings shared by Visual Summary and Native Chat.
  *
  * The legacy Whisper/transcript settings intentionally remain in
  * [com.example.llamadroid.data.SettingsRepository]. Keeping this repository
@@ -20,6 +20,12 @@ class VideoRecognitionSettingsRepository(context: Context) {
 
     private val _savedTargetId = MutableStateFlow(readTargetId())
     val savedTargetId: StateFlow<String?> = _savedTargetId.asStateFlow()
+
+    private val _processingMode = MutableStateFlow(
+        VideoProcessingMode.fromStorage(readString(KEY_PROCESSING_MODE))
+    )
+    /** One global route shared by Video Summary and Native Chat. */
+    val processingMode: StateFlow<VideoProcessingMode> = _processingMode.asStateFlow()
 
     private val _remoteEnabled = MutableStateFlow(readBoolean(KEY_REMOTE_ENABLED, false))
     val remoteEnabled: StateFlow<Boolean> = _remoteEnabled.asStateFlow()
@@ -34,7 +40,9 @@ class VideoRecognitionSettingsRepository(context: Context) {
     val remoteVideoEnabled: StateFlow<Boolean> = _remoteVideoEnabled.asStateFlow()
 
     /** Attach a bounded PCM WAV only when the selected target advertises direct audio input. */
-    private val _audioEnabled = MutableStateFlow(readBoolean(KEY_AUDIO_ENABLED, false))
+    private val _audioEnabled = MutableStateFlow(
+        readBoolean(KEY_AUDIO_ENABLED, VideoRecognitionLimits.DEFAULT_DIRECT_AUDIO_ENABLED)
+    )
     val audioEnabled: StateFlow<Boolean> = _audioEnabled.asStateFlow()
 
     /** Run one coordinator-owned Whisper process alongside sequential visual work. */
@@ -108,6 +116,11 @@ class VideoRecognitionSettingsRepository(context: Context) {
         _savedTargetId.value = normalized
     }
 
+    fun setProcessingMode(value: VideoProcessingMode) {
+        updateString(KEY_PROCESSING_MODE, value.name)
+        _processingMode.value = value
+    }
+
     /** Persist the first automatic local choice without overwriting a concurrent explicit choice. */
     fun setSavedTargetIdIfAbsent(value: String): Boolean {
         val normalized = value.trim().ifBlank { return false }
@@ -150,6 +163,18 @@ class VideoRecognitionSettingsRepository(context: Context) {
         updateBoolean(KEY_AUDIO_ENABLED, value)
         _audioEnabled.value = value
     }
+
+    /** Readable alias for callers that use the policy terminology. */
+    val directAudioEnabled: StateFlow<Boolean>
+        get() = audioEnabled
+
+    fun setDirectAudioEnabled(value: Boolean) = setAudioEnabled(value)
+
+    /** Readable alias clarifying that the switch belongs to Native Chat. */
+    val nativeChatParallelWhisperEnabled: StateFlow<Boolean>
+        get() = parallelWhisperEnabled
+
+    fun setNativeChatParallelWhisperEnabled(value: Boolean) = setParallelWhisperEnabled(value)
 
     fun setParallelWhisperEnabled(value: Boolean) {
         updateBoolean(KEY_PARALLEL_WHISPER_ENABLED, value)
@@ -213,6 +238,7 @@ class VideoRecognitionSettingsRepository(context: Context) {
     fun snapshot(): VideoRecognitionSettingsSnapshot = synchronized(lock) {
         VideoRecognitionSettingsSnapshot(
             savedTargetId = _savedTargetId.value,
+            processingMode = _processingMode.value,
             remoteEnabled = _remoteEnabled.value,
             remoteEndpoint = _remoteEndpoint.value,
             remoteModel = _remoteModel.value,
@@ -262,6 +288,7 @@ class VideoRecognitionSettingsRepository(context: Context) {
 
         const val PREFERENCES_NAME = "video_recognition_settings"
         const val KEY_SAVED_TARGET_ID = "saved_target_id"
+        const val KEY_PROCESSING_MODE = "processing_mode"
         const val KEY_REMOTE_ENABLED = "remote_enabled"
         const val KEY_REMOTE_ENDPOINT = "remote_endpoint"
         const val KEY_REMOTE_MODEL = "remote_model"
@@ -282,6 +309,7 @@ class VideoRecognitionSettingsRepository(context: Context) {
 
 data class VideoRecognitionSettingsSnapshot(
     val savedTargetId: String?,
+    val processingMode: VideoProcessingMode = VideoProcessingMode.AUTO_MULTIMODAL,
     val remoteEnabled: Boolean,
     val remoteEndpoint: String,
     val remoteModel: String,
@@ -295,9 +323,18 @@ data class VideoRecognitionSettingsSnapshot(
     val maxTokens: Int,
     val temperature: Float,
     val timeoutMinutes: Int,
-    val audioEnabled: Boolean = false,
+    val audioEnabled: Boolean = VideoRecognitionLimits.DEFAULT_DIRECT_AUDIO_ENABLED,
     val parallelWhisperEnabled: Boolean = false
 ) {
+    val directAudioEnabled: Boolean
+        get() = audioEnabled
+
+    val nativeChatParallelWhisperEnabled: Boolean
+        get() = parallelWhisperEnabled
+
+    val processingPolicy: VideoProcessingPolicy
+        get() = VideoProcessingPolicy.from(this)
+
     val remoteConfigured: Boolean
         get() = remoteEnabled && remoteVideoEnabled &&
             remoteEndpoint.isNotBlank() && remoteModel.isNotBlank()
@@ -305,9 +342,11 @@ data class VideoRecognitionSettingsSnapshot(
 
 /** Central validation for the native video flags and the UI controls. */
 object VideoRecognitionLimits {
-    const val DEFAULT_SEGMENT_SECONDS = 30
+    const val DEFAULT_SEGMENT_SECONDS = 12
+    const val MAX_SEGMENT_SECONDS = 60
     const val DEFAULT_MAX_FRAMES = 24
     const val DEFAULT_MAX_FPS = 2f
+    const val DEFAULT_DIRECT_AUDIO_ENABLED = true
     const val DEFAULT_CONTEXT_SIZE = 8192
     const val DEFAULT_MAX_TOKENS = 768
     const val DEFAULT_TEMPERATURE = 0.2f
@@ -319,9 +358,9 @@ object VideoRecognitionLimits {
             "content, mention people, objects, actions, and changes, and do not invent details " +
             "or claim anything about speech or audio."
 
-    fun normalizeSegmentSeconds(value: Int): Int = value.coerceIn(5, DEFAULT_SEGMENT_SECONDS)
+    fun normalizeSegmentSeconds(value: Int): Int = value.coerceIn(5, MAX_SEGMENT_SECONDS)
     fun normalizeMaxFrames(value: Int): Int = value.coerceIn(1, DEFAULT_MAX_FRAMES)
-    fun normalizeMaxFps(value: Float): Float = value.takeIf { it.isFinite() }?.coerceIn(0.25f, DEFAULT_MAX_FPS)
+    fun normalizeMaxFps(value: Float): Float = value.takeIf { it.isFinite() }?.coerceIn(0.1f, DEFAULT_MAX_FPS)
         ?: DEFAULT_MAX_FPS
     fun normalizeContextSize(value: Int): Int = value.coerceIn(1024, 131_072)
     fun normalizeMaxTokens(value: Int): Int = value.coerceIn(64, 8_192)
