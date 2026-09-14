@@ -24,12 +24,27 @@ interface AgentChatDao {
     
     @Query("SELECT * FROM agent_conversations WHERE id = :id")
     suspend fun getConversation(id: Long): AgentConversationEntity?
+
+    @Query("SELECT * FROM agent_conversations WHERE id = :id")
+    fun observeConversation(id: Long): Flow<AgentConversationEntity?>
     
+    /**
+     * Keep conversation creation on the single supported direct runtime even
+     * when an older caller passes a legacy profile explicitly.
+     */
+    suspend fun insertConversation(conversation: AgentConversationEntity): Long =
+        insertConversationDirect(conversation.copy(executionProfile = AgentExecutionProfile.DIRECT))
+
     @Insert
-    suspend fun insertConversation(conversation: AgentConversationEntity): Long
+    suspend fun insertConversationDirect(conversation: AgentConversationEntity): Long
     
+    /** Do not allow imports or stale UI projections to reintroduce a profile. */
+    suspend fun updateConversation(conversation: AgentConversationEntity) {
+        updateConversationDirect(conversation.copy(executionProfile = AgentExecutionProfile.DIRECT))
+    }
+
     @Update
-    suspend fun updateConversation(conversation: AgentConversationEntity)
+    suspend fun updateConversationDirect(conversation: AgentConversationEntity)
     
     @Delete
     suspend fun deleteConversation(conversation: AgentConversationEntity)
@@ -64,11 +79,41 @@ interface AgentChatDao {
     suspend fun updatePlanningMode(id: Long, enabled: Boolean, updatedAt: Long = System.currentTimeMillis())
 
     @Query("UPDATE agent_conversations SET executionProfile = :executionProfile, updatedAt = :updatedAt WHERE id = :id")
-    suspend fun updateExecutionProfile(
+    suspend fun updateExecutionProfileDirect(
         id: Long,
         executionProfile: String,
         updatedAt: Long = System.currentTimeMillis()
     ): Int
+
+    /** Historical profile ids are accepted at the boundary but never persisted. */
+    suspend fun updateExecutionProfile(
+        id: Long,
+        executionProfile: String,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int = updateExecutionProfileDirect(
+        id = id,
+        executionProfile = AgentExecutionProfile.normalize(executionProfile),
+        updatedAt = updatedAt
+    )
+
+    @Query(
+        "UPDATE agent_conversations SET executionProfile = :profile, updatedAt = :updatedAt " +
+            "WHERE executionProfile IS NULL OR LOWER(executionProfile) != LOWER(:profile)"
+    )
+    suspend fun normalizeAllExecutionProfiles(
+        profile: String = AgentExecutionProfile.DIRECT,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        "SELECT * FROM agent_conversations " +
+            "WHERE directRuntimeVersion < :runtimeVersion OR directReanchorState != :completeState " +
+            "ORDER BY updatedAt ASC, id ASC"
+    )
+    suspend fun getConversationsNeedingDirectReanchor(
+        runtimeVersion: Int = AgentDirectRuntime.CURRENT_VERSION,
+        completeState: String = AgentDirectReanchorState.COMPLETE
+    ): List<AgentConversationEntity>
 
     @Query("UPDATE agent_conversations SET resumeState = :resumeState, lastStopReason = :reason, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateResumeState(id: Long, resumeState: String, reason: String?, updatedAt: Long = System.currentTimeMillis())
@@ -87,6 +132,13 @@ interface AgentChatDao {
     
     @Query("UPDATE agent_conversations SET updatedAt = :updatedAt WHERE id = :id")
     suspend fun touchConversation(id: Long, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE agent_conversations SET previewUrlOverride = :previewUrlOverride, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updatePreviewUrlOverride(
+        id: Long,
+        previewUrlOverride: String?,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
     
     @Query("UPDATE agent_conversations SET lastAgentRole = :role, lastTask = :task, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateConversationState(id: Long, role: String, task: String?, updatedAt: Long = System.currentTimeMillis())

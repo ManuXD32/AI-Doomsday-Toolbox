@@ -3880,6 +3880,196 @@ object Migrations {
         }
     }
 
+    /**
+     * Move every conversation to the single direct runtime and persist the
+     * one-time re-anchor marker. Existing project/chat/workflow data is left
+     * intact; stale work is cancelled by the first explicit Continue through
+     * AgentWorkflowDao.reanchorConversationToDirect().
+     */
+    val MIGRATION_118_119 = object : Migration(118, 119) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 118 -> 119: direct runtime marker")
+            if (!tableExists(database, "agent_conversations")) return
+
+            if (!columnExists(database, "agent_conversations", "directRuntimeVersion")) {
+                database.execSQL(
+                    "ALTER TABLE `agent_conversations` ADD COLUMN `directRuntimeVersion` INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+            if (!columnExists(database, "agent_conversations", "directReanchorState")) {
+                database.execSQL(
+                    "ALTER TABLE `agent_conversations` ADD COLUMN `directReanchorState` TEXT NOT NULL DEFAULT 'PENDING'"
+                )
+            }
+            if (!columnExists(database, "agent_conversations", "directReanchorReason")) {
+                database.execSQL(
+                    "ALTER TABLE `agent_conversations` ADD COLUMN `directReanchorReason` TEXT DEFAULT NULL"
+                )
+            }
+            if (!columnExists(database, "agent_conversations", "directReanchoredAt")) {
+                database.execSQL(
+                    "ALTER TABLE `agent_conversations` ADD COLUMN `directReanchoredAt` INTEGER DEFAULT NULL"
+                )
+            }
+
+            // Keep a rerun of this migration harmless for test fixtures and
+            // backup restore tools while ensuring all old profile ids become
+            // direct aliases on the first pass.
+            database.execSQL(
+                """
+                UPDATE `agent_conversations`
+                SET `executionProfile` = 'direct',
+                    `directRuntimeVersion` = CASE
+                        WHEN `directRuntimeVersion` > 0 THEN `directRuntimeVersion`
+                        ELSE 0
+                    END,
+                    `directReanchorState` = CASE
+                        WHEN `directReanchorState` = 'COMPLETE' THEN 'COMPLETE'
+                        ELSE 'PENDING'
+                    END,
+                    `directReanchorReason` = CASE
+                        WHEN `directReanchorState` = 'COMPLETE' THEN `directReanchorReason`
+                        WHEN NULLIF(TRIM(COALESCE(`directReanchorReason`, '')), '') IS NULL
+                            THEN 'direct_runtime_migration_118'
+                        ELSE `directReanchorReason`
+                    END
+                """.trimIndent()
+            )
+            DebugLog.log("[DB] Migration 118 -> 119 complete")
+        }
+    }
+
+    /**
+     * Persist app-managed Debian/PRoot environments without changing any
+     * existing workspace roots or starting an environment during migration.
+     */
+    val MIGRATION_119_120 = object : Migration(119, 120) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 119 -> 120: Debian environment metadata")
+            if (tableExists(database, "agent_conversations")) {
+                if (!columnExists(database, "agent_conversations", "prootEnvironmentId")) {
+                    database.execSQL(
+                        "ALTER TABLE `agent_conversations` ADD COLUMN `prootEnvironmentId` TEXT DEFAULT NULL"
+                    )
+                }
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_agent_conversations_prootEnvironmentId` " +
+                        "ON `agent_conversations` (`prootEnvironmentId`)"
+                )
+            }
+
+            if (tableExists(database, "agent_project_runs") &&
+                !columnExists(database, "agent_project_runs", "prootEnvironmentId")
+            ) {
+                database.execSQL(
+                    "ALTER TABLE `agent_project_runs` ADD COLUMN `prootEnvironmentId` TEXT DEFAULT NULL"
+                )
+            }
+
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_proot_environments` (
+                    `id` TEXT NOT NULL,
+                    `displayName` TEXT NOT NULL,
+                    `storageKey` TEXT NOT NULL,
+                    `imageId` TEXT NOT NULL,
+                    `imageVersion` TEXT NOT NULL,
+                    `imageDigest` TEXT NOT NULL,
+                    `sharingMode` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `sizeBytes` INTEGER NOT NULL,
+                    `lastUsedAt` INTEGER,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent()
+            )
+            database.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_agent_proot_environments_storageKey` " +
+                    "ON `agent_proot_environments` (`storageKey`)"
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_agent_proot_environments_status` " +
+                    "ON `agent_proot_environments` (`status`)"
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_agent_proot_environments_sharingMode` " +
+                    "ON `agent_proot_environments` (`sharingMode`)"
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_agent_proot_environments_updatedAt` " +
+                    "ON `agent_proot_environments` (`updatedAt`)"
+            )
+
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_proot_runs` (
+                    `id` TEXT NOT NULL,
+                    `conversationId` INTEGER NOT NULL,
+                    `environmentId` TEXT NOT NULL,
+                    `projectFolder` TEXT NOT NULL,
+                    `commandDigest` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `processGeneration` TEXT,
+                    `processId` INTEGER,
+                    `previewUrl` TEXT,
+                    `outputReference` TEXT,
+                    `outputChars` INTEGER NOT NULL,
+                    `errorClass` TEXT,
+                    `errorMessage` TEXT,
+                    `exitCode` INTEGER,
+                    `startedAt` INTEGER,
+                    `endedAt` INTEGER,
+                    `stopRequestedAt` INTEGER,
+                    `forceStopRequestedAt` INTEGER,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
+                    FOREIGN KEY(`environmentId`) REFERENCES `agent_proot_environments`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT
+                )
+                """.trimIndent()
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_agent_proot_runs_conversationId` " +
+                    "ON `agent_proot_runs` (`conversationId`)"
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_agent_proot_runs_environmentId` " +
+                    "ON `agent_proot_runs` (`environmentId`)"
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_agent_proot_runs_status` " +
+                    "ON `agent_proot_runs` (`status`)"
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_agent_proot_runs_updatedAt` " +
+                    "ON `agent_proot_runs` (`updatedAt`)"
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_agent_project_runs_prootEnvironmentId` " +
+                    "ON `agent_project_runs` (`prootEnvironmentId`)"
+            )
+            DebugLog.log("[DB] Migration 119 -> 120 complete")
+        }
+    }
+
+    /** Persist an optional project-specific preview address; null continues to follow run output. */
+    val MIGRATION_120_121 = object : Migration(120, 121) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 120 -> 121: Agent preview address override")
+            if (tableExists(database, "agent_conversations") &&
+                !columnExists(database, "agent_conversations", "previewUrlOverride")
+            ) {
+                database.execSQL(
+                    "ALTER TABLE `agent_conversations` ADD COLUMN `previewUrlOverride` TEXT DEFAULT NULL"
+                )
+            }
+            DebugLog.log("[DB] Migration 120 -> 121 complete")
+        }
+    }
+
     val ALL_MIGRATIONS: Array<Migration> = arrayOf(
         MIGRATION_27_28,
         MIGRATION_28_29,
@@ -3971,7 +4161,10 @@ object Migrations {
         MIGRATION_114_115,
         MIGRATION_115_116,
         VideoVisionMigration.MIGRATION_116_117,
-        AgentSleepWakeMigration.MIGRATION_117_118
+        AgentSleepWakeMigration.MIGRATION_117_118,
+        MIGRATION_118_119,
+        MIGRATION_119_120,
+        MIGRATION_120_121
     )
     /**
      * Check if a column exists in a table.

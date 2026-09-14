@@ -102,7 +102,7 @@ object ToolCatalog {
             routePatterns = listOf(Screen.Chat.route, "${Screen.Chat.route}?port={serverPort}"),
             settingsAction = ToolSettingsAction.Navigate("settings_llm"), keywords = listOf("chat", "conversation", "llm")),
         tool("agent", ToolCategory.CONVERSATION, Icons.Default.SmartToy, R.string.hub_agent, R.string.hub_agent_desc, Screen.Agent.route,
-            routePatterns = listOf(Screen.Agent.route, "${Screen.Agent.route}?conversationId={conversationId}", Screen.AgentWorkspace.route, Screen.AgentInvocation.route),
+            routePatterns = listOf(Screen.Agent.route, "${Screen.Agent.route}?conversationId={conversationId}", Screen.AgentWorkspace.route, Screen.AgentProotTerminal.route, Screen.AgentInvocation.route),
             keywords = listOf("agent", "coding", "workspace", "project")),
         tool("native_llama", ToolCategory.CONVERSATION, Icons.Default.Memory, R.string.llama_client_title, R.string.llama_client_desc, Screen.LlamaServerList.route,
             routePatterns = listOf(Screen.LlamaServerList.route, Screen.LlamaChatList.route, Screen.LlamaChatList.folderRoute, Screen.LlamaScheduler.route, Screen.LlamaChat.route),

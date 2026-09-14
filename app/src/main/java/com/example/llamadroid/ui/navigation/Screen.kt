@@ -128,6 +128,7 @@ sealed class Screen(val route: String) {
         }
     }
     object AgentWorkspace : Screen("agent_workspace")          // Agent workspace file manager
+    object AgentProotTerminal : Screen("agent_proot_terminal") // Dedicated Local Debian terminal
     object AgentInvocation : Screen("agent_invocation/{invocationId}") {
         fun createRoute(invocationId: String): String = "agent_invocation/$invocationId"
     }

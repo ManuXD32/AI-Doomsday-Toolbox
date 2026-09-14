@@ -16,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -216,11 +217,12 @@ internal object AgentDurableContractStore {
     private const val MAX_METADATA_PATHS = 256
     private val MUTATION_RECEIPT_TOOLS = setOf(
         "write_file",
+        "edit_file",
         "edit_lines",
         "apply_patch",
         "delete_file"
     )
-    private val ARTIFACT_OPERATIONS = setOf("write", "edit", "patch", "create", "delete")
+    private val ARTIFACT_OPERATIONS = setOf("write", "edit", "patch", "create", "delete", "partial")
     private val SUCCESSFUL_RECEIPT_STATUSES = setOf(
         "SUCCESS",
         "SUCCEEDED",
@@ -231,10 +233,6 @@ internal object AgentDurableContractStore {
     )
     internal const val LEGACY_USER_CORRECTION_DECISION_KEY = "latest_user_correction"
     internal const val USER_CORRECTION_DECISION_KEY_PREFIX = "user_correction:"
-    private val NO_MORE_QUESTIONS_DIRECTIVE = Regex(
-        "no (more|further) (optional )?questions|do not ask (any )?more|no m[aá]s preguntas",
-        RegexOption.IGNORE_CASE
-    )
     private val GREENFIELD_DIRECTIVE = Regex(
         "greenfield|no (existing )?codebase|no files have been written|project has not (yet )?started|proyect has not (yet )?started",
         RegexOption.IGNORE_CASE
@@ -255,11 +253,33 @@ internal object AgentDurableContractStore {
         val entries = when (normalizedTool) {
             "write_file" -> args["path"]
                 ?.let { normalizeArtifactPath(it) }
-                ?.let { listOf(ArtifactMetadataEntry(it, "write")) }
+                ?.let {
+                    listOf(
+                        ArtifactMetadataEntry(
+                            it,
+                            if (args["content"].orEmpty().contains(AgentHarnessPolicy.DIRECT_EXTEND_ANCHOR)) {
+                                "partial"
+                            } else {
+                                "write"
+                            }
+                        )
+                    )
+                }
                 .orEmpty()
-            "edit_lines" -> args["path"]
+            "edit_file", "edit_lines" -> args["path"]
                 ?.let { normalizeArtifactPath(it) }
-                ?.let { listOf(ArtifactMetadataEntry(it, "edit")) }
+                ?.let {
+                    listOf(
+                        ArtifactMetadataEntry(
+                            it,
+                            if (args["new_text"].orEmpty().contains(AgentHarnessPolicy.DIRECT_EXTEND_ANCHOR)) {
+                                "partial"
+                            } else {
+                                "edit"
+                            }
+                        )
+                    )
+                }
                 .orEmpty()
             "delete_file" -> (args["path"] ?: args["file"])
                 ?.let { normalizeArtifactPath(it) }
@@ -648,6 +668,28 @@ internal object AgentDurableContractStore {
         value: Boolean = true
     ): AgentProjectContractEntity = withContext(Dispatchers.IO) {
         markGreenfield(AppDatabase.getDatabase(context.applicationContext), conversationId, value)
+    }
+
+    /**
+     * Detects and durably records a new LOCAL_SANDBOX project before Direct
+     * builds its first model request. The filesystem result is deliberately
+     * conservative: only an absent root or a root containing app-owned
+     * `brain` and an empty precreated `.adt` directory qualifies. Any `.adt`
+     * content is project state, and an existing marker is never cleared by a
+     * later scan.
+     */
+    internal suspend fun markGreenfieldIfEmptyLocalWorkspace(
+        database: AppDatabase,
+        conversationId: Long,
+        workspaceRoot: File
+    ): AgentProjectContractEntity = database.withTransaction {
+        val existing = ensureContractInTransaction(database, conversationId)
+        if (existing.greenfield || !AgentLocalWorkspaceSupport.isGreenfieldWorkspace(workspaceRoot)) {
+            return@withTransaction existing
+        }
+        database.agentWorkflowDao().setGreenfield(conversationId, true)
+        database.agentWorkflowDao().getProjectContract(conversationId)
+            ?: error("Project contract disappeared after greenfield detection")
     }
 
     /**
@@ -1204,7 +1246,7 @@ internal object AgentDurableContractStore {
 
     internal fun queuedGuidanceDirectives(content: String): QueuedGuidanceDirectives =
         QueuedGuidanceDirectives(
-            noMoreQuestions = NO_MORE_QUESTIONS_DIRECTIVE.containsMatchIn(content),
+            noMoreQuestions = containsDirectNoMoreQuestionsDirective(content),
             greenfield = GREENFIELD_DIRECTIVE.containsMatchIn(content)
         )
 

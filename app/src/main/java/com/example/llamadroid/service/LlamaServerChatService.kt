@@ -33,7 +33,9 @@ data class LlamaServerRequestOptions(
     val cachePrompt: Boolean = true,
     val slotId: Int? = null,
     val returnPromptProgress: Boolean = true,
-    val requireToolCall: Boolean = false
+    val requireToolCall: Boolean = false,
+    /** Per-request llama.cpp reasoning cap. Null keeps the server default. */
+    val thinkingBudgetTokens: Int? = null
 )
 
 data class LlamaPromptProcessingProgress(
@@ -672,26 +674,11 @@ class LlamaServerChatService {
 
             val toolCalls = if (toolCallBuilders.isNotEmpty()) {
                 toolCallBuilders.entries.sortedBy { it.key }.mapNotNull { (_, builder) ->
-                    if (builder.name.isNotEmpty()) {
-                        try {
-                            val args = AgentRuntimeSupport.normalizeToolArguments(builder.arguments.toString())
-                            DebugLog.log("[$TAG] Assembled tool call: ${builder.name} (id: ${builder.id})")
-                            val rawArgumentsJson = builder.arguments.toString()
-                                .takeIf { it.isNotBlank() }
-                            OllamaService.ToolCall(
-                                name = builder.name,
-                                arguments = args,
-                                id = builder.id.takeIf { it.isNotBlank() }
-                                    ?: stableToolCallId(builder.name, rawArgumentsJson.orEmpty()),
-                                rawArgumentsJson = rawArgumentsJson
-                            )
-                        } catch (e: Exception) {
-                            DebugLog.log("[$TAG] Failed to parse tool call args: ${e.message}")
-                            null
-                        }
-                    } else {
-                        null
-                    }
+                    assembleLlamaServerToolCall(
+                        name = builder.name,
+                        id = builder.id,
+                        rawArgumentsJson = builder.arguments.toString()
+                    )
                 }
             } else {
                 null
@@ -956,6 +943,11 @@ internal fun buildLlamaServerChatRequestPayload(
     if (maxTokens != null && maxTokens > 0) {
         payload["max_tokens"] = maxTokens
     }
+    if (thinkingEnabled) {
+        requestOptions.thinkingBudgetTokens
+            ?.takeIf { it > 0 }
+            ?.let { payload["thinking_budget_tokens"] = it }
+    }
 
     samplingParams.temperature?.let { payload["temperature"] = it }
     samplingParams.topP?.let { payload["top_p"] = it }
@@ -1006,6 +998,36 @@ internal fun buildLlamaServerChatRequestPayload(
     }
 
     return payload
+}
+
+/**
+ * Preserve an output-limited native tool argument as bounded transport state.
+ * The Direct runtime can safely stage an incomplete write/edit prefix; every
+ * other caller still receives empty parsed arguments and must reject it during
+ * normal validation. Dropping the call here loses the only recoverable mutation
+ * boundary and makes a 4K-output model repeat the same oversized call forever.
+ */
+internal fun assembleLlamaServerToolCall(
+    name: String,
+    id: String?,
+    rawArgumentsJson: String
+): OllamaService.ToolCall? {
+    val normalizedName = name.trim()
+    if (normalizedName.isEmpty()) return null
+    val raw = rawArgumentsJson.takeIf { it.isNotBlank() }
+    val arguments = runCatching {
+        AgentRuntimeSupport.normalizeToolArguments(rawArgumentsJson)
+    }.getOrElse {
+        DebugLog.log("[LlamaServerChat] Preserving incomplete tool call: $normalizedName")
+        emptyMap()
+    }
+    return OllamaService.ToolCall(
+        name = normalizedName,
+        arguments = arguments,
+        id = id?.takeIf { it.isNotBlank() }
+            ?: stableToolCallId(normalizedName, raw.orEmpty()),
+        rawArgumentsJson = raw
+    )
 }
 
 internal fun parseLlamaInputTokenCountBody(body: String): Int? {

@@ -1108,7 +1108,7 @@ Static browser only: no server or backend, no Node, Express, Flask, or Python we
         val schemaTokens = 719 // Captured Ling Build schema palette.
         val messageTokens = estimateRawSerializedAgentRequestTokens(request)
         val authoritativeInputTokens = messageTokens + schemaTokens
-        assertEquals(3_072, capacity.maximumInputTokens)
+        assertEquals(3_584, capacity.maximumInputTokens)
         assertTrue(authoritativeInputTokens <= capacity.maximumInputTokens)
         val outputBudget = resolveAgentPromptOutputBudget(
             configuredMaxOutputTokens = 4_096,

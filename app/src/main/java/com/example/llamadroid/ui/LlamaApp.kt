@@ -1054,6 +1054,9 @@ fun LlamaApp(
             composable(Screen.AgentWorkspace.route) {
                 com.example.llamadroid.ui.agent.AgentWorkspaceScreen(navController)
             }
+            composable(Screen.AgentProotTerminal.route) {
+                com.example.llamadroid.ui.agent.AgentProotTerminalScreen(navController)
+            }
             composable(
                 Screen.AgentInvocation.route,
                 arguments = listOf(

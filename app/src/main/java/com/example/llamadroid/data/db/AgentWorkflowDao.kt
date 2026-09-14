@@ -10,6 +10,307 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface AgentWorkflowDao {
+    /** Conversation lookup kept here so the re-anchor transaction can own the full workflow boundary. */
+    @Query("SELECT * FROM agent_conversations WHERE id = :conversationId LIMIT 1")
+    suspend fun getConversationForDirectReanchor(conversationId: Long): AgentConversationEntity?
+
+    /**
+     * Archive/cancel only work that can still be resumed by the old runtime.
+     * Terminal history remains available for exports and diagnostics.
+     */
+    @Query(
+        """
+        UPDATE agent_invocations
+        SET status = 'ARCHIVED',
+            errorClass = 'DIRECT_RUNTIME_REANCHOR',
+            errorMessage = :reason,
+            endedAt = COALESCE(endedAt, :updatedAt),
+            updatedAt = :updatedAt
+        WHERE conversationId = :conversationId
+          AND LOWER(agentClass) != 'direct'
+          AND status NOT IN ('COMPLETED', 'FAILED', 'INTERRUPTED', 'CANCELLED', 'ARCHIVED')
+        """
+    )
+    suspend fun archiveStaleSpecialistInvocations(
+        conversationId: Long,
+        reason: String,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_turn_contexts
+        SET status = 'MIGRATED', completedAt = COALESCE(completedAt, :updatedAt)
+        WHERE conversationId = :conversationId AND status = 'ACTIVE' AND completedAt IS NULL
+        """
+    )
+    suspend fun closeStaleTurnContexts(
+        conversationId: Long,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_pending_inputs
+        SET status = 'CANCELLED', cancelledAt = :updatedAt
+        WHERE conversationId = :conversationId AND status = 'QUEUED'
+        """
+    )
+    suspend fun cancelStalePendingInputs(
+        conversationId: Long,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_continuation_outbox
+        SET status = 'CANCELLED', completedAt = :updatedAt, updatedAt = :updatedAt,
+            errorClass = 'DIRECT_RUNTIME_REANCHOR', errorMessage = :reason
+        WHERE conversationId = :conversationId
+          AND status IN ('QUEUED', 'CLAIMED', 'ENQUEUED')
+        """
+    )
+    suspend fun cancelStaleContinuations(
+        conversationId: Long,
+        reason: String,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_pending_questions
+        SET status = 'CANCELLED'
+        WHERE conversationId = :conversationId AND status = 'PENDING'
+        """
+    )
+    suspend fun cancelStalePendingQuestions(conversationId: Long): Int
+
+    @Query(
+        """
+        UPDATE agent_pending_plans
+        SET state = 'CANCELLED',
+            approvalOperationId = NULL,
+            continuationEnqueued = 0,
+            errorMessage = :reason,
+            updatedAt = :updatedAt
+        WHERE conversationId = :conversationId
+          AND state IN ('AWAITING_APPROVAL', 'APPROVING', 'APPROVED', 'STARTING_BUILD', 'BUILDING')
+        """
+    )
+    suspend fun cancelStalePendingPlans(
+        conversationId: Long,
+        reason: String,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    /** Approval cards are chat projections; preserve their text but make them terminal. */
+    @Query(
+        """
+        UPDATE agent_messages
+        SET needsApproval = 0, isApproved = 0
+        WHERE conversationId = :conversationId AND needsApproval = 1 AND isApproved IS NULL
+        """
+    )
+    suspend fun cancelStaleMessageApprovals(conversationId: Long): Int
+
+    @Query(
+        """
+        UPDATE agent_sleep_wakes
+        SET status = 'CANCELLED', completedAt = :updatedAt, updatedAt = :updatedAt
+        WHERE conversationId = :conversationId AND status IN ('PENDING', 'FIRED')
+        """
+    )
+    suspend fun cancelStaleSleepWakes(
+        conversationId: Long,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    /** A stale specialist assignment must not prevent the direct worker from claiming the TODO. */
+    @Query(
+        """
+        UPDATE agent_todos
+        SET status = CASE WHEN status = 'IN_PROGRESS' THEN 'READY' ELSE status END,
+            ownerRole = CASE WHEN status = 'IN_PROGRESS' THEN NULL ELSE ownerRole END,
+            assignedInvocationId = NULL,
+            updatedAt = :updatedAt
+        WHERE conversationId = :conversationId AND assignedInvocationId IS NOT NULL
+        """
+    )
+    suspend fun releaseStaleTodoAssignments(
+        conversationId: Long,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_project_states
+        SET revision = revision + 1,
+            semanticEventCount = semanticEventCount + 1,
+            lastSemanticEvent = 'direct_runtime_reanchor',
+            mode = :mode,
+            currentGoal = CASE
+                WHEN TRIM(currentGoal) != '' THEN currentGoal
+                WHEN :fallbackGoal IS NOT NULL THEN :fallbackGoal
+                ELSE currentGoal
+            END,
+            activePlanVersionId = :activePlanVersionId,
+            currentPhaseId = :currentPhaseId,
+            currentTodoId = :currentTodoId,
+            updatedAt = :updatedAt
+        WHERE conversationId = :conversationId
+        """
+    )
+    suspend fun updateProjectStateForDirectReanchor(
+        conversationId: Long,
+        mode: String,
+        activePlanVersionId: String?,
+        currentPhaseId: String?,
+        currentTodoId: String?,
+        fallbackGoal: String?,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_conversations
+        SET executionProfile = :executionProfile,
+            directRuntimeVersion = :runtimeVersion,
+            directReanchorState = :reanchorState,
+            directReanchorReason = :reason,
+            directReanchoredAt = :reanchoredAt,
+            planningModeEnabled = CASE WHEN :phase = 'PLAN' THEN 1 ELSE 0 END,
+            resumeState = 'PAUSED',
+            lastStopReason = :reason,
+            updatedAt = :reanchoredAt
+        WHERE id = :conversationId
+        """
+    )
+    suspend fun completeDirectReanchor(
+        conversationId: Long,
+        runtimeVersion: Int,
+        reanchorState: String,
+        reason: String,
+        phase: String,
+        reanchoredAt: Long = System.currentTimeMillis(),
+        executionProfile: String = AgentExecutionProfile.DIRECT
+    ): Int
+
+    /**
+     * Atomically moves one conversation from the legacy/specialist workflow to
+     * the direct runtime. Calling this again after completion is a no-op: all
+     * durable project data remains untouched and no continuation is enqueued.
+     */
+    @Transaction
+    suspend fun reanchorConversationToDirect(
+        conversationId: Long,
+        runtimeVersion: Int = AgentDirectRuntime.CURRENT_VERSION,
+        reason: String = "direct_runtime_reanchor"
+    ): AgentDirectReanchorResult {
+        val conversation = getConversationForDirectReanchor(conversationId)
+            ?: error("Conversation $conversationId does not exist")
+        val normalizedReason = reason.trim().take(240).ifBlank {
+            "direct_runtime_reanchor"
+        }
+        if (
+            conversation.directRuntimeVersion >= runtimeVersion &&
+            conversation.directReanchorState == AgentDirectReanchorState.COMPLETE &&
+            conversation.executionProfile == AgentExecutionProfile.DIRECT
+        ) {
+            val state = getProjectState(conversationId)
+                ?: AgentProjectStateEntity(conversationId = conversationId)
+            return AgentDirectReanchorResult(
+                conversationId = conversationId,
+                applied = false,
+                phase = state.mode,
+                activePlanVersionId = state.activePlanVersionId,
+                currentTodoId = state.currentTodoId,
+                cancelledContinuations = 0,
+                cancelledQuestions = 0,
+                cancelledPlans = 0,
+                cancelledApprovals = 0,
+                archivedInvocations = 0
+            )
+        }
+
+        val now = System.currentTimeMillis()
+        val archivedInvocations = archiveStaleSpecialistInvocations(
+            conversationId = conversationId,
+            reason = normalizedReason,
+            updatedAt = now
+        )
+        closeStaleTurnContexts(conversationId, now)
+        cancelStalePendingInputs(conversationId, now)
+        val cancelledContinuations = cancelStaleContinuations(
+            conversationId = conversationId,
+            reason = normalizedReason,
+            updatedAt = now
+        )
+        val cancelledQuestions = cancelStalePendingQuestions(conversationId)
+        val cancelledPlans = cancelStalePendingPlans(
+            conversationId = conversationId,
+            reason = normalizedReason,
+            updatedAt = now
+        )
+        val cancelledApprovals = cancelStaleMessageApprovals(conversationId)
+        cancelStaleSleepWakes(conversationId, now)
+        releaseStaleTodoAssignments(conversationId, now)
+
+        val approvedPlan = getLatestApprovedPlan(conversationId)
+        val todos = approvedPlan?.let {
+            getTodosForPlanVersion(conversationId, it.id)
+        }.orEmpty()
+        val currentTodo = todos.firstOrNull {
+            it.status !in setOf("COMPLETED", "CANCELLED")
+        }
+        val phase = when {
+            approvedPlan == null -> AgentDirectRuntime.MODE_PLAN
+            currentTodo != null -> AgentDirectRuntime.MODE_BUILD
+            else -> AgentDirectRuntime.MODE_VERIFY
+        }
+        val existingState = getProjectState(conversationId)
+        insertProjectStateIfMissing(
+            AgentProjectStateEntity(
+                conversationId = conversationId,
+                mode = phase,
+                currentGoal = existingState?.currentGoal
+                    ?.takeIf { it.isNotBlank() }
+                    ?: approvedPlan?.summary.orEmpty(),
+                activePlanVersionId = approvedPlan?.id,
+                currentPhaseId = currentTodo?.phaseId,
+                currentTodoId = currentTodo?.id
+            )
+        )
+        updateProjectStateForDirectReanchor(
+            conversationId = conversationId,
+            mode = phase,
+            activePlanVersionId = approvedPlan?.id,
+            currentPhaseId = currentTodo?.phaseId,
+            currentTodoId = currentTodo?.id,
+            fallbackGoal = approvedPlan?.summary,
+            updatedAt = now
+        )
+        completeDirectReanchor(
+            conversationId = conversationId,
+            runtimeVersion = runtimeVersion,
+            reanchorState = AgentDirectReanchorState.COMPLETE,
+            reason = normalizedReason,
+            phase = phase,
+            reanchoredAt = now
+        )
+        return AgentDirectReanchorResult(
+            conversationId = conversationId,
+            applied = true,
+            phase = phase,
+            activePlanVersionId = approvedPlan?.id,
+            currentTodoId = currentTodo?.id,
+            cancelledContinuations = cancelledContinuations,
+            cancelledQuestions = cancelledQuestions,
+            cancelledPlans = cancelledPlans,
+            cancelledApprovals = cancelledApprovals,
+            archivedInvocations = archivedInvocations
+        )
+    }
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertSleepWake(wake: AgentSleepWakeEntity)
 
@@ -1162,6 +1463,31 @@ interface AgentWorkflowDao {
     suspend fun getContinuationReceiptById(id: String): AgentContinuationOutboxEntity?
 
     /**
+     * Finds the durable PASS receipt for one verification action. Direct
+     * receipt projection uses the action binding so a pending or failed check
+     * cannot be mistaken for evidence merely because the tool call succeeded.
+     */
+    @Query(
+        """
+        SELECT * FROM agent_continuation_outbox
+        WHERE conversationId = :conversationId
+          AND kind = 'VERIFICATION_PHASE_TRANSITION'
+          AND status = 'COMPLETED'
+          AND payloadJson LIKE '%"receipt_type":"verification_phase"%'
+          AND payloadJson LIKE '%"action_id":"' || :actionId || '"%'
+          AND payloadJson LIKE '%"disposition":"PASS"%'
+          AND payloadJson LIKE '%"plan_version_id":"' || :planVersionId || '"%'
+        ORDER BY createdAt DESC, updatedAt DESC, id DESC
+        LIMIT 1
+        """
+    )
+    suspend fun getCompletedPassVerificationReceiptForAction(
+        conversationId: Long,
+        actionId: String,
+        planVersionId: String
+    ): AgentContinuationOutboxEntity?
+
+    /**
      * Returns a bounded newest-first view of mutation receipts. The payload
      * shape is written by actionReceiptPayload, so this avoids spending the
      * bound on read/check receipts without requiring SQLite JSON1; payload
@@ -1175,6 +1501,7 @@ interface AgentWorkflowDao {
           AND status = 'COMPLETED'
           AND (
               payloadJson LIKE '%"tool":"write_file"%'
+              OR payloadJson LIKE '%"tool":"edit_file"%'
               OR payloadJson LIKE '%"tool":"edit_lines"%'
               OR payloadJson LIKE '%"tool":"append_file"%'
               OR payloadJson LIKE '%"tool":"apply_patch"%'
@@ -1321,7 +1648,7 @@ interface AgentWorkflowDao {
         SET status = :status, enqueuedAt = COALESCE(:enqueuedAt, enqueuedAt),
             completedAt = :completedAt, errorClass = :errorClass,
             errorMessage = :errorMessage, updatedAt = :updatedAt
-        WHERE id = :id AND status IN ('CLAIMED', 'QUEUED')
+        WHERE id = :id AND status IN ('CLAIMED', 'QUEUED', 'ENQUEUED')
         """
     )
     suspend fun finishContinuation(

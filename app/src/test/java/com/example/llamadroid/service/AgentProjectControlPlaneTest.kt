@@ -288,7 +288,7 @@ class AgentProjectControlPlaneTest {
     }
 
     @Test
-    fun `optimized Build and Verify omit research prose but planning retains it`() {
+    fun `direct aliases omit research prose in Build and Verify but retain it in Plan`() {
         assertFalse(
             AgentProjectControlPlane.shouldIncludeResearchBudgetInControlPacket(
                 executionProfile = "optimized",
@@ -307,7 +307,7 @@ class AgentProjectControlPlaneTest {
                 mode = "PLAN"
             )
         )
-        assertTrue(
+        assertFalse(
             AgentProjectControlPlane.shouldIncludeResearchBudgetInControlPacket(
                 executionProfile = "legacy",
                 mode = "BUILD"

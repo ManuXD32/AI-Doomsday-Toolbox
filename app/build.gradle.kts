@@ -1,3 +1,6 @@
+import java.security.MessageDigest
+import java.util.zip.ZipFile
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.jetbrains.kotlin.android)
@@ -31,6 +34,63 @@ val strippedParquetHadoopJar by tasks.registering(Jar::class) {
         // parquet-column carries the complete shaded fastutil package. Removing the partial
         // copy from parquet-hadoop avoids Android release duplicate-class failures.
         exclude("shaded/parquet/it/unimi/dsi/fastutil/**")
+    }
+}
+
+// The Termux terminal libraries provide the mature Android terminal emulator and view used by
+// Local Debian. Their published v0.118.0 emulator AAR contains a 4 KiB-aligned libtermux.so, so
+// both AARs are pinned by digest and repacked here. The native helper is built from the same tag
+// by this app's NDK 29/CMake toolchain with 16 KiB page alignment.
+val termuxTerminalVersion = "0.118.0"
+val termuxTerminalEmulatorAar by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isTransitive = false
+}
+val termuxTerminalViewAar by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isTransitive = false
+}
+
+fun sha256ZipEntry(file: File, entryName: String): String = ZipFile(file).use { archive ->
+    val entry = requireNotNull(archive.getEntry(entryName)) { "Missing $entryName in ${file.name}" }
+    MessageDigest.getInstance("SHA-256")
+        .digest(archive.getInputStream(entry).use { it.readBytes() })
+        .joinToString("") { "%02x".format(it) }
+}
+
+val strippedTermuxTerminalEmulatorAar by tasks.registering(Zip::class) {
+    archiveBaseName.set("termux-terminal-emulator-pinned")
+    archiveVersion.set(termuxTerminalVersion)
+    archiveExtension.set("aar")
+    destinationDirectory.set(layout.buildDirectory.dir("generated/termux-terminal"))
+    val sourceAar = termuxTerminalEmulatorAar.incoming.files
+    inputs.files(sourceAar)
+    from({ zipTree(sourceAar.singleFile) }) {
+        exclude("jni/**")
+    }
+    doFirst {
+        val source = sourceAar.singleFile
+        require(sha256ZipEntry(source, "classes.jar") == "7f8fa017f6add4faa7e2839bc3b1566c7f235b4c053eb8f0178cea9cb8a982c2") {
+            "Unexpected Termux terminal-emulator v$termuxTerminalVersion classes digest"
+        }
+    }
+}
+
+val pinnedTermuxTerminalViewAar by tasks.registering(Zip::class) {
+    archiveBaseName.set("termux-terminal-view-pinned")
+    archiveVersion.set(termuxTerminalVersion)
+    archiveExtension.set("aar")
+    destinationDirectory.set(layout.buildDirectory.dir("generated/termux-terminal"))
+    val sourceAar = termuxTerminalViewAar.incoming.files
+    inputs.files(sourceAar)
+    from({ zipTree(sourceAar.singleFile) })
+    doFirst {
+        val source = sourceAar.singleFile
+        require(sha256ZipEntry(source, "classes.jar") == "9bceb16dc4d35f412aff579a11fcf4498bd5935dbbee85b9adb11c4ea3ec9068") {
+            "Unexpected Termux terminal-view v$termuxTerminalVersion classes digest"
+        }
     }
 }
 ksp {
@@ -164,7 +224,8 @@ android {
     
     // Asset Packs for on-demand native binary delivery
     assetPacks += setOf(
-        ":asset_upscaler"
+        ":asset_upscaler",
+        ":asset_debian"
     )
     
     // Dynamic Features for native binaries execution (Install-Time/On-Demand)
@@ -203,6 +264,36 @@ val generateTamaDialogCatalog by tasks.registering(Exec::class) {
 
 android.sourceSets["main"].assets.srcDir(tamaDialogGeneratedAssets)
 android.sourceSets["androidTest"].assets.srcDir("$projectDir/schemas")
+
+val verifyPackagedProotNative by tasks.registering {
+    val nativeDirectory = file("src/main/jniLibs/arm64-v8a")
+    val requiredArtifacts = listOf(
+        "libproot.so",
+        "libproot_loader.so",
+        "libproot_broker.so",
+        "libandroid-shmem.so",
+        "libtalloc_2.so"
+    ).map(nativeDirectory::resolve)
+    inputs.files(requiredArtifacts)
+    doLast {
+        requiredArtifacts.forEach { artifact ->
+            require(artifact.isFile && artifact.length() > 0L) {
+                "Missing packaged arm64 Debian PRoot artifact: ${artifact.absolutePath}"
+            }
+        }
+        val prootElf = requiredArtifacts.first().readBytes().toString(Charsets.ISO_8859_1)
+        require(prootElf.contains("\$ORIGIN")) {
+            "Packaged PRoot must resolve adjacent signed dependencies through an origin-relative RUNPATH"
+        }
+        require(!prootElf.contains("/data/data/com.termux/files/usr/lib\u0000")) {
+            "Packaged PRoot still contains the non-relocatable Termux RUNPATH"
+        }
+    }
+}
+
+tasks.matching { it.name == "preBuild" }.configureEach {
+    dependsOn(verifyPackagedProotNative)
+}
 
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
     dependsOn(generateTamaDialogCatalog)
@@ -250,6 +341,11 @@ dependencies {
     implementation(libs.androidx.fragment)
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.play.services.wearable)
+
+    add("termuxTerminalEmulatorAar", "com.termux.termux-app:terminal-emulator:$termuxTerminalVersion")
+    add("termuxTerminalViewAar", "com.termux.termux-app:terminal-view:$termuxTerminalVersion")
+    implementation(files(strippedTermuxTerminalEmulatorAar.flatMap { it.archiveFile }))
+    implementation(files(pinnedTermuxTerminalViewAar.flatMap { it.archiveFile }))
     
     // Document file support for SAF
     implementation("androidx.documentfile:documentfile:1.0.1")

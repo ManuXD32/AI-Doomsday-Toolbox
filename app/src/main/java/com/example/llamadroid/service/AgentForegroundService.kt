@@ -345,7 +345,11 @@ class AgentForegroundService : Service() {
                     AiRuntimeJobStore.getRecoverableJobs(appContext)
                         .filter { !AiRuntimeJobStore.isJobStale(it) }
                 }.getOrDefault(emptyList())
-                if (!AgentService.isLoading.value && activeJobs.isEmpty()) {
+                if (
+                    !AgentService.isLoading.value &&
+                    activeJobs.isEmpty() &&
+                    runtimeRetainCount.get() == 0
+                ) {
                     runtimeRetainCount.set(0)
                     lastIdleReconciledAtMs.set(System.currentTimeMillis())
                     recordBreadcrumb(

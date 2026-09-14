@@ -61,8 +61,9 @@ class AgentPlanProposalRecoveryTest {
 
         assertEquals(recovery.reasonCode, PlanProposalRecoveryDisposition.REPROMPT, recovery.disposition)
         assertEquals("PLAN_PROSE_UNRESOLVED_DECISION", recovery.reasonCode)
-        assertTrue(recovery.instruction.orEmpty().contains("propose_plan"))
-        assertTrue(recovery.instruction.orEmpty().contains("plan and summary"))
+        assertTrue(recovery.instruction.orEmpty().contains("Markdown implementation plan"))
+        assertTrue(recovery.instruction.orEmpty().contains("4000 characters"))
+        assertTrue(!recovery.instruction.orEmpty().contains("propose_plan"))
         assertTrue(recovery.instruction.orEmpty().contains("question"))
         assertTrue(recovery.instruction.orEmpty().contains("do not approve"))
         assertTrue(recovery.instruction.orEmpty().length <= 1_200)
@@ -89,6 +90,26 @@ class AgentPlanProposalRecoveryTest {
     }
 
     @Test
+    fun `verbose explicit plan projects to a bounded structural outline`() {
+        val response = buildString {
+            appendLine("## Implementation Plan: Prime calculator")
+            repeat(8) { index ->
+                appendLine("### ${index + 1}. Stage ${index + 1}")
+                appendLine("- Implement stage ${index + 1} with a bounded worker action.")
+                appendLine("- Verify stage ${index + 1} with a focused runtime check.")
+                appendLine("Background explanation ${"detail ".repeat(100)}")
+            }
+        }
+
+        val recovery = recoverImplementationPlanProse(response)
+
+        assertEquals(PlanProposalRecoveryDisposition.SUBMIT, recovery.disposition)
+        assertEquals("PLAN_PROSE_STRUCTURE_COMPACTED", recovery.reasonCode)
+        assertTrue(AgentPlanBudgetSupport.isWithinBudget(recovery.proposal?.plan.orEmpty()))
+        assertTrue(!recovery.proposal?.plan.orEmpty().contains("Background explanation"))
+    }
+
+    @Test
     fun `research prose and explicit tool shapes stay with normal recovery`() {
         assertEquals(
             PlanProposalRecoveryDisposition.NO_MATCH,
@@ -112,14 +133,14 @@ class AgentPlanProposalRecoveryTest {
     }
 
     @Test
-    fun `plan contract names the approval boundary without approving it`() {
-        assertTrue(OPTIMIZED_PLAN_REQUIRED_ACTION_CONTRACT.contains("propose_plan"))
-        assertTrue(OPTIMIZED_PLAN_REQUIRED_ACTION_CONTRACT.contains("summary"))
+    fun `plan contract uses markdown projection without exposing its internal tool`() {
+        assertTrue(!DIRECT_PLAN_REQUIRED_ACTION_CONTRACT.contains("propose_plan"))
+        assertTrue(DIRECT_PLAN_REQUIRED_ACTION_CONTRACT.contains("Markdown plan"))
         assertTrue(OPTIMIZED_PLAN_REQUIRED_ACTION_CONTRACT.contains("wait"))
         assertTrue(OPTIMIZED_PLAN_REQUIRED_ACTION_CONTRACT.contains("never approve"))
-        val prompt = AgentHarnessPolicy.optimizedSystemPromptForPhase(AgentHarnessPhase.PLAN)
-        assertTrue(prompt.contains("return one clear Markdown plan"))
-        assertTrue(prompt.contains("harness submits it through propose_plan"))
-        assertTrue(prompt.contains(OPTIMIZED_PLAN_REQUIRED_ACTION_CONTRACT))
+        val prompt = AgentHarnessPolicy.directSystemPrompt() + "\n" +
+            AgentHarnessPolicy.directCheckpointTail(AgentHarnessPhase.PLAN)
+        assertTrue(prompt.contains("actionable plan"))
+        assertTrue(!prompt.contains("propose_plan"))
     }
 }

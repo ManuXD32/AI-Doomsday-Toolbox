@@ -12,6 +12,18 @@ import java.io.StringReader
 
 class LlamaServerChatServiceTest {
     @Test
+    fun `incomplete native tool arguments remain available for direct recovery`() {
+        val raw = "{\"path\":\"index.html\",\"content\":\"<!doctype html>"
+
+        val call = assembleLlamaServerToolCall("write_file", "call_partial", raw)!!
+
+        assertEquals("write_file", call.name)
+        assertEquals("call_partial", call.id)
+        assertTrue(call.arguments.isEmpty())
+        assertEquals(raw, call.rawArgumentsJson)
+    }
+
+    @Test
     fun `required action request keeps one tool and leaves ordinary requests unchanged`() {
         val tools = listOf(AgentTool("question", "Ask a blocker", emptyMap(), emptyList()))
         fun payload(required: Boolean, available: List<AgentTool> = tools) =
@@ -187,6 +199,27 @@ class LlamaServerChatServiceTest {
         assertEquals(true, (payload["chat_template_kwargs"] as Map<*, *>)["enable_thinking"])
         assertFalse(payload.containsKey("reasoning_effort"))
         assertFalse(payload.containsKey("reasoning"))
+    }
+
+    @Test
+    fun `buildLlamaServerChatRequestPayload sends exact thinking budget only when enabled`() {
+        val enabled = buildLlamaServerChatRequestPayload(
+            messages = listOf(OllamaService.ChatMessage(role = "user", content = "hello")),
+            tools = emptyList(),
+            thinkingEnabled = true,
+            maxTokens = 2048,
+            requestOptions = LlamaServerRequestOptions(thinkingBudgetTokens = 640)
+        )
+        val disabled = buildLlamaServerChatRequestPayload(
+            messages = listOf(OllamaService.ChatMessage(role = "user", content = "hello")),
+            tools = emptyList(),
+            thinkingEnabled = false,
+            maxTokens = 2048,
+            requestOptions = LlamaServerRequestOptions(thinkingBudgetTokens = 640)
+        )
+
+        assertEquals(640, enabled["thinking_budget_tokens"])
+        assertFalse(disabled.containsKey("thinking_budget_tokens"))
     }
 
     @Test

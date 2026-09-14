@@ -165,13 +165,32 @@ fun AgentWorkspaceScreen(navController: NavController) {
     val runtimeCapabilities by AgentService.currentRuntimeCapabilities.collectAsState()
     val localRunStates by agentService.localProjectRunStates.collectAsState()
     val workspaceTerminalStates by AgentService.workspaceTerminalStates.collectAsState()
+    val prootTerminalStates by agentService.prootTerminalStates.collectAsState()
     val workspaceConversationAnchor = remember(preferredConversationId, activeConversationId) {
         resolveWorkspaceConversationAnchor(preferredConversationId, activeConversationId)
     }
+    val workspaceConversationFlow = remember(workspaceConversationAnchor) {
+        workspaceConversationAnchor?.let(db.agentChatDao()::observeConversation)
+            ?: kotlinx.coroutines.flow.flowOf(null)
+    }
+    val workspaceConversation by workspaceConversationFlow.collectAsState(initial = null)
+    val prootEnvironmentFlow = remember(workspaceConversation?.prootEnvironmentId) {
+        workspaceConversation?.prootEnvironmentId?.let(db.agentProotEnvironmentDao()::observeById)
+            ?: kotlinx.coroutines.flow.flowOf(null)
+    }
+    val prootEnvironment by prootEnvironmentFlow.collectAsState(initial = null)
     val resolvedProjectRoot = remember(workspaceConversationAnchor, currentProjectFolder, workspaceBackend) {
         resolveWorkspaceProjectRoot(workspaceConversationAnchor, currentProjectFolder, workspaceBackend)
     }
-    val workspaceTerminalState = resolvedProjectRoot?.let { workspaceTerminalStates[it] }
+    val prootSessions = workspaceConversationAnchor?.let { prootTerminalStates[it] }.orEmpty()
+    var selectedProotTerminalId by rememberSaveable(workspaceConversationAnchor) { mutableStateOf<String?>(null) }
+    val selectedProotTerminalState = prootSessions.firstOrNull { it.sessionId == selectedProotTerminalId }
+        ?: prootSessions.lastOrNull()
+    val workspaceTerminalState = if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+        selectedProotTerminalState
+    } else {
+        resolvedProjectRoot?.let { workspaceTerminalStates[it] }
+    }
     var currentPath by remember { mutableStateOf("") }
     var files by remember { mutableStateOf<List<FileInfo>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
@@ -183,8 +202,20 @@ fun AgentWorkspaceScreen(navController: NavController) {
             ?.remove<String>("agent_workspace_initial_tab")
     }
     var selectedWorkspaceTab by rememberSaveable { mutableStateOf(requestedInitialTab ?: "files") }
-    val localRunState = activeConversationId?.let { localRunStates[it] }
-    val localBackendActive = workspaceBackend == AgentWorkspaceBackendType.LOCAL_SANDBOX
+    val localRunState = workspaceConversationAnchor?.let { localRunStates[it] }
+    val effectivePreviewUrl = remember(localRunState?.previewUrl, workspaceConversation?.previewUrlOverride) {
+        resolveAgentPreviewAddress(localRunState?.previewUrl, workspaceConversation?.previewUrlOverride)
+    }
+    val localBackendActive = workspaceBackend != AgentWorkspaceBackendType.REMOTE_SSH
+    val terminalBackendActive = workspaceBackend != AgentWorkspaceBackendType.LOCAL_SANDBOX
+
+    LaunchedEffect(prootSessions.map { it.sessionId }, selectedProotTerminalId) {
+        if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT &&
+            prootSessions.none { it.sessionId == selectedProotTerminalId }
+        ) {
+            selectedProotTerminalId = prootSessions.lastOrNull()?.sessionId
+        }
+    }
     val invocationsFlow = remember(activeConversationId) {
         activeConversationId?.let { db.agentWorkflowDao().observeInvocations(it) }
             ?: kotlinx.coroutines.flow.flowOf(emptyList())
@@ -266,11 +297,11 @@ fun AgentWorkspaceScreen(navController: NavController) {
             releasePreviewDownloadPin(target.webView, target.request.url)
             return@rememberLauncherForActivityResult
         }
-        val configuredUrl = localRunState?.previewUrl
+        val configuredUrl = effectivePreviewUrl
         if (configuredUrl == null ||
             classifyAgentPreviewDownload(target.request.url, target.configuredPreviewUrl) != AgentPreviewDownloadKind.BLOB ||
             classifyAgentPreviewDownload(target.webView.url.orEmpty(), configuredUrl) == AgentPreviewDownloadKind.UNSUPPORTED ||
-            !AgentPreviewBridge.hasActivePreview(activeConversationId)
+            !AgentPreviewBridge.hasActivePreview(workspaceConversationAnchor)
         ) {
             releasePreviewDownloadPin(target.webView, target.request.url)
             Toast.makeText(context, previewDownloadUnsupportedText, Toast.LENGTH_LONG).show()
@@ -444,10 +475,14 @@ fun AgentWorkspaceScreen(navController: NavController) {
                 )
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
                     .padding(horizontal = 20.dp), horizontalArrangement = Arrangement.End) {
-                        if (!localBackendActive) {
+                        if (terminalBackendActive) {
                             IconButton(
                                 onClick = {
                                     val projectRoot = resolvedProjectRoot ?: return@IconButton
+                                    if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                                        navController.navigate(Screen.AgentProotTerminal.route)
+                                        return@IconButton
+                                    }
                                     showTerminalDialog = true
                                     scope.launch {
                                         agentService.openWorkspaceTerminal(projectRoot).onFailure { e: Throwable ->
@@ -481,7 +516,13 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                 ) {
                                     Icon(
                                         Icons.Default.Code,
-                                        stringResource(R.string.agent_workspace_terminal_title),
+                                        stringResource(
+                                            if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                                                R.string.agent_proot_terminal_title
+                                            } else {
+                                                R.string.agent_workspace_terminal_title
+                                            }
+                                        ),
                                         tint = tint
                                     )
                                 }
@@ -602,15 +643,16 @@ fun AgentWorkspaceScreen(navController: NavController) {
                     onOpen = { navController.navigate(Screen.AgentInvocation.createRoute(it)) }
                 )
             } else if (selectedWorkspaceTab == "run") {
-                LocalSandboxRunTab(
+                AgentWorkspaceRunTab(
                     modifier = Modifier.fillMaxSize(),
                     conversationId = activeConversationId,
                     projectFolder = currentProjectFolder,
                     backend = workspaceBackend,
+                    prootEnvironment = prootEnvironment,
                     capabilities = runtimeCapabilities,
                     runState = localRunState,
                     onCapabilitiesChanged = { updated ->
-                        val conversationId = activeConversationId ?: return@LocalSandboxRunTab
+                        val conversationId = activeConversationId ?: return@AgentWorkspaceRunTab
                         scope.launch {
                             db.agentChatDao().updateRuntimeSettings(
                                 id = conversationId,
@@ -663,13 +705,20 @@ fun AgentWorkspaceScreen(navController: NavController) {
             } else if (selectedWorkspaceTab == "preview") {
                 AgentWorkspacePreviewTab(
                     modifier = Modifier.fillMaxSize(),
-                    previewUrl = localRunState?.previewUrl,
+                    activeRunUrl = localRunState?.previewUrl,
+                    savedPreviewOverride = workspaceConversation?.previewUrlOverride,
                     backend = workspaceBackend,
+                    onPreviewOverrideChanged = { value ->
+                        val conversationId = workspaceConversationAnchor ?: return@AgentWorkspacePreviewTab
+                        scope.launch {
+                            db.agentChatDao().updatePreviewUrlOverride(conversationId, value)
+                        }
+                    },
                     onOpenExternal = { url ->
                         navController.navigate(Screen.TermuxWebView.createRoute(url, agentWorkspacePreviewTitleText, "agent_local"))
                     },
                     onDownloadRequest = { webView, request, bridge ->
-                        val configuredUrl = localRunState?.previewUrl
+                        val configuredUrl = effectivePreviewUrl
                         val rejected = configuredUrl == null ||
                             classifyAgentPreviewDownload(request.url, configuredUrl) != AgentPreviewDownloadKind.BLOB ||
                             !isAgentPreviewDownloadSizeAllowed(request.contentLength) ||
@@ -1107,11 +1156,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                     Text(
                         stringResource(
                             R.string.agent_workspace_stop_project_shells_workspace_terminal,
-                            if (summary.workspaceTerminalOpen) {
-                                stringResource(R.string.action_yes)
-                            } else {
-                                stringResource(R.string.action_no)
-                            }
+                            summary.workspaceTerminalCount
                         ),
                         fontWeight = FontWeight.SemiBold
                     )
@@ -1160,14 +1205,27 @@ fun AgentWorkspaceScreen(navController: NavController) {
         )
     }
 
-    if (showTerminalDialog && resolvedProjectRoot != null) {
+    if (
+        showTerminalDialog &&
+        resolvedProjectRoot != null &&
+        workspaceBackend != AgentWorkspaceBackendType.LOCAL_PROOT
+    ) {
         WorkspaceTerminalDialog(
             workspaceRoot = resolvedProjectRoot,
             state = workspaceTerminalState,
+            sessions = if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT) prootSessions else listOfNotNull(workspaceTerminalState),
+            allowMultipleSessions = workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT,
             onDismiss = { showTerminalDialog = false },
             onSend = { input ->
                 scope.launch {
-                    agentService.sendWorkspaceTerminalInput(resolvedProjectRoot, input).onFailure { e: Throwable ->
+                    val result = if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                        workspaceTerminalState?.sessionId?.let {
+                            agentService.sendProotWorkspaceTerminalInput(it, input)
+                        } ?: Result.failure(IllegalStateException(context.getString(R.string.agent_workspace_terminal_status_disconnected)))
+                    } else {
+                        agentService.sendWorkspaceTerminalInput(resolvedProjectRoot, input)
+                    }
+                    result.onFailure { e: Throwable ->
                         Toast.makeText(
                             context,
                             formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
@@ -1178,7 +1236,14 @@ fun AgentWorkspaceScreen(navController: NavController) {
             },
             onInterrupt = {
                 scope.launch {
-                    agentService.interruptWorkspaceTerminal(resolvedProjectRoot).onFailure { e: Throwable ->
+                    val result = if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                        workspaceTerminalState?.sessionId?.let {
+                            agentService.sendProotWorkspaceTerminalInput(it, "\u0003", appendNewline = false)
+                        } ?: Result.failure(IllegalStateException(context.getString(R.string.agent_workspace_terminal_status_disconnected)))
+                    } else {
+                        agentService.interruptWorkspaceTerminal(resolvedProjectRoot)
+                    }
+                    result.onFailure { e: Throwable ->
                         Toast.makeText(
                             context,
                             formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
@@ -1189,7 +1254,19 @@ fun AgentWorkspaceScreen(navController: NavController) {
             },
             onReconnect = {
                 scope.launch {
-                    agentService.reconnectWorkspaceTerminal(resolvedProjectRoot).onFailure { e: Throwable ->
+                    val result = if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                        agentService.openProotWorkspaceTerminal(
+                            conversationId = workspaceConversationAnchor ?: return@launch,
+                            projectFolder = currentProjectFolder.orEmpty()
+                        )
+                    } else {
+                        agentService.reconnectWorkspaceTerminal(resolvedProjectRoot)
+                    }
+                    result.onSuccess { opened ->
+                        if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                            selectedProotTerminalId = opened.sessionId
+                        }
+                    }.onFailure { e: Throwable ->
                         Toast.makeText(
                             context,
                             formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
@@ -1198,10 +1275,49 @@ fun AgentWorkspaceScreen(navController: NavController) {
                     }
                 }
             },
-            onClear = { agentService.clearWorkspaceTerminalTranscript(resolvedProjectRoot) },
+            onClear = {
+                if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                    workspaceTerminalState?.sessionId?.let(agentService::clearProotWorkspaceTerminalTranscript)
+                } else {
+                    agentService.clearWorkspaceTerminalTranscript(resolvedProjectRoot)
+                }
+            },
             onStop = {
-                agentService.closeWorkspaceTerminal(resolvedProjectRoot)
-                showTerminalDialog = false
+                if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                    workspaceTerminalState?.sessionId?.let { sessionId ->
+                        scope.launch { agentService.closeProotWorkspaceTerminal(sessionId) }
+                    }
+                } else {
+                    agentService.closeWorkspaceTerminal(resolvedProjectRoot)
+                    showTerminalDialog = false
+                }
+            },
+            onNewSession = {
+                scope.launch {
+                    agentService.openProotWorkspaceTerminal(
+                        conversationId = workspaceConversationAnchor ?: return@launch,
+                        projectFolder = currentProjectFolder.orEmpty()
+                    ).onSuccess { selectedProotTerminalId = it.sessionId }
+                        .onFailure { e ->
+                            Toast.makeText(
+                                context,
+                                formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                }
+            },
+            onSelectSession = { selectedProotTerminalId = it },
+            onSpecialKey = { sequence ->
+                scope.launch {
+                    if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                        workspaceTerminalState?.sessionId?.let {
+                            agentService.sendProotWorkspaceTerminalInput(it, sequence, appendNewline = false)
+                        }
+                    } else {
+                        agentService.sendWorkspaceTerminalInput(resolvedProjectRoot, sequence, appendNewline = false)
+                    }
+                }
             }
         )
     }
@@ -1544,20 +1660,47 @@ fun ImageViewerDialog(
     }
 }
 
+internal data class TerminalExtraKey(val label: String, val sequence: String)
+
+internal fun prootTerminalExtraKeys(): List<TerminalExtraKey> = listOf(
+    TerminalExtraKey("ESC", "\u001B"),
+    TerminalExtraKey("TAB", "\t"),
+    TerminalExtraKey("CTRL-C", "\u0003"),
+    TerminalExtraKey("CTRL-D", "\u0004"),
+    TerminalExtraKey("CTRL-L", "\u000C"),
+    TerminalExtraKey("HOME", "\u001B[H"),
+    TerminalExtraKey("END", "\u001B[F"),
+    TerminalExtraKey("←", "\u001B[D"),
+    TerminalExtraKey("↑", "\u001B[A"),
+    TerminalExtraKey("↓", "\u001B[B"),
+    TerminalExtraKey("→", "\u001B[C"),
+    TerminalExtraKey("PGUP", "\u001B[5~"),
+    TerminalExtraKey("PGDN", "\u001B[6~"),
+    TerminalExtraKey("-", "-"),
+    TerminalExtraKey("/", "/"),
+    TerminalExtraKey("|", "|")
+)
+
 @Composable
 fun WorkspaceTerminalDialog(
     workspaceRoot: String,
     state: com.example.llamadroid.service.WorkspaceTerminalUiState?,
+    sessions: List<com.example.llamadroid.service.WorkspaceTerminalUiState> = listOfNotNull(state),
+    allowMultipleSessions: Boolean = false,
     onDismiss: () -> Unit,
     onSend: (String) -> Unit,
     onInterrupt: () -> Unit,
     onReconnect: () -> Unit,
     onClear: () -> Unit,
-    onStop: () -> Unit
+    onStop: () -> Unit,
+    onNewSession: () -> Unit = {},
+    onSelectSession: (String) -> Unit = {},
+    onSpecialKey: (String) -> Unit = {}
 ) {
-    var inputText by remember(workspaceRoot) { mutableStateOf("") }
-    var draftInput by remember(workspaceRoot) { mutableStateOf("") }
-    var historyIndex by remember(workspaceRoot) { mutableStateOf<Int?>(null) }
+    val terminalStateKey = state?.sessionId ?: workspaceRoot
+    var inputText by remember(terminalStateKey) { mutableStateOf("") }
+    var draftInput by remember(terminalStateKey) { mutableStateOf("") }
+    var historyIndex by remember(terminalStateKey) { mutableStateOf<Int?>(null) }
     var terminalFontSizeSp by rememberSaveable(workspaceRoot) { mutableStateOf(13f) }
     var fitToWidth by rememberSaveable(workspaceRoot) { mutableStateOf(true) }
     val clipboardManager = LocalClipboardManager.current
@@ -1622,11 +1765,14 @@ fun WorkspaceTerminalDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            stringResource(R.string.agent_workspace_terminal_title),
+                            stringResource(
+                                if (allowMultipleSessions) R.string.agent_proot_terminal_title
+                                else R.string.agent_workspace_terminal_title
+                            ),
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            workspaceRoot,
+                            state?.workspaceRoot ?: workspaceRoot,
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 2,
@@ -1640,6 +1786,51 @@ fun WorkspaceTerminalDialog(
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
+
+                if (allowMultipleSessions) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        sessions.forEachIndexed { index, session ->
+                            FilterChip(
+                                selected = session.sessionId == state?.sessionId,
+                                onClick = { onSelectSession(session.sessionId) },
+                                label = {
+                                    Text(
+                                        session.displayName.ifBlank {
+                                            stringResource(R.string.agent_proot_terminal_session_number, index + 1)
+                                        },
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        if (session.isConnected) Icons.Default.Terminal else Icons.Default.ErrorOutline,
+                                        null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            )
+                        }
+                        OutlinedButton(onClick = onNewSession) {
+                            Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.agent_proot_terminal_new_session))
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        stringResource(R.string.agent_proot_terminal_background_note),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
 
                 val statusText = when {
                     state?.isConnecting == true -> stringResource(R.string.agent_workspace_terminal_status_connecting)
@@ -1664,7 +1855,10 @@ fun WorkspaceTerminalDialog(
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
                         text = when {
-                            state?.isConnecting == true -> stringResource(R.string.agent_workspace_terminal_connecting_body)
+                            state?.isConnecting == true -> stringResource(
+                                if (allowMultipleSessions) R.string.agent_proot_terminal_connecting_body
+                                else R.string.agent_workspace_terminal_connecting_body
+                            )
                             state?.isConnected == true -> stringResource(R.string.agent_workspace_terminal_input_placeholder)
                             else -> state?.errorMessage ?: stringResource(R.string.agent_workspace_terminal_status_disconnected)
                         },
@@ -1699,8 +1893,15 @@ fun WorkspaceTerminalDialog(
                         .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedButton(onClick = onReconnect) {
-                        Text(stringResource(R.string.agent_workspace_terminal_reconnect))
+                    if (!allowMultipleSessions || state?.isConnected != true) {
+                        OutlinedButton(onClick = onReconnect) {
+                            Text(
+                                stringResource(
+                                    if (allowMultipleSessions) R.string.agent_proot_terminal_new_session
+                                    else R.string.agent_workspace_terminal_reconnect
+                                )
+                            )
+                        }
                     }
                     OutlinedButton(onClick = onInterrupt, enabled = state?.isConnected == true) {
                         Text(stringResource(R.string.agent_workspace_terminal_interrupt))
@@ -1733,13 +1934,39 @@ fun WorkspaceTerminalDialog(
                     )
                     Button(
                         onClick = onStop,
+                        enabled = state != null,
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                     ) {
-                        Text(stringResource(R.string.action_stop))
+                        Text(
+                            stringResource(
+                                if (allowMultipleSessions) R.string.agent_proot_terminal_close_session
+                                else R.string.action_stop
+                            )
+                        )
                     }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    prootTerminalExtraKeys().forEach { key ->
+                        OutlinedButton(
+                            onClick = { onSpecialKey(key.sequence) },
+                            enabled = state?.isConnected == true,
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier.heightIn(min = 40.dp)
+                        ) {
+                            Text(key.label, fontFamily = FontFamily.Monospace, maxLines = 1)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
 
                 Surface(
                     color = Color.Black.copy(alpha = 0.96f),
@@ -1765,7 +1992,10 @@ fun WorkspaceTerminalDialog(
                             Text(
                                 text = when {
                                     transcript.isNotBlank() -> transcript
-                                    state?.isConnecting == true -> stringResource(R.string.agent_workspace_terminal_connecting_body)
+                                    state?.isConnecting == true -> stringResource(
+                                        if (allowMultipleSessions) R.string.agent_proot_terminal_connecting_body
+                                        else R.string.agent_workspace_terminal_connecting_body
+                                    )
                                     else -> stringResource(R.string.agent_workspace_terminal_empty)
                                 },
                                 fontFamily = FontFamily.Monospace,
@@ -1907,11 +2137,12 @@ fun WorkspaceTerminalDialog(
 }
 
 @Composable
-private fun LocalSandboxRunTab(
+private fun AgentWorkspaceRunTab(
     modifier: Modifier,
     conversationId: Long?,
     projectFolder: String,
     backend: AgentWorkspaceBackendType,
+    prootEnvironment: com.example.llamadroid.data.db.AgentProotEnvironmentEntity?,
     capabilities: AgentLocalRuntimeCapabilities,
     runState: AgentLocalRunState?,
     onCapabilitiesChanged: (AgentLocalRuntimeCapabilities) -> Unit,
@@ -1920,7 +2151,7 @@ private fun LocalSandboxRunTab(
     onForceStop: () -> Unit,
     onOpenPreview: (String) -> Unit
 ) {
-    val localEnabled = backend == AgentWorkspaceBackendType.LOCAL_SANDBOX
+    val presentation = remember(backend) { agentWorkspaceRunBackendPresentation(backend) }
     val running = runState?.status == "RUNNING"
     val logScrollState = rememberScrollState()
     LazyColumn(
@@ -1938,12 +2169,19 @@ private fun LocalSandboxRunTab(
                     AssistChip(
                         onClick = {},
                         label = {
-                            Text(
-                                if (localEnabled) stringResource(R.string.agent_project_backend_local)
-                                else stringResource(R.string.agent_project_backend_remote)
-                            )
+                            Text(stringResource(presentation.labelRes))
                         },
-                        leadingIcon = { Icon(if (localEnabled) Icons.Default.Security else Icons.Default.Terminal, null, modifier = Modifier.size(18.dp)) }
+                        leadingIcon = {
+                            Icon(
+                                when (backend) {
+                                    AgentWorkspaceBackendType.LOCAL_SANDBOX -> Icons.Default.Security
+                                    AgentWorkspaceBackendType.LOCAL_PROOT -> Icons.Default.Storage
+                                    AgentWorkspaceBackendType.REMOTE_SSH -> Icons.Default.Terminal
+                                },
+                                null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     )
                     Text(
                         stringResource(R.string.agent_workspace_backend_locked),
@@ -1951,20 +2189,37 @@ private fun LocalSandboxRunTab(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        if (localEnabled) {
-                            stringResource(R.string.agent_workspace_local_root, projectFolder)
-                        } else {
-                            stringResource(R.string.agent_workspace_remote_root, projectFolder)
+                        when (presentation.root) {
+                            AgentWorkspaceRootPresentation.APP_LOCAL ->
+                                stringResource(R.string.agent_workspace_local_root, projectFolder)
+                            AgentWorkspaceRootPresentation.DEBIAN ->
+                                stringResource(R.string.agent_workspace_proot_root)
+                            AgentWorkspaceRootPresentation.REMOTE ->
+                                stringResource(R.string.agent_workspace_remote_root, projectFolder)
                         },
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    if (backend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                        Text(
+                            prootEnvironment?.let { environment ->
+                                stringResource(
+                                    R.string.agent_workspace_proot_environment,
+                                    environment.displayName,
+                                    environment.imageVersion,
+                                    prootEnvironmentStatusLabel(environment.status)
+                                )
+                            } ?: stringResource(R.string.agent_workspace_proot_environment_missing),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         }
 
-        item {
+        if (presentation.supportsProjectRun) item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -1990,7 +2245,7 @@ private fun LocalSandboxRunTab(
             }
         }
 
-        item {
+        if (presentation.showsSandboxDependencyPolicy) item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -2008,7 +2263,7 @@ private fun LocalSandboxRunTab(
                         )
                         Switch(
                             checked = capabilities.allowPythonDependencies,
-                            enabled = localEnabled && conversationId != null,
+                            enabled = conversationId != null,
                             onCheckedChange = { enabled ->
                                 onCapabilitiesChanged(capabilities.copy(allowPythonDependencies = enabled))
                             }
@@ -2020,6 +2275,17 @@ private fun LocalSandboxRunTab(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+            }
+        }
+
+        if (backend == AgentWorkspaceBackendType.LOCAL_PROOT) item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    stringResource(R.string.agent_workspace_proot_packages_note),
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
 
@@ -2052,7 +2318,7 @@ private fun LocalSandboxRunTab(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                         Button(
                             onClick = onRun,
-                            enabled = localEnabled && conversationId != null,
+                            enabled = presentation.supportsProjectRun && conversationId != null,
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(Icons.Default.PlayArrow, null)
@@ -2061,7 +2327,7 @@ private fun LocalSandboxRunTab(
                         }
                         OutlinedButton(
                             onClick = onStop,
-                            enabled = localEnabled && running,
+                            enabled = presentation.supportsProjectRun && running,
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(Icons.Default.Stop, null)
@@ -2071,7 +2337,7 @@ private fun LocalSandboxRunTab(
                     }
                     OutlinedButton(
                         onClick = onForceStop,
-                        enabled = localEnabled && running,
+                        enabled = presentation.supportsProjectRun && running,
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
                     ) {
@@ -2126,8 +2392,10 @@ private fun LocalSandboxRunTab(
 @Composable
 private fun AgentWorkspacePreviewTab(
     modifier: Modifier,
-    previewUrl: String?,
+    activeRunUrl: String?,
+    savedPreviewOverride: String?,
     backend: AgentWorkspaceBackendType,
+    onPreviewOverrideChanged: (String?) -> Unit,
     onOpenExternal: (String) -> Unit,
     onDownloadRequest: (WebView, AgentPreviewDownloadRequest, AgentPreviewDownloadBridge) -> Unit,
     onPreviewDisposed: () -> Unit,
@@ -2136,25 +2404,140 @@ private fun AgentWorkspacePreviewTab(
     val currentDownloadRequest = rememberUpdatedState(onDownloadRequest)
     val currentPreviewDisposed = rememberUpdatedState(onPreviewDisposed)
     val currentPreviewNavigated = rememberUpdatedState(onPreviewNavigated)
-    val configuredOrigin = remember(previewUrl) {
-        previewUrl?.let(::parseAgentPreviewOrigin)
+    var customMode by rememberSaveable { mutableStateOf(savedPreviewOverride != null) }
+    var addressDraft by rememberSaveable { mutableStateOf(savedPreviewOverride.orEmpty()) }
+    var addressError by rememberSaveable { mutableStateOf(false) }
+    var reloadGeneration by rememberSaveable { mutableIntStateOf(0) }
+    LaunchedEffect(savedPreviewOverride) {
+        if (savedPreviewOverride != null) {
+            customMode = true
+            addressDraft = savedPreviewOverride
+            addressError = false
+        } else if (!customMode) {
+            addressDraft = activeRunUrl.orEmpty()
+        }
     }
+    val previewUrl = remember(activeRunUrl, savedPreviewOverride) {
+        resolveAgentPreviewAddress(activeRunUrl, savedPreviewOverride)
+    }
+    val configuredOrigin = remember(previewUrl) { previewUrl?.let(::parseAgentPreviewOrigin) }
     val safePreviewUrl = remember(previewUrl, configuredOrigin) {
-        previewUrl?.takeIf { configuredOrigin != null && isAllowedAgentPreviewUrl(it, configuredOrigin) }
+        normalizeAgentPreviewAddress(previewUrl)
+            ?.takeIf { configuredOrigin != null && isAllowedAgentPreviewUrl(it, configuredOrigin) }
     }
     Column(
         modifier = modifier.padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(stringResource(R.string.agent_workspace_tab_preview), fontWeight = FontWeight.Bold)
+        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp)) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(stringResource(R.string.agent_preview_address_title), fontWeight = FontWeight.SemiBold)
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = !customMode,
+                        onClick = {
+                            customMode = false
+                            addressError = false
+                            addressDraft = activeRunUrl.orEmpty()
+                            onPreviewOverrideChanged(null)
+                            reloadGeneration += 1
+                        },
+                        label = { Text(stringResource(R.string.agent_preview_mode_auto)) }
+                    )
+                    FilterChip(
+                        selected = customMode,
+                        onClick = {
+                            customMode = true
+                            if (addressDraft.isBlank()) addressDraft = activeRunUrl.orEmpty()
+                        },
+                        label = { Text(stringResource(R.string.agent_preview_mode_custom)) }
+                    )
+                }
+                Text(
+                    stringResource(
+                        if (customMode) R.string.agent_preview_mode_custom_desc
+                        else R.string.agent_preview_mode_auto_desc
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (customMode) {
+                    OutlinedTextField(
+                        value = addressDraft,
+                        onValueChange = {
+                            addressDraft = it.take(AGENT_PREVIEW_MAX_URL_CHARS)
+                            addressError = false
+                        },
+                        label = { Text(stringResource(R.string.agent_preview_address_label)) },
+                        placeholder = { Text(stringResource(R.string.agent_preview_address_hint)) },
+                        singleLine = true,
+                        isError = addressError,
+                        supportingText = if (addressError) {
+                            { Text(stringResource(R.string.agent_preview_address_invalid)) }
+                        } else null,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (customMode) {
+                        Button(onClick = {
+                            val normalized = normalizeAgentPreviewAddress(addressDraft)
+                            if (normalized == null) {
+                                addressError = true
+                            } else {
+                                addressDraft = normalized
+                                addressError = false
+                                onPreviewOverrideChanged(normalized)
+                                reloadGeneration += 1
+                            }
+                        }) {
+                            Icon(Icons.Default.PlayArrow, null)
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.agent_preview_save_go), maxLines = 1)
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            customMode = false
+                            addressDraft = activeRunUrl.orEmpty()
+                            addressError = false
+                            onPreviewOverrideChanged(null)
+                            reloadGeneration += 1
+                        },
+                        enabled = activeRunUrl != null
+                    ) {
+                        Text(stringResource(R.string.agent_preview_use_active_run), maxLines = 1)
+                    }
+                    IconButton(
+                        onClick = { reloadGeneration += 1 },
+                        enabled = safePreviewUrl != null
+                    ) {
+                        Icon(Icons.Default.Refresh, stringResource(R.string.agent_preview_reload))
+                    }
+                }
+            }
+        }
         if (safePreviewUrl.isNullOrBlank()) {
             Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp)) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        if (backend == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
-                            stringResource(R.string.agent_workspace_preview_empty_local)
-                        } else {
-                            stringResource(R.string.agent_workspace_preview_empty_remote)
+                        when (backend) {
+                            AgentWorkspaceBackendType.LOCAL_SANDBOX ->
+                                stringResource(R.string.agent_workspace_preview_empty_local)
+                            AgentWorkspaceBackendType.LOCAL_PROOT ->
+                                stringResource(R.string.agent_workspace_preview_empty_proot)
+                            AgentWorkspaceBackendType.REMOTE_SSH ->
+                                stringResource(R.string.agent_workspace_preview_empty_remote)
                         },
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -2172,9 +2555,9 @@ private fun AgentWorkspacePreviewTab(
                     Icon(Icons.Default.OpenInNew, stringResource(R.string.agent_workspace_open_preview))
                 }
             }
-            Card(modifier = Modifier.fillMaxSize(), shape = RoundedCornerShape(8.dp)) {
+            Card(modifier = Modifier.fillMaxWidth().weight(1f), shape = RoundedCornerShape(8.dp)) {
                 val origin = checkNotNull(configuredOrigin)
-                key(safePreviewUrl) {
+                key(safePreviewUrl, reloadGeneration) {
                     AndroidView(
                         modifier = Modifier.fillMaxSize(),
                         factory = { context ->
@@ -2231,7 +2614,8 @@ private fun AgentWorkspacePreviewTab(
                                 loadUrl(safePreviewUrl)
                                 AgentPreviewBridge.register(
                                     this,
-                                    AgentService.activeConversationId.value,
+                                    AgentService.activeConversationId.value
+                                        ?: AgentService.preferredConversationId.value,
                                     safePreviewUrl
                                 )
                             }
@@ -2239,7 +2623,8 @@ private fun AgentWorkspacePreviewTab(
                         update = { webView ->
                             AgentPreviewBridge.register(
                                 webView,
-                                AgentService.activeConversationId.value,
+                                AgentService.activeConversationId.value
+                                    ?: AgentService.preferredConversationId.value,
                                 safePreviewUrl
                             )
                             if (webView.url != safePreviewUrl && isAllowedAgentPreviewUrl(safePreviewUrl, origin)) {

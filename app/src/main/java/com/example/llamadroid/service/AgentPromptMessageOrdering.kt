@@ -1,6 +1,9 @@
 package com.example.llamadroid.service
 
 private const val PROJECT_CONTROL_PACKET_PREFIX = "# Project Control Packet"
+private const val DIRECT_CONTROL_CAPSULE_PREFIX =
+    "# Project Control Packet — Direct Control Capsule"
+private const val LEGACY_DIRECT_CONTROL_CAPSULE_PREFIX = "CONTROL_CAPSULE v="
 private const val CONTEXT_DIGEST_PREFIX = "CONTEXT DIGEST:"
 private const val CURRENT_MODE_PREFIX = "CURRENT MODE:"
 private const val RECOVERY_MODE_PREFIX = "RECOVERY MODE:"
@@ -24,8 +27,22 @@ internal fun <T> reorderOptimizedPromptMessages(
 ): List<T> {
     if (messages.size < 2) return messages
 
+    // A Direct conversation is append-only between compactions. Historical
+    // capsules must therefore remain exactly where they were sent on their
+    // original request; moving all of them to the end destroys llama.cpp's
+    // reusable prefix. Only the newest capsule is authoritative and belongs at
+    // the absolute request tail.
+    val newestDirectCapsuleIndex = messages.indices.lastOrNull { index ->
+        val message = messages[index]
+        isStandaloneSystemMessage(message) && isDirectControlCapsule(
+            role = roleOf(message),
+            content = contentOf(message)
+        )
+    }
     val movable = messages.mapIndexedNotNull { index, message ->
         if (!isStandaloneSystemMessage(message)) {
+            null
+        } else if (isDirectControlCapsule(roleOf(message), contentOf(message))) {
             null
         } else {
             generatedControlMessageRank(
@@ -36,9 +53,11 @@ internal fun <T> reorderOptimizedPromptMessages(
             }
         }
     }
-    if (movable.isEmpty()) return messages
+    if (movable.isEmpty() && newestDirectCapsuleIndex == null) return messages
 
-    val movableIndices = movable.mapTo(hashSetOf()) { it.index }
+    val movableIndices = movable.mapTo(hashSetOf()) { it.index }.apply {
+        newestDirectCapsuleIndex?.let(::add)
+    }
     val remaining = messages.filterIndexed { index, _ -> index !in movableIndices }
     val movedMessages = movable
         .sortedWith(compareBy<PromptMessageMove> { it.rank }.thenBy { it.index })
@@ -55,7 +74,45 @@ internal fun <T> reorderOptimizedPromptMessages(
         addAll(remaining.take(insertionIndex))
         addAll(movedMessages)
         addAll(remaining.drop(insertionIndex))
+        newestDirectCapsuleIndex?.let { add(messages[it]) }
     }
+}
+
+/** True only for request-tail Direct capsules, not legacy control packets. */
+internal fun isDirectControlCapsule(role: String, content: String): Boolean {
+    if (!role.equals("system", ignoreCase = true)) return false
+    val normalized = content.trimStart()
+    return normalized.startsWith(DIRECT_CONTROL_CAPSULE_PREFIX, ignoreCase = true) ||
+        normalized.startsWith(LEGACY_DIRECT_CONTROL_CAPSULE_PREFIX, ignoreCase = true)
+}
+
+/**
+ * Builds a deterministic, persist-before-dispatch request tail. The latest
+ * non-control message id makes retries idempotent while allowing a new capsule
+ * after every committed assistant/tool boundary, including process recovery.
+ */
+internal fun buildDirectRequestControlTail(
+    conversationId: Long,
+    boundaryMessageId: String,
+    recoveryInstruction: String?,
+    checkpoint: String,
+    capsule: String
+): List<AgentService.Companion.ChatMessage> = buildList {
+    fun message(kind: String, content: String): AgentService.Companion.ChatMessage {
+        val digest = agentPromptSha256(
+            "$conversationId|$boundaryMessageId|$kind|$content"
+        ).take(24)
+        return AgentService.Companion.ChatMessage(
+            id = "direct-request-tail:$conversationId:$kind:$digest",
+            role = "system",
+            content = content
+        )
+    }
+    recoveryInstruction?.trim()?.takeIf { it.isNotBlank() }?.let {
+        add(message("recovery", "RECOVERY MODE: $it"))
+    }
+    add(message("checkpoint", checkpoint))
+    add(message("capsule", capsule))
 }
 
 /**

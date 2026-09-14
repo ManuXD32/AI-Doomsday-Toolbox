@@ -34,6 +34,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.llamadroid.service.AgentService
+import com.example.llamadroid.service.AgentToolOutputStore
 import com.example.llamadroid.service.isBackgroundCommandReminder
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -63,8 +64,48 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 internal const val AGENT_MESSAGE_ACTION_TOUCH_TARGET_DP = 48
+
+internal data class AgentProjectControlPacketSummary(
+    val phase: String?,
+    val nextAction: String?
+)
+
+internal fun isAgentProjectControlPacket(
+    role: String,
+    content: String
+): Boolean {
+    if (!role.equals("system", ignoreCase = true)) return false
+    val normalized = content.trimStart()
+    return normalized.startsWith("# Project Control Packet") ||
+        normalized.startsWith("CONTROL_CAPSULE v=")
+}
+
+internal fun summarizeAgentProjectControlPacket(content: String): AgentProjectControlPacketSummary {
+    fun field(vararg names: String): String? = content.lineSequence()
+        .map(String::trim)
+        .firstNotNullOfOrNull { line ->
+            val normalizedLine = line.removePrefix("-").trim()
+            names.firstNotNullOfOrNull { name ->
+                sequenceOf(':', '=').firstNotNullOfOrNull { separator ->
+                    normalizedLine
+                        .takeIf { it.startsWith("$name$separator", ignoreCase = true) }
+                        ?.substringAfter(separator)
+                        ?.trim()
+                        ?.trim('"')
+                        ?.takeIf(String::isNotBlank)
+                }
+            }
+        }
+    return AgentProjectControlPacketSummary(
+        phase = field("runtime_phase", "phase", "mode"),
+        nextAction = field("exact_next_action", "next_action", "action")
+    )
+}
 
 @Composable
 private fun agentRoleLabel(roleName: String): String {
@@ -640,6 +681,13 @@ private fun ToolCallGroupRow(
             ?.replaceFirst(Regex("(?m)^PREVIEW_IMAGE_PATH:.*$"), "")
             ?.trim()
     }
+    val privateOutputReference = remember(resultMessage?.content) {
+        resultMessage?.content
+            ?.lineSequence()
+            ?.firstOrNull { it.startsWith("content_ref: agent-output://") }
+            ?.substringAfter("content_ref: ")
+            ?.trim()
+    }
     val outputPreview = remember(cleanOutput) {
         cleanOutput?.let {
             if (it.length <= TOOL_OUTPUT_PREVIEW_CHARS) it
@@ -647,12 +695,12 @@ private fun ToolCallGroupRow(
         }
     }
     var showFullOutput by remember(message.id) { mutableStateOf(false) }
+    var viewerOutput by remember(message.id) { mutableStateOf<String?>(null) }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
-    if (showFullOutput && !cleanOutput.isNullOrBlank()) {
-        val visibleFullOutput = remember(cleanOutput) {
-            boundedPreview(cleanOutput, TOOL_OUTPUT_VIEWER_CHARS)
-        }
+    if (showFullOutput && !viewerOutput.isNullOrBlank()) {
+        val visibleFullOutput = viewerOutput.orEmpty()
         Dialog(onDismissRequest = { showFullOutput = false }) {
             Card(modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp)) {
                 Column(modifier = Modifier.padding(16.dp)) {
@@ -672,7 +720,7 @@ private fun ToolCallGroupRow(
                     Row(modifier = Modifier.align(Alignment.End)) {
                         TextButton(onClick = {
                             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            clipboard.setPrimaryClip(ClipData.newPlainText(toolName, cleanOutput.orEmpty()))
+                            clipboard.setPrimaryClip(ClipData.newPlainText(toolName, visibleFullOutput))
                         }) { Text(stringResource(R.string.action_copy)) }
                         TextButton(onClick = { showFullOutput = false }) {
                             Text(stringResource(R.string.action_close))
@@ -777,8 +825,24 @@ private fun ToolCallGroupRow(
                                     .padding(8.dp)
                             )
                         }
-                        if ((cleanOutput?.length ?: 0) > TOOL_OUTPUT_PREVIEW_CHARS) {
-                            TextButton(onClick = { showFullOutput = true }) {
+                        if ((cleanOutput?.length ?: 0) > TOOL_OUTPUT_PREVIEW_CHARS || privateOutputReference != null) {
+                            TextButton(onClick = {
+                                scope.launch {
+                                    viewerOutput = privateOutputReference?.let { reference ->
+                                        withContext(Dispatchers.IO) {
+                                            AgentToolOutputStore.readBounded(
+                                                context = context.applicationContext,
+                                                reference = reference,
+                                                maxCharacters = TOOL_OUTPUT_VIEWER_CHARS
+                                            ).getOrNull()
+                                        }
+                                    } ?: boundedPreview(cleanOutput.orEmpty(), TOOL_OUTPUT_VIEWER_CHARS)
+                                    if (viewerOutput.isNullOrBlank()) {
+                                        viewerOutput = boundedPreview(cleanOutput.orEmpty(), TOOL_OUTPUT_VIEWER_CHARS)
+                                    }
+                                    showFullOutput = !viewerOutput.isNullOrBlank()
+                                }
+                            }) {
                                 Text(stringResource(R.string.agent_tool_view_full_output))
                             }
                         }
@@ -824,6 +888,13 @@ fun ChatMessageBubble(
     val isDelegation = message.isDelegation
     val isCompactionStatus = AgentService.isTransientCompactionStatusMessageForUi(message)
     val isRetryableNeedsDirection = AgentService.isRetryableNeedsDirectionMessage(message)
+    val isProjectControlPacket = remember(message.role, message.content) {
+        isAgentProjectControlPacket(message.role, message.content)
+    }
+    val projectControlPacketSummary = remember(message.content, isProjectControlPacket) {
+        if (isProjectControlPacket) summarizeAgentProjectControlPacket(message.content) else null
+    }
+    var projectControlPacketExpanded by rememberSaveable(message.id) { mutableStateOf(false) }
     val formattedTimestamp = remember(message.timestamp) { formatAgentMessageTimestamp(message.timestamp) }
     val imageFile = remember(message.imagePath) { message.imagePath?.let(::File)?.takeIf { it.exists() } }
     var showImagePreview by remember(message.imagePath) { mutableStateOf(false) }
@@ -896,6 +967,89 @@ fun ChatMessageBubble(
 
                 if (isDelegation && !delegationExpanded) {
                     // Hidden
+                } else if (isProjectControlPacket) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    projectControlPacketExpanded = !projectControlPacketExpanded
+                                }
+                                .padding(vertical = 2.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(R.string.agent_project_control_packet_title),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                projectControlPacketSummary?.phase?.let { phase ->
+                                    Text(
+                                        text = stringResource(
+                                            R.string.agent_project_control_packet_phase,
+                                            phase
+                                        ),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                projectControlPacketSummary?.nextAction?.let { nextAction ->
+                                    Text(
+                                        text = stringResource(
+                                            R.string.agent_project_control_packet_next_action,
+                                            nextAction
+                                        ),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            Icon(
+                                imageVector = if (projectControlPacketExpanded) {
+                                    Icons.Default.KeyboardArrowUp
+                                } else {
+                                    Icons.Default.KeyboardArrowDown
+                                },
+                                contentDescription = stringResource(
+                                    if (projectControlPacketExpanded) {
+                                        R.string.agent_project_control_packet_hide
+                                    } else {
+                                        R.string.agent_project_control_packet_show
+                                    }
+                                ),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        AnimatedVisibility(
+                            visible = projectControlPacketExpanded,
+                            enter = expandVertically(),
+                            exit = shrinkVertically()
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 260.dp)
+                                    .verticalScroll(rememberScrollState())
+                            ) {
+                                ChatMessageContent(
+                                    message = message,
+                                    isEditing = false,
+                                    editingText = "",
+                                    onEditingTextChange = {},
+                                    onCancelEdit = {},
+                                    onSaveEdit = {},
+                                    textColor = MaterialTheme.colorScheme.onSurface,
+                                    onKnowledgeLinkClick = onKnowledgeLinkClick
+                                )
+                            }
+                        }
+                    }
                 } else if (message.needsApproval) {
                     val title = when (message.toolName) {
                         "write_file" -> stringResource(R.string.agent_approve_file_title)

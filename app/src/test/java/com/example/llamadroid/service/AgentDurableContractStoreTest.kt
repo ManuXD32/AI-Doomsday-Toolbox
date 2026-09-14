@@ -550,6 +550,32 @@ class AgentDurableContractStoreTest {
     }
 
     @Test
+    fun `consumed tool continuation closes its enqueued durable handoff`() = runBlocking {
+        val receipt = AgentContinuationOutboxEntity(
+            id = "tool-continuation:consumed",
+            conversationId = conversationId,
+            rootTurnId = "root-consumed",
+            kind = "TOOL_CONTINUATION",
+            dedupeKey = "tool:consumed",
+            status = AgentContinuationStatus.ENQUEUED,
+            enqueuedAt = 100L,
+            createdAt = 90L,
+            updatedAt = 100L
+        )
+        database.agentWorkflowDao().insertContinuationReceipt(receipt)
+
+        val completed = AgentDurableContractStore.completeContinuation(
+            database = database,
+            receiptId = receipt.id,
+            status = AgentContinuationStatus.COMPLETED
+        )
+
+        assertEquals(AgentContinuationStatus.COMPLETED, completed?.status)
+        assertNotNull(completed?.completedAt)
+        assertEquals(0, database.agentWorkflowDao().countPendingToolContinuations(conversationId))
+    }
+
+    @Test
     fun `mutation receipt metadata keeps exact paths and omits file content`() {
         val write = AgentDurableContractStore.mutationReceiptMetadata(
             tool = "write_file",
@@ -560,6 +586,40 @@ class AgentDurableContractStoreTest {
         assertEquals("index.html", writeEntry.getString("path"))
         assertEquals("write", writeEntry.getString("operation"))
         assertFalse(write.contains("DO NOT PERSIST THIS"))
+
+        val exactEdit = AgentDurableContractStore.mutationReceiptMetadata(
+            tool = "edit_file",
+            args = mapOf(
+                "path" to "src/app.js",
+                "old_text" to "PRIVATE OLD CONTENT",
+                "new_text" to "PRIVATE NEW CONTENT"
+            ),
+            success = true
+        )
+        val editEntry = JSONObject(exactEdit).getJSONArray("entries").getJSONObject(0)
+        assertEquals("src/app.js", editEntry.getString("path"))
+        assertEquals("edit", editEntry.getString("operation"))
+        assertFalse(exactEdit.contains("PRIVATE OLD CONTENT"))
+        assertFalse(exactEdit.contains("PRIVATE NEW CONTENT"))
+
+        val partialWrite = AgentDurableContractStore.mutationReceiptMetadata(
+            tool = "write_file",
+            args = mapOf("path" to "src/large.js", "content" to "const ready = true; // DIRECT-EXTEND"),
+            success = true
+        )
+        assertEquals(
+            "partial",
+            JSONObject(partialWrite).getJSONArray("entries").getJSONObject(0).getString("operation")
+        )
+        val partialEdit = AgentDurableContractStore.mutationReceiptMetadata(
+            tool = "edit_file",
+            args = mapOf("path" to "src/large.js", "old_text" to "DIRECT-EXTEND", "new_text" to "more(); // DIRECT-EXTEND"),
+            success = true
+        )
+        assertEquals(
+            "partial",
+            JSONObject(partialEdit).getJSONArray("entries").getJSONObject(0).getString("operation")
+        )
 
         val patch = AgentDurableContractStore.mutationReceiptMetadata(
             tool = "apply_patch",
@@ -615,9 +675,15 @@ class AgentDurableContractStoreTest {
         insertActionReceipt(
             id = "artifact-style",
             actionId = "action-style",
-            tool = "edit_lines",
+            tool = "edit_file",
             metadataJson = AgentDurableContractStore.mutationReceiptMetadata(
-                "edit_lines", mapOf("path" to "styles.css", "new_content" to "old"), true
+                "edit_file",
+                mapOf(
+                    "path" to "styles.css",
+                    "old_text" to "old",
+                    "new_text" to "new"
+                ),
+                true
             ),
             createdAt = 110L
         )

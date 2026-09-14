@@ -254,11 +254,11 @@ fun AgentWorkspaceConsoleHeader(
     onShowDashboard: () -> Unit,
     onNavigateToWorkspace: () -> Unit,
     onStopAll: () -> Unit,
-    onPlanningModeChanged: (Boolean) -> Unit,
     onShowAgentSettings: () -> Unit,
     onShowKnowledgeBases: () -> Unit,
     modifier: Modifier = Modifier,
-    idleStatusText: String? = null
+    idleStatusText: String? = null,
+    directRuntimeStatus: AgentDirectRuntimeStatus? = null
 ) {
     val hasProject = !projectPath.isNullOrBlank()
     var expanded by rememberSaveable { mutableStateOf(false) }
@@ -349,7 +349,6 @@ fun AgentWorkspaceConsoleHeader(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Surface(
-                        onClick = { onPlanningModeChanged(!planningModeEnabled) },
                         shape = RoundedCornerShape(50),
                         color = if (planningModeEnabled) {
                             MaterialTheme.colorScheme.secondaryContainer
@@ -445,26 +444,6 @@ fun AgentWorkspaceConsoleHeader(
                         label = stringResource(R.string.agent_console_last_saved),
                         value = savedLabel
                     )
-                    FilterChip(
-                        selected = planningModeEnabled,
-                        onClick = { onPlanningModeChanged(true) },
-                        label = { Text(stringResource(R.string.agent_mode_plan), maxLines = 1) },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Default.Lock,
-                                null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    )
-                    FilterChip(
-                        selected = !planningModeEnabled,
-                        onClick = { onPlanningModeChanged(false) },
-                        label = { Text(stringResource(R.string.agent_mode_build), maxLines = 1) },
-                        leadingIcon = {
-                            Icon(Icons.Default.LockOpen, null, modifier = Modifier.size(18.dp))
-                        }
-                    )
                     AssistChip(
                         onClick = onShowAgentSettings,
                         label = { Text(stringResource(R.string.agent_settings_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
@@ -492,6 +471,9 @@ fun AgentWorkspaceConsoleHeader(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
+                }
+                directRuntimeStatus?.let { status ->
+                    AgentDirectRuntimeStatusCard(status = status)
                 }
             }
         }

@@ -10,7 +10,9 @@ import java.util.Locale
 
 enum class AgentWorkspaceBackendType {
     REMOTE_SSH,
-    LOCAL_SANDBOX;
+    LOCAL_SANDBOX,
+    /** App-managed Debian userland executed through the packaged PRoot broker. */
+    LOCAL_PROOT;
 
     companion object {
         fun fromStored(value: String?): AgentWorkspaceBackendType =
@@ -132,6 +134,27 @@ object AgentRunConfigParser {
     }
 }
 
+/** Validate model-authored run manifests before replacing the durable file. */
+fun validateAgentRunManifestWrite(path: String, rawJson: String): Result<Unit> {
+    val normalizedPath = path.trim()
+        .replace('\\', '/')
+        .removePrefix("./")
+    if (normalizedPath != ".adt/run.json") return Result.success(Unit)
+    return runCatching {
+        val manifest = JSONObject(rawJson)
+        require(manifest.has("version")) { "version is required" }
+        require(manifest.has("runtime")) { "runtime is required" }
+        require(manifest.has("entrypoint")) { "entrypoint is required" }
+        require(manifest.has("ui")) { "ui is required" }
+        AgentRunConfigParser.parse(rawJson)
+        Unit
+    }.recoverCatching { error ->
+        throw IllegalArgumentException(
+            "RUN_CONFIG_INVALID: ${error.message ?: error::class.java.simpleName}"
+        )
+    }
+}
+
 object AgentLocalWorkspaceSupport {
     const val DISPLAY_ROOT = "/local_workspace"
     private const val STORAGE_ROOT = "agent_local_workspaces"
@@ -152,6 +175,33 @@ object AgentLocalWorkspaceSupport {
     }
 
     fun displayRoot(projectFolder: String): String = "$DISPLAY_ROOT/${sanitizeProjectFolder(projectFolder)}"
+
+    /**
+     * Returns true only when a local project contains no user-owned entries.
+     *
+     * Direct runtime metadata is allowed to exist before the first model turn:
+     * the top-level `brain` directory and an empty precreated `.adt` directory
+     * do not make a newly-created project non-greenfield. `.adt` contents are
+     * runtime configuration/project artifacts, so any file or child directory
+     * there makes the workspace non-greenfield. Every other entry, including an
+     * empty user directory, is treated as existing project state.
+     * An unreadable or non-directory root fails closed so a filesystem error
+     * cannot cause Direct to skip required inspection.
+     */
+    fun isGreenfieldWorkspace(root: File): Boolean {
+        val canonicalRoot = runCatching { root.canonicalFile }.getOrNull() ?: return false
+        if (!canonicalRoot.exists()) return true
+        if (!canonicalRoot.isDirectory) return false
+        val entries = canonicalRoot.listFiles() ?: return false
+        return entries.all { entry ->
+            when {
+                entry.isDirectory && entry.name == "brain" -> true
+                entry.isDirectory && entry.name == ".adt" ->
+                    entry.listFiles()?.isEmpty() == true
+                else -> false
+            }
+        }
+    }
 
     fun sanitizeProjectFolder(projectFolder: String): String =
         projectFolder.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(80).ifBlank { "default_project" }

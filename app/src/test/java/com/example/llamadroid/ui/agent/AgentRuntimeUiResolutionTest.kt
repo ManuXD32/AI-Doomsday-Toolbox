@@ -3,6 +3,7 @@ package com.example.llamadroid.ui.agent
 import com.example.llamadroid.data.db.AgentRuntimeBackend
 import com.example.llamadroid.data.db.AgentRuntimeEndpointConfig
 import com.example.llamadroid.data.db.AgentRuntimeProfile
+import com.example.llamadroid.data.runtime.AgentRuntimeGlobalOverride
 import com.example.llamadroid.data.runtime.ManagedLlamaServerDescriptor
 import com.example.llamadroid.data.runtime.ManagedLlamaServerState
 import org.junit.Assert.assertEquals
@@ -54,6 +55,41 @@ class AgentRuntimeUiResolutionTest {
             "CODER",
             agentRuntimeProfileKeyForUi("CODER", " ")
         )
+    }
+
+    @Test
+    fun `Direct UI ignores historical roles and follows override then Direct defaults`() {
+        val defaults = AgentRuntimeGlobalOverride(
+            enabled = true,
+            backend = AgentRuntimeBackend.LLAMA_SWAP.id,
+            model = "direct-model",
+            endpointConfigId = 12L
+        )
+        val disabledOverride = AgentRuntimeGlobalOverride(
+            enabled = false,
+            backend = AgentRuntimeBackend.OLLAMA.id,
+            model = "inactive-model"
+        )
+
+        val direct = directAgentRuntimeProfileForUi("ORCHESTRATOR", disabledOverride, defaults)
+        assertEquals(AgentRuntimeBackend.LLAMA_SWAP.id, direct.backend)
+        assertEquals("direct-model", direct.model)
+        assertEquals(12L, direct.endpointConfigId)
+
+        val override = directAgentRuntimeProfileForUi(
+            "ORCHESTRATOR",
+            disabledOverride.copy(
+                enabled = true,
+                backend = AgentRuntimeBackend.LLAMA_SERVER.id,
+                model = "override-model",
+                endpointConfigId = null,
+                managedLlamaServerId = 7L
+            ),
+            defaults
+        )
+        assertEquals(AgentRuntimeBackend.LLAMA_SERVER.id, override.backend)
+        assertEquals("override-model", override.model)
+        assertEquals(7L, override.managedLlamaServerId)
     }
 
     @Test

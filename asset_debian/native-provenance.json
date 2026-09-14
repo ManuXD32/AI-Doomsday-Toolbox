@@ -1,0 +1,25 @@
+{
+  "architecture": "arm64-v8a",
+  "proot": {
+    "source": "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.92_aarch64.deb",
+    "sha256": "1f1c983509701f6826f568482c70673ee453a9ba38c9f5fa445a472d6b7524e9",
+    "version": "5.1.107.92",
+    "license": "GPL-2.0-or-later",
+    "loaderOverride": "PROOT_LOADER=libproot_loader.so",
+    "runtimeLibraryPath": "$ORIGIN"
+  },
+  "dependencies": {
+    "libandroid-shmem.so": "0da3a24d558b93c92bcf8d611e0826a99ff96e396b148e6cdf33b47c47c57ff6",
+    "libtalloc.so.2": "ac81ad623d74c209718b9f3acb2dd702cc8a88c431e820d212229910b4db29da",
+    "patchedSoname": "libtalloc_2.so"
+  },
+  "broker": {
+    "source": "app/src/main/cpp/proot_broker/proot_broker.c",
+    "compiler": "aarch64-linux-android26-clang",
+    "ndk": "29.0.14206865",
+    "sha256": "8994d080909167a2c11df38537a15569fd3533cef538fbc73732b8fb4bf2aaca",
+    "elfLoadAlignment": 16384,
+    "ptyBehavior": "Accepts an inherited controlling PTY and transfers its foreground process group to the PRoot child.",
+    "license": "GPL-2.0-or-later"
+  }
+}

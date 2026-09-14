@@ -5,19 +5,22 @@ import java.util.Locale
 /**
  * Stable execution-profile identifiers stored with an Agent conversation.
  *
- * Existing conversations are intentionally resolved to [LEGACY] when their
- * value is absent or unknown. New conversations are assigned [OPTIMIZED] by
- * the conversation owner.
+ * Existing values are accepted only as migration/import aliases and always
+ * resolve to [DIRECT].
  */
 enum class AgentHarnessProfile(val id: String) {
+    /**
+     * The only profile used by the redesigned runtime.  The two values below
+     * remain readable for old persisted rows while the Room migration moves
+     * those rows to DIRECT.
+     */
+    DIRECT("direct"),
     OPTIMIZED("optimized"),
     LEGACY("legacy");
 
     companion object {
-        fun fromId(value: String?): AgentHarnessProfile = entries.firstOrNull {
-            it.id.equals(value?.trim(), ignoreCase = true) ||
-                it.name.equals(value?.trim(), ignoreCase = true)
-        } ?: LEGACY
+        /** Old values are import/migration aliases; they never select an old runtime. */
+        fun fromId(@Suppress("UNUSED_PARAMETER") value: String?): AgentHarnessProfile = DIRECT
     }
 }
 
@@ -69,7 +72,9 @@ data class AgentHarnessPolicySpec(
     val researchLimits: AgentHarnessResearchLimits,
     val explicitThinkingEnabled: Boolean?
 ) {
-    val isOptimized: Boolean get() = profile == AgentHarnessProfile.OPTIMIZED
+    /** Direct is the successor of the former optimized low-token profile. */
+    val isDirect: Boolean get() = profile == AgentHarnessProfile.DIRECT
+    val isOptimized: Boolean get() = profile == AgentHarnessProfile.OPTIMIZED || isDirect
     val isLegacy: Boolean get() = profile == AgentHarnessProfile.LEGACY
 
     /** Name-aligned aliases for UI and settings callers. */
@@ -96,7 +101,11 @@ data class AgentHarnessPolicySpec(
     ): Int {
         if (!isOptimized) return configuredContextTokens.coerceAtLeast(1)
         val selected = if (explicit) configuredContextTokens else (defaultContextTokens ?: configuredContextTokens)
-        return selected.coerceIn(AgentHarnessPolicy.MIN_CONTEXT_TOKENS, maximumContextTokens)
+        return if (explicit) {
+            selected.coerceIn(AgentHarnessPolicy.MIN_CONTEXT_TOKENS, AgentHarnessPolicy.MAX_EXPLICIT_TOKENS)
+        } else {
+            selected.coerceIn(AgentHarnessPolicy.MIN_CONTEXT_TOKENS, maximumContextTokens)
+        }
     }
 
     /**
@@ -111,7 +120,11 @@ data class AgentHarnessPolicySpec(
     ): Int {
         if (!isOptimized) return configuredOutputTokens.coerceAtLeast(1)
         val selected = if (explicit) configuredOutputTokens else (maxOutputTokens(stage) ?: configuredOutputTokens)
-        return selected.coerceIn(AgentHarnessPolicy.MIN_OUTPUT_TOKENS, AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS)
+        return if (explicit) {
+            selected.coerceIn(AgentHarnessPolicy.MIN_OUTPUT_TOKENS, AgentHarnessPolicy.MAX_EXPLICIT_TOKENS)
+        } else {
+            selected.coerceIn(AgentHarnessPolicy.MIN_OUTPUT_TOKENS, AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS)
+        }
     }
 
     /** True only for roles explicitly retained as optional sequential workers. */
@@ -134,6 +147,7 @@ data class AgentHarnessPolicySpec(
  * rewritten when a profile is selected.
  */
 object AgentHarnessPolicy {
+    const val DIRECT = "direct"
     const val OPTIMIZED = "optimized"
     const val LEGACY = "legacy"
 
@@ -166,7 +180,9 @@ object AgentHarnessPolicy {
         RegexOption.IGNORE_CASE
     )
 
+    /** Kept for old optimized settings and tests; Direct defaults to 16K. */
     const val DEFAULT_CONTEXT_TOKENS = 8_192
+    const val DIRECT_DEFAULT_CONTEXT_TOKENS = 16_384
     /** Maximum supported by the low-end optimized profile. */
     const val MAX_CONTEXT_TOKENS = 16_384
     const val CONTROL_MAX_OUTPUT_TOKENS = 2_048
@@ -174,11 +190,111 @@ object AgentHarnessPolicy {
     const val SUMMARY_MAX_OUTPUT_TOKENS = 512
     const val MIN_CONTEXT_TOKENS = 2_048
     const val MIN_OUTPUT_TOKENS = 256
+    const val MAX_EXPLICIT_TOKENS = 1_048_576
     const val RESEARCH_MAX_SEARCH_CALLS = 2
     const val RESEARCH_MAX_FETCH_CALLS = 4
 
     /** The optimized research policy remains fixed; token budgets are user-tunable. */
     const val RESEARCH_AUTO_SUMMARIZE = false
+
+    /** Stable Direct prompt/schema budgets expressed in tokenizer tokens. */
+    const val DIRECT_STABLE_PREFIX_MAX_TOKENS = 2_500
+    const val DIRECT_FIRST_REQUEST_MAX_TOKENS = 4_000
+    const val DIRECT_CONTEXT_RESERVE_TOKENS = 512
+    const val DIRECT_THINKING_ENABLED = false
+    const val DIRECT_WRITE_FILE_MAX_BYTES = 5 * 1_024
+    const val DIRECT_EXTEND_ANCHOR = "DIRECT-EXTEND"
+
+    /**
+     * Resolve the phase output from the request-scoped Direct settings snapshot.
+     * A global override intentionally replaces every phase limit. Without it,
+     * Plan and summaries stay compact while the editable Direct default owns
+     * the Build/Verify ceiling (4K for a fresh installation).
+     */
+    fun resolveDirectPhaseOutputTokens(
+        stage: AgentHarnessStage,
+        configuredOutputTokens: Int,
+        globalOverrideEnabled: Boolean
+    ): Int {
+        val configured = configuredOutputTokens.coerceIn(MIN_OUTPUT_TOKENS, MAX_EXPLICIT_TOKENS)
+        if (globalOverrideEnabled) return configured
+        return when (stage) {
+            AgentHarnessStage.CONTROL -> CONTROL_MAX_OUTPUT_TOKENS
+            AgentHarnessStage.BUILD -> configured
+            AgentHarnessStage.SUMMARY -> SUMMARY_MAX_OUTPUT_TOKENS
+        }
+    }
+
+    /**
+     * A compact, phase-independent prompt.  Plan/Build/Verify state belongs
+     * in [directCheckpointTail] and the authoritative capsule, never here.
+     * Keeping this string immutable is what lets llama.cpp reuse its prefix
+     * when a phase changes.
+     */
+    const val DIRECT_SYSTEM_PROMPT =
+        "You are one direct project agent. Work in the current project and preserve its files, chat, decisions, approved plans, and artifact history. " +
+            "Follow the checkpoint at the end of each request: Plan proposes one bounded Markdown plan and waits for the single plan approval; Build performs only the approved next action; Verify checks the result and finishes with evidence. " +
+            "Use only advertised tools. Read an existing file before editing it, keep paths project-relative, make one durable tool call at a time, and never repeat a successful action. Keep each write_file or edit_file replacement to at most 60 source lines and below 5 KiB; if a file must be larger, end the bounded increment with exactly one DIRECT-EXTEND anchor and extend only that anchor through later exact-match edit_file calls. " +
+            "Ask question only for a genuine unresolved blocker; choose implementation algorithms, libraries, stacks, and tests yourself. If the contract says greenfield or no scouting, treat project inspection as complete: do not call read, list, or search in Plan, and after approval call write_file for the first artifact before any inspection. " +
+            "Research is not a prerequisite merely because the user permits it; use existing knowledge unless the capsule's exact next action says an external fact is required. Use tool_help to activate one optional capability by name only when the core tools cannot perform that exact next action. " +
+            "Persist the result of every message, tool call, tool result, and transition before continuing. Do not delegate or invoke other agents, maintain brain files, or invent unavailable commands. " +
+            "When the current approved-plan step is complete, call finish_task with its artifacts and evidence; the runtime advances to the next step and ends only after the final Verify pass. " +
+            "After a failure, use the exact recovery instruction; after repeated failure or missing progress, pause and make the blocker visible."
+
+    /**
+     * The complete core contract is intentionally stable across phases.  The
+     * backend-specific additions are supplied by AgentToolSchemaPolicy.
+     */
+    val DIRECT_CORE_TOOL_NAMES: Set<String> = linkedSetOf(
+        "read_file",
+        "list_directory",
+        "search_code",
+        "write_file",
+        "edit_file",
+        "question",
+        "finish_task",
+        "tool_help"
+    )
+
+    /** Returns a tiny phase tail; it is not part of the cacheable prefix. */
+    fun directCheckpointTail(phase: AgentHarnessPhase): String = when (phase) {
+        AgentHarnessPhase.PLAN ->
+            "CHECKPOINT phase=PLAN; inspect only; return one actionable plan; wait for approval."
+        AgentHarnessPhase.BUILD ->
+            "CHECKPOINT phase=BUILD; use the approved plan; perform the exact next action; record its receipt."
+        AgentHarnessPhase.VERIFY ->
+            "CHECKPOINT phase=VERIFY; run focused checks and preview inspection; repair only a concrete defect; finish with evidence."
+    }
+
+    /** Stable system prompt accessor used by Direct request assembly. */
+    fun directSystemPrompt(): String = DIRECT_SYSTEM_PROMPT
+
+    /**
+     * Direct cache identity deliberately omits phase, role, and turn branch.
+     * The caller must invalidate this key only for endpoint/model/backend/core
+     * schema/project-context changes or compaction.
+     */
+    fun directPromptCacheKey(
+        conversationId: Long,
+        backend: String,
+        model: String,
+        endpointGeneration: String,
+        coreSchemaHash: String,
+        projectContextHash: String
+    ): String = buildString {
+        append("direct-cache|")
+        append("conversation=").append(conversationId).append('|')
+        append("backend=").append(cachePart(backend)).append('|')
+        append("model=").append(cachePart(model)).append('|')
+        append("endpoint=").append(cachePart(endpointGeneration)).append('|')
+        append("core=").append(cachePart(coreSchemaHash)).append('|')
+        append("project=").append(cachePart(projectContextHash))
+    }
+
+    private fun cachePart(value: String): String {
+        val normalized = value.trim()
+        return "${normalized.length}:$normalized"
+    }
 
     /**
      * Returns true for a durable greenfield declaration or an explicit user
@@ -211,6 +327,53 @@ object AgentHarnessPolicy {
     /** True for the broad Plan-mode codebase discovery tools only. */
     fun isCodebaseDiscoveryTool(toolName: String): Boolean =
         toolName.trim().lowercase(Locale.ROOT) in CODEBASE_DISCOVERY_TOOL_NAMES
+
+    /**
+     * Direct greenfield projects have no useful source state to inspect. Keep
+     * the model on the bounded plan in Plan and block Build inspection until
+     * the first durable mutation. Once a committed artifact exists, ordinary
+     * read-before-edit behavior resumes.
+     */
+    fun shouldBlockDirectGreenfieldInspection(
+        phase: AgentHarnessPhase,
+        codebaseDiscoverySuppressed: Boolean,
+        hasCommittedArtifact: Boolean,
+        toolName: String
+    ): Boolean {
+        if (!codebaseDiscoverySuppressed) return false
+        val inspectionTool = toolName.trim().lowercase(Locale.ROOT) in setOf(
+            "read_file",
+            "list_directory",
+            "search_code"
+        )
+        if (!inspectionTool) return false
+        return phase == AgentHarnessPhase.PLAN ||
+            (phase == AgentHarnessPhase.BUILD && !hasCommittedArtifact)
+    }
+
+    /**
+     * Keep the first greenfield Build mutation deterministic. Control calls
+     * can still explain a genuine blocker or inspect tool help, but the first
+     * project-affecting call must create an artifact with [write_file].
+     */
+    fun shouldBlockDirectGreenfieldFirstMutation(
+        phase: AgentHarnessPhase,
+        codebaseDiscoverySuppressed: Boolean,
+        hasCommittedArtifact: Boolean,
+        toolName: String
+    ): Boolean {
+        if (
+            phase != AgentHarnessPhase.BUILD ||
+            !codebaseDiscoverySuppressed ||
+            hasCommittedArtifact
+        ) return false
+        return toolName.trim().lowercase(Locale.ROOT) !in setOf(
+            "write_file",
+            "question",
+            "tool_help",
+            "finish_task"
+        )
+    }
 
     private fun explicitCodebaseScoutDirective(text: String): Boolean? {
         if (text.isBlank()) return null
@@ -424,8 +587,19 @@ object AgentHarnessPolicy {
     fun profileFromId(value: String?): AgentHarnessProfile =
         AgentHarnessProfile.fromId(value)
 
+    /**
+     * Migration-facing normalization.  Any old profile is an alias for the
+     * Direct runtime; no new conversation can opt back into a legacy lane.
+     */
+    fun directProfileFromId(@Suppress("UNUSED_PARAMETER") value: String?): AgentHarnessProfile =
+        AgentHarnessProfile.DIRECT
+
+    fun normalizeDirectProfileId(@Suppress("UNUSED_PARAMETER") value: String?): String = DIRECT
+
+    fun isDirect(@Suppress("UNUSED_PARAMETER") value: String?): Boolean = true
+
     /** String form for Room/preferences and callback boundaries. */
-    fun normalizeProfileId(value: String?): String = profileFromId(value).id
+    fun normalizeProfileId(@Suppress("UNUSED_PARAMETER") value: String?): String = DIRECT
 
     /**
      * Builds the identity for prompt-only caches for one root-turn branch.
@@ -450,47 +624,31 @@ object AgentHarnessPolicy {
     }
 
     /** Avoids callers having to compare a persisted string themselves. */
-    fun isOptimized(value: String?): Boolean =
-        profileFromId(value) == AgentHarnessProfile.OPTIMIZED
+    fun isOptimized(value: String?): Boolean = isDirect(value)
 
     /**
      * Resolve one immutable policy snapshot. Legacy deliberately returns null
      * for optimized-only tuning so the runtime can keep its current settings.
      */
     fun forProfile(
-        profile: AgentHarnessProfile,
+        @Suppress("UNUSED_PARAMETER") profile: AgentHarnessProfile,
         explicitThinkingEnabled: Boolean? = null
-    ): AgentHarnessPolicySpec = when (profile) {
-        AgentHarnessProfile.OPTIMIZED -> AgentHarnessPolicySpec(
-            profile = profile,
-            defaultContextTokens = DEFAULT_CONTEXT_TOKENS,
+    ): AgentHarnessPolicySpec = AgentHarnessPolicySpec(
+            profile = AgentHarnessProfile.DIRECT,
+            defaultContextTokens = DIRECT_DEFAULT_CONTEXT_TOKENS,
             maximumContextTokens = MAX_CONTEXT_TOKENS,
             controlMaxOutputTokens = CONTROL_MAX_OUTPUT_TOKENS,
             buildMaxOutputTokens = BUILD_MAX_OUTPUT_TOKENS,
             summaryMaxOutputTokens = SUMMARY_MAX_OUTPUT_TOKENS,
-            optimizedSystemPrompt = OPTIMIZED_SYSTEM_PROMPT,
-            optionalSequentialSpecialists = OPTIONAL_SEQUENTIAL_SPECIALISTS,
-            researchLimits = OPTIMIZED_RESEARCH_LIMITS,
-            explicitThinkingEnabled = explicitThinkingEnabled
-        )
-
-        AgentHarnessProfile.LEGACY -> AgentHarnessPolicySpec(
-            profile = profile,
-            defaultContextTokens = null,
-            maximumContextTokens = MAX_CONTEXT_TOKENS,
-            controlMaxOutputTokens = null,
-            buildMaxOutputTokens = null,
-            summaryMaxOutputTokens = null,
-            optimizedSystemPrompt = null,
+            optimizedSystemPrompt = DIRECT_SYSTEM_PROMPT,
             optionalSequentialSpecialists = emptyList(),
             researchLimits = AgentHarnessResearchLimits(
-                maxSearchCalls = Int.MAX_VALUE,
-                maxFetchCalls = Int.MAX_VALUE,
-                autoSummarize = true
+                maxSearchCalls = RESEARCH_MAX_SEARCH_CALLS,
+                maxFetchCalls = RESEARCH_MAX_FETCH_CALLS,
+                autoSummarize = false
             ),
-            explicitThinkingEnabled = explicitThinkingEnabled
+            explicitThinkingEnabled = explicitThinkingEnabled ?: DIRECT_THINKING_ENABLED
         )
-    }
 
     fun forProfile(
         profileId: String?,
@@ -527,4 +685,35 @@ object AgentHarnessPolicy {
         configuredOutputTokens: Int,
         explicit: Boolean = true
     ): Int = forProfile(profileId).resolveOutputTokens(stage, configuredOutputTokens, explicit)
+
+    /**
+     * Estimate input tokens when the endpoint does not expose an exact
+     * tokenizer count.  A 1.25 safety factor is applied to the conventional
+     * four UTF-8 characters/token estimate so the caller pauses early rather
+     * than silently dropping authoritative state.
+     */
+    fun directInputTokenCount(text: String, exactTokenCount: Int? = null): Int {
+        exactTokenCount?.let { return it.coerceAtLeast(0) }
+        val base = (text.codePointCount(0, text.length) + 3) / 4
+        return kotlin.math.ceil(base * 1.25).toInt().coerceAtLeast(0)
+    }
+
+    /** Required invariant: input + reserved output + safety reserve <= context. */
+    fun directFitsContext(
+        inputTokens: Int,
+        reservedOutputTokens: Int,
+        contextTokens: Int = DIRECT_DEFAULT_CONTEXT_TOKENS
+    ): Boolean = inputTokens.coerceAtLeast(0) +
+        reservedOutputTokens.coerceAtLeast(0) +
+        DIRECT_CONTEXT_RESERVE_TOKENS <= contextTokens.coerceAtLeast(1)
+
+    /**
+     * The highest input budget that may be sent without losing the control
+     * capsule.  A negative value means the required state itself cannot fit
+     * and the runtime must pause/compact instead of pruning it.
+     */
+    fun directInputBudget(
+        contextTokens: Int = DIRECT_DEFAULT_CONTEXT_TOKENS,
+        reservedOutputTokens: Int
+    ): Int = contextTokens - reservedOutputTokens - DIRECT_CONTEXT_RESERVE_TOKENS
 }

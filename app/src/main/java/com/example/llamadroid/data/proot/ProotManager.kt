@@ -23,8 +23,6 @@ class ProotManager(private val context: Context) {
         private const val ROOTFS_SIZE_ESTIMATE = 500_000_000L // ~500MB extracted
         private const val A1111_SIZE_ESTIMATE = 5_000_000_000L // ~5GB with venv
         
-        // Termux proot package URL - built specifically for Android with proper ptrace/seccomp handling
-        private const val TERMUX_PROOT_URL = "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107-67_aarch64.deb"
     }
     
     private val prootDir = File(context.filesDir, "proot")
@@ -270,19 +268,21 @@ class ProotManager(private val context: Context) {
             // Set up environment for proot
             val env = mutableMapOf<String, String>()
             
-            // Check for Termux proot loader first (better Android compatibility)
+            // Executables must come from the signed APK native-library directory. Existing
+            // legacy SD data remains in place, but it is never an executable source.
             val termuxLoader = File(prootDir, "termux-proot/loader")
             val nativeLibDir = context.applicationInfo.nativeLibraryDir
             val bundledLoader = File(nativeLibDir, "libproot_loader.so")
             
             when {
-                termuxLoader.exists() -> {
-                    env["PROOT_LOADER"] = termuxLoader.absolutePath
-                    DebugLog.log("ProotManager: Using Termux PROOT_LOADER=${termuxLoader.absolutePath}")
-                }
                 bundledLoader.exists() -> {
                     env["PROOT_LOADER"] = bundledLoader.absolutePath
                     DebugLog.log("ProotManager: Using bundled PROOT_LOADER=${bundledLoader.absolutePath}")
+                }
+                termuxLoader.exists() -> {
+                    // Compatibility only for an installation created by an older release.
+                    env["PROOT_LOADER"] = termuxLoader.absolutePath
+                    DebugLog.log("ProotManager: Using preserved legacy loader=${termuxLoader.absolutePath}")
                 }
             }
             
@@ -328,109 +328,33 @@ class ProotManager(private val context: Context) {
         }
     }
     
-    /**
-     * Get the proot binary, preferring Termux version for better Android compatibility
-     */
+    /** Get the signed packaged PRoot binary, preserving old installations only as fallback. */
     private fun getProotBinary(): File? {
-        // First check for Termux proot (better Android compatibility)
+        AgentProotNativeBinaryProvider.locate(context, AgentProotNativeBinaryProvider.Binary.PROOT)?.let {
+            DebugLog.log("ProotManager: Using signed packaged PRoot at ${it.absolutePath}")
+            return it
+        }
+        
+        // Compatibility only: never create or refresh these writable executables.
         val termuxProot = File(prootDir, "termux-proot/proot")
-        if (termuxProot.exists() && termuxProot.canExecute()) {
-            DebugLog.log("ProotManager: Using Termux proot at ${termuxProot.absolutePath}")
-            return termuxProot
-        }
-        
-        // Fallback to bundled proot (may not work on all devices)
-        val nativeLibDir = context.applicationInfo.nativeLibraryDir
-        val bundledProot = File(nativeLibDir, "libproot.so")
-        if (bundledProot.exists()) {
-            DebugLog.log("ProotManager: Falling back to bundled proot at ${bundledProot.absolutePath}")
-            return bundledProot
-        }
-        
-        // Check legacy location
+        if (termuxProot.exists() && termuxProot.canExecute()) return termuxProot
         val legacyProot = File(prootDir, "proot")
         if (legacyProot.exists() && legacyProot.canExecute()) {
             DebugLog.log("ProotManager: Found legacy proot at ${legacyProot.absolutePath}")
             return legacyProot
         }
         
-        DebugLog.log("ProotManager: Proot binary not found - download required")
+        DebugLog.log("ProotManager: Signed packaged PRoot binary is unavailable")
         return null
     }
     
     /**
-     * Download Termux's proot package which has proper Android compatibility.
-     * The bundled proot loader doesn't work on all Android devices due to security restrictions.
+     * Compatibility entry point retained for the legacy SD setup flow. It no longer downloads
+     * or extracts executable packages: Android target-29+ only executes the signed APK artifact.
      */
     suspend fun downloadProot(onProgress: (Float) -> Unit): Boolean = withContext(Dispatchers.IO) {
-        // Check if we already have Termux proot extracted
-        val termuxProotDir = File(prootDir, "termux-proot")
-        val prootBinary = File(termuxProotDir, "proot")
-        val loaderBinary = File(termuxProotDir, "loader")
-        
-        if (prootBinary.exists() && prootBinary.canExecute()) {
-            DebugLog.log("ProotManager: Termux proot already available at ${prootBinary.absolutePath}")
-            onProgress(1f)
-            return@withContext true
-        }
-        
-        try {
-            termuxProotDir.mkdirs()
-            downloadDir.mkdirs()
-            
-            // Download the .deb package
-            val debFile = File(downloadDir, "proot.deb")
-            DebugLog.log("ProotManager: Downloading Termux proot from $TERMUX_PROOT_URL")
-            onProgress(0.1f)
-            
-            URL(TERMUX_PROOT_URL).openStream().use { input ->
-                FileOutputStream(debFile).use { output ->
-                    val buffer = ByteArray(8192)
-                    var bytesRead: Int
-                    while (input.read(buffer).also { bytesRead = it } != -1) {
-                        output.write(buffer, 0, bytesRead)
-                    }
-                }
-            }
-            
-            DebugLog.log("ProotManager: Proot .deb downloaded (${debFile.length()} bytes)")
-            onProgress(0.4f)
-            
-            // Extract the .deb file (it's an ar archive)
-            // First, extract data.tar.xz from the ar archive
-            val dataFile = extractDataFromDeb(debFile, termuxProotDir)
-            if (dataFile == null) {
-                DebugLog.log("ProotManager: Failed to extract data from .deb")
-                return@withContext false
-            }
-            onProgress(0.7f)
-            
-            // Extract the proot binary from data.tar.xz
-            val success = extractProotFromData(dataFile, termuxProotDir)
-            if (!success) {
-                DebugLog.log("ProotManager: Failed to extract proot from data archive")
-                return@withContext false
-            }
-            
-            // Make proot executable
-            prootBinary.setExecutable(true, false)
-            if (loaderBinary.exists()) {
-                loaderBinary.setExecutable(true, false)
-            }
-            
-            // Clean up
-            debFile.delete()
-            dataFile.delete()
-            
-            DebugLog.log("ProotManager: Termux proot extracted successfully")
-            onProgress(1f)
-            return@withContext true
-            
-        } catch (e: Exception) {
-            DebugLog.log("ProotManager: Failed to download/extract Termux proot: ${e.message}")
-            e.printStackTrace()
-            return@withContext false
-        }
+        onProgress(1f)
+        getProotBinary() != null
     }
     
     /**

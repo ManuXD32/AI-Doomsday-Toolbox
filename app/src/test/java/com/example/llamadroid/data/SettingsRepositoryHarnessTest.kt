@@ -56,14 +56,14 @@ class SettingsRepositoryHarnessTest {
     }
 
     @Test
-    fun `optimized resolution uses recommendations only for roles without saved limits`() {
+    fun `direct resolution uses recommendations only for roles without saved limits`() {
         val app = RuntimeEnvironment.getApplication()
         val settings = SettingsRepository(app)
 
         assertFalse(settings.hasExplicitAgentContextForRole("ORCHESTRATOR"))
         assertFalse(settings.hasExplicitAgentMaxOutputTokensForRole("ORCHESTRATOR"))
         assertEquals(
-            AgentHarnessPolicy.DEFAULT_CONTEXT_TOKENS,
+            AgentHarnessPolicy.DIRECT_DEFAULT_CONTEXT_TOKENS,
             settings.resolveAgentHarnessContext(
                 profileId = AgentHarnessPolicy.OPTIMIZED,
                 role = "ORCHESTRATOR"
@@ -85,14 +85,14 @@ class SettingsRepositoryHarnessTest {
         assertTrue(settings.hasExplicitAgentContextForRole("ORCHESTRATOR"))
         assertTrue(settings.hasExplicitAgentMaxOutputTokensForRole("ORCHESTRATOR"))
         assertEquals(
-            AgentHarnessPolicy.MAX_CONTEXT_TOKENS,
+            32_768,
             settings.resolveAgentHarnessContext(
                 profileId = AgentHarnessPolicy.OPTIMIZED,
                 role = "ORCHESTRATOR"
             )
         )
         assertEquals(
-            AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS,
+            12_345,
             settings.resolveAgentHarnessOutputTokens(
                 profileId = AgentHarnessPolicy.OPTIMIZED,
                 role = "ORCHESTRATOR",
@@ -114,14 +114,14 @@ class SettingsRepositoryHarnessTest {
         assertTrue(settings.hasExplicitAgentContextForRole("CUSTOM:writer"))
         assertTrue(settings.hasExplicitAgentMaxOutputTokensForRole("CUSTOM:writer"))
         assertEquals(
-            AgentHarnessPolicy.MAX_CONTEXT_TOKENS,
+            32_768,
             settings.resolveAgentHarnessContext(
                 profileId = AgentHarnessPolicy.OPTIMIZED,
                 role = "CUSTOM:writer"
             )
         )
         assertEquals(
-            AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS,
+            12_345,
             settings.resolveAgentHarnessOutputTokens(
                 profileId = AgentHarnessPolicy.OPTIMIZED,
                 role = "CUSTOM:writer",

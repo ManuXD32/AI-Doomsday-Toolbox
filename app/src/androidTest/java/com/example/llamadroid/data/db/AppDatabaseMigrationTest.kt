@@ -3095,6 +3095,6 @@ class AppDatabaseMigrationTest {
         private const val OLDEST_EXPORTED_VERSION = 28
 
         /** Keep in step with the `version` in [AppDatabase]'s `@Database`. */
-        private const val LATEST_VERSION = 112
+        private const val LATEST_VERSION = 120
     }
 }

@@ -34,7 +34,6 @@ import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import com.example.llamadroid.R
 import com.example.llamadroid.service.AgentService
 import com.example.llamadroid.service.AgentHarnessPolicy
-import com.example.llamadroid.service.AgentHarnessProfile
 import com.example.llamadroid.service.OllamaService
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
@@ -80,6 +79,39 @@ typealias AgentGlobalOverrideState = AgentRuntimeGlobalOverride
 
 private const val GLOBAL_OVERRIDE_CONNECTION_KEY = "__global_override_connection__"
 private const val MANAGED_OVERRIDE_CONNECTION_KEY = "__managed_override_connection__"
+
+/** Controls that are retained in preferences but cannot be enabled in Direct. */
+private val DIRECT_HIDDEN_TOOL_SETTINGS = setOf(
+    "call_agent",
+    "delegate_task",
+    "reflection",
+    "reflect",
+    "project_state_read",
+    "project_order_read",
+    "plan_read",
+    "agent_report_read",
+    "propose_plan",
+    "report_progress",
+    "memory_read",
+    "memory_write",
+    "read_memory",
+    "list_memory",
+    "write_memory",
+    "rewrite_memory",
+    "delete_memory",
+    "todo_read",
+    "todo_write",
+    "todo_reconcile",
+    "todo_transition",
+    "append_file",
+    "edit_lines",
+    "apply_patch",
+    "create_folder",
+    "run_tools_sequential",
+    "sleep_until",
+    "read_skill_resource",
+    "run_skill_script"
+)
 
 @Composable
 fun ModelSelectorDialog(
@@ -858,6 +890,7 @@ fun AgentSettingsDialog(
     availableBackgroundRemovalModels: List<String>,
     onKnowledgeBaseSelectionChange: (List<Long>) -> Unit,
     onManageKnowledgeBases: () -> Unit,
+    onManageProotEnvironments: () -> Unit = {},
     section: AgentSettingsSection = AgentSettingsSection.AGENTS,
     onDismiss: () -> Unit,
     runtimeProfileStore: AgentRuntimeProfileStore = EmptyAgentRuntimeProfileStore,
@@ -878,6 +911,7 @@ fun AgentSettingsDialog(
     val runtimeProfiles by runtimeProfileStore.observeProfiles().collectAsState(initial = emptyList())
     val runtimeEndpointConfigs by runtimeProfileStore.observeEndpointConfigs().collectAsState(initial = emptyList())
     val persistedGlobalOverride by settingsRepository.agentGlobalRuntimeOverride.collectAsState()
+    val directRuntimeDefaults by settingsRepository.agentDirectRuntimeDefaults.collectAsState()
     val effectiveGlobalOverride = globalOverride ?: persistedGlobalOverride
     val saveGlobalOverride: (AgentGlobalOverrideState) -> Unit = if (globalOverride == null) {
         settingsRepository::setAgentGlobalRuntimeOverride
@@ -1007,16 +1041,18 @@ fun AgentSettingsDialog(
     val selectedAgentLiteRtModel = liteRtModels.firstOrNull { it.id == agentLiteRtModelId }
         ?: liteRtModels.firstOrNull()
 
-    val optimizedHarnessSelected = currentProfile?.let {
-        AgentHarnessProfile.fromId(it) == AgentHarnessProfile.OPTIMIZED
-    } == true
+    // Direct is the only active execution profile. Keep the old project id
+    // parameter in this dialog for migration-era callers, but never expose a
+    // legacy/optimized choice in the UI. The runtime owns the actual
+    // persisted normalization and applies these fixed low-token defaults.
+    val directHarnessSelected = true
 
     // Keep the persisted role values untouched while showing the effective
     // Optimized recommendation in an unset field. Once a user starts editing,
     // the preference key exists and the draft value is shown as-is.
     fun displayRoleContext(role: String, configured: Int): Int =
         if (
-            optimizedHarnessSelected &&
+            directHarnessSelected &&
                 !effectiveGlobalOverride.enabled &&
                 !settingsRepository.hasExplicitAgentContextForRole(role)
         ) {
@@ -1027,7 +1063,7 @@ fun AgentSettingsDialog(
 
     fun displayRoleOutput(role: String, configured: Int): Int =
         if (
-            optimizedHarnessSelected &&
+            directHarnessSelected &&
                 !effectiveGlobalOverride.enabled &&
                 !settingsRepository.hasExplicitAgentMaxOutputTokensForRole(role)
         ) {
@@ -1042,7 +1078,7 @@ fun AgentSettingsDialog(
     @Composable
     fun outputRecommendationForRole(role: String): String? {
         if (
-            !optimizedHarnessSelected ||
+            !directHarnessSelected ||
             effectiveGlobalOverride.enabled ||
             settingsRepository.hasExplicitAgentMaxOutputTokensForRole(role)
         ) {
@@ -1066,16 +1102,16 @@ fun AgentSettingsDialog(
     }
 
     val displayGlobalContext = if (
-        optimizedHarnessSelected &&
+        directHarnessSelected &&
             !effectiveGlobalOverride.enabled &&
             !settingsRepository.hasExplicitAgentGlobalOverrideContextSize()
     ) {
-        AgentHarnessPolicy.DEFAULT_CONTEXT_TOKENS
+        AgentHarnessPolicy.DIRECT_DEFAULT_CONTEXT_TOKENS
     } else {
         null
     }
     val displayGlobalOutput = if (
-        optimizedHarnessSelected &&
+        directHarnessSelected &&
             !effectiveGlobalOverride.enabled &&
             !settingsRepository.hasExplicitAgentGlobalOverrideMaxOutputTokens()
     ) {
@@ -1084,7 +1120,7 @@ fun AgentSettingsDialog(
         null
     }
     val globalOutputRecommendation = if (
-        optimizedHarnessSelected &&
+        directHarnessSelected &&
             !effectiveGlobalOverride.enabled &&
             !settingsRepository.hasExplicitAgentGlobalOverrideMaxOutputTokens()
     ) {
@@ -1181,16 +1217,57 @@ fun AgentSettingsDialog(
                             AgentRuntimeBackend.LITERT -> null
                         },
                         onChange = saveGlobalOverride,
-                        contextSizeForDisplay = displayGlobalContext,
-                        maxOutputTokensForDisplay = displayGlobalOutput,
-                        outputRecommendation = globalOutputRecommendation,
-                        optimizedLimits = optimizedHarnessSelected
+                        contextSizeForDisplay = null,
+                        maxOutputTokensForDisplay = null,
+                        outputRecommendation = null,
+                        optimizedLimits = false
                     )
-                    if (currentProfile != null) {
-                        AgentHarnessProfileCard(
-                            profile = AgentHarnessProfile.fromId(currentProfile),
-                            onProfileChange = { onProfileChange(it.id) }
+                    if (effectiveGlobalOverride.enabled) {
+                        AgentDirectRuntimeCard(
+                            selectedModel = directRuntimeDefaults.model.orEmpty(),
+                            availableModels = availableModels,
+                            backend = directRuntimeDefaults.backend,
+                            llamaServerModelLabel = llamaServerModelLabel,
+                            llamaServerContextLabel = llamaServerContextLabel,
+                            globalOverride = effectiveGlobalOverride,
+                            directDefaults = directRuntimeDefaults,
+                            onModelChange = {}
                         )
+                    } else {
+                        AgentGlobalOverrideCard(
+                            state = directRuntimeDefaults.copy(enabled = true),
+                            availableModels = availableModels,
+                            llamaSwapModels = llamaSwapModels,
+                            endpointConfigs = runtimeEndpointConfigs,
+                            managedLlamaServers = managedLlamaServers,
+                            liteRtModels = runtimeLiteRtOptions,
+                            globalConnectionDescription = when (directRuntimeDefaults.normalizedBackend) {
+                                AgentRuntimeBackend.OLLAMA -> globalOllamaUrl
+                                AgentRuntimeBackend.LLAMA_SERVER -> globalLlamaServerUrl
+                                AgentRuntimeBackend.LLAMA_SWAP -> globalLlamaSwapUrl
+                                AgentRuntimeBackend.LITERT -> null
+                            },
+                            onChange = {
+                                settingsRepository.setAgentDirectRuntimeDefaults(
+                                    it.copy(enabled = true)
+                                )
+                            },
+                            contextSizeForDisplay = null,
+                            maxOutputTokensForDisplay = null,
+                            outputRecommendation = stringResource(
+                                R.string.agent_harness_general_output_recommendation,
+                                AgentHarnessPolicy.CONTROL_MAX_OUTPUT_TOKENS,
+                                AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS
+                            ),
+                            optimizedLimits = false,
+                            directDefaultsMode = true
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = onManageProotEnvironments,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(stringResource(R.string.agent_proot_manage_action))
                     }
                 }
 
@@ -1252,7 +1329,10 @@ fun AgentSettingsDialog(
                     )
                 }
                 
-                if (showAgentConfiguration) {
+                // Specialist role cards remain persisted for history/export and
+                // migration, but are intentionally not active controls in the
+                // Direct runtime. There is one serialized agent above instead.
+                if (showAgentConfiguration && false) {
                 AgentSettingsGroupHeader(
                     title = stringResource(R.string.agent_settings_section_roles)
                 )
@@ -1280,7 +1360,7 @@ fun AgentSettingsDialog(
                     maxOutputTokens = displayRoleOutput("ORCHESTRATOR", orchestratorMaxOutputTokens),
                     onMaxOutputTokensChange = settingsRepository::setAgentOrchestratorMaxOutputTokens,
                     outputRecommendation = outputRecommendationForRole("ORCHESTRATOR"),
-                    optimizedLimits = optimizedHarnessSelected,
+                    optimizedLimits = directHarnessSelected,
                     thinkingEnabled = orchestratorThinking,
                     onThinkingChange = { settingsRepository.setAgentOrchestratorThinkingEnabled(it) },
                     visionEnabled = orchestratorVisionEnabled,
@@ -1312,7 +1392,7 @@ fun AgentSettingsDialog(
                     onMaxOutputTokensChange =
                         settingsRepository::setAgentCodebaseScoutMaxOutputTokens,
                     outputRecommendation = outputRecommendationForRole("CODEBASE_SCOUT"),
-                    optimizedLimits = optimizedHarnessSelected,
+                    optimizedLimits = directHarnessSelected,
                     thinkingEnabled = codebaseScoutThinking,
                     onThinkingChange =
                         settingsRepository::setAgentCodebaseScoutThinkingEnabled,
@@ -1350,7 +1430,7 @@ fun AgentSettingsDialog(
                     onMaxOutputTokensChange =
                         settingsRepository::setAgentPlannerMaxOutputTokens,
                     outputRecommendation = outputRecommendationForRole("PLANNER"),
-                    optimizedLimits = optimizedHarnessSelected,
+                    optimizedLimits = directHarnessSelected,
                     thinkingEnabled = plannerThinking,
                     onThinkingChange =
                         settingsRepository::setAgentPlannerThinkingEnabled,
@@ -1388,7 +1468,7 @@ fun AgentSettingsDialog(
                     onMaxOutputTokensChange =
                         settingsRepository::setAgentResearcherMaxOutputTokens,
                     outputRecommendation = outputRecommendationForRole("RESEARCHER"),
-                    optimizedLimits = optimizedHarnessSelected,
+                    optimizedLimits = directHarnessSelected,
                     thinkingEnabled = researcherThinking,
                     onThinkingChange =
                         settingsRepository::setAgentResearcherThinkingEnabled,
@@ -1432,7 +1512,7 @@ fun AgentSettingsDialog(
                     maxOutputTokens = displayRoleOutput("CODER", coderMaxOutputTokens),
                     onMaxOutputTokensChange = settingsRepository::setAgentCoderMaxOutputTokens,
                     outputRecommendation = outputRecommendationForRole("CODER"),
-                    optimizedLimits = optimizedHarnessSelected,
+                    optimizedLimits = directHarnessSelected,
                     thinkingEnabled = coderThinking,
                     onThinkingChange = { settingsRepository.setAgentCoderThinkingEnabled(it) },
                     visionEnabled = coderVisionEnabled,
@@ -1470,7 +1550,7 @@ fun AgentSettingsDialog(
                     maxOutputTokens = displayRoleOutput("EXECUTOR", executorMaxOutputTokens),
                     onMaxOutputTokensChange = settingsRepository::setAgentExecutorMaxOutputTokens,
                     outputRecommendation = outputRecommendationForRole("EXECUTOR"),
-                    optimizedLimits = optimizedHarnessSelected,
+                    optimizedLimits = directHarnessSelected,
                     thinkingEnabled = executorThinking,
                     onThinkingChange = { settingsRepository.setAgentExecutorThinkingEnabled(it) },
                     visionEnabled = executorVisionEnabled,
@@ -1510,7 +1590,7 @@ fun AgentSettingsDialog(
                     maxOutputTokens = displayRoleOutput("REVIEWER", reviewerMaxOutputTokens),
                     onMaxOutputTokensChange = settingsRepository::setAgentReviewerMaxOutputTokens,
                     outputRecommendation = outputRecommendationForRole("REVIEWER"),
-                    optimizedLimits = optimizedHarnessSelected,
+                    optimizedLimits = directHarnessSelected,
                     thinkingEnabled = reviewerThinking,
                     onThinkingChange = { settingsRepository.setAgentReviewerThinkingEnabled(it) },
                     visionEnabled = reviewerVisionEnabled,
@@ -1544,7 +1624,7 @@ fun AgentSettingsDialog(
                     onMaxOutputTokensChange =
                         settingsRepository::setAgentVisualTesterMaxOutputTokens,
                     outputRecommendation = outputRecommendationForRole("VISUAL_TESTER"),
-                    optimizedLimits = optimizedHarnessSelected,
+                    optimizedLimits = directHarnessSelected,
                     thinkingEnabled = visualTesterThinking,
                     onThinkingChange =
                         settingsRepository::setAgentVisualTesterThinkingEnabled,
@@ -1595,7 +1675,7 @@ fun AgentSettingsDialog(
                     maxOutputTokens = displayRoleOutput("SUMMARIZER", summarizerMaxOutputTokens),
                     onMaxOutputTokensChange = settingsRepository::setAgentSummarizerMaxOutputTokens,
                     outputRecommendation = outputRecommendationForRole("SUMMARIZER"),
-                    optimizedLimits = optimizedHarnessSelected,
+                    optimizedLimits = directHarnessSelected,
                     thinkingEnabled = summarizerThinking,
                     onThinkingChange = { settingsRepository.setAgentSummarizerThinkingEnabled(it) },
                     visionEnabled = summarizerVisionEnabled,
@@ -2399,17 +2479,48 @@ private fun AgentSettingsGroupHeader(title: String) {
 }
 
 /**
- * Project-scoped harness choice hosted in the existing Agent Settings dialog.
- * The dialog only emits the canonical id; the conversation owner persists it.
+ * The only active execution settings card. Legacy and optimized values remain
+ * readable in history/migration data, but the user can no longer switch the
+ * project into a different runtime lane. This summary is shown while the
+ * global override owns editing; inactive historical role preferences are
+ * never consulted.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AgentHarnessProfileCard(
-    profile: AgentHarnessProfile,
-    onProfileChange: (AgentHarnessProfile) -> Unit
+private fun AgentDirectRuntimeCard(
+    selectedModel: String,
+    availableModels: List<String>,
+    backend: String,
+    llamaServerModelLabel: String?,
+    llamaServerContextLabel: String?,
+    globalOverride: AgentGlobalOverrideState,
+    directDefaults: AgentGlobalOverrideState,
+    onModelChange: (String) -> Unit
 ) {
+    var modelExpanded by remember { mutableStateOf(false) }
+    val effectiveBackend = if (globalOverride.enabled) globalOverride.backend else backend
+    val isRemoteServer = SettingsRepository.isLlamaServerBackend(effectiveBackend) ||
+        SettingsRepository.isLlamaSwapBackend(effectiveBackend)
+    val isLiteRt = SettingsRepository.isLiteRtBackend(effectiveBackend)
+    val effectiveModel = if (globalOverride.enabled) globalOverride.model else selectedModel
+    val serverModel = friendlyBackendModelLabel(
+        if (globalOverride.enabled) globalOverride.model else llamaServerModelLabel
+    )
+    val effectiveContext = if (globalOverride.enabled) globalOverride.contextSize else directDefaults.contextSize
+    val effectivePlanOutput = if (globalOverride.enabled) {
+        globalOverride.maxOutputTokens
+    } else {
+        AgentDirectUiDefaults.PLAN_OUTPUT_TOKENS
+    }
+    val effectiveBuildOutput = if (globalOverride.enabled) {
+        globalOverride.maxOutputTokens
+    } else {
+        directDefaults.maxOutputTokens
+    }
+
     Card(
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f)
         )
     ) {
         Column(
@@ -2417,90 +2528,179 @@ private fun AgentHarnessProfileCard(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
-                text = stringResource(R.string.agent_harness_profile_title),
+                text = stringResource(R.string.agent_direct_title),
                 fontWeight = FontWeight.Bold
             )
             Text(
-                text = stringResource(R.string.agent_harness_profile_desc),
+                text = stringResource(R.string.agent_direct_desc),
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            AgentHarnessProfile.entries.forEach { candidate ->
-                val selected = candidate == profile
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onProfileChange(candidate) },
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (selected) {
-                        MaterialTheme.colorScheme.primaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.surface
-                    },
-                    border = if (selected) {
-                        androidx.compose.foundation.BorderStroke(
-                            1.dp,
-                            MaterialTheme.colorScheme.primary
-                        )
-                    } else {
-                        null
-                    }
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
+            ) {
+                Text(
+                    text = stringResource(R.string.agent_direct_fixed_note),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                )
+            }
+
+            if (globalOverride.enabled) {
+                AgentDirectBudgetRow(
+                    label = stringResource(R.string.agent_direct_model_label),
+                    value = friendlyBackendModelLabel(effectiveModel)
+                        ?: effectiveModel
+                        ?: stringResource(R.string.agent_direct_model_unavailable)
+                )
+            } else if (isLiteRt) {
+                Text(
+                    text = stringResource(R.string.agent_direct_litert_model_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else if (isRemoteServer) {
+                Text(
+                    text = stringResource(
+                        R.string.agent_direct_server_model,
+                        serverModel ?: stringResource(R.string.agent_llama_server_value_unavailable)
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                llamaServerContextLabel?.takeIf { it.isNotBlank() }?.let { contextLabel ->
+                    Text(
+                        text = stringResource(R.string.agent_direct_server_context, contextLabel),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                ExposedDropdownMenuBox(
+                    expanded = modelExpanded,
+                    onExpandedChange = { modelExpanded = it }
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    OutlinedTextField(
+                        value = selectedModel,
+                        onValueChange = onModelChange,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor(),
+                        label = { Text(stringResource(R.string.agent_direct_model_label)) },
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelExpanded)
+                        },
+                        singleLine = true
+                    )
+                    ExposedDropdownMenu(
+                        expanded = modelExpanded,
+                        onDismissRequest = { modelExpanded = false }
                     ) {
-                        RadioButton(
-                            selected = selected,
-                            onClick = { onProfileChange(candidate) }
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = stringResource(
-                                    when (candidate) {
-                                        AgentHarnessProfile.OPTIMIZED ->
-                                            R.string.agent_harness_profile_optimized
-                                        AgentHarnessProfile.LEGACY ->
-                                            R.string.agent_harness_profile_legacy
-                                    }
-                                ),
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                text = stringResource(
-                                    when (candidate) {
-                                        AgentHarnessProfile.OPTIMIZED ->
-                                            R.string.agent_harness_profile_optimized_desc
-                                        AgentHarnessProfile.LEGACY ->
-                                            R.string.agent_harness_profile_legacy_desc
-                                    }
-                                ),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                        availableModels.forEach { model ->
+                            DropdownMenuItem(
+                                text = { Text(model, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                onClick = {
+                                    onModelChange(model)
+                                    modelExpanded = false
+                                }
                             )
                         }
                     }
                 }
+                if (availableModels.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.agent_direct_model_unavailable),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary
+                    )
+                }
             }
-            if (profile == AgentHarnessProfile.OPTIMIZED) {
-                Text(
-                    text = stringResource(
-                        R.string.agent_harness_profile_budget_note,
-                        AgentHarnessPolicy.DEFAULT_CONTEXT_TOKENS,
-                        AgentHarnessPolicy.MAX_CONTEXT_TOKENS,
-                        AgentHarnessPolicy.CONTROL_MAX_OUTPUT_TOKENS,
-                        AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS,
-                        AgentHarnessPolicy.SUMMARY_MAX_OUTPUT_TOKENS
-                    ),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.tertiary
+
+            AgentDirectBudgetRow(
+                label = stringResource(R.string.agent_direct_context_label),
+                value = stringResource(
+                    R.string.agent_direct_tokens_value,
+                    effectiveContext
                 )
-            }
+            )
+            AgentDirectBudgetRow(
+                label = stringResource(R.string.agent_direct_plan_output_label),
+                value = stringResource(
+                    R.string.agent_direct_tokens_value,
+                    effectivePlanOutput
+                )
+            )
+            AgentDirectBudgetRow(
+                label = stringResource(R.string.agent_direct_build_output_label),
+                value = stringResource(
+                    R.string.agent_direct_tokens_value,
+                    effectiveBuildOutput
+                )
+            )
+            AgentDirectBudgetRow(
+                label = stringResource(R.string.agent_direct_thinking_label),
+                value = when {
+                    !(if (globalOverride.enabled) globalOverride.thinkingEnabled else directDefaults.thinkingEnabled) ->
+                        stringResource(R.string.agent_direct_thinking_disabled)
+                    (if (globalOverride.enabled) globalOverride.thinkingBudgetTokens else directDefaults.thinkingBudgetTokens) != null ->
+                        stringResource(
+                            R.string.agent_direct_thinking_budget_value,
+                            (if (globalOverride.enabled) globalOverride.thinkingBudgetTokens else directDefaults.thinkingBudgetTokens)!!
+                        )
+                    else -> stringResource(R.string.agent_direct_thinking_provider_default)
+                }
+            )
+            Text(
+                text = stringResource(
+                    if (globalOverride.enabled) {
+                        R.string.agent_direct_global_override_active
+                    } else {
+                        R.string.agent_direct_global_override_inactive
+                    }
+                ),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
+
+@Composable
+private fun AgentDirectBudgetRow(
+    label: String,
+    value: String
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+/*
+ * Retained role-setting implementation follows below for data compatibility
+ * and old exports. It is unreachable from the Direct settings surface.
+ */
 
 /**
  * Shared runtime defaults for all configured roles.
@@ -2520,11 +2720,13 @@ fun AgentGlobalOverrideCard(
     liteRtModels: List<AgentLiteRtProfileOption> = emptyList(),
     globalConnectionDescription: String? = null,
     onChange: (AgentGlobalOverrideState) -> Unit,
-    /** Optional display-only values for an active Optimized profile. */
+    /** Optional display-only values for the active Direct runtime. */
     contextSizeForDisplay: Int? = null,
     maxOutputTokensForDisplay: Int? = null,
     outputRecommendation: String? = null,
-    optimizedLimits: Boolean = false
+    optimizedLimits: Boolean = false,
+    /** Reuse the canonical editor for the active fallback snapshot without an enable switch. */
+    directDefaultsMode: Boolean = false
 ) {
     val backendOptions = AgentRuntimeBackend.entries.map { it.id }
     val backend = state.normalizedBackend
@@ -2546,16 +2748,12 @@ fun AgentGlobalOverrideCard(
         }
         addAll(endpointOptions.map { it.id.toString() })
     }
-    val modelOptions = buildList {
-        addAll(
-            if (backend == AgentRuntimeBackend.LLAMA_SWAP && llamaSwapModels.isNotEmpty()) {
-                llamaSwapModels
-            } else {
-                availableModels
-            }
-        )
-        state.model?.trim()?.takeIf { it.isNotBlank() }?.let(::add)
-    }.distinct()
+    val modelOptions = directAgentModelOptions(
+        backend = backend,
+        ollamaModels = availableModels,
+        openAiModels = llamaSwapModels,
+        selectedModel = state.model
+    )
     val liteRtModelOptions = liteRtModels.map { it.id.toString() }
 
     fun selectConnection(selection: String) {
@@ -2597,21 +2795,29 @@ fun AgentGlobalOverrideCard(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = stringResource(R.string.agent_global_override_title),
+                        text = stringResource(
+                            if (directDefaultsMode) R.string.agent_direct_title
+                            else R.string.agent_global_override_title
+                        ),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = stringResource(R.string.agent_global_override_desc),
+                        text = stringResource(
+                            if (directDefaultsMode) R.string.agent_direct_desc
+                            else R.string.agent_global_override_desc
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Switch(
-                    checked = state.enabled,
-                    onCheckedChange = { onChange(state.copy(enabled = it)) },
-                    modifier = Modifier.scale(0.82f)
-                )
+                if (!directDefaultsMode) {
+                    Switch(
+                        checked = state.enabled,
+                        onCheckedChange = { onChange(state.copy(enabled = it)) },
+                        modifier = Modifier.scale(0.82f)
+                    )
+                }
             }
 
             Surface(
@@ -2625,7 +2831,9 @@ fun AgentGlobalOverrideCard(
             ) {
                 Text(
                     text = stringResource(
-                        if (state.enabled) {
+                        if (directDefaultsMode) {
+                            R.string.agent_direct_fixed_note
+                        } else if (state.enabled) {
                             R.string.agent_global_override_enabled_note
                         } else {
                             R.string.agent_global_override_disabled_note
@@ -2637,8 +2845,15 @@ fun AgentGlobalOverrideCard(
                 )
             }
 
+            // Inactive override values are deliberately not editable. The
+            // read-only Direct card below remains the authoritative summary.
+            if (!directDefaultsMode && !state.enabled) return@Column
+
             AgentStringDropdown(
-                label = stringResource(R.string.agent_global_override_backend_label),
+                label = stringResource(
+                    if (directDefaultsMode) R.string.agent_runtime_engine_label
+                    else R.string.agent_global_override_backend_label
+                ),
                 selected = state.backend,
                 values = backendOptions,
                 labelFor = { backend ->
@@ -2663,7 +2878,10 @@ fun AgentGlobalOverrideCard(
 
             if (backend != AgentRuntimeBackend.LITERT) {
                 AgentStringDropdown(
-                    label = stringResource(R.string.agent_global_override_connection_label),
+                    label = stringResource(
+                        if (directDefaultsMode) R.string.agent_runtime_connection_label
+                        else R.string.agent_global_override_connection_label
+                    ),
                     selected = connectionSelection,
                     values = connectionOptions,
                     labelFor = { selection ->
@@ -2703,7 +2921,10 @@ fun AgentGlobalOverrideCard(
                 ) {
                     Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
                         Text(
-                            stringResource(R.string.agent_global_override_connection_label),
+                            stringResource(
+                                if (directDefaultsMode) R.string.agent_runtime_connection_label
+                                else R.string.agent_global_override_connection_label
+                            ),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -2752,7 +2973,10 @@ fun AgentGlobalOverrideCard(
             } else {
                 if (modelOptions.isNotEmpty()) {
                     AgentStringDropdown(
-                        label = stringResource(R.string.agent_global_override_model_label),
+                        label = stringResource(
+                            if (directDefaultsMode) R.string.agent_runtime_model_label
+                            else R.string.agent_global_override_model_label
+                        ),
                         selected = state.model.orEmpty(),
                         values = modelOptions,
                         onSelected = { onChange(state.copy(model = it)) }
@@ -2761,7 +2985,14 @@ fun AgentGlobalOverrideCard(
                     OutlinedTextField(
                         value = state.model.orEmpty(),
                         onValueChange = { onChange(state.copy(model = it)) },
-                        label = { Text(stringResource(R.string.agent_global_override_model_label)) },
+                        label = {
+                            Text(
+                                stringResource(
+                                    if (directDefaultsMode) R.string.agent_runtime_model_label
+                                    else R.string.agent_global_override_model_label
+                                )
+                            )
+                        },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
@@ -2810,9 +3041,16 @@ fun AgentGlobalOverrideCard(
                 valueRange = if (optimizedLimits) {
                     AgentHarnessPolicy.MIN_CONTEXT_TOKENS..AgentHarnessPolicy.MAX_CONTEXT_TOKENS
                 } else 1..1_048_576,
-                label = { Text(stringResource(R.string.agent_global_override_context_label)) },
+                label = {
+                    Text(
+                        stringResource(
+                            if (directDefaultsMode) R.string.agent_direct_context_label
+                            else R.string.agent_global_override_context_label
+                        )
+                    )
+                },
                 modifier = Modifier.fillMaxWidth(),
-                blankValue = if (optimizedLimits) AgentHarnessPolicy.DEFAULT_CONTEXT_TOKENS else 0
+                blankValue = if (optimizedLimits) AgentDirectUiDefaults.CONTEXT_TOKENS else 0
             )
             DraftIntTextField(
                 value = maxOutputTokensForDisplay ?: state.maxOutputTokens,
@@ -2824,7 +3062,14 @@ fun AgentGlobalOverrideCard(
                 valueRange = if (optimizedLimits) {
                     AgentHarnessPolicy.MIN_OUTPUT_TOKENS..AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS
                 } else 1..1_048_576,
-                label = { Text(stringResource(R.string.agent_global_override_max_output_label)) },
+                label = {
+                    Text(
+                        stringResource(
+                            if (directDefaultsMode) R.string.agent_direct_build_output_label
+                            else R.string.agent_global_override_max_output_label
+                        )
+                    )
+                },
                 modifier = Modifier.fillMaxWidth(),
                 blankValue = if (optimizedLimits) AgentHarnessPolicy.CONTROL_MAX_OUTPUT_TOKENS else 8096
             )
@@ -2842,6 +3087,40 @@ fun AgentGlobalOverrideCard(
                 checked = state.thinkingEnabled,
                 onCheckedChange = { onChange(state.copy(thinkingEnabled = it)) }
             )
+            if (state.thinkingEnabled) {
+                if (
+                    backend == AgentRuntimeBackend.LLAMA_SERVER ||
+                    backend == AgentRuntimeBackend.LLAMA_SWAP
+                ) {
+                    DraftIntTextField(
+                        value = state.thinkingBudgetTokens ?: 0,
+                        onValueChange = { value ->
+                            onChange(
+                                state.copy(
+                                    thinkingBudgetTokens = value.takeIf { it > 0 }
+                                )
+                            )
+                        },
+                        valueRange = 0..state.maxOutputTokens.coerceAtLeast(1),
+                        label = {
+                            Text(stringResource(R.string.agent_thinking_budget_label))
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        blankValue = 0
+                    )
+                    Text(
+                        text = stringResource(R.string.agent_thinking_budget_desc),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Text(
+                        text = stringResource(R.string.agent_thinking_budget_unsupported),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary
+                    )
+                }
+            }
             AgentGlobalOverrideSwitchRow(
                 title = stringResource(R.string.agent_vision_enabled),
                 description = stringResource(R.string.agent_vision_enabled_desc),
@@ -2922,7 +3201,7 @@ private fun agentToolSettingGroups(): List<AgentToolSettingGroup> = listOf(
     ),
     AgentToolSettingGroup(
         R.string.agent_tool_category_mutation,
-        listOf("write_file", "append_file", "edit_lines", "apply_patch", "create_folder")
+        listOf("write_file", "edit_file", "append_file", "edit_lines", "apply_patch", "create_folder")
     ),
     AgentToolSettingGroup(
         R.string.agent_tool_category_execution,
@@ -2974,6 +3253,7 @@ private fun agentToolSettingGroups(): List<AgentToolSettingGroup> = listOf(
         R.string.agent_tool_category_advanced,
         listOf(
             "run_tools_sequential",
+            "tool_help",
             "skill",
             "read_skill_resource",
             "run_skill_script",
@@ -3021,6 +3301,11 @@ private fun AgentToolSettingsCard(
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            Text(
+                text = stringResource(R.string.agent_direct_tool_policy_note),
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.tertiary
+            )
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
@@ -3029,29 +3314,20 @@ private fun AgentToolSettingsCard(
                 leadingIcon = { Icon(Icons.Default.Search, null) },
                 singleLine = true
             )
-            AgentToolToggleRow(
-                label = stringResource(R.string.agent_auto_reflection_toggle),
-                description = stringResource(R.string.agent_auto_reflection_toggle_desc),
-                checked = autoReflectionEnabled,
-                onCheckedChange = onAutoReflectionChanged
-            )
-            AgentToolToggleRow(
-                label = stringResource(
-                    R.string.agent_plan_read_only_delegation_approval
-                ),
-                description = stringResource(
-                    R.string.agent_plan_read_only_delegation_approval_desc
-                ),
-                checked = requirePlanReadOnlyDelegationApproval,
-                onCheckedChange = onPlanDelegationApprovalChanged
-            )
+            // The old reflection/delegation switches deliberately remain in
+            // SettingsRepository for migration compatibility, but are not
+            // active controls for Direct runtime.
             agentToolSettingGroups().forEach { group ->
                 val visibleTools = group.tools.filter { tool ->
-                    normalizedQuery.isBlank() ||
-                        tool.lowercase().contains(normalizedQuery) ||
-                        agentToolDisplayName(tool)
-                            .lowercase()
-                            .contains(normalizedQuery)
+                    if (tool in DIRECT_HIDDEN_TOOL_SETTINGS) {
+                        false
+                    } else {
+                        normalizedQuery.isBlank() ||
+                            tool.lowercase().contains(normalizedQuery) ||
+                            agentToolDisplayName(tool)
+                                .lowercase()
+                                .contains(normalizedQuery)
+                    }
                 }
                 if (visibleTools.isNotEmpty()) {
                     HorizontalDivider()
@@ -3090,13 +3366,11 @@ private fun AgentWorkflowReadinessCard(
     disabledAgents: Set<String>,
     researchBackendAvailable: Boolean
 ) {
-    val planReady =
-        "CODEBASE_SCOUT" !in disabledAgents &&
-            "PLANNER" !in disabledAgents
-    val buildReady = "CODER" !in disabledAgents
-    val reviewReady =
-        "REVIEWER" !in disabledAgents &&
-            "EXECUTOR" !in disabledAgents
+    // Direct owns all three phases. Historical specialist enabled/disabled
+    // flags are intentionally not used to report readiness.
+    val planReady = true
+    val buildReady = true
+    val reviewReady = true
     Card(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)

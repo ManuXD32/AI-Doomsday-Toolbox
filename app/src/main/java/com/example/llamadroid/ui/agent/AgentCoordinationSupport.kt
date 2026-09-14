@@ -265,7 +265,7 @@ internal fun resolveWorkspaceProjectRoot(
 ): String? {
     val projectFolder = currentProjectFolder?.takeIf { it.isNotBlank() } ?: return null
     if (conversationAnchorId == null) return null
-    return if (backend == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
+    return if (backend != AgentWorkspaceBackendType.REMOTE_SSH) {
         AgentLocalWorkspaceSupport.displayRoot(projectFolder)
     } else {
         "${AgentService.WORKSPACE_PATH}/$projectFolder"

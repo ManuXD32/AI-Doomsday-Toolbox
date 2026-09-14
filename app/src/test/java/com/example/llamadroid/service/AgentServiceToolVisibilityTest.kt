@@ -7,6 +7,7 @@ import io.mockk.mockk
 import io.mockk.mockkObject
 import io.mockk.unmockkObject
 import kotlinx.coroutines.flow.MutableStateFlow
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -35,8 +36,8 @@ class AgentServiceToolVisibilityTest {
     }
 
     @Test
-    fun `orchestrator receives only bounded control plane tools`() {
-        val names = AgentService.getAgentTools(
+    fun `direct request palette keeps core tools and removes archived control plane tools`() {
+        val catalog = AgentService.getAgentTools(
             role = AgentService.Companion.AgentRole.ORCHESTRATOR,
             settingsRepo = mockAgentSettings(
                 webSearchEnabled = true,
@@ -45,19 +46,63 @@ class AgentServiceToolVisibilityTest {
                 backgroundRemovalEnabled = true,
                 visionEnabled = true
             )
-        ).map { it.name }.toSet()
+        )
+        val palette = AgentToolSchemaPolicy.selectDirectToolPalette(
+            tools = catalog,
+            backend = AgentDirectBackend.LOCAL
+        )
+        val names = palette.map { it.name }.toSet()
 
-        assertTrue("project_state_read" in names)
-        assertTrue("agent_report_read" in names)
-        assertTrue("todo_transition" in names)
-        assertTrue("call_agent" in names)
-        assertTrue("propose_plan" in names)
-        assertFalse("read_file" in names)
-        assertFalse("search_code" in names)
-        assertFalse("write_file" in names)
+        assertEquals(
+            AgentHarnessPolicy.DIRECT_CORE_TOOL_NAMES,
+            names
+        )
+        assertFalse("project_state_read" in names)
+        assertFalse("agent_report_read" in names)
+        assertFalse("todo_transition" in names)
+        assertFalse("call_agent" in names)
+        assertFalse("propose_plan" in names)
         assertFalse("run_command" in names)
         assertFalse("web_search" in names)
-        assertFalse("fetch_url" in names)
+        val writeSchema = JSONObject(requireNotNull(palette.single { it.name == "write_file" }.schemaJson))
+        assertEquals(
+            AgentHarnessPolicy.DIRECT_WRITE_FILE_MAX_BYTES,
+            writeSchema.getJSONObject("properties").getJSONObject("content").getInt("maxLength")
+        )
+        assertFalse(writeSchema.optBoolean("additionalProperties", true))
+        val editSchema = JSONObject(requireNotNull(palette.single { it.name == "edit_file" }.schemaJson))
+        assertEquals(
+            AgentHarnessPolicy.DIRECT_WRITE_FILE_MAX_BYTES,
+            editSchema.getJSONObject("properties").getJSONObject("new_text").getInt("maxLength")
+        )
+    }
+
+    @Test
+    fun `strict direct recovery advertises one tool with a smaller mutation bound`() {
+        val catalog = AgentService.getAgentTools(
+            role = AgentService.Companion.AgentRole.ORCHESTRATOR,
+            settingsRepo = mockAgentSettings(
+                webSearchEnabled = false,
+                kiwixEnabled = false,
+                imageGenerationEnabled = false,
+                backgroundRemovalEnabled = false,
+                visionEnabled = false
+            )
+        )
+
+        val strict = AgentToolSchemaPolicy.selectDirectStrictRecoveryTool(
+            tools = catalog,
+            backend = AgentDirectBackend.LOCAL,
+            toolName = "write_file"
+        )
+
+        assertEquals(listOf("write_file"), strict.map { it.name })
+        val schema = JSONObject(requireNotNull(strict.single().schemaJson))
+        assertEquals(
+            AgentToolSchemaPolicy.DIRECT_STRICT_RECOVERY_MUTATION_MAX_CHARS,
+            schema.getJSONObject("properties").getJSONObject("content").getInt("maxLength")
+        )
+        assertTrue(strict.single().description.contains("below 2 KiB"))
     }
 
     @Test
@@ -209,7 +254,7 @@ class AgentServiceToolVisibilityTest {
     }
 
     @Test
-    fun `saved no scout policy removes discovery in Plan and restores it in Build`() {
+    fun `direct core schema stays stable when phase and old scout preference change`() {
         val oldProfile = AgentService.executionProfile.value
         val oldBackend = AgentService.currentWorkspaceBackend.value
         val oldPlanMode = AgentService.currentPlanningModeEnabled.value
@@ -222,24 +267,24 @@ class AgentServiceToolVisibilityTest {
             AgentService.setCurrentPlanningModeEnabled(true)
             AgentService.updateCodebaseDiscoveryPolicy(999L, true)
             val settings = mockAgentSettings(true, true, false, false, false)
-            val planTools = AgentService.getAgentTools(
+            val planTools = AgentToolSchemaPolicy.selectDirectToolPalette(AgentService.getAgentTools(
                 role = AgentService.Companion.AgentRole.ORCHESTRATOR, settingsRepo = settings
-            )
-            assertFalse(planTools.any { it.name in setOf("list_directory", "search_code") })
+            ), AgentDirectBackend.LOCAL)
+            assertTrue(planTools.any { it.name in setOf("list_directory", "search_code") })
             assertTrue(planTools.any { it.name == "read_file" })
-            assertTrue(planTools.any { it.name == "propose_plan" })
-            assertFalse(planTools.single { it.name == "call_agent" }.parameters.getValue("agent").contains("CODEBASE_SCOUT"))
+            assertFalse(planTools.any { it.name == "propose_plan" })
+            assertFalse(planTools.any { it.name == "call_agent" })
             AgentService.setCurrentPlanningModeEnabled(false)
-            val buildTools = AgentService.getAgentTools(
+            val buildTools = AgentToolSchemaPolicy.selectDirectToolPalette(AgentService.getAgentTools(
                 role = AgentService.Companion.AgentRole.ORCHESTRATOR, settingsRepo = settings
-            )
-            assertTrue(buildTools.any { it.name == "list_directory" })
-            assertTrue(buildTools.any { it.name == "write_file" })
+            ), AgentDirectBackend.LOCAL)
+            assertEquals(planTools.map { it.name }, buildTools.map { it.name })
             AgentService.setCurrentPlanningModeEnabled(true)
             AgentService.updateCodebaseDiscoveryPolicy(999L, false)
-            assertTrue(AgentService.getAgentTools(
+            val restored = AgentToolSchemaPolicy.selectDirectToolPalette(AgentService.getAgentTools(
                 role = AgentService.Companion.AgentRole.ORCHESTRATOR, settingsRepo = settings
-            ).any { it.name == "list_directory" })
+            ), AgentDirectBackend.LOCAL)
+            assertEquals(planTools.map { it.name }, restored.map { it.name })
         } finally {
             AgentService.setActiveConversationId(oldConversation)
             AgentService.setPreferredConversationId(oldPreferred)
@@ -250,7 +295,7 @@ class AgentServiceToolVisibilityTest {
     }
 
     @Test
-    fun `optimized local root can build and finish with compact schemas`() {
+    fun `direct local root stays below the stable prefix budget`() {
         val oldProfile = AgentService.executionProfile.value
         val oldBackend = AgentService.currentWorkspaceBackend.value
         val oldPlanMode = AgentService.currentPlanningModeEnabled.value
@@ -262,26 +307,26 @@ class AgentServiceToolVisibilityTest {
                 role = AgentService.Companion.AgentRole.ORCHESTRATOR,
                 settingsRepo = mockAgentSettings(true, true, false, false, false)
             )
-            val names = tools.map { it.name }.toSet()
-            assertTrue("write_file" in names)
-            assertTrue("run_project" in names)
-            assertTrue("check_project_run" in names)
-            assertTrue("finish_task" in names)
-            assertFalse("run_command" in names)
-            assertFalse("propose_plan" in names)
-            val compact = compactAgentToolSchemas(tools)
-            assertEquals(names, compact.map { it.name }.toSet())
-            val rawTokens = estimateRawAgentToolSchemaTokens(tools)
-            val compactTokens = estimateRawAgentToolSchemaTokens(compact)
-            println("Optimized local Build schemas: tools=${tools.size} raw=$rawTokens compact=$compactTokens")
-            assertTrue(compactTokens < rawTokens)
-            val core = compactAgentToolSchemas(AgentToolSchemaPolicy.selectOptimizedToolPalette(tools, AgentHarnessPhase.BUILD))
+            val core = compactAgentToolSchemas(
+                AgentToolSchemaPolicy.selectDirectToolPalette(tools, AgentDirectBackend.LOCAL)
+            )
+            val names = core.map { it.name }.toSet()
             val coreTokens = estimateRawAgentToolSchemaTokens(core)
-            println("Optimized local Build core: tools=${core.size} tokens=$coreTokens")
-            assertTrue("Core schemas must leave space for protected state at 8K", coreTokens < 1_600)
-            assertTrue(core.map { it.name }.containsAll(listOf("write_file", "run_project", "check_project_run", "finish_task", "tool_help")))
-            val expanded = AgentToolSchemaPolicy.selectOptimizedToolPalette(tools, AgentHarnessPhase.BUILD, "project_state_read")
-            assertTrue(expanded.any { it.name == "project_state_read" })
+            val promptTokens = estimateRawPromptTextTokens(AgentHarnessPolicy.directSystemPrompt())
+            assertEquals(
+                AgentHarnessPolicy.DIRECT_CORE_TOOL_NAMES +
+                    AgentToolSchemaPolicy.DIRECT_LOCAL_TOOL_NAMES,
+                names
+            )
+            assertTrue(promptTokens + coreTokens < AgentHarnessPolicy.DIRECT_STABLE_PREFIX_MAX_TOKENS)
+            assertFalse("check_project_run" in names)
+            assertFalse("propose_plan" in names)
+            val expanded = AgentToolSchemaPolicy.selectDirectToolPalette(
+                tools,
+                AgentDirectBackend.LOCAL,
+                activatedTool = "web_search"
+            )
+            assertTrue(expanded.any { it.name == "web_search" })
             assertTrue(tools.single { it.name == "finish_task" }.parameters.keys.containsAll(listOf("summary", "artifacts", "validation")))
         } finally {
             AgentService.setExecutionProfile(oldProfile)
@@ -291,7 +336,7 @@ class AgentServiceToolVisibilityTest {
     }
 
     @Test
-    fun `text root preview tools respect preview toggle and retain read only tester contract`() {
+    fun `direct local preview schema stays stable while tester records remain read only`() {
         val oldProfile = AgentService.executionProfile.value
         val oldBackend = AgentService.currentWorkspaceBackend.value
         val oldPlanMode = AgentService.currentPlanningModeEnabled.value
@@ -317,7 +362,7 @@ class AgentServiceToolVisibilityTest {
             ).map { it.name }.toSet()
             assertEquals(setOf("observe_preview", "interact_preview", "tool_help", "finish_task"), testerTools)
             previewEnabled.value = false
-            assertFalse(AgentService.getAgentTools(
+            assertTrue(AgentService.getAgentTools(
                 role = AgentService.Companion.AgentRole.ORCHESTRATOR,
                 settingsRepo = settings
             ).any { it.name in setOf("observe_preview", "interact_preview") })
@@ -346,8 +391,7 @@ class AgentServiceToolVisibilityTest {
         every { repo.agentBackgroundRemovalToolEnabled } returns
             MutableStateFlow(backgroundRemovalEnabled)
         every { repo.agentVisualTestingEnabled } returns MutableStateFlow(false)
-        every { repo.resolveAgentSettingsForDispatch(any(), any(), any(), any()) } returns
-            AgentRuntimeDispatchSettings(
+        val dispatch = AgentRuntimeDispatchSettings(
                 backend = "ollama",
                 model = "test-model",
                 contextSize = 4096,
@@ -355,6 +399,7 @@ class AgentServiceToolVisibilityTest {
                 thinkingEnabled = false,
                 visionEnabled = visionEnabled
             )
+        every { repo.resolveAgentSettingsForDispatch(any(), any(), any(), any()) } returns dispatch
         return repo
     }
 }

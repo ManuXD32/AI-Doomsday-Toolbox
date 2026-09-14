@@ -7,7 +7,7 @@ import org.junit.Test
 
 class AgentPromptBudgetTest {
     @Test
-    fun `exact and fallback capacities keep different safety reserves`() {
+    fun `direct capacity always keeps the fixed safety reserve`() {
         val exact = resolveAgentPromptCapacity(
             configuredContextTokens = 16_384,
             reportedContextTokens = 16_896,
@@ -20,9 +20,9 @@ class AgentPromptBudgetTest {
         )
 
         assertEquals(16_384, exact.contextCapacityTokens)
-        assertEquals(256, exact.safetyReserveTokens)
-        assertEquals(1_638, fallback.safetyReserveTokens)
-        assertTrue(exact.maximumInputTokens > fallback.maximumInputTokens)
+        assertEquals(512, exact.safetyReserveTokens)
+        assertEquals(512, fallback.safetyReserveTokens)
+        assertEquals(exact.maximumInputTokens, fallback.maximumInputTokens)
     }
 
     @Test
@@ -96,6 +96,50 @@ class AgentPromptBudgetTest {
 
         assertEquals(4_000, limits.targetTokens)
         assertEquals(5_200, limits.triggerTokens)
+    }
+
+    @Test
+    fun `direct ordinary packing waits for measured eighty percent input`() {
+        val limits = resolveDirectPromptPackingLimits(maximumInputTokens = 1_000)
+
+        assertEquals(800, limits.triggerTokens)
+        assertEquals(800, limits.targetTokens)
+        assertFalse(
+            directPromptCompactionThresholdReached(
+                measuredInputTokens = 799,
+                availableInputTokens = 1_000
+            )
+        )
+        assertTrue(
+            directPromptCompactionThresholdReached(
+                measuredInputTokens = 800,
+                availableInputTokens = 1_000
+            )
+        )
+    }
+
+    @Test
+    fun `direct threshold rounds up instead of compacting below eighty percent`() {
+        assertEquals(800, directPromptCompactionThresholdTokens(999))
+        assertFalse(
+            directPromptCompactionThresholdReached(
+                measuredInputTokens = 799,
+                availableInputTokens = 999
+            )
+        )
+        assertTrue(
+            directPromptCompactionThresholdReached(
+                measuredInputTokens = 800,
+                availableInputTokens = 999
+            )
+        )
+    }
+
+    @Test
+    fun `direct capsule capacity grows with the measured input window`() {
+        assertEquals(7_500, resolveDirectControlCapsuleMaxChars(1_000))
+        assertEquals(21_196, resolveDirectControlCapsuleMaxChars(11_776))
+        assertEquals(24_000, resolveDirectControlCapsuleMaxChars(20_000))
     }
 
     @Test

@@ -208,3 +208,7 @@
 # needs generic signatures on both Continuation and Response (upstream retrofit2.pro).
 -keep,allowoptimization,allowshrinking,allowobfuscation class kotlin.coroutines.Continuation
 -keep,allowoptimization,allowshrinking,allowobfuscation class retrofit2.Response
+
+# Termux terminal-emulator enters this class from the locally built libtermux.so PTY helper.
+# The Java native method names must remain stable in minified release builds.
+-keep class com.termux.terminal.JNI { *; }

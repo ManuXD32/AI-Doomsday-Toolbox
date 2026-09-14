@@ -10,6 +10,7 @@ import androidx.compose.ui.unit.dp
 import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.llamadroid.R
+import com.example.llamadroid.data.db.AgentProotEnvironmentEntity
 import com.example.llamadroid.service.AgentWorkspaceBackendType
 import com.example.llamadroid.ui.components.AppTaskActionFooter
 
@@ -21,6 +22,10 @@ fun AgentNewProjectDialog(
     onNameChange: (String) -> Unit,
     backend: AgentWorkspaceBackendType,
     onBackendChange: (AgentWorkspaceBackendType) -> Unit,
+    prootEnvironments: List<AgentProotEnvironmentEntity> = emptyList(),
+    selectedProotEnvironmentId: String? = null,
+    onProotEnvironmentChange: (String?) -> Unit = {},
+    onManageProotEnvironments: () -> Unit = {},
     onCreate: () -> Unit,
     onDismiss: () -> Unit,
     errorMessage: String? = null,
@@ -84,9 +89,38 @@ fun AgentNewProjectDialog(
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp))
                 }
                 item {
-                    Text(stringResource(if (backend == AgentWorkspaceBackendType.LOCAL_SANDBOX)
-                        R.string.agent_project_backend_local_desc else R.string.agent_project_backend_remote_desc),
+                    FilterChip(selected = backend == AgentWorkspaceBackendType.LOCAL_PROOT,
+                        onClick = { onBackendChange(AgentWorkspaceBackendType.LOCAL_PROOT) },
+                        label = { Text(stringResource(R.string.agent_proot_backend_label)) },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp))
+                }
+                item {
+                    Text(stringResource(
+                        when (backend) {
+                            AgentWorkspaceBackendType.LOCAL_SANDBOX -> R.string.agent_project_backend_local_desc
+                            AgentWorkspaceBackendType.LOCAL_PROOT -> R.string.agent_proot_backend_desc
+                            AgentWorkspaceBackendType.REMOTE_SSH -> R.string.agent_project_backend_remote_desc
+                        }
+                    ),
                         style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (backend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                    item {
+                        AgentProotEnvironmentPicker(
+                            environments = prootEnvironments,
+                            selectedEnvironmentId = selectedProotEnvironmentId,
+                            onSelectionChange = onProotEnvironmentChange,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    item {
+                        OutlinedButton(
+                            onClick = onManageProotEnvironments,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(stringResource(R.string.agent_proot_manage_action))
+                        }
+                    }
                 }
                 errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
                     item {

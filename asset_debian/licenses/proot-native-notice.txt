@@ -1,0 +1,9 @@
+The packaged PRoot executable and loader are from the pinned Termux PRoot arm64 package.
+They are GPL-2.0-or-later. Source and license information:
+  https://github.com/termux/proot
+  https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+The Agent process broker is original project glue, distributed under GPL-2.0-or-later in
+app/src/main/cpp/proot_broker/proot_broker.c. It is not a security boundary: PRoot uses ptrace
+path translation and does not provide Linux namespaces. The app still clamps mounts and owns
+the broker process group and resource limits.

@@ -4,6 +4,7 @@ import com.example.llamadroid.data.db.AgentRuntimeEndpointConfig
 import com.example.llamadroid.data.db.AgentRuntimeBackend
 import com.example.llamadroid.data.db.AgentRuntimeProfile
 import com.example.llamadroid.data.db.AgentRuntimeProfileKeys
+import com.example.llamadroid.data.runtime.AgentRuntimeGlobalOverride
 import com.example.llamadroid.data.runtime.ManagedLlamaServerDescriptor
 
 /**
@@ -66,6 +67,28 @@ internal fun agentRuntimeProfileKeyForUi(
     ?.takeIf { it.isNotEmpty() }
     ?.let(AgentRuntimeProfileKeys::custom)
     ?: currentAgentName
+
+/**
+ * Project status, endpoint probes, model discovery, and dispatch must all select the same
+ * Direct runtime source. Historical per-role profiles remain exportable, but consulting them
+ * here makes the UI report a different backend from the request that will actually be sent.
+ */
+internal fun directAgentRuntimeProfileForUi(
+    agentKey: String,
+    globalOverride: AgentRuntimeGlobalOverride,
+    directDefaults: AgentRuntimeGlobalOverride
+): AgentRuntimeProfile {
+    val source = globalOverride.normalized().takeIf { it.enabled }
+        ?: directDefaults.normalized().copy(enabled = true)
+    return AgentRuntimeProfile(
+        agentKey = agentKey,
+        backend = source.backend,
+        model = source.model,
+        endpointConfigId = source.endpointConfigId,
+        managedLlamaServerId = source.managedLlamaServerId,
+        liteRtModelId = source.liteRtModelId
+    ).normalized()
+}
 
 /**
  * Resolves the endpoint first, then the managed server only when no named endpoint is

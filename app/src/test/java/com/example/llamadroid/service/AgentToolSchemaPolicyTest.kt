@@ -215,7 +215,7 @@ class AgentToolSchemaPolicyTest {
 
         val compact = compactAgentToolSchemas(tools).associateBy { it.name }
         assertTrue(compact.getValue("question").description.contains("blocker"))
-        assertTrue(compact.getValue("question").description.contains("preferences"))
+        assertTrue(compact.getValue("question").description.contains("preference"))
         assertTrue(compact.getValue("report_progress").description.contains("VERIFY"))
         assertTrue(compact.getValue("finish_task").description.contains("validation"))
     }

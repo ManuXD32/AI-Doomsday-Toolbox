@@ -6,6 +6,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(cpufeatures SHARED CpuFeatures.cpp)
 
+# Pinned from Termux v0.118.0. This is built in-tree because the upstream Maven artifact's
+# prebuilt helper is only 4 KiB page aligned. Android 15+ requires 16 KiB-compatible ELF loads.
+add_library(termux SHARED terminal/termux.c)
+target_link_options(termux PRIVATE "-Wl,-z,max-page-size=16384" "-Wl,-z,common-page-size=16384")
+
 # Stable Audio 3 uses the LiteRT CompiledModel C ABI exported by the existing
 # LiteRT-LM AAR. The worker resolves libLiteRt.so with dlopen/dlsym, so this
 # target deliberately does not package a second LiteRT runtime.

@@ -66,8 +66,18 @@ private val EXPLICIT_TOOL_SHAPE = Regex(
 )
 
 /** Stable, compact Plan-phase contract appended to the optimized system prompt. */
-internal const val OPTIMIZED_PLAN_REQUIRED_ACTION_CONTRACT =
-    "Required outcome: submit one plan and summary through propose_plan, then wait; never approve or build. A plain Markdown plan is auto-submitted by the harness."
+internal const val DIRECT_PLAN_REQUIRED_ACTION_CONTRACT =
+    "Required outcome: return one bounded actionable Markdown plan, then wait; never approve or build. The runtime projects it through the durable approval boundary."
+
+/** Source-compatible name for older optimized request assembly. */
+internal const val OPTIMIZED_PLAN_REQUIRED_ACTION_CONTRACT = DIRECT_PLAN_REQUIRED_ACTION_CONTRACT
+
+/**
+ * Direct-runtime entry point.  The host owns the one-retry counter; this pure
+ * parser never approves a plan and never performs a second repair itself.
+ */
+internal fun recoverDirectImplementationPlanProse(text: String): PlanProposalRecovery =
+    recoverImplementationPlanProse(text, phase = AgentHarnessPhase.PLAN)
 
 /**
  * Inspects a bounded Plan response for an explicit implementation-plan body.
@@ -130,7 +140,7 @@ internal fun recoverImplementationPlanProse(
         }
     }
 
-    val normalizedPlan = normalizePlanBody(extracted.first)
+    var normalizedPlan = normalizePlanBody(extracted.first)
     if (normalizedPlan.isBlank()) {
         return repair(
             reasonCode = "PLAN_PROSE_EMPTY_BODY",
@@ -138,11 +148,17 @@ internal fun recoverImplementationPlanProse(
         )
     }
 
+    var structurallyCompacted = false
     if (!AgentPlanBudgetSupport.isWithinBudget(normalizedPlan)) {
-        return repair(
-            reasonCode = "PLAN_PROSE_OVER_BUDGET",
-            questionAware = false
-        )
+        val compacted = compactPlanStructure(normalizedPlan)
+        if (!AgentPlanBudgetSupport.isWithinBudget(compacted)) {
+            return repair(
+                reasonCode = "PLAN_PROSE_OVER_BUDGET",
+                questionAware = false
+            )
+        }
+        normalizedPlan = compacted
+        structurallyCompacted = true
     }
 
     val steps = normalizedPlan.lines().count { LIST_STEP.matches(it) }
@@ -182,7 +198,9 @@ internal fun recoverImplementationPlanProse(
             summary = boundedSummary.ifBlank { "Implementation plan" },
             toolCallId = callId
         ),
-        reasonCode = if (extracted.second) {
+        reasonCode = if (structurallyCompacted) {
+            "PLAN_PROSE_STRUCTURE_COMPACTED"
+        } else if (extracted.second) {
             "PLAN_PROSE_HEADING_RECOVERED"
         } else {
             "PLAN_PROSE_NUMBERED_RECOVERED"
@@ -200,29 +218,19 @@ internal fun planProposalRecoveryInstruction(
     availableToolNames: Collection<String> = emptyList()
 ): String {
     val hasQuestion = availableToolNames.any { it.equals("question", ignoreCase = true) }
-    val hasProposal = availableToolNames.any { it.equals("propose_plan", ignoreCase = true) }
-    val toolAvailability = when {
-        hasProposal && hasQuestion ->
-            "The advertised tools are propose_plan and question."
-        hasProposal ->
-            "The advertised tool is propose_plan."
-        else ->
-            "Use the advertised plan-boundary tool."
-    }
     val questionRule = if (hasQuestion) {
         "Use question only for one genuine unresolved blocker with 2 to 3 literal choices."
     } else {
         "Do not invent a question or ask for approval in prose."
     }
     return buildString {
-        append("Your previous response contained plan prose but no executable tool call (reason=")
+        append("Your previous response was not a bounded actionable plan (reason=")
         append(reasonCode)
         append("). ")
-        append(toolAvailability)
-        append(" Emit exactly one real structured propose_plan call with both required arguments, plan and summary (plan <=500 words and <=4000 characters; summary is one line). ")
-        append("The tool opens the approval UI; do not approve, reject, or execute anything yourself. ")
+        append("Return exactly one Markdown implementation plan with at least two concrete numbered steps (<=500 words and <=4000 characters). ")
+        append("The runtime opens the approval UI; do not approve, reject, or execute anything yourself. ")
         append(questionRule)
-        append(" Do not print JSON, markdown, or a tool name as assistant prose.")
+        append(" Do not print JSON or name an internal plan tool.")
     }.take(1_200)
 }
 
@@ -231,7 +239,7 @@ private fun repair(reasonCode: String, questionAware: Boolean): PlanProposalReco
         disposition = PlanProposalRecoveryDisposition.REPROMPT,
         instruction = planProposalRecoveryInstruction(
             reasonCode = reasonCode,
-            availableToolNames = if (questionAware) listOf("propose_plan", "question") else listOf("propose_plan")
+            availableToolNames = if (questionAware) listOf("question") else emptyList()
         ),
         reasonCode = reasonCode
     )
@@ -274,6 +282,26 @@ private fun normalizePlanBody(raw: String): String {
         .map { it.trimEnd() }
         .joinToString("\n")
         .trim()
+}
+
+/**
+ * Preserve the model's explicit headings and actionable list items while
+ * removing explanatory paragraphs, tables, fences, and separators. This is a
+ * deterministic projection, not a generated summary, so no plan decision is
+ * invented and every retained action remains verbatim.
+ */
+private fun compactPlanStructure(plan: String): String {
+    val retained = plan.lineSequence()
+        .map(String::trim)
+        .filter { line ->
+            line.isNotBlank() && (
+                line.matches(Regex("^#{1,6}\\s+.+")) ||
+                    LIST_STEP.matches(line)
+                )
+        }
+        .toList()
+    if (retained.count { LIST_STEP.matches(it) } < 2) return plan
+    return retained.joinToString("\n")
 }
 
 private fun cleanSummary(raw: String): String {

@@ -331,6 +331,11 @@ private val PLAN_SAFE_CUSTOM_AGENT_TOOLS = setOf(
 )
 
 private val CRITICAL_AGENT_PROTOCOL_TOOLS = setOf(
+    "read_file",
+    "list_directory",
+    "search_code",
+    "write_file",
+    "edit_file",
     "question",
     "call_agent",
     "propose_plan",
@@ -339,7 +344,11 @@ private val CRITICAL_AGENT_PROTOCOL_TOOLS = setOf(
     "todo_read",
     "todo_write",
     "todo_transition",
-    "tool_help"
+    "tool_help",
+    "run_project",
+    "run_command",
+    "observe_preview",
+    "interact_preview"
 )
 
 internal fun isCriticalAgentProtocolTool(toolName: String): Boolean =

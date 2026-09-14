@@ -1,0 +1,5 @@
+90080e48d4a808bfc8d809476597e3abb2aa09139ae651efbacaf31b08cf1319  app/src/main/jniLibs/arm64-v8a/libproot.so
+44ef39c1e1a18c09f6e4c4b5d6f8bba82d30596598bd155ec162d05c5122ff04  app/src/main/jniLibs/arm64-v8a/libproot_loader.so
+8994d080909167a2c11df38537a15569fd3533cef538fbc73732b8fb4bf2aaca  app/src/main/jniLibs/arm64-v8a/libproot_broker.so
+2ec1856bf6430dd5c65e5a6f274dcc1dc6338ab6539fce1154a02ba97c60d646  app/src/main/jniLibs/arm64-v8a/libandroid-shmem.so
+77a0b14ec39e53a2bdc6ce901780ac9db0361a56373247764caecd4a74f6d902  app/src/main/jniLibs/arm64-v8a/libtalloc_2.so

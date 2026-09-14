@@ -184,6 +184,8 @@ class SettingsRepository(private val context: Context) {
     val walkthrough: WalkthroughPreferences = WalkthroughPreferences(prefs)
     @Suppress("unused")
     private val llamaManagedSettingsMigration = migrateLegacyLlamaManagedPreferences()
+    @Suppress("unused")
+    private val directAgentSettingsMigration = migrateDirectAgentSettingsPreferences()
 
     private fun migrateLegacyLlamaManagedPreferences() {
         if (prefs.getInt(PREF_LLAMA_MANAGED_SCHEMA, 0) >= LLAMA_MANAGED_SCHEMA) return
@@ -222,6 +224,80 @@ class SettingsRepository(private val context: Context) {
             .putString(PREF_SELECTED_LLM_LORA_PATH, legacyPath)
             .putString(PREF_CUSTOM_FLAGS, controller.buildCommandString(migrated.filteredArgs))
             .commit()
+    }
+
+    /**
+     * Freeze a versioned Direct-settings baseline without deleting historical
+     * role preferences. Routing/model values are copied once from the former
+     * Orchestrator while Direct tuning starts at the documented recommendations.
+     */
+    private fun migrateDirectAgentSettingsPreferences() {
+        if (prefs.getInt(PREF_AGENT_DIRECT_SETTINGS_SCHEMA, 0) >= AGENT_DIRECT_SETTINGS_SCHEMA) return
+        prefs.edit().apply {
+            if (!prefs.contains(PREF_AGENT_DIRECT_BACKEND)) {
+                putString(
+                    PREF_AGENT_DIRECT_BACKEND,
+                    prefs.getString(PREF_AGENT_GLOBAL_OVERRIDE_BACKEND, null)
+                        ?: prefs.getString("agent_backend", PDF_BACKEND_OLLAMA)
+                )
+            }
+            if (!prefs.contains(PREF_AGENT_DIRECT_MODEL)) {
+                (prefs.getString(PREF_AGENT_GLOBAL_OVERRIDE_MODEL, null)
+                    ?: prefs.getString("agent_orchestrator_model", null))
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { putString(PREF_AGENT_DIRECT_MODEL, it) }
+            }
+            if (!prefs.contains(PREF_AGENT_DIRECT_ENDPOINT_CONFIG_ID) &&
+                prefs.contains(PREF_AGENT_GLOBAL_OVERRIDE_ENDPOINT_CONFIG_ID)
+            ) {
+                putLong(
+                    PREF_AGENT_DIRECT_ENDPOINT_CONFIG_ID,
+                    prefs.getLong(PREF_AGENT_GLOBAL_OVERRIDE_ENDPOINT_CONFIG_ID, -1L)
+                )
+            }
+            if (!prefs.contains(PREF_AGENT_DIRECT_MANAGED_SERVER_ID) &&
+                prefs.contains(PREF_AGENT_GLOBAL_OVERRIDE_MANAGED_SERVER_ID)
+            ) {
+                putLong(
+                    PREF_AGENT_DIRECT_MANAGED_SERVER_ID,
+                    prefs.getLong(PREF_AGENT_GLOBAL_OVERRIDE_MANAGED_SERVER_ID, -1L)
+                )
+            }
+            if (!prefs.contains(PREF_AGENT_DIRECT_LITERT_MODEL_ID)) {
+                val liteRtModel = if (prefs.contains(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MODEL_ID)) {
+                    prefs.getLong(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MODEL_ID, -1L)
+                } else {
+                    prefs.getLong("agent_litert_model_id", -1L)
+                }
+                if (liteRtModel > 0L) putLong(PREF_AGENT_DIRECT_LITERT_MODEL_ID, liteRtModel)
+            }
+            if (!prefs.contains(PREF_AGENT_DIRECT_LITERT_BACKEND)) {
+                putString(
+                    PREF_AGENT_DIRECT_LITERT_BACKEND,
+                    prefs.getString(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_BACKEND, null)
+                        ?: prefs.getString("agent_litert_backend", "auto")
+                )
+            }
+            if (!prefs.contains(PREF_AGENT_DIRECT_LITERT_MTP_ENABLED)) {
+                putBoolean(
+                    PREF_AGENT_DIRECT_LITERT_MTP_ENABLED,
+                    prefs.getBoolean(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MTP_ENABLED, false)
+                )
+            }
+            if (!prefs.contains(PREF_AGENT_DIRECT_CONTEXT_SIZE)) {
+                putInt(PREF_AGENT_DIRECT_CONTEXT_SIZE, AgentHarnessPolicy.DIRECT_DEFAULT_CONTEXT_TOKENS)
+            }
+            if (!prefs.contains(PREF_AGENT_DIRECT_MAX_OUTPUT_TOKENS)) {
+                putInt(PREF_AGENT_DIRECT_MAX_OUTPUT_TOKENS, AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS)
+            }
+            if (!prefs.contains(PREF_AGENT_DIRECT_THINKING_ENABLED)) {
+                putBoolean(PREF_AGENT_DIRECT_THINKING_ENABLED, AgentHarnessPolicy.DIRECT_THINKING_ENABLED)
+            }
+            if (!prefs.contains(PREF_AGENT_DIRECT_VISION_ENABLED)) {
+                putBoolean(PREF_AGENT_DIRECT_VISION_ENABLED, prefs.getBoolean("agent_orchestrator_vision_enabled", true))
+            }
+            putInt(PREF_AGENT_DIRECT_SETTINGS_SCHEMA, AGENT_DIRECT_SETTINGS_SCHEMA)
+        }.commit()
     }
 
     private fun encodeLlamaLoraSpecs(loras: List<LlamaLoraSpec>): String =
@@ -4665,6 +4741,73 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
+    // ========== Direct Agent Defaults ==========
+
+    private fun readAgentDirectRuntimeDefaults(): AgentRuntimeGlobalOverride =
+        AgentRuntimeGlobalOverride(
+            enabled = true,
+            backend = normalizeOllamaOrLlamaBackend(
+                prefs.getString(PREF_AGENT_DIRECT_BACKEND, PDF_BACKEND_OLLAMA)
+            ),
+            model = prefs.getString(PREF_AGENT_DIRECT_MODEL, null),
+            endpointConfigId = optionalLongPref(PREF_AGENT_DIRECT_ENDPOINT_CONFIG_ID),
+            managedLlamaServerId = optionalLongPref(PREF_AGENT_DIRECT_MANAGED_SERVER_ID, allowZero = true),
+            liteRtModelId = optionalLongPref(PREF_AGENT_DIRECT_LITERT_MODEL_ID),
+            liteRtBackend = normalizeLiteRtBackend(
+                prefs.getString(PREF_AGENT_DIRECT_LITERT_BACKEND, LITERT_BACKEND_AUTO)
+            ),
+            liteRtMtpEnabled = prefs.getBoolean(PREF_AGENT_DIRECT_LITERT_MTP_ENABLED, false),
+            contextSize = prefs.getInt(
+                PREF_AGENT_DIRECT_CONTEXT_SIZE,
+                AgentHarnessPolicy.DIRECT_DEFAULT_CONTEXT_TOKENS
+            ),
+            maxOutputTokens = prefs.getInt(
+                PREF_AGENT_DIRECT_MAX_OUTPUT_TOKENS,
+                AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS
+            ),
+            thinkingEnabled = prefs.getBoolean(
+                PREF_AGENT_DIRECT_THINKING_ENABLED,
+                AgentHarnessPolicy.DIRECT_THINKING_ENABLED
+            ),
+            thinkingBudgetTokens = optionalIntPref(PREF_AGENT_DIRECT_THINKING_BUDGET_TOKENS),
+            visionEnabled = prefs.getBoolean(PREF_AGENT_DIRECT_VISION_ENABLED, true)
+        ).normalized().copy(enabled = true)
+
+    private val _agentDirectRuntimeDefaults = MutableStateFlow(readAgentDirectRuntimeDefaults())
+    val agentDirectRuntimeDefaults: StateFlow<AgentRuntimeGlobalOverride> =
+        _agentDirectRuntimeDefaults.asStateFlow()
+
+    fun getAgentDirectRuntimeDefaults(): AgentRuntimeGlobalOverride =
+        agentDirectRuntimeDefaults.value
+
+    /** Persist the only non-override runtime source used by Direct Agent dispatch. */
+    fun setAgentDirectRuntimeDefaults(value: AgentRuntimeGlobalOverride) {
+        val normalized = value.normalized().copy(enabled = true)
+        prefs.edit().apply {
+            putString(PREF_AGENT_DIRECT_BACKEND, normalized.backend)
+            if (normalized.model == null) remove(PREF_AGENT_DIRECT_MODEL)
+            else putString(PREF_AGENT_DIRECT_MODEL, normalized.model)
+            if (normalized.endpointConfigId == null) remove(PREF_AGENT_DIRECT_ENDPOINT_CONFIG_ID)
+            else putLong(PREF_AGENT_DIRECT_ENDPOINT_CONFIG_ID, normalized.endpointConfigId)
+            if (normalized.managedLlamaServerId == null) remove(PREF_AGENT_DIRECT_MANAGED_SERVER_ID)
+            else putLong(PREF_AGENT_DIRECT_MANAGED_SERVER_ID, normalized.managedLlamaServerId)
+            if (normalized.liteRtModelId == null) remove(PREF_AGENT_DIRECT_LITERT_MODEL_ID)
+            else putLong(PREF_AGENT_DIRECT_LITERT_MODEL_ID, normalized.liteRtModelId)
+            putString(PREF_AGENT_DIRECT_LITERT_BACKEND, normalized.liteRtBackend)
+            putBoolean(PREF_AGENT_DIRECT_LITERT_MTP_ENABLED, normalized.liteRtMtpEnabled)
+            putInt(PREF_AGENT_DIRECT_CONTEXT_SIZE, normalized.contextSize)
+            putInt(PREF_AGENT_DIRECT_MAX_OUTPUT_TOKENS, normalized.maxOutputTokens)
+            putBoolean(PREF_AGENT_DIRECT_THINKING_ENABLED, normalized.thinkingEnabled)
+            if (normalized.thinkingBudgetTokens == null) {
+                remove(PREF_AGENT_DIRECT_THINKING_BUDGET_TOKENS)
+            } else {
+                putInt(PREF_AGENT_DIRECT_THINKING_BUDGET_TOKENS, normalized.thinkingBudgetTokens)
+            }
+            putBoolean(PREF_AGENT_DIRECT_VISION_ENABLED, normalized.visionEnabled)
+        }.apply()
+        _agentDirectRuntimeDefaults.value = normalized
+    }
+
     // ========== Optional General Agent Override ==========
 
     /**
@@ -4719,21 +4862,27 @@ class SettingsRepository(private val context: Context) {
     val agentGlobalOverrideLiteRtMtpEnabled = _agentGlobalOverrideLiteRtMtpEnabled.asStateFlow()
 
     private val _agentGlobalOverrideContextSize = MutableStateFlow(
-        prefs.getInt(PREF_AGENT_GLOBAL_OVERRIDE_CONTEXT_SIZE, _agentOrchestratorCtx.value)
+        prefs.getInt(PREF_AGENT_GLOBAL_OVERRIDE_CONTEXT_SIZE, AgentHarnessPolicy.DIRECT_DEFAULT_CONTEXT_TOKENS)
             .coerceIn(1_024, 1_048_576)
     )
     val agentGlobalOverrideContextSize = _agentGlobalOverrideContextSize.asStateFlow()
 
     private val _agentGlobalOverrideMaxOutputTokens = MutableStateFlow(
-        prefs.getInt(PREF_AGENT_GLOBAL_OVERRIDE_MAX_OUTPUT_TOKENS, _agentOrchestratorMaxOutputTokens.value)
+        prefs.getInt(PREF_AGENT_GLOBAL_OVERRIDE_MAX_OUTPUT_TOKENS, AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS)
             .coerceIn(1, 1_048_576)
     )
     val agentGlobalOverrideMaxOutputTokens = _agentGlobalOverrideMaxOutputTokens.asStateFlow()
 
     private val _agentGlobalOverrideThinkingEnabled = MutableStateFlow(
-        prefs.getBoolean(PREF_AGENT_GLOBAL_OVERRIDE_THINKING_ENABLED, _agentOrchestratorThinkingEnabled.value)
+        prefs.getBoolean(PREF_AGENT_GLOBAL_OVERRIDE_THINKING_ENABLED, AgentHarnessPolicy.DIRECT_THINKING_ENABLED)
     )
     val agentGlobalOverrideThinkingEnabled = _agentGlobalOverrideThinkingEnabled.asStateFlow()
+
+    private val _agentGlobalOverrideThinkingBudgetTokens = MutableStateFlow(
+        optionalIntPref(PREF_AGENT_GLOBAL_OVERRIDE_THINKING_BUDGET_TOKENS)
+    )
+    val agentGlobalOverrideThinkingBudgetTokens =
+        _agentGlobalOverrideThinkingBudgetTokens.asStateFlow()
 
     private val _agentGlobalOverrideVisionEnabled = MutableStateFlow(
         prefs.getBoolean(PREF_AGENT_GLOBAL_OVERRIDE_VISION_ENABLED, _agentOrchestratorVisionEnabled.value)
@@ -4760,6 +4909,7 @@ class SettingsRepository(private val context: Context) {
             contextSize = _agentGlobalOverrideContextSize.value,
             maxOutputTokens = _agentGlobalOverrideMaxOutputTokens.value,
             thinkingEnabled = _agentGlobalOverrideThinkingEnabled.value,
+            thinkingBudgetTokens = _agentGlobalOverrideThinkingBudgetTokens.value,
             visionEnabled = _agentGlobalOverrideVisionEnabled.value
         ).normalized()
 
@@ -4873,6 +5023,14 @@ class SettingsRepository(private val context: Context) {
         publishAgentGlobalRuntimeOverride()
     }
 
+    fun setAgentGlobalOverrideThinkingBudgetTokens(value: Int?) {
+        val normalized = value?.takeIf { it > 0 }
+            ?.coerceAtMost(_agentGlobalOverrideMaxOutputTokens.value)
+        setOptionalIntPref(PREF_AGENT_GLOBAL_OVERRIDE_THINKING_BUDGET_TOKENS, normalized)
+        _agentGlobalOverrideThinkingBudgetTokens.value = normalized
+        publishAgentGlobalRuntimeOverride()
+    }
+
     fun setAgentGlobalOverrideVisionEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(PREF_AGENT_GLOBAL_OVERRIDE_VISION_ENABLED, enabled).apply()
         _agentGlobalOverrideVisionEnabled.value = enabled
@@ -4898,6 +5056,14 @@ class SettingsRepository(private val context: Context) {
             putInt(PREF_AGENT_GLOBAL_OVERRIDE_CONTEXT_SIZE, normalized.contextSize)
             putInt(PREF_AGENT_GLOBAL_OVERRIDE_MAX_OUTPUT_TOKENS, normalized.maxOutputTokens)
             putBoolean(PREF_AGENT_GLOBAL_OVERRIDE_THINKING_ENABLED, normalized.thinkingEnabled)
+            if (normalized.thinkingBudgetTokens == null) {
+                remove(PREF_AGENT_GLOBAL_OVERRIDE_THINKING_BUDGET_TOKENS)
+            } else {
+                putInt(
+                    PREF_AGENT_GLOBAL_OVERRIDE_THINKING_BUDGET_TOKENS,
+                    normalized.thinkingBudgetTokens
+                )
+            }
             putBoolean(PREF_AGENT_GLOBAL_OVERRIDE_VISION_ENABLED, normalized.visionEnabled)
         }.apply()
         _agentGlobalOverrideEnabled.value = normalized.enabled
@@ -4911,68 +5077,56 @@ class SettingsRepository(private val context: Context) {
         _agentGlobalOverrideContextSize.value = normalized.contextSize
         _agentGlobalOverrideMaxOutputTokens.value = normalized.maxOutputTokens
         _agentGlobalOverrideThinkingEnabled.value = normalized.thinkingEnabled
+        _agentGlobalOverrideThinkingBudgetTokens.value = normalized.thinkingBudgetTokens
         _agentGlobalOverrideVisionEnabled.value = normalized.visionEnabled
         publishAgentGlobalRuntimeOverride()
     }
 
     /**
-     * Resolve all runtime and tuning choices for one dispatch.  The global
-     * card is selected as a whole when enabled; otherwise the stored profile,
-     * custom-agent values, and existing role preferences remain authoritative.
+     * Resolve all runtime and tuning choices for one Direct dispatch. The
+     * enabled global override is selected as a whole; otherwise the immutable
+     * Direct-default snapshot is selected as a whole. Historical role/profile
+     * arguments remain on this compatibility boundary but never participate.
      */
     fun resolveAgentSettingsForDispatch(
         role: String,
         customModel: String? = null,
         customVisionEnabled: Boolean? = null,
         runtimeProfile: AgentRuntimeProfile? = null
+    ): AgentRuntimeDispatchSettings = resolveAgentSettingsForDispatch(
+        role = role,
+        customModel = customModel,
+        customVisionEnabled = customVisionEnabled,
+        runtimeProfile = runtimeProfile,
+        globalOverrideSnapshot = getAgentGlobalRuntimeOverride(),
+        directDefaultsSnapshot = getAgentDirectRuntimeDefaults()
+    )
+
+    /** Request-scoped form: all consumers receive the exact same captured snapshots. */
+    fun resolveAgentSettingsForDispatch(
+        role: String,
+        customModel: String? = null,
+        customVisionEnabled: Boolean? = null,
+        runtimeProfile: AgentRuntimeProfile? = null,
+        globalOverrideSnapshot: AgentRuntimeGlobalOverride = getAgentGlobalRuntimeOverride(),
+        directDefaultsSnapshot: AgentRuntimeGlobalOverride = getAgentDirectRuntimeDefaults()
     ): AgentRuntimeDispatchSettings {
-        val global = getAgentGlobalRuntimeOverride().takeIf { it.enabled }
-        val profile = runtimeProfile?.normalized()
-        val roleName = role.trim().uppercase(Locale.US)
-        val backend = normalizeOllamaOrLlamaBackend(
-            global?.backend ?: profile?.backend ?: agentBackend.value
-        )
-        val model = if (global != null) {
-            global.model
-        } else {
-            profile?.model?.takeIf { it.isNotBlank() }
-                ?: customModel?.trim()?.takeIf { it.isNotBlank() }
-                ?: getAgentModelForRole(roleName)
-        }
-        // A null target in an enabled General override means "use this
-        // backend's ordinary global connection".  Do not accidentally fall
-        // through to the role profile's named endpoint or managed server.
-        val endpointConfigId = if (global != null) {
-            global.endpointConfigId
-        } else {
-            profile?.endpointConfigId
-        }
-        val managedServerId = if (global != null) {
-            global.managedLlamaServerId
-        } else {
-            profile?.managedLlamaServerId
-        }
-        val liteRtModelId = if (global != null) {
-            global.liteRtModelId
-        } else {
-            profile?.liteRtModelId?.takeIf { it > 0L }
-                ?: agentLiteRtModelId.value.takeIf { it > 0L }
-        }
+        val global = globalOverrideSnapshot.normalized().takeIf { it.enabled }
+        val direct = directDefaultsSnapshot.normalized().copy(enabled = true)
+        val source = global ?: direct
         return AgentRuntimeDispatchSettings(
-            backend = backend,
-            model = model,
-            endpointConfigId = endpointConfigId,
-            managedLlamaServerId = managedServerId,
-            liteRtModelId = liteRtModelId,
-            liteRtBackend = global?.liteRtBackend ?: agentLiteRtBackend.value,
-            liteRtMtpEnabled = global?.liteRtMtpEnabled ?: agentLiteRtMtpEnabled.value,
-            contextSize = global?.contextSize ?: getAgentContextForRole(roleName),
-            maxOutputTokens = global?.maxOutputTokens ?: getAgentMaxOutputTokensForRole(roleName),
-            thinkingEnabled = global?.thinkingEnabled
-                ?: getAgentThinkingEnabledForRole(roleName),
-            visionEnabled = global?.visionEnabled
-                ?: customVisionEnabled
-                ?: getAgentVisionEnabledForRole(roleName)
+            backend = source.backend,
+            model = source.model,
+            endpointConfigId = source.endpointConfigId,
+            managedLlamaServerId = source.managedLlamaServerId,
+            liteRtModelId = source.liteRtModelId,
+            liteRtBackend = source.liteRtBackend,
+            liteRtMtpEnabled = source.liteRtMtpEnabled,
+            contextSize = source.contextSize,
+            maxOutputTokens = source.maxOutputTokens,
+            thinkingEnabled = source.thinkingEnabled,
+            thinkingBudgetTokens = source.thinkingBudgetTokens,
+            visionEnabled = source.visionEnabled
         ).normalized()
     }
 
@@ -5006,7 +5160,22 @@ class SettingsRepository(private val context: Context) {
         private const val PREF_AGENT_GLOBAL_OVERRIDE_CONTEXT_SIZE = "agent_global_override_context_size"
         private const val PREF_AGENT_GLOBAL_OVERRIDE_MAX_OUTPUT_TOKENS = "agent_global_override_max_output_tokens"
         private const val PREF_AGENT_GLOBAL_OVERRIDE_THINKING_ENABLED = "agent_global_override_thinking_enabled"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_THINKING_BUDGET_TOKENS = "agent_global_override_thinking_budget_tokens"
         private const val PREF_AGENT_GLOBAL_OVERRIDE_VISION_ENABLED = "agent_global_override_vision_enabled"
+        private const val PREF_AGENT_DIRECT_BACKEND = "agent_direct_backend"
+        private const val PREF_AGENT_DIRECT_MODEL = "agent_direct_model"
+        private const val PREF_AGENT_DIRECT_ENDPOINT_CONFIG_ID = "agent_direct_endpoint_config_id"
+        private const val PREF_AGENT_DIRECT_MANAGED_SERVER_ID = "agent_direct_managed_server_id"
+        private const val PREF_AGENT_DIRECT_LITERT_MODEL_ID = "agent_direct_litert_model_id"
+        private const val PREF_AGENT_DIRECT_LITERT_BACKEND = "agent_direct_litert_backend"
+        private const val PREF_AGENT_DIRECT_LITERT_MTP_ENABLED = "agent_direct_litert_mtp_enabled"
+        private const val PREF_AGENT_DIRECT_CONTEXT_SIZE = "agent_direct_context_size"
+        private const val PREF_AGENT_DIRECT_MAX_OUTPUT_TOKENS = "agent_direct_max_output_tokens"
+        private const val PREF_AGENT_DIRECT_THINKING_ENABLED = "agent_direct_thinking_enabled"
+        private const val PREF_AGENT_DIRECT_THINKING_BUDGET_TOKENS = "agent_direct_thinking_budget_tokens"
+        private const val PREF_AGENT_DIRECT_VISION_ENABLED = "agent_direct_vision_enabled"
+        private const val PREF_AGENT_DIRECT_SETTINGS_SCHEMA = "agent_direct_settings_schema"
+        private const val AGENT_DIRECT_SETTINGS_SCHEMA = 3
         private const val PREF_AGENT_HARNESS_THINKING_OVERRIDE = "agent_harness_thinking_override"
         const val PDF_BACKEND_OLLAMA = "ollama"
         const val PDF_BACKEND_LLAMA_SERVER = "llama-server"

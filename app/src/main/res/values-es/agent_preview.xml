@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="agent_preview_address_title">Dirección de vista previa</string>
+    <string name="agent_preview_mode_auto">Automática</string>
+    <string name="agent_preview_mode_custom">Personalizada</string>
+    <string name="agent_preview_mode_auto_desc">Sigue la dirección generada por la ejecución actual del proyecto.</string>
+    <string name="agent_preview_mode_custom_desc">Usa una dirección HTTP o HTTPS guardada para este proyecto.</string>
+    <string name="agent_preview_address_label">Dirección HTTP(S)</string>
+    <string name="agent_preview_address_hint">http://127.0.0.1:8080/</string>
+    <string name="agent_preview_address_invalid">Introduce una dirección HTTP o HTTPS sin credenciales ni fragmento.</string>
+    <string name="agent_preview_save_go">Guardar y abrir</string>
+    <string name="agent_preview_use_active_run">Usar ejecución activa</string>
+    <string name="agent_preview_reload">Recargar vista previa</string>
+    <string name="agent_workspace_preview_empty_proot">Ejecuta un proyecto web en Debian o escribe arriba la dirección del servidor para mostrar aquí su interfaz.</string>
+</resources>

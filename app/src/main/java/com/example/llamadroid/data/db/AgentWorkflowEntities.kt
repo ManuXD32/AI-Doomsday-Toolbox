@@ -683,14 +683,51 @@ object AgentSleepWakeStatus {
 
 /** Stable execution profile identifiers persisted on conversations. */
 object AgentExecutionProfile {
+    /** The only runtime used by current and future conversations. */
+    const val DIRECT = "direct"
+
+    /** Historical values kept as migration aliases for import/export compatibility. */
+    @Deprecated("Legacy profiles are normalized to DIRECT")
     const val LEGACY = "legacy"
+    @Deprecated("Legacy profiles are normalized to DIRECT")
     const val OPTIMIZED = "optimized"
 
-    fun normalize(value: String?): String = when (value?.trim()?.lowercase()) {
-        OPTIMIZED -> OPTIMIZED
-        else -> LEGACY
-    }
+    /**
+     * Normalize persisted and imported profile values to the one supported
+     * runtime. Keeping this tolerant is important for old backups and rows
+     * written by pre-direct builds.
+     */
+    fun normalize(@Suppress("UNUSED_PARAMETER") value: String?): String = DIRECT
 }
+
+/** Durable one-time direct-runtime re-anchor marker values. */
+object AgentDirectReanchorState {
+    const val PENDING = "PENDING"
+    const val COMPLETE = "COMPLETE"
+}
+
+/** Version and state values shared by the direct runtime and its persistence layer. */
+object AgentDirectRuntime {
+    const val CURRENT_VERSION = 1
+    const val MODE_PLAN = "PLAN"
+    const val MODE_BUILD = "BUILD"
+    const val MODE_VERIFY = "VERIFY"
+    const val MODE_COMPLETE = "COMPLETE"
+}
+
+/** Result returned by the atomic direct-runtime re-anchor operation. */
+data class AgentDirectReanchorResult(
+    val conversationId: Long,
+    val applied: Boolean,
+    val phase: String,
+    val activePlanVersionId: String?,
+    val currentTodoId: String?,
+    val cancelledContinuations: Int,
+    val cancelledQuestions: Int,
+    val cancelledPlans: Int,
+    val cancelledApprovals: Int,
+    val archivedInvocations: Int
+)
 
 /** Stable outbox lifecycle identifiers used by storage and orchestration. */
 object AgentContinuationStatus {

@@ -4,8 +4,10 @@ import androidx.room.Room
 import com.example.llamadroid.data.db.AgentConversationEntity
 import com.example.llamadroid.data.db.AgentContinuationOutboxEntity
 import com.example.llamadroid.data.db.AgentContinuationStatus
+import com.example.llamadroid.data.db.AgentDirectRuntime
 import com.example.llamadroid.data.db.AgentPlanVersionEntity
 import com.example.llamadroid.data.db.AgentProjectStateEntity
+import com.example.llamadroid.data.db.AgentTodoEntity
 import com.example.llamadroid.data.db.AppDatabase
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -158,6 +160,230 @@ class AgentProjectControlPlaneVerificationTest {
         assertEquals(beforeReplay.revision, second.state.revision)
         assertEquals(first.state.mode, second.state.mode)
         assertTrue(second.eventId == first.eventId)
+    }
+
+    @Test
+    fun `direct PASS receipt verifies ready build and verification todos with evidence`() = runBlocking {
+        seedProject(mode = AgentProjectControlPlane.PROJECT_MODE_BUILD)
+        val dao = database.agentWorkflowDao()
+        val statuses = listOf(
+            AgentTodoStatus.READY,
+            AgentTodoStatus.IN_PROGRESS,
+            AgentTodoStatus.READY_FOR_VERIFICATION
+        )
+
+        statuses.forEachIndexed { index, initialStatus ->
+            val todoId = "direct-verify-$index"
+            dao.upsertTodo(
+                AgentTodoEntity(
+                    id = todoId,
+                    conversationId = conversationId,
+                    text = "Verify the projected phase $index",
+                    status = initialStatus,
+                    position = index,
+                    planVersionId = "plan-1",
+                    phaseId = "phase-$index"
+                )
+            )
+            dao.updateProjectStateBasics(
+                conversationId = conversationId,
+                mode = AgentProjectControlPlane.PROJECT_MODE_BUILD,
+                currentGoal = null
+            )
+            dao.setProjectCurrentTodo(conversationId, "phase-$index", todoId)
+
+            val actionId = "direct-pass-$index"
+            val phase = AgentProjectControlPlane.applyVerificationResult(
+                database = database,
+                conversationId = conversationId,
+                toolName = "check_project_run",
+                actionId = actionId,
+                rawResult = "status: STOPPED\nruntime: python\nexit_code: 0"
+            )
+            assertEquals(AgentVerificationDisposition.PASS, phase.disposition)
+            assertEquals(AgentProjectControlPlane.PROJECT_MODE_VERIFY, phase.state.mode)
+
+            val receipt = AgentProjectControlPlane.applyDirectToolReceipt(
+                database = database,
+                conversationId = conversationId,
+                toolName = "check_project_run",
+                actionId = actionId,
+                successful = true
+            )
+            assertTrue(receipt.changed)
+            assertEquals(initialStatus, receipt.previousTodoStatus)
+            assertEquals(AgentTodoStatus.VERIFIED, receipt.currentTodoStatus)
+            assertTrue(
+                database.agentWorkflowDao().getTodoById(todoId)?.evidenceJson
+                    ?.contains("DIRECT_TOOL_RECEIPT") == true
+            )
+        }
+    }
+
+    @Test
+    fun `direct verification receipt does not promote a pending check`() = runBlocking {
+        seedProject(mode = AgentProjectControlPlane.PROJECT_MODE_BUILD)
+        val dao = database.agentWorkflowDao()
+        dao.upsertTodo(
+            AgentTodoEntity(
+                id = "direct-pending-check",
+                conversationId = conversationId,
+                text = "Wait for the runtime check",
+                status = AgentTodoStatus.READY,
+                position = 0,
+                planVersionId = "plan-1",
+                phaseId = "phase-1"
+            )
+        )
+        dao.setProjectCurrentTodo(conversationId, "phase-1", "direct-pending-check")
+
+        val actionId = "direct-pending"
+        val phase = AgentProjectControlPlane.applyVerificationResult(
+            database = database,
+            conversationId = conversationId,
+            toolName = "check_project_run",
+            actionId = actionId,
+            rawResult = "status: RUNNING\nruntime: python"
+        )
+        assertEquals(AgentVerificationDisposition.PENDING, phase.disposition)
+
+        val receipt = AgentProjectControlPlane.applyDirectToolReceipt(
+            database = database,
+            conversationId = conversationId,
+            toolName = "check_project_run",
+            actionId = actionId,
+            successful = true
+        )
+        assertFalse(receipt.changed)
+        assertEquals(AgentTodoStatus.READY, receipt.currentTodoStatus)
+    }
+
+    @Test
+    fun `verified direct todo can finish and close the project`() = runBlocking {
+        seedProject(mode = AgentProjectControlPlane.PROJECT_MODE_VERIFY)
+        val todoId = "direct-verified-finish"
+        database.agentWorkflowDao().upsertTodo(
+            AgentTodoEntity(
+                id = todoId,
+                conversationId = conversationId,
+                text = "Complete the verified handoff",
+                status = AgentTodoStatus.VERIFIED,
+                position = 0,
+                planVersionId = "plan-1",
+                phaseId = "phase-verify"
+            )
+        )
+        database.agentWorkflowDao().setProjectCurrentTodo(
+            conversationId,
+            "phase-verify",
+            todoId
+        )
+
+        val receipt = AgentProjectControlPlane.applyDirectToolReceipt(
+            database = database,
+            conversationId = conversationId,
+            toolName = "finish_task",
+            actionId = "direct-finish-verified",
+            successful = true,
+            completionStatus = "SUCCESS"
+        )
+
+        assertTrue(receipt.changed)
+        assertEquals(AgentTodoStatus.COMPLETED, receipt.currentTodoStatus)
+        assertEquals(
+            AgentDirectRuntime.MODE_COMPLETE,
+            database.agentWorkflowDao().getProjectState(conversationId)?.mode
+        )
+    }
+
+    @Test
+    fun `final direct Build finish enters Verify instead of completing project`() = runBlocking {
+        seedProject(mode = AgentProjectControlPlane.PROJECT_MODE_BUILD)
+        val todoId = "direct-final-build"
+        database.agentWorkflowDao().upsertTodo(
+            AgentTodoEntity(
+                id = todoId,
+                conversationId = conversationId,
+                text = "Build the final approved artifacts",
+                status = AgentTodoStatus.IN_PROGRESS,
+                position = 0,
+                planVersionId = "plan-1",
+                phaseId = "phase-build"
+            )
+        )
+        database.agentWorkflowDao().setProjectCurrentTodo(
+            conversationId,
+            "phase-build",
+            todoId
+        )
+
+        val receipt = AgentProjectControlPlane.applyDirectToolReceipt(
+            database = database,
+            conversationId = conversationId,
+            toolName = "finish_task",
+            actionId = "direct-finish-build",
+            successful = true,
+            completionStatus = "SUCCESS"
+        )
+
+        assertTrue(receipt.changed)
+        assertEquals(AgentTodoStatus.READY_FOR_VERIFICATION, receipt.currentTodoStatus)
+        assertEquals(
+            AgentProjectControlPlane.PROJECT_MODE_VERIFY,
+            database.agentWorkflowDao().getProjectState(conversationId)?.mode
+        )
+    }
+
+    @Test
+    fun `completed projected Build advances directly to projected Verify`() = runBlocking {
+        seedProject(mode = AgentProjectControlPlane.PROJECT_MODE_BUILD)
+        val dao = database.agentWorkflowDao()
+        dao.upsertTodo(
+            AgentTodoEntity(
+                id = "projected-build",
+                conversationId = conversationId,
+                text = "Build the approved artifacts",
+                status = AgentTodoStatus.IN_PROGRESS,
+                position = 0,
+                planVersionId = "plan-1",
+                phaseId = "direct-phase-build",
+                ownerRole = "CODER"
+            )
+        )
+        dao.upsertTodo(
+            AgentTodoEntity(
+                id = "projected-verify",
+                conversationId = conversationId,
+                text = "Verify the approved acceptance criteria",
+                status = AgentTodoStatus.PENDING,
+                position = 1,
+                planVersionId = "plan-1",
+                phaseId = "direct-phase-verify",
+                ownerRole = "EXECUTOR",
+                dependenciesJson = "[\"projected-build\"]"
+            )
+        )
+        dao.setProjectCurrentTodo(
+            conversationId,
+            "direct-phase-build",
+            "projected-build"
+        )
+
+        val receipt = AgentProjectControlPlane.applyDirectToolReceipt(
+            database = database,
+            conversationId = conversationId,
+            toolName = "finish_task",
+            actionId = "finish-projected-build",
+            successful = true,
+            completionStatus = "SUCCESS"
+        )
+
+        assertTrue(receipt.changed)
+        assertEquals(AgentTodoStatus.COMPLETED, receipt.currentTodoStatus)
+        val state = requireNotNull(dao.getProjectState(conversationId))
+        assertEquals(AgentProjectControlPlane.PROJECT_MODE_VERIFY, state.mode)
+        assertEquals("projected-verify", state.currentTodoId)
+        assertEquals(AgentTodoStatus.READY, dao.getTodoById("projected-verify")?.status)
     }
 
     @Test

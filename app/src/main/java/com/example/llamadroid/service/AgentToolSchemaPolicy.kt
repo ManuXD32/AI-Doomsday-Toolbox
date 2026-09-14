@@ -2,6 +2,25 @@ package com.example.llamadroid.service
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.security.MessageDigest
+import java.util.Locale
+
+/** Backend-specific additions to the phase-independent Direct core. */
+enum class AgentDirectBackend {
+    LOCAL,
+    PROOT,
+    REMOTE;
+
+    companion object {
+        fun fromStored(value: String?): AgentDirectBackend = when {
+            value?.trim()?.equals("LOCAL", ignoreCase = true) == true ||
+                value?.trim()?.equals("LOCAL_SANDBOX", ignoreCase = true) == true -> LOCAL
+            value?.trim()?.equals("PROOT", ignoreCase = true) == true ||
+                value?.trim()?.equals("LOCAL_PROOT", ignoreCase = true) == true -> PROOT
+            else -> REMOTE
+        }
+    }
+}
 
 /**
  * Pure presentation policy for the tool definitions sent to a small model.
@@ -13,6 +32,232 @@ import org.json.JSONObject
  */
 object AgentToolSchemaPolicy {
     const val MAX_DESCRIPTION_CHARS = 96
+    const val DIRECT_STRICT_RECOVERY_MUTATION_MAX_CHARS = 2 * 1_024
+
+    /**
+     * Select the Direct Agent's one stable core.  Unlike the old optimized
+     * palette this function never varies by Plan/Build/Verify: only the
+     * immutable workspace backend changes the core, and optional tools are
+     * activated one at a time through tool_help.
+     *
+     * [pendingStatusTool] is included only for the exact currently constrained
+     * command/run handle.  It is intentionally not a broad status palette.
+     */
+    fun selectDirectToolPalette(
+        tools: List<AgentTool>,
+        backend: AgentDirectBackend,
+        activatedTool: String? = null,
+        pendingStatusTool: String? = null,
+        pendingStatusHandle: String? = null
+    ): List<AgentTool> {
+        val allowed = linkedSetOf<String>().apply {
+            addAll(AgentHarnessPolicy.DIRECT_CORE_TOOL_NAMES)
+            if (backend == AgentDirectBackend.LOCAL || backend == AgentDirectBackend.PROOT) {
+                addAll(DIRECT_LOCAL_TOOL_NAMES)
+            }
+            if (backend == AgentDirectBackend.PROOT || backend == AgentDirectBackend.REMOTE) {
+                add("run_command")
+            }
+            pendingStatusTool
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { add(it) }
+            activatedTool
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { add(it) }
+        }
+        return tools
+            .filter { it.name in allowed }
+            .map { tool ->
+                if (tool.name == "write_file") {
+                    tool.copy(schemaJson = directWriteFileSchemaJson())
+                } else if (tool.name == "edit_file") {
+                    tool.copy(schemaJson = directEditFileSchemaJson())
+                } else if (
+                    tool.name == "check_command" &&
+                    pendingStatusTool == "check_command" &&
+                    !pendingStatusHandle.isNullOrBlank()
+                ) {
+                    tool.copy(
+                        description = "Check only the active background command ${pendingStatusHandle.trim()}.",
+                        parameters = mapOf(
+                            "command_id" to "Exact active command ID: ${pendingStatusHandle.trim()}",
+                            "lines" to "Optional output lines, from 1 through 200"
+                        ),
+                        schemaJson = JSONObject()
+                            .put("type", "object")
+                            .put(
+                                "properties",
+                                JSONObject()
+                                    .put(
+                                        "command_id",
+                                        JSONObject()
+                                            .put("type", "string")
+                                            .put("const", pendingStatusHandle.trim())
+                                    )
+                                    .put(
+                                        "lines",
+                                        JSONObject()
+                                            .put("type", "integer")
+                                            .put("minimum", 1)
+                                            .put("maximum", 200)
+                                    )
+                            )
+                            .put("required", JSONArray().put("command_id"))
+                            .put("additionalProperties", false)
+                            .toString()
+                    )
+                } else {
+                    tool
+                }
+            }
+    }
+
+    /**
+     * Advertise exactly the failed tool during strict recovery. Mutation
+     * payloads receive a smaller bound so a 4K-output model can close the
+     * native JSON boundary instead of losing an in-progress value.
+     */
+    fun selectDirectStrictRecoveryTool(
+        tools: List<AgentTool>,
+        backend: AgentDirectBackend,
+        toolName: String
+    ): List<AgentTool> {
+        val selected = selectDirectToolPalette(tools, backend)
+            .firstOrNull { it.name == toolName }
+            ?: tools.firstOrNull { it.name == toolName }
+            ?: return emptyList()
+        return listOf(
+            when (selected.name) {
+                "write_file" -> selected.copy(
+                    description = "Write one project file; strict recovery content must be below 2 KiB and may end DIRECT-EXTEND.",
+                    schemaJson = directWriteFileSchemaJson(DIRECT_STRICT_RECOVERY_MUTATION_MAX_CHARS)
+                )
+                "edit_file" -> selected.copy(
+                    description = "Replace one exact match; strict recovery replacement must be below 2 KiB.",
+                    schemaJson = directEditFileSchemaJson(DIRECT_STRICT_RECOVERY_MUTATION_MAX_CHARS)
+                )
+                else -> selected
+            }
+        )
+    }
+
+    private fun directWriteFileSchemaJson(
+        maxContentCharacters: Int = AgentHarnessPolicy.DIRECT_WRITE_FILE_MAX_BYTES
+    ): String = JSONObject()
+        .put("type", "object")
+        .put(
+            "properties",
+            JSONObject()
+                .put(
+                    "path",
+                    JSONObject()
+                        .put("type", "string")
+                        .put("description", "Project-relative file path")
+                )
+                .put(
+                    "content",
+                    JSONObject()
+                        .put("type", "string")
+                        .put("minLength", 1)
+                        .put("maxLength", maxContentCharacters)
+                        .put("description", "Complete compact content or a runnable skeleton with one DIRECT-EXTEND anchor")
+                )
+        )
+        .put("required", JSONArray().put("path").put("content"))
+        .put("additionalProperties", false)
+        .toString()
+
+    private fun directEditFileSchemaJson(
+        maxReplacementCharacters: Int = AgentHarnessPolicy.DIRECT_WRITE_FILE_MAX_BYTES
+    ): String = JSONObject()
+        .put("type", "object")
+        .put(
+            "properties",
+            JSONObject()
+                .put("path", JSONObject().put("type", "string").put("description", "Project-relative file path"))
+                .put(
+                    "old_text",
+                    JSONObject()
+                        .put("type", "string")
+                        .put("minLength", 1)
+                        .put("maxLength", 2_048)
+                        .put("description", "One exact unique current match")
+                )
+                .put(
+                    "new_text",
+                    JSONObject()
+                        .put("type", "string")
+                        .put("maxLength", maxReplacementCharacters)
+                        .put("description", "Bounded replacement; retain DIRECT-EXTEND exactly once until the file is complete")
+                )
+        )
+        .put("required", JSONArray().put("path").put("old_text").put("new_text"))
+        .put("additionalProperties", false)
+        .toString()
+
+    /** String overload for persistence/UI boundaries that have no enum. */
+    fun selectDirectToolPalette(
+        tools: List<AgentTool>,
+        backend: String?,
+        activatedTool: String? = null,
+        pendingStatusTool: String? = null,
+        pendingStatusHandle: String? = null
+    ): List<AgentTool> = selectDirectToolPalette(
+        tools = tools,
+        backend = AgentDirectBackend.fromStored(backend),
+        activatedTool = activatedTool,
+        pendingStatusTool = pendingStatusTool,
+        pendingStatusHandle = pendingStatusHandle
+    )
+
+    /** Status probes are injected only while their exact run is active. */
+    val DIRECT_TRANSIENT_STATUS_TOOL_NAMES: Set<String> = setOf(
+        "check_command",
+        "check_project_run"
+    )
+
+    /** Names that make up the fixed Local WebUI/console extension. */
+    val DIRECT_LOCAL_TOOL_NAMES: Set<String> = linkedSetOf(
+        "run_project",
+        "observe_preview",
+        "interact_preview"
+    )
+
+    /** Canonical name list used by prompt/cache diagnostics and tests. */
+    fun directCoreToolNames(backend: AgentDirectBackend): List<String> =
+        (AgentHarnessPolicy.DIRECT_CORE_TOOL_NAMES +
+            when (backend) {
+                AgentDirectBackend.LOCAL -> DIRECT_LOCAL_TOOL_NAMES
+                AgentDirectBackend.PROOT -> DIRECT_LOCAL_TOOL_NAMES + "run_command"
+                AgentDirectBackend.REMOTE -> setOf("run_command")
+            })
+            .toList()
+            .sorted()
+
+    /**
+     * Stable hash for the actual compact schemas sent to the endpoint.  The
+     * caller should key one llama.cpp slot by this hash, not by phase or role.
+     */
+    fun directCoreSchemaHash(
+        tools: List<AgentTool>,
+        backend: AgentDirectBackend
+    ): String {
+        val selected = selectDirectToolPalette(tools, backend)
+        val canonical = selected.joinToString("\u001e") { tool ->
+            buildString {
+                append(tool.name).append('\u001f')
+                append(tool.requiredParams.joinToString(",")).append('\u001f')
+                append(tool.parameters.keys.sorted().joinToString(",")).append('\u001f')
+                append(compactSchemaJson(tool.schemaJson ?: "")).append('\u001f')
+                append(compactDescription(TOOL_DESCRIPTION_HINTS[tool.name] ?: tool.description, "${tool.name} tool."))
+            }
+        }
+        return MessageDigest.getInstance("SHA-256")
+            .digest(canonical.toByteArray(Charsets.UTF_8))
+            .joinToString("") { byte -> "%02x".format(Locale.ROOT, byte.toInt() and 0xff) }
+    }
 
     /**
      * Select the small, phase-specific advertised palette from an already
@@ -257,7 +502,7 @@ object AgentToolSchemaPolicy {
         "edit_lines" to "Replace a bounded line range in a project file.",
         "fetch_url" to "Fetch a URL for cited source content.",
         "file_line_count" to "Count lines in a project-relative file.",
-        "finish_task" to "Finish with validation evidence, or report a blocker; Plan success needs approval.",
+        "finish_task" to "Complete the current approved step with artifacts and validation evidence; after final Verify, finish the project.",
         "force_stop_project_run" to "Force-stop the local project.",
         "generate_image" to "Generate a PNG inside the project workspace.",
         "get_datetime" to "Get the current date and time.",
@@ -268,14 +513,14 @@ object AgentToolSchemaPolicy {
         "kb_read_chunk" to "Read a knowledge-base chunk by chunk_id.",
         "kb_search" to "Search selected knowledge bases.",
         "kiwix_search" to "Search the offline Kiwix library.",
-        "list_directory" to "List project-relative files; use . for the project root.",
+        "list_directory" to "List relevant existing project files; never call for a declared greenfield/no-scout plan.",
         "list_memory" to "List agent memory files.",
         "observe_preview" to "Read bounded page text and control coordinates from the open WebUI preview.",
         "plan_read" to "Read an approved plan by ID.",
         "project_order_read" to "Read the original project order.",
         "project_state_read" to "Read the bounded canonical project state.",
         "propose_plan" to "Structured propose_plan with plan + summary (<=500 words/4000 chars); opens approval, then wait.",
-        "question" to "Ask one unresolved blocker with choices; never ask preferences or repeats.",
+        "question" to "Ask one user-owned blocker; never ask implementation, algorithm, stack, test, or preference choices.",
         "read_file" to "Read a project-relative file.",
         "read_file_lines" to "Read a bounded line range from a project file.",
         "read_memory" to "Read a bounded agent memory file.",
@@ -287,7 +532,7 @@ object AgentToolSchemaPolicy {
         "run_project" to "Run the local project from .adt/run.json.",
         "run_skill_script" to "Run an approved project-local skill script.",
         "run_tools_sequential" to "Run up to four read-only tools sequentially.",
-        "search_code" to "Search project files for text or regex.",
+        "search_code" to "Search relevant existing project files; never call for a declared greenfield/no-scout plan.",
         "send_command_input" to "Send text to a running command's stdin.",
         "skill" to "Load an installed skill by name or ID.",
         "stop_project_run" to "Gracefully stop the local project.",
@@ -408,3 +653,18 @@ fun selectOptimizedToolPaletteForRole(
         role = role,
         activatedTool = activatedTool
     )
+
+/** Direct palette helper for request assembly. */
+fun selectDirectToolPalette(
+    tools: List<AgentTool>,
+    backend: AgentDirectBackend,
+    activatedTool: String? = null,
+    pendingStatusTool: String? = null,
+    pendingStatusHandle: String? = null
+): List<AgentTool> = AgentToolSchemaPolicy.selectDirectToolPalette(
+    tools = tools,
+    backend = backend,
+    activatedTool = activatedTool,
+    pendingStatusTool = pendingStatusTool,
+    pendingStatusHandle = pendingStatusHandle
+)

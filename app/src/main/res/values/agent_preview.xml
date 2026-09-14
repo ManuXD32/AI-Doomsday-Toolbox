@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="agent_preview_address_title">Preview address</string>
+    <string name="agent_preview_mode_auto">Auto</string>
+    <string name="agent_preview_mode_custom">Custom</string>
+    <string name="agent_preview_mode_auto_desc">Follow the address produced by the current project run.</string>
+    <string name="agent_preview_mode_custom_desc">Use a saved HTTP or HTTPS address for this project.</string>
+    <string name="agent_preview_address_label">HTTP(S) address</string>
+    <string name="agent_preview_address_hint">http://127.0.0.1:8080/</string>
+    <string name="agent_preview_address_invalid">Enter an HTTP or HTTPS address without credentials or a fragment.</string>
+    <string name="agent_preview_save_go">Save and open</string>
+    <string name="agent_preview_use_active_run">Use active run</string>
+    <string name="agent_preview_reload">Reload preview</string>
+    <string name="agent_workspace_preview_empty_proot">Run a Debian web project or enter the server address above to show its UI here.</string>
+</resources>

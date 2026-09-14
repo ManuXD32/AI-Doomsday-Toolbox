@@ -5,4 +5,9 @@
     <string name="agent_structured_action_required">The model did not return a single structured next action. The task is still incomplete; requesting one tool call.</string>
     <string name="agent_structured_action_paused">The model still did not call the required action after one retry. Your work is saved. Select Continue to resume; plans and questions must use their interactive tools.</string>
     <string name="agent_structured_action_output_limit">The model reached its output limit without a structured action after one retry. Your work is saved. Adjust the output limit in Agent Settings if needed, then select Continue.</string>
+    <string name="agent_direct_external_research_repair">search_code only inspects project files, and this project is declared greenfield. The strict recovery gate activated web_search. Call web_search once now for external research, then return the bounded Markdown plan.</string>
+    <string name="agent_direct_build_receipts_complete">The declared Build artifacts are already committed. Further inspection would not advance this step.</string>
+    <string name="agent_direct_build_receipts_complete_hint">Call finish_task now with the committed artifacts and evidence. The runtime will enter Verify for checks and preview inspection.</string>
+    <string name="agent_direct_failure_repair_required">A failed action must be repaired successfully before finish_task can close this phase.</string>
+    <string name="agent_direct_failure_repair_hint">Follow the latest failure in the project control packet. Make one concrete configuration, code, dependency, or runtime repair, then retry the failed action.</string>
 </resources>
