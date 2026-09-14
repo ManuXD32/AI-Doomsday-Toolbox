@@ -195,8 +195,27 @@ class LiteRtGraph final {
         throw NativeError(cpu_options_error.empty() ? "set_cpu_threads" : cpu_options_error);
       }
       preflight_model_file(path);
-      check_litert(api_->create_model_from_file(environment_, path.c_str(), &model_), *api_,
-                   "load_model");
+      const litert::Status file_status =
+          api_->create_model_from_file(environment_, path.c_str(), &model_);
+      if (file_status == litert::kFileIO && api_->create_model_from_buffer != nullptr) {
+        // Some Android file providers expose a readable path but LiteRT's
+        // file loader still returns status 500. A complete read-only mapping
+        // gives the same bytes to LiteRT without copying multi-gigabyte DiTs.
+        check_litert(mapped_model_.map(path), *api_, "map_model_for_buffer");
+        if (model_ != nullptr) {
+          api_->destroy_model(model_);
+          model_ = nullptr;
+        }
+        const litert::Status buffer_status = api_->create_model_from_buffer(
+            environment_, mapped_model_.address(), mapped_model_.size(), &model_);
+        if (buffer_status != litert::kOk) {
+          check_litert(buffer_status, *api_, "load_model_from_buffer");
+        }
+        __android_log_print(ANDROID_LOG_INFO, kLogTag,
+                            "LiteRT model loaded through buffer fallback after file status 500");
+      } else {
+        check_litert(file_status, *api_, "load_model");
+      }
       check_litert(api_->create_compiled_model(environment_, model_, options_, &compiled_),
                    *api_, "compile_model");
       check_litert(api_->set_compiled_model_cancellation_function(
@@ -445,6 +464,9 @@ class LiteRtGraph final {
     model_ = nullptr;
     options_ = nullptr;
     environment_ = nullptr;
+    // LiteRT may retain the model buffer through compilation and graph
+    // invocation. Unmap only after both model handles have been destroyed.
+    mapped_model_.reset();
   }
 
   litert::Api* api_ = nullptr;
@@ -452,6 +474,7 @@ class LiteRtGraph final {
   void* options_ = nullptr;
   void* model_ = nullptr;
   void* compiled_ = nullptr;
+  litert::ReadOnlyModelMapping mapped_model_;
   std::vector<Signature> signatures_;
 };
 

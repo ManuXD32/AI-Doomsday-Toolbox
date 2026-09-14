@@ -74,34 +74,6 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import java.io.File
 
-private fun editableModelTypeOptions(): List<ModelType> = listOf(
-    ModelType.LLM,
-    ModelType.LLM_DRAFT,
-    ModelType.LORA,
-    ModelType.EMBEDDING,
-    ModelType.VISION_PROJECTOR,
-    ModelType.LLAMA_TTS,
-    ModelType.LLAMA_TTS_COMPANION,
-    ModelType.LITERT_AUDIO_DIT,
-    ModelType.LITERT_AUDIO_COMPONENT
-)
-
-@Composable
-private fun modelTypeLabel(type: ModelType): String = when (type) {
-    ModelType.LLM,
-    ModelType.VISION -> stringResource(R.string.models_type_llm)
-    ModelType.LLM_DRAFT -> stringResource(R.string.models_type_mtp)
-    ModelType.LORA -> stringResource(R.string.models_type_lora)
-    ModelType.EMBEDDING -> stringResource(R.string.models_type_embedding)
-    ModelType.VISION_PROJECTOR,
-    ModelType.MMPROJ -> stringResource(R.string.models_type_vision_projector)
-    ModelType.LLAMA_TTS -> stringResource(R.string.model_promote_audio_tts)
-    ModelType.LLAMA_TTS_COMPANION -> stringResource(R.string.model_promote_audio_tts_companion)
-    ModelType.LITERT_AUDIO_DIT -> stringResource(R.string.model_library_role_stable_audio_dit)
-    ModelType.LITERT_AUDIO_COMPONENT -> stringResource(R.string.model_library_role_stable_audio_component)
-    else -> type.name
-}
-
 private data class ModelManagerCategory(
     @StringRes val labelRes: Int,
     val modelTypes: Set<ModelType>
@@ -306,6 +278,7 @@ fun InstalledTab(
     var editedModelType by remember { mutableStateOf(ModelType.LLM) }
     var editedVisionSupport by remember { mutableStateOf(false) }
     var useForKnowledgeEmbedding by remember { mutableStateOf(false) }
+    var resetClassificationToDetected by remember { mutableStateOf(false) }
     
     // Export picker launcher
     val exportPicker = rememberLauncherForActivityResult(
@@ -764,6 +737,7 @@ fun InstalledTab(
                                     }
                                     editedVisionSupport = model.isVision || model.type == ModelType.VISION
                                     useForKnowledgeEmbedding = model.type == ModelType.EMBEDDING
+                                    resetClassificationToDetected = false
                                     showRenameDialog = true
                                 }
                             )
@@ -805,59 +779,23 @@ fun InstalledTab(
                                 modifier = Modifier.padding(top = 4.dp)
                             )
                         }
-                        Text(stringResource(R.string.models_import_type_label), style = MaterialTheme.typography.labelMedium)
-                        editableModelTypeOptions().forEach { type ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .selectable(
-                                        selected = editedModelType == type,
-                                        onClick = {
-                                            editedModelType = type
-                                            useForKnowledgeEmbedding = type == ModelType.EMBEDDING && useForKnowledgeEmbedding
-                                        }
-                                    )
-                                    .padding(vertical = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                RadioButton(
-                                    selected = editedModelType == type,
-                                    onClick = {
-                                        editedModelType = type
-                                        useForKnowledgeEmbedding = type == ModelType.EMBEDDING && useForKnowledgeEmbedding
-                                    }
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(modelTypeLabel(type))
+                        InstalledModelClassificationControls(
+                            model = modelToRename!!,
+                            editedModelType = editedModelType,
+                            editedVisionSupport = editedVisionSupport,
+                            useForKnowledgeEmbedding = useForKnowledgeEmbedding,
+                            onTypeChange = { type ->
+                                editedModelType = type
+                                useForKnowledgeEmbedding = type == ModelType.EMBEDDING && useForKnowledgeEmbedding
+                            },
+                            onVisionChange = { editedVisionSupport = it },
+                            onEmbeddingChange = { useForKnowledgeEmbedding = it },
+                            onResetToDetected = { type, isVision ->
+                                editedModelType = type
+                                editedVisionSupport = isVision
+                                resetClassificationToDetected = true
                             }
-                        }
-                        if (editedModelType == ModelType.EMBEDDING) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(
-                                    checked = useForKnowledgeEmbedding,
-                                    onCheckedChange = { useForKnowledgeEmbedding = it }
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(stringResource(R.string.models_use_for_kb_embedding))
-                            }
-                        }
-                        if (editedModelType == ModelType.LLM) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Switch(
-                                    checked = editedVisionSupport,
-                                    onCheckedChange = { editedVisionSupport = it }
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(stringResource(R.string.models_vision_toggle_title))
-                                    Text(
-                                        stringResource(R.string.models_vision_toggle_desc),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
+                        )
                     }
                 },
                 confirmButton = {
@@ -867,9 +805,19 @@ fun InstalledTab(
                             val extension = model.filename.substringAfterLast(".", "")
                             val fullNewName = if (extension.isNotEmpty()) "$newModelName.$extension" else newModelName
                             val cleanNewName = fullNewName.trim()
-                            val typeChanged = editedModelType != model.type
+                            val currentEditableType = when (model.type) {
+                                ModelType.VISION -> ModelType.LLM
+                                ModelType.MMPROJ -> ModelType.VISION_PROJECTOR
+                                else -> model.type
+                            }
+                            val typeChanged = editedModelType != currentEditableType
                             val finalVisionSupport = editedModelType == ModelType.LLM && editedVisionSupport
                             val visionChanged = finalVisionSupport != model.isVision
+                            val classificationSource = when {
+                                resetClassificationToDetected -> "AUTO"
+                                typeChanged || visionChanged -> "USER_OVERRIDE"
+                                else -> null
+                            }
                             
                             if (cleanNewName.isNotBlank()) {
                                 scope.launch(Dispatchers.IO) {
@@ -889,13 +837,14 @@ fun InstalledTab(
                                             model.path
                                         }
 
-                                        if (renamed || typeChanged || visionChanged) {
+                                        if (renamed || typeChanged || visionChanged || resetClassificationToDetected) {
                                             db.modelDao().updateMetadata(
                                                 oldFilename = model.filename,
                                                 newFilename = cleanNewName,
                                                 newPath = finalPath,
                                                 newType = editedModelType,
-                                                isVision = finalVisionSupport
+                                                isVision = finalVisionSupport,
+                                                classificationSource = classificationSource
                                             )
                                         }
 
@@ -1966,6 +1915,9 @@ fun ModelCard(
 @Composable
 private fun modelCardDetails(model: ModelEntity): List<String> = buildList {
     add(stringResource(R.string.models_metadata_type, modelTypeLabel(model.type)))
+    if (model.classificationSource.equals("USER_OVERRIDE", ignoreCase = true)) {
+        add(stringResource(R.string.model_library_manual_override))
+    }
 
     if (model.type == ModelType.LLM || model.type == ModelType.VISION) {
         add(

@@ -1,5 +1,6 @@
 package com.example.llamadroid.audio.music
 
+import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -47,5 +48,20 @@ class StableAudio3RequestTest {
         assertTrue(runCatching { base.copy(ditPrecision = StableAudio3DitPrecision.W8A32).validate() }.isFailure)
         assertTrue(runCatching { StableAudio3ComponentRef("dit", sha256 = "invalid").validate("dit") }.isFailure)
         assertTrue(runCatching { request().copy(threads = 0).validate() }.isFailure)
+    }
+
+    @Test fun componentAliasesAreCanonicalizedWhenRestoringAJob() {
+        val components = StableAudio3Components.fromJson(JSONObject().apply {
+            put("stable_audio_tokenizer", JSONObject().put("path", "tokenizer"))
+            put("text_encoder", JSONObject().put("path", "text"))
+            put("stable_audio_dit", JSONObject().put("path", "dit"))
+            put("codec_decoder", JSONObject().put("path", "decoder"))
+            put("codec_encoder", JSONObject().put("path", "encoder"))
+        })
+        assertEquals("tokenizer", components.tokenizer.path)
+        assertEquals("text", components.textEncoder.path)
+        assertEquals("dit", components.dit.path)
+        assertEquals("decoder", components.codecDecoder.path)
+        assertEquals("encoder", components.codecEncoder?.path)
     }
 }

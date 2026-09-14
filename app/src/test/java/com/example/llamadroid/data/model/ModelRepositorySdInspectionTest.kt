@@ -18,7 +18,7 @@ import org.junit.Test
 
 class ModelRepositorySdInspectionTest {
     @Test
-    fun highConfidenceStandaloneArtifactCannotBeImportedAsFullCheckpoint() {
+    fun highConfidenceStandaloneArtifactCanUseConfirmedFullCheckpointOverride() {
         val inspection = inspection(
             family = SdModelFamily.SD3,
             role = SdArtifactRole.STANDALONE_DIFFUSION,
@@ -32,10 +32,7 @@ class ModelRepositorySdInspectionTest {
             configuredFamily = SdModelFamily.SD3.storedValue
         )
 
-        assertFalse(result.isSuccess)
-        assertEquals(SdArtifactValidationCode.ROLE_CONTRADICTION, result.exceptionOrNull()?.let {
-            (it as SdArtifactValidationException).code
-        })
+        assertTrue(result.isSuccess)
     }
 
     @Test
@@ -94,7 +91,7 @@ class ModelRepositorySdInspectionTest {
     }
 
     @Test
-    fun highConfidenceWrongFamilyVaeIsBlocked() {
+    fun highConfidenceWrongFamilyVaeRemainsManuallyConfigurable() {
         val result = ModelRepository.validateSdArtifactInspection(
             configuredType = ModelType.SD_VAE,
             inspection = inspection(
@@ -106,11 +103,7 @@ class ModelRepositorySdInspectionTest {
             configuredFamily = SdModelFamily.SD3.storedValue
         )
 
-        assertFalse(result.isSuccess)
-        assertEquals(
-            SdArtifactValidationCode.FAMILY_CONTRADICTION,
-            (result.exceptionOrNull() as SdArtifactValidationException).code
-        )
+        assertTrue(result.isSuccess)
     }
 
     @Test

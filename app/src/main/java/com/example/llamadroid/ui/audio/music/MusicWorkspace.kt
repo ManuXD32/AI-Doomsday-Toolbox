@@ -13,6 +13,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.llamadroid.R
+import com.example.llamadroid.audio.music.StableAudio3Kind
+import com.example.llamadroid.audio.music.StableAudio3ManifestEntry
+import com.example.llamadroid.audio.music.StableAudio3ManifestLoader
 import com.example.llamadroid.ui.audio.audioComponentLabel
 import com.example.llamadroid.ui.audio.AudioComponentDetails
 import com.example.llamadroid.ui.components.AppSectionCard
@@ -45,6 +48,30 @@ fun MusicWorkspace(
     var tab by rememberSaveable(draft.kind) { mutableIntStateOf(0) }
     fun value(key: String, value: String) = onChange(draft.withValue(key, value))
     val context = LocalContext.current
+    val stableKind = if (draft.kind == "sfx") StableAudio3Kind.SFX else StableAudio3Kind.MUSIC
+    val precisionEntries = remember(context, stableKind) {
+        runCatching {
+            StableAudio3ManifestLoader.load(context).verifiedEntries().filter { it.kind == stableKind }
+        }.getOrDefault(emptyList())
+    }
+    val ditPrecisionOptions = precisionEntries.map { it.ditPrecision.wireValue }.distinct()
+    val decoderPrecisionOptions = precisionEntries.map { it.decoderPrecision.wireValue }.distinct()
+    val encoderPrecisionOptions = precisionEntries.map { it.encoderPrecision.wireValue }.distinct()
+    fun applyPrecision(entry: StableAudio3ManifestEntry) {
+        onChange(draft.copy(values = draft.values + mapOf(
+            "ditPrecision" to entry.ditPrecision.wireValue,
+            "decoderPrecision" to entry.decoderPrecision.wireValue,
+            "encoderPrecision" to entry.encoderPrecision.wireValue
+        )))
+    }
+    fun selectPrecisionProfile(predicate: (StableAudio3ManifestEntry) -> Boolean): StableAudio3ManifestEntry? {
+        val matching = precisionEntries.filter(predicate)
+        return matching.firstOrNull { entry ->
+            entry.ditPrecision.wireValue == draft["ditPrecision"] &&
+                entry.decoderPrecision.wireValue == draft["decoderPrecision"] &&
+                entry.encoderPrecision.wireValue == draft["encoderPrecision"]
+        } ?: matching.firstOrNull()
+    }
     val audioBundleFamily = if (draft.kind == "sfx") {
         StableAudioModelSupport.FAMILY_SFX
     } else {
@@ -113,11 +140,17 @@ fun MusicWorkspace(
                                     draft.components[role]?.takeIf { it.isNotBlank() }?.let { AudioComponentDetails(it) }
                                 }
                                 MusicChoice(stringResource(R.string.audio_music_dit_precision), draft["ditPrecision"],
-                                    listOf("fp32", "w16a32", "w8a32", "w8a8-dyn")) { value("ditPrecision", it) }
+                                    ditPrecisionOptions) { selected ->
+                                        selectPrecisionProfile { it.ditPrecision.wireValue == selected }?.let(::applyPrecision)
+                                    }
                                 MusicChoice(stringResource(R.string.audio_music_decoder_precision), draft["decoderPrecision"],
-                                    listOf("w8a8", "fp32")) { value("decoderPrecision", it) }
+                                    decoderPrecisionOptions) { selected ->
+                                        selectPrecisionProfile { it.decoderPrecision.wireValue == selected }?.let(::applyPrecision)
+                                    }
                                 MusicChoice(stringResource(R.string.audio_music_encoder_precision), draft["encoderPrecision"],
-                                    listOf("w8a8", "fp32")) { value("encoderPrecision", it) }
+                                    encoderPrecisionOptions) { selected ->
+                                        selectPrecisionProfile { it.encoderPrecision.wireValue == selected }?.let(::applyPrecision)
+                                    }
                             }
                         }
                         (!advanced && step == 1) || (advanced && tab == 1) -> {

@@ -593,6 +593,11 @@ class ModelSourceRepository(
                     destinationPath = staging.absolutePath,
                     requestedFamily = family.storedValue,
                     requestedRole = role?.trim()?.takeIf { it.isNotBlank() },
+                    classificationSource = if (role.isNullOrBlank()) {
+                        ModelClassificationSource.AUTO.storedValue
+                    } else {
+                        ModelClassificationSource.USER_OVERRIDE.storedValue
+                    },
                     status = PendingArtifactStatus.STAGED.storedValue,
                     requiresManualPromotion = true,
                     createdAt = System.currentTimeMillis(),
@@ -614,6 +619,11 @@ class ModelSourceRepository(
                         sourceId = verified.id,
                         artifactFamily = family.storedValue,
                         artifactRole = role?.trim()?.takeIf { it.isNotBlank() },
+                        classificationSource = if (role.isNullOrBlank()) {
+                            ModelClassificationSource.AUTO.storedValue
+                        } else {
+                            ModelClassificationSource.USER_OVERRIDE.storedValue
+                        },
                         pendingArtifactId = pendingId,
                         stageOnly = true
                     )
@@ -983,6 +993,7 @@ class ModelSourceRepository(
                             destinationPath = destination.absolutePath,
                             requestedFamily = item.family,
                             requestedRole = item.role,
+                            classificationSource = ModelClassificationSource.CATALOG.storedValue,
                             status = PendingArtifactStatus.CANCELLED.storedValue,
                             requiresManualPromotion = true,
                             createdAt = now,
@@ -1162,7 +1173,9 @@ class ModelSourceRepository(
         reference: ModelArtifactReference,
         role: String? = null,
         artifactSha256: String? = null,
-        sizeBytes: Long? = null
+        sizeBytes: Long? = null,
+        classificationSource: String = ModelClassificationSource.LEGACY.storedValue,
+        detectedClassificationJson: String? = null
     ): Result<ModelProvenanceEntity> = withContext(Dispatchers.IO) {
         runCatching {
             requireNotNull(libraryDao.getSourceById(sourceId)) { "Cannot record provenance for a missing source" }
@@ -1174,6 +1187,8 @@ class ModelSourceRepository(
                 localPath = File(reference.localPath).canonicalPath,
                 artifactSha256 = artifactSha256?.trim()?.lowercase(Locale.US),
                 sizeBytes = sizeBytes,
+                classificationSource = classificationSource,
+                detectedClassificationJson = detectedClassificationJson,
                 importedAt = System.currentTimeMillis(),
                 updatedAt = System.currentTimeMillis()
             )
@@ -1243,7 +1258,7 @@ class ModelSourceRepository(
                     return@forEach
                 }
                 val localFile = localRoot?.let { resolveLocalFile(it, item) }
-                if (localFile != null && isVerifiedExisting(item, localFile, item.family)) {
+                if (localFile != null && isVerifiedExisting(item, localFile)) {
                     existing += item.id
                 } else {
                     ready += item.id
@@ -1294,14 +1309,14 @@ class ModelSourceRepository(
                     val provenancePath = libraryDao.getProvenanceBySource(source.id).firstNotNullOfOrNull { edge ->
                         val candidate = edge.localPath?.takeIf { it.isNotBlank() }?.let(::File)
                         candidate?.takeIf { it.exists() &&
-                            (isVerifiedExisting(evidence, it, item.family) ||
+                            (isVerifiedExisting(evidence, it) ||
                                 evidence.expectedSha256 == null && edge.artifactSha256 != null &&
                                 (evidence.expectedSizeBytes == null || it.length() == evidence.expectedSizeBytes) &&
                                 artifactFileSha256(it) == edge.artifactSha256)
                         }
                     }
                     if (provenancePath != null ||
-                        destination.exists() && isVerifiedExisting(evidence, destination, item.family)
+                        destination.exists() && isVerifiedExisting(evidence, destination)
                     ) {
                         existing += item.id
                         return@forEach
@@ -1394,7 +1409,7 @@ class ModelSourceRepository(
                     val item = artifact.bundleItemId?.let { libraryDao.getBundleItemById(it) }
                     val source = artifact.sourceId?.let { libraryDao.getSourceById(it) }
                     if (destination != null && item != null && source != null &&
-                        isVerifiedExisting(item, destination, source.family)
+                        isVerifiedExisting(item, destination)
                     ) {
                         val finalized = ModelArtifactFinalizer.finalizeIfKnown(
                             database = db,
@@ -1435,6 +1450,7 @@ class ModelSourceRepository(
                         bundleItemId = request.item.id,
                         requestedFamily = ModelFamily.fromStoredValue(plan.bundle.family)?.storedValue,
                         requestedRole = request.item.role,
+                        classificationSource = ModelClassificationSource.CATALOG.storedValue,
                         destinationPath = request.destination.absolutePath,
                         status = PendingArtifactStatus.STAGED.storedValue,
                         requiresManualPromotion = true,
@@ -1472,6 +1488,7 @@ class ModelSourceRepository(
                         bundleItemId = item.id,
                         requestedFamily = ModelFamily.fromStoredValue(plan.bundle.family)?.storedValue,
                         requestedRole = item.role,
+                        classificationSource = ModelClassificationSource.CATALOG.storedValue,
                         destinationPath = bundlePath.absolutePath,
                         status = PendingArtifactStatus.INSPECTING.storedValue,
                         requiresManualPromotion = true,
@@ -1623,6 +1640,7 @@ class ModelSourceRepository(
                         sourceId = request.source.id,
                         artifactFamily = family.storedValue,
                         artifactRole = request.item.role,
+                        classificationSource = ModelClassificationSource.CATALOG.storedValue,
                         pendingArtifactId = pendingId,
                         stageOnly = true
                     )
@@ -1845,6 +1863,11 @@ class ModelSourceRepository(
                 destinationPath = destinationPath,
                 requestedFamily = requestedFamily?.storedValue,
                 requestedRole = requestedRole,
+                classificationSource = if (requestedFamily != null || !requestedRole.isNullOrBlank()) {
+                    ModelClassificationSource.USER_OVERRIDE.storedValue
+                } else {
+                    ModelClassificationSource.AUTO.storedValue
+                },
                 status = PendingArtifactStatus.STAGED.storedValue,
                 requiresManualPromotion = true,
                 createdAt = System.currentTimeMillis(),
@@ -1868,13 +1891,18 @@ class ModelSourceRepository(
                 requiresManualRoleSelection(requestedFamily, row.requestedRole) &&
                 (result.requiresManualPromotion || result.detectedType != runtimeTypeFor(requestedFamily, row.requestedRole).name)
             val updated = row.copy(
-                detectedFamily = requestedFamily?.storedValue ?: result.family?.storedValue,
-                detectedRole = row.requestedRole ?: result.role,
+                // Detection fields are immutable evidence. The requested family/role
+                // remains the effective selection and must not overwrite what the
+                // inspector observed.
+                detectedFamily = result.family?.storedValue ?: row.detectedFamily,
+                detectedRole = result.role ?: row.detectedRole,
                 detectedType = if (roleRequiresManual) {
-                    runtimeTypeFor(requestedFamily!!, row.requestedRole).name
+                    result.detectedType ?: row.detectedType
                 } else {
-                    result.detectedType
+                    result.detectedType ?: row.detectedType
                 },
+                detectedClassificationJson = row.detectedClassificationJson
+                    ?: result.classificationEvidenceJson(),
                 status = if (!roleRequiresManual && result.isStructurallyValid && !result.requiresManualPromotion) {
                     PendingArtifactStatus.VALIDATED.storedValue
                 } else {
@@ -1914,7 +1942,12 @@ class ModelSourceRepository(
             val group = resolvePendingArtifactGroup(libraryDao, row, File(row.stagingPath))
             if (!group.complete) throw ModelLibraryException(ModelLibraryErrorCode.MANUAL_PROMOTION_REQUIRED,
                 "Required multipart files are missing")
-            val result = ModelArtifactRecognizer.validateForPromotion(group.entry, family, role ?: row.requestedRole)
+            val result = ModelArtifactRecognizer.validateForPromotion(
+                group.entry,
+                family,
+                role ?: row.requestedRole,
+                allowClassificationMismatch = true
+            )
             if (!result.isStructurallyValid) {
                 throw ModelLibraryException(
                     result.errorCode ?: ModelLibraryErrorCode.RECOGNITION_FAILED,
@@ -1927,14 +1960,19 @@ class ModelSourceRepository(
                 displayName = displayName,
                 modelKey = modelKey ?: row.promotedModelKey ?: displayName
             )
+            val detectedEvidence = row.detectedClassificationJson
+                ?: result.classificationEvidenceJson()
             libraryDao.upsertActiveArtifact(
                 row.copy(
                     requestedFamily = family.storedValue,
                     requestedRole = role ?: row.requestedRole,
-                    detectedFamily = family.storedValue,
-                    detectedRole = result.role ?: role,
-                    detectedType = result.detectedType
-                        ?: runtimeTypeFor(family, role ?: row.requestedRole).name,
+                    // Detection fields are immutable inspector evidence. The
+                    // requested fields above carry the confirmed selection.
+                    detectedFamily = row.detectedFamily ?: result.family?.storedValue,
+                    detectedRole = row.detectedRole ?: result.role,
+                    detectedType = row.detectedType ?: result.detectedType,
+                    classificationSource = ModelClassificationSource.USER_OVERRIDE.storedValue,
+                    detectedClassificationJson = detectedEvidence,
                     status = PendingArtifactStatus.PROMOTED.storedValue,
                     validationJson = result.validationJson,
                     validationMessage = result.validationMessage,
@@ -1976,7 +2014,12 @@ class ModelSourceRepository(
             ).map { it.trim() }
                 .firstOrNull(::isStableAudioComponentRole)
             val effectiveRole = role ?: row.requestedRole ?: row.detectedRole ?: stableAudioRole
-            val result = ModelArtifactRecognizer.validateForPromotion(staged, family, effectiveRole)
+            val result = ModelArtifactRecognizer.validateForPromotion(
+                staged,
+                family,
+                effectiveRole,
+                allowClassificationMismatch = true
+            )
             if (!result.isStructurallyValid) {
                 throw ModelLibraryException(
                     result.errorCode ?: ModelLibraryErrorCode.RECOGNITION_FAILED,
@@ -2000,6 +2043,12 @@ class ModelSourceRepository(
             val installedSize = com.example.llamadroid.data.model.physicalFiles(destination.absolutePath).values.sum()
             val installedHash = artifactFileSha256(destination)
             val runtimeType = runtimeModelTypeFor(family, effectiveRole)
+            val classificationSource = ModelClassificationSource.USER_OVERRIDE.storedValue
+            val detectedEvidence = row.detectedClassificationJson
+                ?: result.classificationEvidenceJson()
+            val detectedFamily = row.detectedFamily ?: result.family?.storedValue
+            val detectedRole = row.detectedRole ?: result.role
+            val detectedType = row.detectedType ?: result.detectedType
             val stableAudioRoleCanonical = StableAudioModelSupport.canonicalRole(effectiveRole)
             val stableAudioType = StableAudioModelSupport.typeForRole(stableAudioRoleCanonical)
             val stableAudioComponent = family == ModelFamily.LITERT && stableAudioType != null
@@ -2050,7 +2099,9 @@ class ModelSourceRepository(
                         isDownloaded = true,
                         audioFamily = stableAudioFamily,
                         audioComponentRole = stableAudioRoleCanonical,
-                        audioArtifactIdentity = audioIdentity
+                        audioArtifactIdentity = audioIdentity,
+                        classificationSource = classificationSource,
+                        detectedClassificationJson = detectedEvidence
                     )
                 )
                 key
@@ -2065,8 +2116,8 @@ class ModelSourceRepository(
                         repoId = repoId,
                         filename = destination.name,
                         sizeBytes = installedSize,
-                        backendPreference = portableMetadata?.optString("liteRtBackend", "")
-                            ?.takeIf { it.isNotBlank() }
+                        backendPreference = portableMetadata.optString("liteRtBackend", "")
+                            .takeIf { it.isNotBlank() }
                             ?: com.example.llamadroid.data.model.LITERT_BACKEND_AUTO,
                         supportsCpu = portableMetadata.optBoolean("supportsCpu", true),
                         supportsGpu = portableMetadata.optBoolean("supportsGpu", true),
@@ -2074,7 +2125,9 @@ class ModelSourceRepository(
                         supportsVision = portableMetadata.optBoolean("supportsVision", false),
                         supportsAudio = portableMetadata.optBoolean("supportsAudio", false),
                         supportsEmbedding = portableMetadata.optBoolean("supportsEmbedding", false),
-                        maxContextTokens = portableMetadata.optInt("maxContextTokens", 0).takeIf { it > 0 }
+                        maxContextTokens = portableMetadata.optInt("maxContextTokens", 0).takeIf { it > 0 },
+                        classificationSource = classificationSource,
+                        detectedClassificationJson = detectedEvidence
                     )
                 )
                 .let { "litert:$it" }
@@ -2088,17 +2141,17 @@ class ModelSourceRepository(
                         type = runtimeType,
                         repoId = repoId,
                         isDownloaded = true,
-                        isVision = portableMetadata?.optBoolean(
+                        isVision = portableMetadata.optBoolean(
                             "isVision",
                             effectiveRole?.contains("vision", ignoreCase = true) == true
-                        ) ?: (effectiveRole?.contains("vision", ignoreCase = true) == true),
-                        sdCapabilities = portableMetadata?.optString("sdCapabilities")?.takeIf { it.isNotBlank() },
-                        sdFamily = portableMetadata?.optString("sdFamily")?.takeIf { it.isNotBlank() },
-                        sdVariant = portableMetadata?.optString("sdVariant")?.takeIf { it.isNotBlank() },
-                        sdCompatProfiles = portableMetadata?.optString("sdCompatProfiles")?.takeIf { it.isNotBlank() },
-                        onnxCapabilities = portableMetadata?.optString("onnxCapabilities")?.takeIf { it.isNotBlank() },
-                        onnxAssetKind = portableMetadata?.optString("onnxAssetKind")?.takeIf { it.isNotBlank() },
-                        onnxPipelineFamily = portableMetadata?.optString("onnxPipelineFamily")?.takeIf { it.isNotBlank() },
+                        ),
+                        sdCapabilities = portableMetadata.optString("sdCapabilities").takeIf { it.isNotBlank() },
+                        sdFamily = portableMetadata.optString("sdFamily").takeIf { it.isNotBlank() },
+                        sdVariant = portableMetadata.optString("sdVariant").takeIf { it.isNotBlank() },
+                        sdCompatProfiles = portableMetadata.optString("sdCompatProfiles").takeIf { it.isNotBlank() },
+                        onnxCapabilities = portableMetadata.optString("onnxCapabilities").takeIf { it.isNotBlank() },
+                        onnxAssetKind = portableMetadata.optString("onnxAssetKind").takeIf { it.isNotBlank() },
+                        onnxPipelineFamily = portableMetadata.optString("onnxPipelineFamily").takeIf { it.isNotBlank() },
                         audioFamily = audioDescriptor?.family ?: portableMetadata.optString("audioFamily", "")
                             .takeIf { it.isNotBlank() },
                         audioLanguage = audioDescriptor?.language
@@ -2107,7 +2160,9 @@ class ModelSourceRepository(
                         audioComponentRole = audioDescriptor?.role
                             ?: portableMetadata.optString("audioComponentRole", "")
                                 .takeIf { it.isNotBlank() },
-                        audioArtifactIdentity = audioIdentity
+                        audioArtifactIdentity = audioIdentity,
+                        classificationSource = classificationSource,
+                        detectedClassificationJson = detectedEvidence
                     )
                 )
                 key
@@ -2117,9 +2172,11 @@ class ModelSourceRepository(
                     stagingPath = destination.absolutePath,
                     requestedFamily = family.storedValue,
                     requestedRole = effectiveRole,
-                    detectedFamily = family.storedValue,
-                    detectedRole = effectiveRole,
-                    detectedType = runtimeModelTypeFor(family, effectiveRole).name,
+                    detectedFamily = detectedFamily,
+                    detectedRole = detectedRole,
+                    detectedType = detectedType,
+                    classificationSource = classificationSource,
+                    detectedClassificationJson = detectedEvidence,
                     status = PendingArtifactStatus.PROMOTED.storedValue,
                     validationJson = result.validationJson,
                     validationMessage = result.validationMessage,
@@ -2143,6 +2200,8 @@ class ModelSourceRepository(
                         localPath = destination.absolutePath,
                         artifactSha256 = installedHash,
                         sizeBytes = installedSize,
+                        classificationSource = classificationSource,
+                        detectedClassificationJson = detectedEvidence,
                         importedAt = row.createdAt,
                         updatedAt = System.currentTimeMillis()
                     )
@@ -2189,7 +2248,7 @@ class ModelSourceRepository(
         return targetCanonical
     }
 
-    private fun isVerifiedExisting(item: ModelBundleItemEntity, file: File, family: String): Boolean {
+    private fun isVerifiedExisting(item: ModelBundleItemEntity, file: File): Boolean {
         if (!file.exists()) return false
         item.expectedSizeBytes?.let { expected ->
             if (file.length() != expected) return false
@@ -2217,7 +2276,7 @@ class ModelSourceRepository(
         val provenancePath = libraryDao.getProvenanceBySource(source.id).firstNotNullOfOrNull { edge ->
             val candidate = edge.localPath?.takeIf { it.isNotBlank() }?.let(::File)
             candidate?.takeIf { it.exists() &&
-                (isVerifiedExisting(evidence, it, item.family) ||
+                (isVerifiedExisting(evidence, it) ||
                     evidence.expectedSha256 == null && edge.artifactSha256 != null &&
                     (evidence.expectedSizeBytes == null || it.length() == evidence.expectedSizeBytes) &&
                     artifactFileSha256(it) == edge.artifactSha256)
@@ -2225,7 +2284,7 @@ class ModelSourceRepository(
         }
         if (provenancePath != null) return provenancePath.canonicalFile
         val destination = runCatching { resolveLocalFile(localRoot, item) }.getOrNull()
-        return destination?.takeIf { isVerifiedExisting(evidence, it, item.family) }
+        return destination?.takeIf { isVerifiedExisting(evidence, it) }
     }
 
     /** Reuses a verified old file while materializing it at the bundle's exact relative path. */

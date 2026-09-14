@@ -846,7 +846,8 @@ fun LiteRtModelsScreen(navController: NavController, initialTab: String? = null)
                                     downloadUrlOverride = file.downloadUrl,
                                     localFilenameOverride = file.installedFilename(bundle.defaultPrefix),
                                     artifactFamily = file.audioFamily,
-                                    artifactRole = file.componentRole
+                                    artifactRole = file.componentRole,
+                                    classificationSource = com.example.llamadroid.data.model.library.ModelClassificationSource.CATALOG
                                 )
                             }
                             toast(

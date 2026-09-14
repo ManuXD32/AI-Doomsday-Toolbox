@@ -43,16 +43,17 @@ interface ModelDao {
     @Query("UPDATE models SET filename = :newFilename, path = :newPath WHERE filename = :oldFilename")
     suspend fun updateFilename(oldFilename: String, newFilename: String, newPath: String)
 
-    @Query("UPDATE models SET filename = :newFilename, path = :newPath, type = :newType, isVision = :isVision WHERE filename = :oldFilename")
+    @Query("UPDATE models SET filename = :newFilename, path = :newPath, type = :newType, isVision = :isVision, classificationSource = COALESCE(:classificationSource, classificationSource) WHERE filename = :oldFilename")
     suspend fun updateMetadata(
         oldFilename: String,
         newFilename: String,
         newPath: String,
         newType: ModelType,
-        isVision: Boolean
+        isVision: Boolean,
+        classificationSource: String? = null
     )
 
-    @Query("UPDATE models SET isVision = :isVision WHERE filename = :filename")
+    @Query("UPDATE models SET isVision = :isVision, classificationSource = 'USER_OVERRIDE' WHERE filename = :filename")
     suspend fun updateVisionSupport(filename: String, isVision: Boolean)
 
     /** Persist an explicitly selected native TTS companion edge. */

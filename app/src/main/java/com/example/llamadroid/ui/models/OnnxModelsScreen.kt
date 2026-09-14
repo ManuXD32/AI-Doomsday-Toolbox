@@ -1310,7 +1310,17 @@ private suspend fun importOnnxBundleFromTree(
                 onnxAssetKind = ONNX_ASSET_KIND_CUSTOM_IMPORT_BUNDLE,
                 onnxPipelineFamily = ONNX_PIPELINE_FAMILY_SUPERTONIC_TTS,
                 onnxReferenceUri = treeUri.toString(),
-                onnxReferencePath = null
+                onnxReferencePath = null,
+                classificationSource = com.example.llamadroid.data.model.library.ModelClassificationSource.AUTO.storedValue,
+                detectedClassificationJson = com.example.llamadroid.data.model.library.ModelClassificationPolicy
+                    .evidenceJson(
+                        com.example.llamadroid.data.model.library.ModelClassification(
+                            family = com.example.llamadroid.data.model.library.ModelFamily.ONNX,
+                            type = ModelType.ONNX_TTS,
+                            role = "tts",
+                            capabilities = setOf(ONNX_CAPABILITY_TTS)
+                        )
+                    )
             )
         } else {
             buildOnnxImageGenModelEntity(
@@ -1324,6 +1334,19 @@ private suspend fun importOnnxBundleFromTree(
                     .supportedCapabilities,
                 referenceUri = treeUri.toString(),
                 referencePath = null
+            ).copy(
+                classificationSource = com.example.llamadroid.data.model.library.ModelClassificationSource.AUTO.storedValue,
+                detectedClassificationJson = com.example.llamadroid.data.model.library.ModelClassificationPolicy
+                    .evidenceJson(
+                        com.example.llamadroid.data.model.library.ModelClassification(
+                            family = com.example.llamadroid.data.model.library.ModelFamily.ONNX,
+                            type = ModelType.ONNX_IMAGE_GEN,
+                            role = "image_gen",
+                            capabilities = com.example.llamadroid.onnx.OnnxBundleValidator
+                                .validateDirectory(targetDir)
+                                .supportedCapabilities
+                        )
+                    )
             )
         }
     )

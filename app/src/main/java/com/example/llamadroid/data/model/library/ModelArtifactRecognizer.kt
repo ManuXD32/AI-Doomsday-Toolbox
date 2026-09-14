@@ -206,16 +206,21 @@ object ModelArtifactRecognizer {
      * Manual promotion is allowed only after the selected family is checked
      * again. The result remains explicit so UI can show why a row is pending.
      */
-    fun validateForPromotion(target: File, family: ModelFamily, role: String? = null): ArtifactRecognitionResult {
+    fun validateForPromotion(
+        target: File,
+        family: ModelFamily,
+        role: String? = null,
+        allowClassificationMismatch: Boolean = false
+    ): ArtifactRecognitionResult {
         val observed = inspect(target)
         if (!target.exists() || !target.isFile && !target.isDirectory) return observed
         return when (family) {
-            ModelFamily.SD -> validateSd(target, role)
-            ModelFamily.LLM -> validateLlm(target, role)
-            ModelFamily.ONNX -> validateOnnx(target)
-            ModelFamily.LITERT -> validateLiteRt(target, role)
-            ModelFamily.WHISPER -> validateWhisper(target)
-            ModelFamily.AUDIO -> validateAudio(target, role)
+            ModelFamily.SD -> validateSd(target, role, allowClassificationMismatch)
+            ModelFamily.LLM -> validateLlm(target, role, allowClassificationMismatch)
+            ModelFamily.ONNX -> validateOnnx(target, allowClassificationMismatch)
+            ModelFamily.LITERT -> validateLiteRt(target, role, allowClassificationMismatch)
+            ModelFamily.WHISPER -> validateWhisper(target, allowClassificationMismatch)
+            ModelFamily.AUDIO -> validateAudio(target, role, allowClassificationMismatch)
         }.let { validated ->
             if (!validated.isStructurallyValid) validated
             else validated.copy(
@@ -275,13 +280,18 @@ object ModelArtifactRecognizer {
         )
     }
 
-    private fun validateSd(target: File, role: String?): ArtifactRecognitionResult {
+    private fun validateSd(
+        target: File,
+        role: String?,
+        allowClassificationMismatch: Boolean = false
+    ): ArtifactRecognitionResult {
         if (!target.isFile) return ArtifactRecognitionResult(family = ModelFamily.SD, validationMessage = "SD promotion requires a file")
         if (!role.isNullOrBlank()) {
             val structural = runCatching { SdArtifactInspector.inspect(target) }.getOrNull()
             val expectedRole = artifactRoleForManualSelection(role)
             val validContainer = structural?.isStructurallyUsable == true
-            val highConfidenceContradiction = structural?.confidence == SdInspectionConfidence.HIGH &&
+            val highConfidenceContradiction = !allowClassificationMismatch &&
+                structural?.confidence == SdInspectionConfidence.HIGH &&
                 expectedRole != null && structural.detectedRole != null &&
                 !isCompatibleManualRole(expectedRole, structural.detectedRole)
             val valid = validContainer && !highConfidenceContradiction
@@ -301,14 +311,14 @@ object ModelArtifactRecognizer {
                 role = role,
                 confidence = structural?.confidence.toArtifactConfidence(),
                 isStructurallyValid = valid,
-                requiresManualPromotion = true,
+                requiresManualPromotion = !valid || !allowClassificationMismatch,
                 validationMessage = message,
                 validationJson = structural?.toJson(),
-                errorCode = if (valid) {
+                errorCode = if (valid && !allowClassificationMismatch) {
                     ModelLibraryErrorCode.MANUAL_PROMOTION_REQUIRED
-                } else {
+                } else if (!valid) {
                     ModelLibraryErrorCode.RECOGNITION_FAILED
-                }
+                } else null
             )
         }
         val configuredRole = role?.let { SdArtifactRole.fromStoredValue(it) }
@@ -362,7 +372,11 @@ object ModelArtifactRecognizer {
         else -> detected == expected
     }
 
-    private fun validateLlm(target: File, role: String?): ArtifactRecognitionResult {
+    private fun validateLlm(
+        target: File,
+        role: String?,
+        allowClassificationMismatch: Boolean = false
+    ): ArtifactRecognitionResult {
         if (!target.isFile) return ArtifactRecognitionResult(family = ModelFamily.LLM, validationMessage = "LLM promotion requires a file")
         val requestedRole = normalizedModelLibraryRole(role)
         val expectedRole = when (requestedRole) {
@@ -391,7 +405,8 @@ object ModelArtifactRecognizer {
             )
             else -> inspection?.confidence == SdInspectionConfidence.HIGH
         }
-        val valid = inspection?.isStructurallyUsable == true && roleMatches && confidenceAcceptable
+        val valid = inspection?.isStructurallyUsable == true &&
+            (roleMatches || allowClassificationMismatch) && confidenceAcceptable
         val runtimeRole = role?.trim()?.takeIf { it.isNotBlank() }
             ?: detectedRole?.storedValue
             ?: "llm"
@@ -406,7 +421,8 @@ object ModelArtifactRecognizer {
             validationMessage = when {
                 valid -> "Language model GGUF validated for the selected role"
                 inspection?.isStructurallyUsable != true -> "Language model GGUF structure could not be validated"
-                !roleMatches -> "Detected artifact role contradicts the selected LLM role"
+                !roleMatches && !allowClassificationMismatch -> "Detected artifact role contradicts the selected LLM role"
+                !roleMatches -> "Artifact structure is valid; selected LLM role differs from detected evidence"
                 else -> "Language model GGUF evidence is not strong enough for automatic promotion"
             },
             validationJson = inspection?.toJson(),
@@ -414,7 +430,10 @@ object ModelArtifactRecognizer {
         )
     }
 
-    private fun validateOnnx(target: File): ArtifactRecognitionResult {
+    private fun validateOnnx(
+        target: File,
+        allowClassificationMismatch: Boolean = false
+    ): ArtifactRecognitionResult {
         val image = target.takeIf { it.isDirectory }?.let { OnnxBundleValidator.validateDirectory(it) }
         val tts = target.takeIf { it.isDirectory }?.let { OnnxTtsBundleValidator.validateDirectory(it) }
         val valid = image?.isValid == true || tts?.isValid == true || isLikelyOnnxFile(target)
@@ -424,9 +443,13 @@ object ModelArtifactRecognizer {
             role = if (tts?.isValid == true) "onnx_tts_bundle" else "onnx_bundle",
             confidence = if (valid && target.isDirectory) ArtifactConfidence.HIGH else ArtifactConfidence.MEDIUM,
             isStructurallyValid = valid,
-            requiresManualPromotion = !valid || target.isFile,
+            requiresManualPromotion = !valid || target.isFile && !allowClassificationMismatch,
             validationMessage = if (valid) "ONNX artifact validated" else "ONNX bundle files are incomplete",
-            errorCode = ModelLibraryErrorCode.MANUAL_PROMOTION_REQUIRED.takeIf { target.isFile || !valid }
+            errorCode = when {
+                !valid -> ModelLibraryErrorCode.RECOGNITION_FAILED
+                target.isFile && !allowClassificationMismatch -> ModelLibraryErrorCode.MANUAL_PROMOTION_REQUIRED
+                else -> null
+            }
         )
     }
 
@@ -444,7 +467,11 @@ object ModelArtifactRecognizer {
         ).any(evidence::contains)
     }
 
-    private fun validateLiteRt(target: File, role: String?): ArtifactRecognitionResult {
+    private fun validateLiteRt(
+        target: File,
+        role: String?,
+        allowClassificationMismatch: Boolean = false
+    ): ArtifactRecognitionResult {
         val valid = when {
             target.isFile -> isLikelyLiteRtFile(target)
             target.isDirectory -> target.walkTopDown().any { it.isFile && isLikelyLiteRtFile(it) }
@@ -458,13 +485,20 @@ object ModelArtifactRecognizer {
             role = stableRole ?: "litert_model",
             confidence = if (valid) ArtifactConfidence.HIGH else ArtifactConfidence.UNKNOWN,
             isStructurallyValid = valid,
-            requiresManualPromotion = true,
+            requiresManualPromotion = !valid || !allowClassificationMismatch,
             validationMessage = if (valid) "LiteRT package shape validated" else "LiteRT package is empty or unsupported",
-            errorCode = if (valid) ModelLibraryErrorCode.MANUAL_PROMOTION_REQUIRED else ModelLibraryErrorCode.RECOGNITION_FAILED
+            errorCode = when {
+                !valid -> ModelLibraryErrorCode.RECOGNITION_FAILED
+                !allowClassificationMismatch -> ModelLibraryErrorCode.MANUAL_PROMOTION_REQUIRED
+                else -> null
+            }
         )
     }
 
-    private fun validateWhisper(target: File): ArtifactRecognitionResult {
+    private fun validateWhisper(
+        target: File,
+        allowClassificationMismatch: Boolean = false
+    ): ArtifactRecognitionResult {
         val valid = target.isFile && isLikelyWhisperFile(target)
         return ArtifactRecognitionResult(
             family = ModelFamily.WHISPER,
@@ -472,13 +506,21 @@ object ModelArtifactRecognizer {
             role = "whisper_model",
             confidence = if (valid) ArtifactConfidence.HIGH else ArtifactConfidence.UNKNOWN,
             isStructurallyValid = valid,
-            requiresManualPromotion = true,
+            requiresManualPromotion = !valid || !allowClassificationMismatch,
             validationMessage = if (valid) "Whisper model header validated" else "Whisper model header is missing or malformed",
-            errorCode = if (valid) ModelLibraryErrorCode.MANUAL_PROMOTION_REQUIRED else ModelLibraryErrorCode.RECOGNITION_FAILED
+            errorCode = when {
+                !valid -> ModelLibraryErrorCode.RECOGNITION_FAILED
+                !allowClassificationMismatch -> ModelLibraryErrorCode.MANUAL_PROMOTION_REQUIRED
+                else -> null
+            }
         )
     }
 
-    private fun validateAudio(target: File, role: String?): ArtifactRecognitionResult {
+    private fun validateAudio(
+        target: File,
+        role: String?,
+        allowClassificationMismatch: Boolean = false
+    ): ArtifactRecognitionResult {
         if (!target.isFile) return ArtifactRecognitionResult(
             family = ModelFamily.AUDIO,
             validationMessage = ModelLibraryErrorCode.AUDIO_MODEL_FILE_REQUIRED.name,
@@ -502,12 +544,13 @@ object ModelArtifactRecognizer {
         // A valid GGUF is not automatically a speech model. Keep unknown
         // architectures unresolved until bounded metadata/tensor evidence
         // identifies a known TTS family (including custom compatible TTS).
-        val valid = inspection?.isStructurallyUsable == true && descriptor != null && roleValid && roleMatches
+        val valid = inspection?.isStructurallyUsable == true && descriptor != null && roleValid &&
+            (roleMatches || allowClassificationMismatch)
         val audioError = when {
             inspection?.isStructurallyUsable != true -> ModelLibraryErrorCode.AUDIO_STRUCTURE_INVALID
             descriptor == null -> ModelLibraryErrorCode.AUDIO_ARCHITECTURE_UNRESOLVED
             !roleValid -> ModelLibraryErrorCode.AUDIO_ROLE_INVALID
-            !roleMatches -> ModelLibraryErrorCode.AUDIO_ROLE_MISMATCH
+            !roleMatches && !allowClassificationMismatch -> ModelLibraryErrorCode.AUDIO_ROLE_MISMATCH
             else -> null
         }
         return ArtifactRecognitionResult(
@@ -518,7 +561,11 @@ object ModelArtifactRecognizer {
                 inspection?.confidence.toArtifactConfidence(),
             isStructurallyValid = valid,
             requiresManualPromotion = !valid,
-            validationMessage = audioError?.name,
+            validationMessage = audioError?.name ?: if (!roleMatches) {
+                "Audio structure is valid; selected role differs from detected evidence"
+            } else {
+                null
+            },
             validationJson = inspection?.toJson(),
             errorCode = audioError ?: ModelLibraryErrorCode.MANUAL_PROMOTION_REQUIRED.takeUnless { valid }
         )

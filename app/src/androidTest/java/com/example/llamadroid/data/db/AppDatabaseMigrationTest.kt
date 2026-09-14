@@ -3063,6 +3063,108 @@ class AppDatabaseMigrationTest {
         migratedDb.close()
     }
 
+    @Test
+    fun migrate121To122_addsClassificationProvenanceToAllArtifactTables() {
+        helper.createDatabase(TEST_DB, 121).apply {
+            execSQL(
+                """
+                INSERT INTO models (
+                    filename, path, sizeBytes, type, repoId, isDownloaded, isVision,
+                    sdParamsBackendMode, sdParamsBackendSpec, sdRuntimeBackendMode,
+                    layerCount, sdInspectionVersion
+                ) VALUES (
+                    'legacy-model.gguf', '/models/legacy-model.gguf', 1,
+                    'LLM', 'legacy', 1, 0, 'auto', 'auto', 'auto', 0, 0
+                )
+                """.trimIndent()
+            )
+            execSQL(
+                """
+                INSERT INTO litert_models (
+                    displayName, path, filename, sizeBytes, backendPreference,
+                    supportsCpu, supportsGpu, supportsNpu, supportsVision,
+                    supportsAudio, supportsEmbedding, kbEmbeddingRunnable,
+                    createdAt, updatedAt
+                ) VALUES (
+                    'Legacy LiteRT', '/models/legacy.litert', 'legacy.litert', 1,
+                    'auto', 1, 1, 0, 0, 0, 0, 0, 1, 1
+                )
+                """.trimIndent()
+            )
+            execSQL(
+                """
+                INSERT INTO download_tasks (
+                    id, url, destPath, filename, repoId, progressKey, modelType,
+                    isVision, stageOnly, status, bytesDownloaded, createdAt, updatedAt
+                ) VALUES (
+                    'legacy-download', 'https://example.invalid/model',
+                    '/models/legacy.gguf', 'legacy.gguf', 'legacy', 'legacy-progress',
+                    'LLM', 0, 0, 'ACTIVE', 0, 1, 1
+                )
+                """.trimIndent()
+            )
+            execSQL(
+                """
+                INSERT INTO pending_model_artifacts (
+                    id, filename, stagingPath, status, requiresManualPromotion,
+                    createdAt, updatedAt
+                ) VALUES (
+                    'legacy-pending', 'legacy.safetensors', '/staging/legacy.safetensors',
+                    'STAGED', 1, 1, 1
+                )
+                """.trimIndent()
+            )
+            execSQL(
+                """
+                INSERT INTO model_provenance (
+                    id, sourceId, modelKey, family, importedAt, updatedAt
+                ) VALUES (
+                    'legacy-provenance', 'legacy-source', 'legacy-model', 'LLM', 1, 1
+                )
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            122,
+            true,
+            Migrations.MIGRATION_121_122
+        )
+
+        listOf(
+            "models",
+            "litert_models",
+            "download_tasks",
+            "pending_model_artifacts",
+            "model_provenance"
+        ).forEach { table ->
+            migratedDb.query("PRAGMA table_info(`$table`)").use { cursor ->
+                val nameIndex = cursor.getColumnIndexOrThrow("name")
+                val defaultIndex = cursor.getColumnIndexOrThrow("dflt_value")
+                val columns = mutableMapOf<String, String?>()
+                while (cursor.moveToNext()) {
+                    columns[cursor.getString(nameIndex)] =
+                        if (cursor.isNull(defaultIndex)) null else cursor.getString(defaultIndex)
+                }
+                assertTrue(columns.containsKey("classificationSource"))
+                assertTrue(columns.containsKey("detectedClassificationJson"))
+                assertEquals("'LEGACY'", columns["classificationSource"])
+                assertEquals("NULL", columns["detectedClassificationJson"])
+            }
+
+            migratedDb.query(
+                "SELECT classificationSource, detectedClassificationJson FROM `$table` LIMIT 1"
+            ).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("LEGACY", cursor.getString(0))
+                assertTrue(cursor.isNull(1))
+            }
+        }
+        migratedDb.close()
+    }
+
     /**
      * Walks the entire registered migration chain in one run.
      *
@@ -3095,6 +3197,6 @@ class AppDatabaseMigrationTest {
         private const val OLDEST_EXPORTED_VERSION = 28
 
         /** Keep in step with the `version` in [AppDatabase]'s `@Database`. */
-        private const val LATEST_VERSION = 120
+        private const val LATEST_VERSION = 122
     }
 }

@@ -1,7 +1,12 @@
 package com.example.llamadroid.ui.audio.music
 
+import com.example.llamadroid.audio.music.StableAudio3CodecPrecision
+import com.example.llamadroid.audio.music.StableAudio3ComponentManifest
+import com.example.llamadroid.audio.music.StableAudio3Kind
+import com.example.llamadroid.audio.music.StableAudio3DitPrecision
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 
 /** Editable values retain invalid text until validation; changing tabs never resets them. */
 data class MusicWorkspaceDraft(
@@ -12,6 +17,41 @@ data class MusicWorkspaceDraft(
 ) {
     operator fun get(key: String): String = values[key].orEmpty()
     fun withValue(key: String, value: String) = copy(values = values + (key to value))
+
+    /**
+     * Repairs precision values against the currently pinned, verified graph
+     * catalog. Drafts are persisted independently of the manifest, so an
+     * entry removed or invalidated by a later manifest must never reach the
+     * request enums directly.
+     */
+    fun repairedFor(manifest: StableAudio3ComponentManifest): MusicWorkspaceDraft {
+        val stableKind = if (kind == "sfx") StableAudio3Kind.SFX else StableAudio3Kind.MUSIC
+        val candidates = manifest.verifiedEntries().filter { it.kind == stableKind }
+        val selected = candidates.firstOrNull { entry ->
+            matchesPrecision(values["ditPrecision"], entry.ditPrecision) &&
+                matchesPrecision(values["decoderPrecision"], entry.decoderPrecision) &&
+                matchesPrecision(values["encoderPrecision"], entry.encoderPrecision)
+        } ?: candidates.firstOrNull() ?: return this
+        return copy(values = values + mapOf(
+            "ditPrecision" to selected.ditPrecision.wireValue,
+            "decoderPrecision" to selected.decoderPrecision.wireValue,
+            "encoderPrecision" to selected.encoderPrecision.wireValue
+        ))
+    }
+
+    private fun matchesPrecision(value: String?, precision: StableAudio3DitPrecision): Boolean {
+        val normalized = value?.trim()?.lowercase(Locale.US)?.replace('_', '-') ?: return false
+        return normalized == precision.wireValue ||
+            normalized == precision.name.lowercase(Locale.US).replace('_', '-') ||
+            (precision == StableAudio3DitPrecision.W8A8_DYNAMIC && normalized in setOf("w8a8-dynamic", "w8a8dyn"))
+    }
+
+    private fun matchesPrecision(value: String?, precision: StableAudio3CodecPrecision): Boolean {
+        val normalized = value?.trim()?.lowercase(Locale.US)?.replace('_', '-') ?: return false
+        return normalized == precision.wireValue ||
+            normalized == precision.name.lowercase(Locale.US).replace('_', '-')
+    }
+
     fun toJson(): JSONObject = JSONObject().put("kind", kind)
         .put("values", JSONObject(values)).put("components", JSONObject(components))
         .put("loras", JSONArray(loras.map { JSONObject().put("path", it.path).put("strength", it.strength) }))

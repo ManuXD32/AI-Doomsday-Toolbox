@@ -106,6 +106,34 @@ class SdPipelineResolverTest {
     }
 
     @Test
+    fun `configured family remains authoritative when inspection disagrees`() {
+        val inspection = SdArtifactInspection(
+            format = SdArtifactFormat.SAFETENSORS,
+            detectedFamily = SdModelFamily.FLUX_2,
+            detectedRole = SdArtifactRole.FULL_MODEL,
+            mainLayout = SdMainLayout.FULL_MODEL,
+            containsDiffusion = true,
+            tensorCount = 1L,
+            confidence = SdInspectionConfidence.HIGH
+        )
+
+        val pipeline = resolveSdPipeline(
+            SDConfig(
+                modelPath = "/models/manual-chroma.safetensors",
+                modelFamily = SdModelFamily.CHROMA.storedValue,
+                modelLayout = SdMainLayout.FULL_MODEL,
+                prompt = "a lighthouse",
+                outputPath = "/tmp/out.png"
+            ),
+            inspection
+        )
+
+        assertEquals(SdModelFamily.CHROMA, pipeline.family)
+        assertTrue(pipeline.blockingIssues.isEmpty())
+        assertTrue(pipeline.warnings.any { it.code == SdPipelineIssueCode.DETECTED_FAMILY_CONFLICT })
+    }
+
+    @Test
     fun `legacy flux hint cannot classify unknown diffusion`() {
         val config = SDConfig(
             modelPath = "/models/transformer.gguf",

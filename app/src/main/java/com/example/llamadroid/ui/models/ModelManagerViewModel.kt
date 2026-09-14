@@ -343,7 +343,10 @@ internal fun buildLocalModelEntity(
         isDownloaded = true,
         isVision = effectiveType == ModelType.LLM && hasVision,
         sdCapabilities = sdCapabilities,
-        layerCount = layerCount
+        layerCount = layerCount,
+        // A local import is an explicit user classification, even when the
+        // caller selected the default LLM option.
+        classificationSource = "USER_OVERRIDE"
     )
 }
 

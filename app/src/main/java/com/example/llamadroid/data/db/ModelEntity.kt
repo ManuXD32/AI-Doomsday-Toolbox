@@ -1,5 +1,6 @@
 package com.example.llamadroid.data.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
@@ -44,7 +45,11 @@ data class ModelEntity(
     val audioLanguage: String? = null,
     val audioComponentRole: String? = null,
     /** Stable digest/content identity used for shared companion reuse. */
-    val audioArtifactIdentity: String? = null
+    val audioArtifactIdentity: String? = null,
+    /** AUTO/CATALOG/USER_OVERRIDE/LEGACY; existing runtime fields stay effective. */
+    @ColumnInfo(defaultValue = "'LEGACY'") val classificationSource: String = "LEGACY",
+    /** Immutable bounded inspector evidence, separate from effective selections. */
+    @ColumnInfo(defaultValue = "NULL") val detectedClassificationJson: String? = null
 )
 
 const val SD_CAPABILITY_TXT2IMG = "txt2img"

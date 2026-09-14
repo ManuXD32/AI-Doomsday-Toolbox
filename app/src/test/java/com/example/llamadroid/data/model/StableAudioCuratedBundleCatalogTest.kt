@@ -47,4 +47,16 @@ class StableAudioCuratedBundleCatalogTest {
         assertTrue(StableAudioCuratedBundleCatalog.fromManifest(source.copy(entries = listOf(invalid))).isEmpty())
     }
 
+    @Test fun `precision selection falls back to a manifest graph`() {
+        val selection = manifest().repairPrecisionSelection(
+            kind = com.example.llamadroid.audio.music.StableAudio3Kind.MUSIC,
+            dit = "removed_precision",
+            decoder = "fp32",
+            encoder = "w8a8"
+        )
+        assertNotNull(selection)
+        assertEquals("fp32", selection?.dit?.wireValue)
+        assertEquals("w8a8", selection?.decoder?.wireValue)
+        assertEquals("w8a8", selection?.encoder?.wireValue)
+    }
 }

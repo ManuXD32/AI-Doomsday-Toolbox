@@ -440,6 +440,12 @@ fun inferSdFamily(
     filename: String
 ): Pair<SdModelFamily?, String?> {
     val haystack = listOf(repoId, filename).joinToString(" ").lowercase()
+    val normalizedHaystack = haystack
+        .replace('_', ' ')
+        .replace('-', ' ')
+        .replace('.', ' ')
+        .replace(Regex("\\s+"), " ")
+        .trim()
     return when (type) {
         ModelType.SD_CHECKPOINT -> when {
             haystack.contains("sd3.5") || haystack.contains("sd3_medium") || haystack.contains("stable-diffusion-3") || haystack.contains("stable diffusion 3") ->
@@ -470,9 +476,11 @@ fun inferSdFamily(
                 haystack.contains("stable-diffusion-3") || haystack.contains("stable diffusion 3") ||
                 Regex("(?:^|[^a-z0-9])sd3(?:[^a-z0-9]|$)").containsMatchIn(haystack) ->
                 SdModelFamily.SD3 to inferSdVariant(type, haystack)
-            haystack.contains("kontext") -> SdModelFamily.FLUX_KONTEXT to inferSdVariant(type, haystack)
-            haystack.contains("flux.2") || haystack.contains("flux-2") || haystack.contains("klein") ->
+            normalizedHaystack.contains("flux 2") || normalizedHaystack.contains("flux2") ||
+                normalizedHaystack.contains("klein") || normalizedHaystack.contains("chroma2") ||
+                normalizedHaystack.contains("chroma 2") || normalizedHaystack.contains("kaleidoscope") ->
                 SdModelFamily.FLUX_2 to inferSdVariant(type, haystack)
+            haystack.contains("kontext") -> SdModelFamily.FLUX_KONTEXT to inferSdVariant(type, haystack)
             haystack.contains("chroma1-radiance") || haystack.contains("radiance") ->
                 SdModelFamily.CHROMA_RADIANCE to inferSdVariant(type, haystack)
             haystack.contains("chroma") ->
@@ -506,16 +514,20 @@ private fun inferSdVariant(type: ModelType, haystack: String): String? = when (t
         haystack.contains("sd3.5") || haystack.contains("sd3_5") -> "sd3_5"
         haystack.contains("sd3-medium") || haystack.contains("sd3_medium") -> "sd3_medium"
         haystack.contains("sd3") -> "sd3"
+        haystack.contains("klein-base-4b") || haystack.contains("klein_base_4b") ||
+            haystack.contains("klein base 4b") -> "klein_base_4b"
+        haystack.contains("klein-base-9b") || haystack.contains("klein_base_9b") ||
+            haystack.contains("klein base 9b") -> "klein_base_9b"
+        haystack.contains("klein-4b") || haystack.contains("klein_4b") ||
+            haystack.contains("klein 4b") -> "klein_4b"
+        haystack.contains("klein-9b") || haystack.contains("klein_9b") ||
+            haystack.contains("klein 9b") -> "klein_9b"
         haystack.contains("schnell") -> "schnell"
         haystack.contains("dev") -> "dev"
         haystack.contains("2509") -> "2509"
         haystack.contains("2511") -> "2511"
         haystack.contains("turbo") -> "turbo"
         haystack.contains("base") -> "base"
-        haystack.contains("klein-4b") || haystack.contains("klein 4b") -> "klein_4b"
-        haystack.contains("klein-base-4b") || haystack.contains("klein base 4b") -> "klein_base_4b"
-        haystack.contains("klein-9b") || haystack.contains("klein 9b") -> "klein_9b"
-        haystack.contains("klein-base-9b") || haystack.contains("klein base 9b") -> "klein_base_9b"
         else -> null
     }
     else -> null

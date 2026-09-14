@@ -1,5 +1,11 @@
 package com.example.llamadroid.ui.audio.music
 
+import com.example.llamadroid.audio.music.StableAudio3CodecPrecision
+import com.example.llamadroid.audio.music.StableAudio3ComponentManifest
+import com.example.llamadroid.audio.music.StableAudio3DitPrecision
+import com.example.llamadroid.audio.music.StableAudio3Kind
+import com.example.llamadroid.audio.music.StableAudio3ManifestComponent
+import com.example.llamadroid.audio.music.StableAudio3ManifestEntry
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -32,4 +38,68 @@ class MusicWorkspaceDraftTest {
         val switched = draft.withValue("operation", "generate").withValue("operation", "inpaint")
         assertEquals(draft, switched)
     }
+
+    @Test fun `stale precision falls back to the first verified manifest entry`() {
+        val manifest = manifest(
+            entry(StableAudio3DitPrecision.FP32, StableAudio3CodecPrecision.W8A8, verified = false),
+            entry(StableAudio3DitPrecision.W16A32, StableAudio3CodecPrecision.W8A8, verified = true)
+        )
+        val repaired = MusicWorkspaceDraft("music")
+            .withValue("ditPrecision", "w8a32")
+            .withValue("decoderPrecision", "fp32")
+            .withValue("encoderPrecision", "fp32")
+            .repairedFor(manifest)
+
+        assertEquals("w16a32", repaired["ditPrecision"])
+        assertEquals("w8a8", repaired["decoderPrecision"])
+        assertEquals("w8a8", repaired["encoderPrecision"])
+    }
+
+    @Test fun `supported precision combination is preserved`() {
+        val manifest = manifest(
+            entry(StableAudio3DitPrecision.FP32, StableAudio3CodecPrecision.W8A8, verified = true),
+            entry(StableAudio3DitPrecision.W16A32, StableAudio3CodecPrecision.FP32, verified = true)
+        )
+        val repaired = MusicWorkspaceDraft("music")
+            .withValue("ditPrecision", "w16a32")
+            .withValue("decoderPrecision", "fp32")
+            .withValue("encoderPrecision", "fp32")
+            .repairedFor(manifest)
+
+        assertEquals("w16a32", repaired["ditPrecision"])
+        assertEquals("fp32", repaired["decoderPrecision"])
+        assertEquals("fp32", repaired["encoderPrecision"])
+    }
+
+    private fun manifest(vararg entries: StableAudio3ManifestEntry) = StableAudio3ComponentManifest(
+        schemaVersion = 1,
+        repository = "repo",
+        revision = "revision",
+        license = "license",
+        entries = entries.toList()
+    )
+
+    private fun entry(
+        dit: StableAudio3DitPrecision,
+        codec: StableAudio3CodecPrecision,
+        verified: Boolean
+    ) = StableAudio3ManifestEntry(
+        id = "entry-${dit.wireValue}-${codec.wireValue}",
+        kind = StableAudio3Kind.MUSIC,
+        ditPrecision = dit,
+        decoderPrecision = codec,
+        encoderPrecision = codec,
+        decoder = "same-s",
+        components = listOf(
+            StableAudio3ManifestComponent(
+                role = "dit",
+                remotePath = "dit.tflite",
+                localFileName = "dit.tflite",
+                sha256 = if (verified) "a".repeat(64) else null,
+                sizeBytes = if (verified) 1L else null,
+                license = "license",
+                sourceRevision = "revision"
+            )
+        )
+    )
 }

@@ -2,6 +2,7 @@ package com.example.llamadroid.data.model
 
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.isStableAudioComponentType
+import com.example.llamadroid.data.model.library.ModelClassificationPolicy
 import org.json.JSONObject
 
 /** Whitelist of portable runtime choices: weights, paths, credentials and private input never enter it. */
@@ -9,6 +10,7 @@ object PortableModelMetadata {
     private val stringKeys = setOf("modelType", "sdCapabilities", "sdFamily", "sdVariant", "sdCompatProfiles",
         "onnxCapabilities", "onnxAssetKind", "onnxPipelineFamily", "liteRtBackend", "liteRtProfile", "whisperVariant",
         "audioFamily", "audioComponentRole", "audioLanguage", "audioArtifactIdentity",
+        "classificationSource", "detectedClassificationJson",
         // Stable Audio uses appended model rows alongside the LiteRT runtime;
         // its bundle items still need portable, role-specific metadata.
         "stableAudioFamily", "stableAudioRole", "stableAudioComponentRole", "stableAudioVersion")
@@ -25,6 +27,8 @@ object PortableModelMetadata {
         put("onnxCapabilities", model.onnxCapabilities)
         put("onnxAssetKind", model.onnxAssetKind)
         put("onnxPipelineFamily", model.onnxPipelineFamily)
+        put("classificationSource", model.classificationSource)
+        model.detectedClassificationJson?.let { put("detectedClassificationJson", it) }
         (AudioModelSupport.descriptorForModel(model)
             ?: AudioModelSupport.descriptorForDownload(model.type, model.repoId, model.filename))?.let { descriptor ->
             if (model.type.isStableAudioComponentType()) {
@@ -74,6 +78,8 @@ object PortableModelMetadata {
         put("supportsAudio", model.supportsAudio)
         put("supportsEmbedding", model.supportsEmbedding)
         put("maxContextTokens", model.maxContextTokens)
+        put("classificationSource", model.classificationSource)
+        model.detectedClassificationJson?.let { put("detectedClassificationJson", it) }
     }.toString())
 
     fun sanitize(raw: String?): String {
@@ -82,7 +88,12 @@ object PortableModelMetadata {
         return JSONObject().apply {
             stringKeys.forEach { key ->
                 val value = source.opt(key) as? String
-                if (value != null && value.length <= 4096 && !value.startsWith("/") &&
+                val maxLength = if (key == "detectedClassificationJson") {
+                    ModelClassificationPolicy.MAX_DETECTED_EVIDENCE_LENGTH
+                } else {
+                    4096
+                }
+                if (value != null && value.length <= maxLength && !value.startsWith("/") &&
                     !value.contains("://") && !value.contains('\\')) put(key, value)
             }
             booleanKeys.forEach { key -> (source.opt(key) as? Boolean)?.let { put(key, it) } }

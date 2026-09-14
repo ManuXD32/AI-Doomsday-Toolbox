@@ -76,6 +76,8 @@ data class ModelProvenanceEntity(
     val localPath: String? = null,
     val artifactSha256: String? = null,
     val sizeBytes: Long? = null,
+    @ColumnInfo(defaultValue = "'LEGACY'") val classificationSource: String = "LEGACY",
+    @ColumnInfo(defaultValue = "NULL") val detectedClassificationJson: String? = null,
     val importedAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
@@ -157,6 +159,10 @@ data class PendingModelArtifactEntity(
     val detectedFamily: String? = null,
     val detectedRole: String? = null,
     val detectedType: String? = null,
+    /** AUTO/CATALOG/USER_OVERRIDE/LEGACY for the effective requested fields. */
+    @ColumnInfo(defaultValue = "'LEGACY'") val classificationSource: String = "LEGACY",
+    /** Immutable bounded inspector evidence; never replaced by a manual choice. */
+    @ColumnInfo(defaultValue = "NULL") val detectedClassificationJson: String? = null,
     val status: String = PendingArtifactStatus.STAGED.storedValue,
     val validationJson: String? = null,
     val validationMessage: String? = null,

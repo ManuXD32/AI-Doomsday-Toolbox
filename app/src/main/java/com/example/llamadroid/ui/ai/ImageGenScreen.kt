@@ -85,7 +85,6 @@ import com.example.llamadroid.sd.resolveSdParamsBackendProfileForArtifacts
 import com.example.llamadroid.sd.SdRuntimeBackendMode
 import com.example.llamadroid.sd.SdArtifactInspection
 import com.example.llamadroid.sd.SdMainLayout
-import com.example.llamadroid.sd.SdModelFamily
 import com.example.llamadroid.sd.effectiveSdCompatProfiles
 import com.example.llamadroid.sd.isSdImageMainModel
 import com.example.llamadroid.sd.matchesSdFamily
@@ -491,14 +490,10 @@ fun ImageGenScreen(
     )
     val selectedActiveModel = modelsForSelectedMode.firstOrNull { it.path == selectedModelPath }
     val selectedInspection = selectedMainModel?.sdArtifactInspection()
-    val selectedFamilyInfo = selectedMainModel?.let { model ->
-        val detectedFamily = SdModelFamily.fromStoredValue(model.sdDetectedFamily)
-        if (detectedFamily != null) {
-            detectedFamily to model.sdVariant?.trim()?.ifBlank { null }
-        } else {
-            model.resolvedSdFamily()
-        }
-    }
+    // The persisted family is the user's effective selection. Detection is
+    // shown separately as evidence and must never silently replace it in the
+    // component selectors or launch configuration.
+    val selectedFamilyInfo = selectedMainModel?.resolvedSdFamily()
     val selectedFamily = selectedFamilyInfo?.first
     val selectedVariant = selectedFamilyInfo?.second
     val selectedPipeline = selectedMainModel?.let { model ->
@@ -2568,7 +2563,13 @@ fun ImageGenScreen(
         } }
 
         if (selectedModelPath != null && selectedMode != 2 && selectedInspection != null) item(key = "artifact-inspection") {
-            SdGenerationInspectionCard(selectedInspection)
+            SdGenerationInspectionCard(
+                inspection = selectedInspection,
+                selectedFamily = selectedFamily,
+                isManualOverride = selectedMainModel?.let { model ->
+                    model.sdFamily != null && model.sdFamily != model.sdDetectedFamily
+                } == true
+            )
         }
         if (selectedModelPath != null && selectedMode != 2 && componentRoles.isNotEmpty()) item(key = "components") {
             Spacer(modifier = Modifier.height(12.dp))
@@ -4043,7 +4044,11 @@ private fun filterSdComponents(
 }
 
 @Composable
-private fun SdGenerationInspectionCard(inspection: SdArtifactInspection) {
+private fun SdGenerationInspectionCard(
+    inspection: SdArtifactInspection,
+    selectedFamily: com.example.llamadroid.sd.SdModelFamily?,
+    isManualOverride: Boolean
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -4067,6 +4072,25 @@ private fun SdGenerationInspectionCard(inspection: SdArtifactInspection) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            Text(
+                stringResource(
+                    R.string.sd_models_selected_family,
+                    selectedFamily?.let(::sdFamilyLabelRes)?.let { stringResource(it) }
+                        ?: stringResource(R.string.sd_models_unknown_value)
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (isManualOverride) {
+                Text(
+                    stringResource(R.string.sd_models_manual_override_badge),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
             Text(
                 stringResource(
                     R.string.sd_models_inspection_confidence,

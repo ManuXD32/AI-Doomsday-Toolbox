@@ -51,6 +51,10 @@ data class DownloadTaskEntity(
     val artifactFamily: String? = null,
     val artifactRole: String? = null,
     val pendingArtifactId: String? = null,
+    /** Classification source for the effective task selection. */
+    @androidx.room.ColumnInfo(defaultValue = "'LEGACY'") val classificationSource: String = "LEGACY",
+    /** Bounded inspector evidence copied when a task is inspected/finalized. */
+    @androidx.room.ColumnInfo(defaultValue = "NULL") val detectedClassificationJson: String? = null,
     @androidx.room.ColumnInfo(defaultValue = "0") val stageOnly: Boolean = false,
     val status: String = DOWNLOAD_TASK_STATUS_ACTIVE,
     val bytesDownloaded: Long = 0L,

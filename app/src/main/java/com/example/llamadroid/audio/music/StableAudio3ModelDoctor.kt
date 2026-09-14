@@ -7,6 +7,7 @@ import com.example.llamadroid.data.model.StableAudioModelSupport
 import java.io.File
 import java.security.MessageDigest
 import java.util.Locale
+import org.json.JSONObject
 
 /** The result of checking one installed Stable Audio component. */
 enum class StableAudio3ComponentHealth {
@@ -29,7 +30,9 @@ data class StableAudio3ComponentCheck(
     val actualSha256: String?,
     val readable: Boolean,
     val parentDirectoryAvailable: Boolean,
-    val health: StableAudio3ComponentHealth
+    val health: StableAudio3ComponentHealth,
+    /** True when the bytes are usable but the user selected a non-curated row. */
+    val classificationWarning: Boolean = false
 ) {
     val ready: Boolean get() = health == StableAudio3ComponentHealth.READY
 }
@@ -43,6 +46,11 @@ data class StableAudio3ModelDoctorReport(
 ) {
     val ready: Boolean get() = check.ready
 }
+
+data class StableAudio3RequestResolution(
+    val request: StableAudio3Request,
+    val warnings: List<String> = emptyList()
+)
 
 /**
  * Resolves the one pinned Stable Audio manifest entry and validates installed
@@ -77,7 +85,7 @@ object StableAudio3ModelDoctor {
         require(File(component.localFileName).name == component.localFileName) {
             "Stable Audio component filename is not canonical"
         }
-        return if (component.role == StableAudioModelSupport.ROLE_DIT) {
+        return if (StableAudioModelSupport.canonicalRole(component.role) == StableAudioModelSupport.ROLE_DIT) {
             "Stable-Audio-3-Small-${if (kind == StableAudio3Kind.MUSIC) "Music" else "SFX"}-${component.localFileName}"
         } else {
             "shared-${component.sha256.orEmpty().take(12)}-${component.localFileName}"
@@ -88,8 +96,11 @@ object StableAudio3ModelDoctor {
         kind: StableAudio3Kind,
         entry: StableAudio3ManifestEntry,
         role: String
-    ): StableAudio3ManifestComponent = entry.component(role)
-        ?: throw StableAudio3ValidationException("Stable Audio ${roleLabel(role)} component is missing")
+    ): StableAudio3ManifestComponent {
+        require(entry.kind == kind) { "Stable Audio manifest entry has the wrong family" }
+        return entry.component(role)
+            ?: throw StableAudio3ValidationException("Stable Audio ${roleLabel(role)} component is missing")
+    }
 
     /** Returns true when durable row metadata identifies the exact curated artifact. */
     fun isCanonicalInstalledModel(
@@ -100,15 +111,17 @@ object StableAudio3ModelDoctor {
     ): Boolean {
         val payload = File(model.path)
         val canonicalPayload = runCatching { payload.canonicalFile }.getOrNull() ?: return false
-        val expectedFamily = if (component.role == StableAudioModelSupport.ROLE_DIT) {
+        val canonicalRole = StableAudioModelSupport.canonicalRole(component.role) ?: component.role
+        val expectedFamily = if (canonicalRole == StableAudioModelSupport.ROLE_DIT) {
             kind.family
         } else {
             StableAudioModelSupport.FAMILY_SHARED
         }
-        return model.isDownloaded &&
+        return entry.kind == kind && entry.component(canonicalRole) == component &&
+            model.isDownloaded &&
             model.repoId == StableAudio3Ids.SOURCE_REPOSITORY &&
-            model.type == expectedType(component.role) &&
-            model.audioComponentRole == component.role &&
+            model.type == expectedType(canonicalRole) &&
+            StableAudioModelSupport.canonicalRole(model.audioComponentRole) == canonicalRole &&
             model.audioFamily == expectedFamily &&
             model.filename == canonicalFilename(kind, component) &&
             model.sizeBytes == component.sizeBytes &&
@@ -162,7 +175,19 @@ object StableAudio3ModelDoctor {
      * intentionally independent of Room so the isolated worker can fail closed
      * when an old job references a legacy row.
      */
-    fun resolveRequest(context: Context, request: StableAudio3Request): StableAudio3Request {
+    fun resolveRequest(context: Context, request: StableAudio3Request): StableAudio3Request =
+        resolveRequestWithWarnings(context, request).request
+
+    /**
+     * Resolves curated references strictly, while permitting an explicitly
+     * selected local component to be used with a bounded integrity warning.
+     * Curated downloads are still verified by their catalog before reaching
+     * this method; a manual row never inherits a curated digest.
+     */
+    fun resolveRequestWithWarnings(
+        context: Context,
+        request: StableAudio3Request
+    ): StableAudio3RequestResolution {
         val manifest = StableAudio3ManifestLoader.load(context)
         val entry = entryFor(
             manifest = manifest,
@@ -171,14 +196,10 @@ object StableAudio3ModelDoctor {
             decoderPrecision = request.decoderPrecision,
             encoderPrecision = request.encoderPrecision
         )
+        val warnings = mutableListOf<String>()
         val components = request.components.all().map { (role, ref) ->
-            val canonicalRole = when (role) {
-                "textEncoder" -> StableAudioModelSupport.ROLE_TEXT_ENCODER
-                "codecDecoder" -> StableAudioModelSupport.ROLE_CODEC_DECODER
-                "codecEncoder" -> StableAudioModelSupport.ROLE_CODEC_ENCODER
-                "tokenizer", "dit" -> role
-                else -> throw StableAudio3ValidationException("Unknown Stable Audio component role")
-            }
+            val canonicalRole = StableAudioModelSupport.canonicalRole(role)
+                ?: throw StableAudio3ValidationException("Unknown Stable Audio component role")
             val expected = canonicalComponent(request.kind, entry, canonicalRole)
             val expectedName = canonicalFilename(request.kind, expected)
             val value = ref.normalized()
@@ -189,34 +210,53 @@ object StableAudio3ModelDoctor {
                     "Stable Audio ${roleLabel(canonicalRole)} path is unavailable"
                 )
             }
-            checkCanonical(
-                file.name == expectedName &&
-                    canonicalFile.name == expectedName &&
-                    canonicalFile.path == file.absolutePath
-            ) {
-                "Stable Audio ${roleLabel(canonicalRole)} is stale; re-download the curated component"
+            val canonicalPath = canonicalFile.path == file.absolutePath
+            val isCuratedReference = file.name == expectedName &&
+                canonicalFile.name == expectedName && canonicalPath &&
+                value.sizeBytes == expected.sizeBytes &&
+                value.sha256.equals(expected.sha256, ignoreCase = true)
+            when {
+                isCuratedReference -> canonicalRole to StableAudio3ComponentRef(
+                    path = canonicalFile.path,
+                    sha256 = expected.sha256,
+                    sizeBytes = expected.sizeBytes,
+                    sourceIdentity = "sha256:${expected.sha256}"
+                )
+                canonicalRole == StableAudioModelSupport.ROLE_DIT &&
+                    validateMergedCache(
+                        file = canonicalFile,
+                        expectedBase = expected,
+                        request = request,
+                        sourceIdentity = value.sourceIdentity
+                    ) -> {
+                    warnings += "manual_lora_cache:${roleLabel(canonicalRole)}"
+                    canonicalRole to value.copy(
+                        path = canonicalFile.path,
+                        sha256 = sha256(canonicalFile),
+                        sizeBytes = canonicalFile.length()
+                    )
+                }
+                value.sourceIdentity.orEmpty().startsWith("stable-audio3-lora:") ->
+                    throw StableAudio3ValidationException(
+                        "Stable Audio merged LoRA cache manifest is invalid"
+                    )
+                else -> {
+                    warnings += "manual_component:${roleLabel(canonicalRole)}"
+                    canonicalRole to validateManualComponent(value, canonicalRole)
+                }
             }
-            checkCanonical(value.sizeBytes == expected.sizeBytes) {
-                "Stable Audio ${roleLabel(canonicalRole)} size is stale; re-download the curated component"
-            }
-            checkCanonical(value.sha256.equals(expected.sha256, ignoreCase = true)) {
-                "Stable Audio ${roleLabel(canonicalRole)} digest is stale; re-download the curated component"
-            }
-            role to StableAudio3ComponentRef(
-                path = canonicalFile.path,
-                sha256 = expected.sha256,
-                sizeBytes = expected.sizeBytes,
-                sourceIdentity = "sha256:${expected.sha256}"
-            )
         }.toMap()
-        return request.copy(
-            components = StableAudio3Components(
-                tokenizer = requireNotNull(components["tokenizer"]),
-                textEncoder = requireNotNull(components["textEncoder"]),
-                dit = requireNotNull(components["dit"]),
-                codecDecoder = requireNotNull(components["codecDecoder"]),
-                codecEncoder = components["codecEncoder"]
-            )
+        return StableAudio3RequestResolution(
+            request = request.copy(
+                components = StableAudio3Components(
+                    tokenizer = requireNotNull(components[StableAudioModelSupport.ROLE_TOKENIZER]),
+                    textEncoder = requireNotNull(components[StableAudioModelSupport.ROLE_TEXT_ENCODER]),
+                    dit = requireNotNull(components[StableAudioModelSupport.ROLE_DIT]),
+                    codecDecoder = requireNotNull(components[StableAudioModelSupport.ROLE_CODEC_DECODER]),
+                    codecEncoder = components[StableAudioModelSupport.ROLE_CODEC_ENCODER]
+                )
+            ),
+            warnings = warnings.distinct()
         )
     }
 
@@ -278,15 +318,18 @@ object StableAudio3ModelDoctor {
         val parentAvailable = file.parentFile?.isDirectory == true
         val readable = file.isFile && file.canRead()
         val actualSize = file.takeIf { it.exists() }?.length()
-        val expectedFamily = if (component.role == StableAudioModelSupport.ROLE_DIT) {
+        val canonicalRole = StableAudioModelSupport.canonicalRole(component.role) ?: component.role
+        val belongsToEntry = entry.kind == kind && entry.component(canonicalRole) == component
+        val expectedFamily = if (canonicalRole == StableAudioModelSupport.ROLE_DIT) {
             kind.family
         } else {
             StableAudioModelSupport.FAMILY_SHARED
         }
         val baseHealth = when {
-            model.audioComponentRole != component.role ->
+            !belongsToEntry -> StableAudio3ComponentHealth.NON_CANONICAL
+            StableAudioModelSupport.canonicalRole(model.audioComponentRole) != canonicalRole ->
                 StableAudio3ComponentHealth.ROLE_MISMATCH
-            model.type != expectedType(component.role) ||
+            model.type != expectedType(canonicalRole) ||
                 model.repoId != StableAudio3Ids.SOURCE_REPOSITORY ||
                 model.audioFamily != expectedFamily ||
                 !model.audioArtifactIdentity.equals("sha256:${component.sha256}", ignoreCase = true) ->
@@ -300,7 +343,7 @@ object StableAudio3ModelDoctor {
         }
         if (baseHealth != null || !calculateDigest) {
             return StableAudio3ComponentCheck(
-                role = component.role,
+                role = canonicalRole,
                 expectedFilename = expectedName,
                 expectedSizeBytes = component.sizeBytes ?: 0L,
                 expectedSha256 = component.sha256.orEmpty(),
@@ -313,7 +356,7 @@ object StableAudio3ModelDoctor {
         }
         val actualDigest = sha256(file)
         return StableAudio3ComponentCheck(
-            role = component.role,
+            role = canonicalRole,
             expectedFilename = expectedName,
             expectedSizeBytes = component.sizeBytes ?: 0L,
             expectedSha256 = component.sha256.orEmpty(),
@@ -330,7 +373,7 @@ object StableAudio3ModelDoctor {
     }
 
     private fun expectedType(role: String): ModelType =
-        if (role == StableAudioModelSupport.ROLE_DIT) {
+        if (StableAudioModelSupport.canonicalRole(role) == StableAudioModelSupport.ROLE_DIT) {
             ModelType.LITERT_AUDIO_DIT
         } else {
             ModelType.LITERT_AUDIO_COMPONENT
@@ -358,5 +401,85 @@ object StableAudio3ModelDoctor {
             }
         }
         return digest.digest().joinToString("") { "%02x".format(Locale.US, it) }
+    }
+
+    /** Validates a manually registered component without borrowing catalog metadata. */
+    fun validateManualComponent(
+        component: StableAudio3ComponentRef,
+        role: String
+    ): StableAudio3ComponentRef {
+        val value = component.normalized()
+        val file = File(value.path)
+        require(file.isFile && file.canRead()) {
+            "Stable Audio ${roleLabel(role)} component is missing or unreadable"
+        }
+        require(file.length() > 0L) {
+            "Stable Audio ${roleLabel(role)} component is empty"
+        }
+        value.sizeBytes?.let { expected ->
+            require(file.length() == expected) {
+                "Stable Audio ${roleLabel(role)} component size changed"
+            }
+        }
+        val actualDigest = sha256(file)
+        value.sha256?.let { expected ->
+            require(actualDigest.equals(expected, ignoreCase = true)) {
+                "Stable Audio ${roleLabel(role)} component digest changed"
+            }
+        }
+        if (StableAudioModelSupport.canonicalRole(role) != StableAudioModelSupport.ROLE_TOKENIZER) {
+            require(hasLiteRtFlatbufferHeader(file)) {
+                "Stable Audio ${roleLabel(role)} component is not a LiteRT graph"
+            }
+        }
+        return value.copy(
+            path = runCatching { file.canonicalPath }.getOrElse { file.absolutePath },
+            sha256 = actualDigest,
+            sizeBytes = file.length(),
+            sourceIdentity = "manual;sha256:$actualDigest"
+        )
+    }
+
+    private fun hasLiteRtFlatbufferHeader(file: File): Boolean = runCatching {
+        file.inputStream().buffered().use { input ->
+            val header = ByteArray(8)
+            var read = 0
+            while (read < header.size) {
+                val count = input.read(header, read, header.size - read)
+                if (count < 0) return@use false
+                read += count
+            }
+            header.copyOfRange(4, 8).contentEquals(byteArrayOf('T'.code.toByte(), 'F'.code.toByte(),
+                'L'.code.toByte(), '3'.code.toByte()))
+        }
+    }.getOrDefault(false)
+
+    /** Validates the sidecar and bytes produced by StableAudio3LoraMerge. */
+    private fun validateMergedCache(
+        file: File,
+        expectedBase: StableAudio3ManifestComponent,
+        request: StableAudio3Request,
+        sourceIdentity: String?
+    ): Boolean {
+        val expectedBaseDigest = expectedBase.sha256?.lowercase(Locale.US) ?: return false
+        val manifest = File(file.parentFile, file.nameWithoutExtension + ".json")
+        val json = runCatching { JSONObject(manifest.readText()) }.getOrNull() ?: return false
+        if (json.optInt("schemaVersion", -1) != 1 ||
+            json.optString("family") != request.kind.family ||
+            json.optString("precision") != request.ditPrecision.wireValue ||
+            json.optString("baseDigest").lowercase(Locale.US) != expectedBaseDigest ||
+            json.optLong("baseSizeBytes", -1L) != expectedBase.sizeBytes ||
+            json.optLong("mergedSizeBytes", -1L) != file.length() ||
+            json.optString("mergedPath").isBlank() ||
+            runCatching { File(json.optString("mergedPath")).canonicalPath != file.canonicalPath }
+                .getOrDefault(true)
+        ) return false
+        val cacheKey = json.optString("cacheKey").takeIf { it.isNotBlank() } ?: return false
+        val provenance = json.optString("provenance")
+        if (!provenance.contains(cacheKey)) return false
+        if (!sourceIdentity.orEmpty().startsWith("stable-audio3-lora:$cacheKey;")) return false
+        val mergedDigest = json.optString("mergedDigest")
+        if (!mergedDigest.matches(Regex("[0-9a-fA-F]{64}"))) return false
+        return runCatching { sha256(file).equals(mergedDigest, ignoreCase = true) }.getOrDefault(false)
     }
 }

@@ -4070,6 +4070,35 @@ object Migrations {
         }
     }
 
+    /** Persist detected evidence separately from the user's effective classification. */
+    val MIGRATION_121_122 = object : Migration(121, 122) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 121 -> 122: model classification provenance")
+            val tables = listOf(
+                "models",
+                "litert_models",
+                "download_tasks",
+                "pending_model_artifacts",
+                "model_provenance"
+            )
+            tables.forEach { table ->
+                if (!tableExists(db, table)) return@forEach
+                if (!columnExists(db, table, "classificationSource")) {
+                    db.execSQL(
+                        "ALTER TABLE `$table` ADD COLUMN `classificationSource` TEXT NOT NULL DEFAULT 'LEGACY'"
+                    )
+                }
+                if (!columnExists(db, table, "detectedClassificationJson")) {
+                    // Keep the explicit nullable default visible to Room's schema validator.
+                    db.execSQL(
+                        "ALTER TABLE `$table` ADD COLUMN `detectedClassificationJson` TEXT DEFAULT (NULL)"
+                    )
+                }
+            }
+            DebugLog.log("[DB] Migration 121 -> 122 complete")
+        }
+    }
+
     val ALL_MIGRATIONS: Array<Migration> = arrayOf(
         MIGRATION_27_28,
         MIGRATION_28_29,
@@ -4164,7 +4193,8 @@ object Migrations {
         AgentSleepWakeMigration.MIGRATION_117_118,
         MIGRATION_118_119,
         MIGRATION_119_120,
-        MIGRATION_120_121
+        MIGRATION_120_121,
+        MIGRATION_121_122
     )
     /**
      * Check if a column exists in a table.

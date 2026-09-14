@@ -53,6 +53,8 @@ import com.example.llamadroid.data.model.FileInfo
 import com.example.llamadroid.data.model.ModelLibraryManager
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.data.model.library.ModelFamily
+import com.example.llamadroid.data.model.library.ModelClassificationPolicy
+import com.example.llamadroid.data.model.library.ModelClassificationSource
 import com.example.llamadroid.data.model.library.ModelSourceDraft
 import com.example.llamadroid.data.model.library.ModelSourceRepository
 import com.example.llamadroid.data.model.isStableDiffusionArtifact
@@ -1169,8 +1171,13 @@ private fun InstalledSDModelsTab(
         val selectionInspectionBlock = pendingInspection
             ?.takeIf { selectionNeedsInspection }
             ?.let { inspection ->
-                inspectionBlockForSelection(inspection, selectedImportType, importSdFamily)
+                inspectionBlockForSelection(inspection)
             }
+        val selectionInspectionMismatch = pendingInspection
+            ?.takeIf { selectionNeedsInspection }
+            ?.let { inspection ->
+                inspectionHasSemanticMismatch(inspection, selectedImportType, importSdFamily)
+            } == true
         LaunchedEffect(selectedImportType, pendingFilename) {
             val metadata = defaultSdMetadataForSelection(
                 selectionType = selectedImportType,
@@ -1262,7 +1269,17 @@ private fun InstalledSDModelsTab(
                             Spacer(modifier = Modifier.height(12.dp))
                         } else if (selectionNeedsInspection) {
                             pendingInspection?.let { inspection ->
-                                SdSelectedArtifactSummary(inspection)
+                                SdSelectedArtifactSummary(inspection, importSdFamily)
+                                if (selectionInspectionMismatch) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        stringResource(R.string.sd_models_detection_mismatch_warning),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.tertiary,
+                                        maxLines = 4,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                                 Spacer(modifier = Modifier.height(12.dp))
                             }
                         }
@@ -1345,7 +1362,14 @@ private fun InstalledSDModelsTab(
                             sdVariant = importSdVariant,
                             onSdVariantChange = { importSdVariant = it },
                             compatProfiles = importCompatProfiles,
-                            onCompatProfilesChange = { importCompatProfiles = it }
+                            onCompatProfilesChange = { importCompatProfiles = it },
+                            detectedFamily = pendingInspection?.detectedFamily,
+                            onResetToDetected = {
+                                pendingInspection?.detectedFamily?.let { detected ->
+                                    importSdFamily = detected
+                                    importSdVariant = pendingInspection?.detectedVariant.orEmpty()
+                                }
+                            }
                         )
                         if (isImageMainSelection(selectedImportType) && importSdFamily == null) {
                             Spacer(modifier = Modifier.height(8.dp))
@@ -2199,7 +2223,19 @@ private fun InstalledSDModelsTab(
                                 sdVariant = editSdVariant,
                                 onSdVariantChange = { editSdVariant = it },
                                 compatProfiles = editCompatProfiles,
-                                onCompatProfilesChange = { editCompatProfiles = it }
+                                onCompatProfilesChange = { editCompatProfiles = it },
+                                detectedFamily = editingModel?.sdDetectedFamily
+                                    ?.let(SdModelFamily::fromStoredValue),
+                                onResetToDetected = {
+                                    editingModel?.let { model ->
+                                        model.sdDetectedFamily
+                                            ?.let(SdModelFamily::fromStoredValue)
+                                            ?.let { detected -> editSdFamily = detected }
+                                        editSdVariant = editingModel?.sdArtifactInspection()
+                                            ?.detectedVariant
+                                            ?: editSdVariant
+                                    }
+                                }
                             )
                             if (isImageMainSelection(selectedEditType) &&
                                 editingModel?.sdInspectionConfidence != SdInspectionConfidence.HIGH.storedValue
@@ -2405,7 +2441,10 @@ private suspend fun importSDModel(
             sdCapabilities = capabilities,
             sdFamily = sdFamily,
             sdVariant = sdVariant,
-            sdCompatProfiles = sdCompatProfiles
+            sdCompatProfiles = sdCompatProfiles,
+            classificationSource = ModelClassificationSource.USER_OVERRIDE.storedValue,
+            detectedClassificationJson = inspection?.toJson()
+                ?.let(ModelClassificationPolicy::boundedEvidence)
         ).let { entity ->
             inspection?.let { entity.withSdArtifactInspection(it) } ?: entity
         }
@@ -2739,7 +2778,9 @@ private fun SDMetadataEditor(
     sdVariant: String,
     onSdVariantChange: (String) -> Unit,
     compatProfiles: String,
-    onCompatProfilesChange: (String) -> Unit
+    onCompatProfilesChange: (String) -> Unit,
+    detectedFamily: SdModelFamily? = null,
+    onResetToDetected: (() -> Unit)? = null
 ) {
     if (isImageMainSelection(selectionType)) {
         Text(stringResource(R.string.sd_models_family_label), style = MaterialTheme.typography.labelMedium)
@@ -2787,6 +2828,28 @@ private fun SDMetadataEditor(
             placeholder = { Text(stringResource(R.string.sd_models_variant_hint)) },
             singleLine = true
         )
+        if (detectedFamily != null && sdFamily != null && sdFamily != detectedFamily) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                stringResource(R.string.sd_models_family_override_warning),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.tertiary,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis
+            )
+            onResetToDetected?.let { reset ->
+                TextButton(
+                    onClick = reset,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        stringResource(R.string.sd_models_reset_to_detection),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
     } else if (requiresCompatProfiles(selectionType)) {
         Text(stringResource(R.string.sd_models_compat_profiles_label), style = MaterialTheme.typography.labelMedium)
         Spacer(modifier = Modifier.height(8.dp))
@@ -3051,7 +3114,10 @@ private fun hasStaleSdCompatibilityMetadata(model: ModelEntity): Boolean {
 }
 
 @Composable
-private fun SdSelectedArtifactSummary(inspection: SdArtifactInspection) {
+private fun SdSelectedArtifactSummary(
+    inspection: SdArtifactInspection,
+    selectedFamily: SdModelFamily?
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -3077,6 +3143,27 @@ private fun SdSelectedArtifactSummary(inspection: SdArtifactInspection) {
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+        Text(
+            stringResource(
+                R.string.sd_models_selected_family,
+                selectedFamily?.let { stringResource(sdFamilyLabelRes(it)) }
+                    ?: stringResource(R.string.sd_models_unknown_value)
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (selectedFamily != null && inspection.detectedFamily != null &&
+            selectedFamily != inspection.detectedFamily
+        ) {
+            Text(
+                stringResource(R.string.sd_models_manual_override_badge),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.tertiary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
         Text(
             stringResource(
                 R.string.sd_models_detected_role,
@@ -3150,31 +3237,30 @@ private fun expectedRoleForSelection(selectionType: SDModelSelectionType): SdArt
     else -> null
 }
 
-private fun inspectionBlockForSelection(
+private fun inspectionBlockForSelection(inspection: SdArtifactInspection): String? {
+    if (!inspection.isInspected || !inspection.isStructurallyUsable) return "invalid"
+    // Detection disagreements are semantic metadata warnings. The user may
+    // intentionally classify a valid artifact differently, so neither role
+    // nor family evidence may block import here. Structural integrity is the
+    // only blocker handled by this dialog.
+    return null
+}
+
+private fun inspectionHasSemanticMismatch(
     inspection: SdArtifactInspection,
     selectionType: SDModelSelectionType,
     configuredFamily: SdModelFamily?
-): String? {
-    if (!inspection.isInspected || !inspection.isStructurallyUsable) return "invalid"
+): Boolean {
     val expectedRole = expectedRoleForSelection(selectionType)
     val detectedRole = inspection.detectedRole
-    if (inspection.confidence == SdInspectionConfidence.HIGH &&
-        expectedRole != null && detectedRole != null &&
-        when (expectedRole) {
-            SdArtifactRole.FULL_MODEL -> detectedRole != SdArtifactRole.FULL_MODEL &&
-                detectedRole != SdArtifactRole.MAIN_MODEL
-            else -> detectedRole != expectedRole
-        }
-    ) {
-        return "role"
+    val roleMismatch = expectedRole != null && detectedRole != null && when (expectedRole) {
+        SdArtifactRole.FULL_MODEL -> detectedRole != SdArtifactRole.FULL_MODEL &&
+            detectedRole != SdArtifactRole.MAIN_MODEL
+        else -> detectedRole != expectedRole
     }
-    if (inspection.confidence == SdInspectionConfidence.HIGH &&
-        configuredFamily != null && inspection.detectedFamily != null &&
+    val familyMismatch = configuredFamily != null && inspection.detectedFamily != null &&
         configuredFamily != inspection.detectedFamily
-    ) {
-        return "family"
-    }
-    return null
+    return roleMismatch || familyMismatch
 }
 
 @Composable
@@ -3355,6 +3441,25 @@ private fun SdInspectionEvidence(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            Text(
+                stringResource(
+                    R.string.sd_models_selected_family,
+                    model.sdFamilyEnum()?.let { stringResource(sdFamilyLabelRes(it)) }
+                        ?: stringResource(R.string.sd_models_unknown_value)
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (model.sdFamily != null && model.sdFamily != model.sdDetectedFamily) {
+                Text(
+                    stringResource(R.string.sd_models_manual_override_badge),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
             Text(
                 stringResource(
                     R.string.sd_models_detected_role,

@@ -41,6 +41,25 @@ struct RankedTensorType {
   Layout layout;
 };
 
+/** Owns a read-only model mapping for LiteRtCreateModelFromBuffer. */
+class ReadOnlyModelMapping final {
+ public:
+  ReadOnlyModelMapping() = default;
+  ReadOnlyModelMapping(const ReadOnlyModelMapping&) = delete;
+  ReadOnlyModelMapping& operator=(const ReadOnlyModelMapping&) = delete;
+  ~ReadOnlyModelMapping();
+
+  Status map(const std::string& path);
+  void reset();
+  const void* address() const { return address_; }
+  std::size_t size() const { return size_; }
+
+ private:
+  void* address_ = nullptr;
+  std::size_t size_ = 0;
+  bool mapped_ = false;
+};
+
 // This mirrors LiteRT's public litert/c/litert_layout.h and
 // litert/c/litert_model_types.h ABI. The app's 0.12.0 AAR is loaded at
 // runtime; these checks make a compiler/platform layout drift fail at build
@@ -77,6 +96,9 @@ struct Api {
   using DestroyOpaqueOptions = void (*)(void*);
   using AddOpaqueOptions = Status (*)(void*, void*);
   using CreateModelFromFile = Status (*)(void*, const char*, void**);
+  // Optional in older LiteRT-LM AARs. The buffer API is used only as a
+  // recovery path when the file API reports its public file-I/O status.
+  using CreateModelFromBuffer = Status (*)(void*, const void*, std::size_t, void**);
   using DestroyModel = void (*)(void*);
   using CreateCompiledModel = Status (*)(void*, void*, void*, void**);
   using DestroyCompiledModel = void (*)(void*);
@@ -119,6 +141,7 @@ struct Api {
   DestroyOpaqueOptions destroy_opaque_options = nullptr;
   AddOpaqueOptions add_opaque_options = nullptr;
   CreateModelFromFile create_model_from_file = nullptr;
+  CreateModelFromBuffer create_model_from_buffer = nullptr;
   DestroyModel destroy_model = nullptr;
   CreateCompiledModel create_compiled_model = nullptr;
   DestroyCompiledModel destroy_compiled_model = nullptr;

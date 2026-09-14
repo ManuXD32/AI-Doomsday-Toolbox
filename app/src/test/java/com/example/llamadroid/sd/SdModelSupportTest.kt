@@ -38,6 +38,44 @@ class SdModelSupportTest {
     }
 
     @Test
+    fun `infers flux 2 spellings and klein variants before generic flux`() {
+        val cases = listOf(
+            "flux.2-dev-q4.gguf" to "dev",
+            "flux-2_dev-q4.gguf" to "dev",
+            "flux_2-klein-4b.gguf" to "klein_4b",
+            "chroma2-kaleidoscope.gguf" to null,
+            "kaleidoscope.gguf" to null
+        )
+
+        cases.forEach { (filename, expectedVariant) ->
+            val inferred = inferSdFamily(
+                type = ModelType.SD_DIFFUSION,
+                repoId = "local/flux-model",
+                filename = filename
+            )
+            assertEquals(filename, SdModelFamily.FLUX_2, inferred.first)
+            assertEquals(filename, expectedVariant, inferred.second)
+        }
+    }
+
+    @Test
+    fun `infers chroma radiance before generic chroma`() {
+        val radiance = inferSdFamily(
+            type = ModelType.SD_DIFFUSION,
+            repoId = "local/chroma",
+            filename = "chroma1-radiance-q4.gguf"
+        )
+        val chroma = inferSdFamily(
+            type = ModelType.SD_DIFFUSION,
+            repoId = "local/chroma",
+            filename = "chroma-q4.gguf"
+        )
+
+        assertEquals(SdModelFamily.CHROMA_RADIANCE, radiance.first)
+        assertEquals(SdModelFamily.CHROMA, chroma.first)
+    }
+
+    @Test
     fun `infers qwen image edit 2511 family`() {
         val inferred = inferSdFamily(
             type = ModelType.SD_DIFFUSION,

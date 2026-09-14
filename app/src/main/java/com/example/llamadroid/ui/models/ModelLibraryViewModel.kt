@@ -295,7 +295,9 @@ class ModelLibraryViewModel(
                     modelKey = model.filename
                 ),
                 role = role?.trim()?.takeIf { it.isNotBlank() },
-                sizeBytes = model.sizeBytes
+                sizeBytes = model.sizeBytes,
+                classificationSource = model.classificationSource,
+                detectedClassificationJson = model.detectedClassificationJson
             ).getOrThrow()
         }
     }
@@ -329,7 +331,9 @@ class ModelLibraryViewModel(
                     modelKey = InstalledModelAsset.fromLiteRt(model).stableId
                 ),
                 role = role?.trim()?.takeIf { it.isNotBlank() } ?: "litert",
-                sizeBytes = model.sizeBytes
+                sizeBytes = model.sizeBytes,
+                classificationSource = model.classificationSource,
+                detectedClassificationJson = model.detectedClassificationJson
             ).getOrThrow()
         }
     }

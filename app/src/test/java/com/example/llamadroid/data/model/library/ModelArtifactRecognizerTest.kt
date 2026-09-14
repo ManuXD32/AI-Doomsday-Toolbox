@@ -297,6 +297,26 @@ class ModelArtifactRecognizerTest {
     }
 
     @Test
+    fun `confirmed override accepts semantic role disagreement for a valid container`() {
+        val file = Files.createTempFile("motion-module-override", ".safetensors").toFile()
+        writeSafeTensors(file, "model.diffusion_model.blocks.0.cross_attn.norm_k.weight")
+        try {
+            val result = ModelArtifactRecognizer.validateForPromotion(
+                file,
+                ModelFamily.SD,
+                "motionmodule",
+                allowClassificationMismatch = true
+            )
+
+            assertTrue(result.isStructurallyValid)
+            assertFalse(result.requiresManualPromotion)
+            assertEquals(ModelType.SD_MOTION_MODULE.name, result.detectedType)
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
     fun `explicit video companion role still rejects a malformed container`() {
         val file = Files.createTempFile("audio-vae", ".safetensors").toFile()
         file.writeBytes(

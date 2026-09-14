@@ -7,6 +7,7 @@ import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.sd.SdArtifactInspection
 import com.example.llamadroid.sd.SdArtifactFormat
+import com.example.llamadroid.sd.SdArtifactRole
 import com.example.llamadroid.sd.SdInspectionCache
 import com.example.llamadroid.sd.SdInspectionConfidence
 import com.example.llamadroid.sd.SdMainLayout
@@ -95,6 +96,20 @@ internal suspend fun resolveSdPipelineForLaunch(
                 evidence = "component=${file.name} type=${type.name}"
             )
         }
+        if (validation.isSuccess && sdRolesSemanticallyDiffer(
+                inspection.configuredRole,
+                inspection.detectedRole
+            )
+        ) {
+            componentWarnings += SdPipelineIssue(
+                code = SdPipelineIssueCode.COMPONENT_INCOMPATIBLE,
+                message = "${file.name}: selected role ${inspection.configuredRole?.storedValue} " +
+                    "differs from detected role ${inspection.detectedRole?.storedValue}.",
+                blocking = false,
+                evidence = "selected=${inspection.configuredRole?.storedValue}," +
+                    "detected=${inspection.detectedRole?.storedValue}"
+            )
+        }
         if (validation.isSuccess && inspection.confidence != SdInspectionConfidence.HIGH &&
             inspection.warnings.isNotEmpty()
         ) {
@@ -113,10 +128,11 @@ internal suspend fun resolveSdPipelineForLaunch(
         configuredCompatibilityComponents(effectiveConfig).forEach { (type, path) ->
             val stored = dao.getModelByPath(path)
             if (stored != null && !stored.matchesSdFamily(resolvedFamily, pipeline.variant)) {
-                componentIssues += SdPipelineIssue(
+                componentWarnings += SdPipelineIssue(
                     code = SdPipelineIssueCode.COMPONENT_INCOMPATIBLE,
                     message = "The selected ${type.name} artifact is incompatible with " +
                         resolvedFamily.storedValue + ".",
+                    blocking = false,
                     evidence = "component=${File(path).name} type=${type.name} " +
                         "family=${resolvedFamily.storedValue} variant=${pipeline.variant.orEmpty()}"
                 )
@@ -129,6 +145,18 @@ internal suspend fun resolveSdPipelineForLaunch(
         blockingIssues = pipeline.blockingIssues + componentIssues
     )
     return pipeline.requireValid()
+}
+
+private fun sdRolesSemanticallyDiffer(
+    selected: SdArtifactRole?,
+    detected: SdArtifactRole?
+): Boolean {
+    if (selected == null || detected == null || detected == SdArtifactRole.UNKNOWN) return false
+    if (selected == detected) return false
+    if (selected in setOf(SdArtifactRole.FULL_MODEL, SdArtifactRole.MAIN_MODEL) &&
+        detected in setOf(SdArtifactRole.FULL_MODEL, SdArtifactRole.MAIN_MODEL)
+    ) return false
+    return true
 }
 
 private suspend fun persistComponentInspection(

@@ -8,12 +8,16 @@ import com.example.llamadroid.audio.music.*
 import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelEntity
+import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.data.db.isStableAudioComponentType
 import com.example.llamadroid.data.model.StableAudioModelSupport
+import com.example.llamadroid.data.model.library.ModelClassificationSource
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import org.json.JSONObject
 import java.io.File
 import java.security.SecureRandom
+import java.util.Locale
 import java.util.UUID
 
 data class MusicWorkspaceState(
@@ -33,7 +37,11 @@ data class MusicWorkspaceState(
 /** Music/SFX share the existing foreground queue; this object only owns UI state. */
 class MusicWorkspaceController(context: Context, val kind: String) {
     private val app = context.applicationContext
+    private val stableKind = if (kind == "sfx") StableAudio3Kind.SFX else StableAudio3Kind.MUSIC
     private val family = if (kind == "sfx") StableAudio3Ids.FAMILY_SFX else StableAudio3Ids.FAMILY_MUSIC
+    private val stableAudioManifest: StableAudio3ComponentManifest? by lazy {
+        runCatching { StableAudio3ManifestLoader.load(app) }.getOrNull()
+    }
     private val db = AppDatabase.getDatabase(app)
     private val repository = AudioWorkspaceRepository(app, db)
     private val store = MusicWorkspaceDraftStore.get(app, kind)
@@ -52,26 +60,26 @@ class MusicWorkspaceController(context: Context, val kind: String) {
             catch (_: Exception) { mutableState.update { it.copy(error = app.getString(R.string.audio_music_draft_error)) } }
         }
         scope.launch { store.draft.filterNotNull().collect { draft ->
-            mutableState.update { it.copy(draft = draft, loaded = true) }
+            val repaired = repairDraft(draft)
+            if (repaired != draft) {
+                store.save(repaired)
+            } else {
+                mutableState.update { it.copy(draft = draft, loaded = true) }
+            }
         } }
         scope.launch { store.error.collect { error -> mutableState.update { it.copy(draftError = error) } } }
         scope.launch {
             db.modelDao().getAllModels().map { rows -> withContext(Dispatchers.IO) {
-                val manifest = StableAudio3ManifestLoader.load(app)
-                val entry = StableAudio3ModelDoctor.entryFor(
-                    manifest,
-                    if (kind == "sfx") StableAudio3Kind.SFX else StableAudio3Kind.MUSIC
-                )
+                val manifest = stableAudioManifest ?: error("Stable Audio component manifest is unavailable")
+                val entry = manifest.verifiedEntries().firstOrNull { it.kind == stableKind }
+                    ?: error("Stable Audio verified manifest entry is unavailable")
                 rows.filter { row ->
                     val role = StableAudioModelSupport.canonicalRole(row.audioComponentRole)
                     val expected = role?.let { entry.component(it) }
                     expected != null &&
-                        StableAudio3ModelDoctor.isCanonicalInstalledModel(
-                            if (kind == "sfx") StableAudio3Kind.SFX else StableAudio3Kind.MUSIC,
-                            entry,
-                            expected,
-                            row
-                        ) && File(row.path).isFile && File(row.path).canRead()
+                        (StableAudio3ModelDoctor.isCanonicalInstalledModel(stableKind, entry, expected, row) ||
+                            isManualStableAudioModel(row, stableKind, role)) &&
+                        File(row.path).isFile && File(row.path).canRead()
                 }
             } }.catch { error -> if (error is CancellationException) throw error; fail() }.collect { rows ->
                 models = rows.associateBy { it.path }
@@ -98,8 +106,9 @@ class MusicWorkspaceController(context: Context, val kind: String) {
 
     fun update(draft: MusicWorkspaceDraft) {
         if (!mutableState.value.loaded) return
-        mutableState.update { it.copy(draft = draft, error = null) }
-        store.save(draft)
+        val repaired = repairDraft(draft)
+        mutableState.update { it.copy(draft = repaired, error = null) }
+        store.save(repaired)
     }
 
     fun useInput(path: String, operation: String) {
@@ -147,52 +156,68 @@ class MusicWorkspaceController(context: Context, val kind: String) {
     }
 
     private fun buildRequest(draft: MusicWorkspaceDraft): StableAudio3Request {
-        val kindValue = if (kind == "sfx") StableAudio3Kind.SFX else StableAudio3Kind.MUSIC
-        val manifest = StableAudio3ManifestLoader.load(app)
-        val entry = StableAudio3ModelDoctor.entryFor(
-            manifest = manifest,
-            kind = kindValue,
-            ditPrecision = StableAudio3DitPrecision.fromWire(draft["ditPrecision"]),
-            decoderPrecision = StableAudio3CodecPrecision.fromWire(draft["decoderPrecision"]),
-            encoderPrecision = StableAudio3CodecPrecision.fromWire(draft["encoderPrecision"])
-        )
+        val manifest = stableAudioManifest ?: error("Stable Audio component manifest is unavailable")
+        val effectiveDraft = repairDraft(draft)
+        val entry = manifest.verifiedEntries().firstOrNull { candidate ->
+            candidate.kind == stableKind &&
+                candidate.ditPrecision.wireValue == effectiveDraft["ditPrecision"] &&
+                candidate.decoderPrecision.wireValue == effectiveDraft["decoderPrecision"] &&
+                candidate.encoderPrecision.wireValue == effectiveDraft["encoderPrecision"]
+        } ?: error("Stable Audio precision selection is unavailable")
         fun component(role: String): StableAudio3ComponentRef {
-            val path = draft.components[role] ?: error("Missing component")
+            val path = effectiveDraft.components[role] ?: error("Missing component")
             val model = models[path] ?: error("Missing model")
-            val expected = StableAudio3ModelDoctor.canonicalComponent(kindValue, entry, role)
-            require(StableAudio3ModelDoctor.isCanonicalInstalledModel(kindValue, entry, expected, model)) {
+            val expected = StableAudio3ModelDoctor.canonicalComponent(stableKind, entry, role)
+            val canonical = StableAudio3ModelDoctor.isCanonicalInstalledModel(stableKind, entry, expected, model)
+            if (canonical) {
+                return StableAudio3ComponentRef(
+                    path = model.path,
+                    sha256 = expected.sha256,
+                    sizeBytes = expected.sizeBytes,
+                    sourceIdentity = "sha256:${expected.sha256}"
+                )
+            }
+            require(isManualStableAudioModel(model, stableKind, role)) {
                 "Stable Audio ${role} is stale; re-download the curated component"
             }
+            val digest = manualArtifactDigest(model)
+                ?: error("Stable Audio ${role} manual digest is unavailable")
+            val manualPath = runCatching { File(model.path).canonicalPath }.getOrElse {
+                error("Stable Audio ${role} path is unavailable")
+            }
             return StableAudio3ComponentRef(
-                path = model.path,
-                sha256 = expected.sha256,
-                sizeBytes = expected.sizeBytes,
-                sourceIdentity = "sha256:${expected.sha256}"
+                path = manualPath,
+                sha256 = digest,
+                sizeBytes = model.sizeBytes,
+                sourceIdentity = model.audioArtifactIdentity
             )
         }
-        val operation = StableAudio3Operation.fromWire(draft["operation"])
+        val operation = StableAudio3Operation.fromWire(effectiveDraft["operation"])
         return StableAudio3Request(
-            kind = kindValue,
+            kind = stableKind,
             operation = operation,
             components = StableAudio3Components(component("tokenizer"), component("textEncoder"), component("dit"),
                 component("codecDecoder"), if (operation != StableAudio3Operation.GENERATE) component("codecEncoder") else null),
-            prompt = draft["prompt"], negativePrompt = draft["negativePrompt"],
-            durationSeconds = draft["durationSeconds"].toDouble(), steps = draft["steps"].toInt(),
-            seed = draft["seed"].takeIf { it.isNotBlank() }?.toLong() ?: SecureRandom().nextLong().ushr(1),
-            cfg = draft["cfg"].toFloat(), apg = draft["apg"].toFloat(), cfgBatched = draft["cfgBatched"] == "true",
-            initAudioPath = draft["initAudio"].takeIf { operation != StableAudio3Operation.GENERATE && it.isNotBlank() },
-            initNoiseLevel = if (operation == StableAudio3Operation.GENERATE) 1f else draft["initNoiseLevel"].toFloat(),
-            maskStartSeconds = if (operation == StableAudio3Operation.INPAINT) draft["maskStartSeconds"].toDouble() else null,
-            maskEndSeconds = if (operation == StableAudio3Operation.INPAINT) draft["maskEndSeconds"].toDouble() else null,
-            threads = draft["threads"].toInt(), freeModels = draft["freeModels"] == "true",
-            ditPrecision = StableAudio3DitPrecision.fromWire(draft["ditPrecision"]),
-            decoderPrecision = StableAudio3CodecPrecision.fromWire(draft["decoderPrecision"]),
-            encoderPrecision = StableAudio3CodecPrecision.fromWire(draft["encoderPrecision"]),
-            maxRung = draft["maxRung"].takeIf { it.isNotBlank() }?.toInt(),
-            loras = draft.loras.map { StableAudio3Lora(it.path, it.strength.toFloat()) },
+            prompt = effectiveDraft["prompt"], negativePrompt = effectiveDraft["negativePrompt"],
+            durationSeconds = effectiveDraft["durationSeconds"].toDouble(), steps = effectiveDraft["steps"].toInt(),
+            seed = effectiveDraft["seed"].takeIf { it.isNotBlank() }?.toLong() ?: SecureRandom().nextLong().ushr(1),
+            cfg = effectiveDraft["cfg"].toFloat(), apg = effectiveDraft["apg"].toFloat(), cfgBatched = effectiveDraft["cfgBatched"] == "true",
+            initAudioPath = effectiveDraft["initAudio"].takeIf { operation != StableAudio3Operation.GENERATE && it.isNotBlank() },
+            initNoiseLevel = if (operation == StableAudio3Operation.GENERATE) 1f else effectiveDraft["initNoiseLevel"].toFloat(),
+            maskStartSeconds = if (operation == StableAudio3Operation.INPAINT) effectiveDraft["maskStartSeconds"].toDouble() else null,
+            maskEndSeconds = if (operation == StableAudio3Operation.INPAINT) effectiveDraft["maskEndSeconds"].toDouble() else null,
+            threads = effectiveDraft["threads"].toInt(), freeModels = effectiveDraft["freeModels"] == "true",
+            ditPrecision = entry.ditPrecision,
+            decoderPrecision = entry.decoderPrecision,
+            encoderPrecision = entry.encoderPrecision,
+            maxRung = effectiveDraft["maxRung"].takeIf { it.isNotBlank() }?.toInt(),
+            loras = effectiveDraft.loras.map { StableAudio3Lora(it.path, it.strength.toFloat()) },
             outputPath = File(app.cacheDir, "stable_audio_pending.wav").absolutePath
         )
     }
+
+    private fun repairDraft(draft: MusicWorkspaceDraft): MusicWorkspaceDraft =
+        stableAudioManifest?.let(draft::repairedFor) ?: draft
 
     fun cancel() {
         if (importJob?.isActive == true) { importJob?.cancel(); return }
@@ -257,3 +282,38 @@ class MusicWorkspaceController(context: Context, val kind: String) {
 internal fun musicComponentRole(value: String?): String? =
     com.example.llamadroid.data.model.StableAudioModelSupport.canonicalRole(value)
         ?.takeIf { it in setOf("dit", "textEncoder", "tokenizer", "codecEncoder", "codecDecoder") }
+
+internal fun isManualStableAudioModel(
+    model: ModelEntity,
+    kind: StableAudio3Kind,
+    role: String
+): Boolean {
+    val canonicalRole = StableAudioModelSupport.canonicalRole(role) ?: return false
+    val expectedType = if (canonicalRole == StableAudioModelSupport.ROLE_DIT) {
+        ModelType.LITERT_AUDIO_DIT
+    } else {
+        ModelType.LITERT_AUDIO_COMPONENT
+    }
+    val expectedFamily = if (canonicalRole == StableAudioModelSupport.ROLE_DIT) {
+        kind.family
+    } else {
+        StableAudioModelSupport.FAMILY_SHARED
+    }
+    val payload = File(model.path)
+    return model.isDownloaded &&
+        ModelClassificationSource.USER_OVERRIDE.storedValue.equals(model.classificationSource, ignoreCase = true) &&
+        model.type.isStableAudioComponentType() &&
+        model.type == expectedType &&
+        StableAudioModelSupport.canonicalRole(model.audioComponentRole) == canonicalRole &&
+        model.audioFamily.equals(expectedFamily, ignoreCase = true) &&
+        model.sizeBytes > 0L &&
+        payload.isFile && payload.canRead() &&
+        payload.length() == model.sizeBytes &&
+        manualArtifactDigest(model) != null
+}
+
+private fun manualArtifactDigest(model: ModelEntity): String? {
+    val value = model.audioArtifactIdentity?.trim()?.lowercase(Locale.US) ?: return null
+    val digest = value.removePrefix("sha256:")
+    return digest.takeIf { it.matches(Regex("[0-9a-f]{64}")) }
+}

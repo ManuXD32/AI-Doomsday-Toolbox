@@ -2,7 +2,12 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
+#include <limits>
 #include <sstream>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <dlfcn.h>
 
@@ -16,6 +21,38 @@ T symbol(void* library, const char* name) {
 
 void free_payload(void* payload) { std::free(payload); }
 }  // namespace
+
+ReadOnlyModelMapping::~ReadOnlyModelMapping() { reset(); }
+
+void ReadOnlyModelMapping::reset() {
+  if (mapped_) munmap(address_, size_);
+  address_ = nullptr;
+  size_ = 0;
+  mapped_ = false;
+}
+
+Status ReadOnlyModelMapping::map(const std::string& path) {
+  reset();
+  const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return kFileIO;
+  struct stat info {};
+  if (fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) || info.st_size <= 0 ||
+      static_cast<unsigned long long>(info.st_size) >
+          static_cast<unsigned long long>(std::numeric_limits<std::size_t>::max())) {
+    close(fd);
+    return kInvalidFlatbuffer;
+  }
+  size_ = static_cast<std::size_t>(info.st_size);
+  void* mapped = mmap(nullptr, size_, PROT_READ, MAP_PRIVATE, fd, 0);
+  close(fd);
+  if (mapped == MAP_FAILED) {
+    size_ = 0;
+    return kFileIO;
+  }
+  address_ = mapped;
+  mapped_ = true;
+  return kOk;
+}
 
 Api::~Api() { unload(); }
 
@@ -56,6 +93,10 @@ bool Api::load(std::string* error) {
   get_opaque_cpu_options_data =
       symbol<GetOpaqueCpuOptionsData>(library, "LrtGetOpaqueCpuOptionsData");
   LOAD_REQUIRED(create_model_from_file, "LiteRtCreateModelFromFile");
+  // LiteRT 0.12 exports this recovery API, but keep it optional so the
+  // worker remains compatible with older LiteRT-LM packages.
+  create_model_from_buffer =
+      symbol<CreateModelFromBuffer>(library, "LiteRtCreateModelFromBuffer");
   LOAD_REQUIRED(destroy_model, "LiteRtDestroyModel");
   LOAD_REQUIRED(create_compiled_model, "LiteRtCreateCompiledModel");
   LOAD_REQUIRED(destroy_compiled_model, "LiteRtDestroyCompiledModel");
@@ -107,6 +148,7 @@ void Api::unload() {
   destroy_opaque_options = nullptr;
   add_opaque_options = nullptr;
   create_model_from_file = nullptr;
+  create_model_from_buffer = nullptr;
   destroy_model = nullptr;
   create_compiled_model = nullptr;
   destroy_compiled_model = nullptr;

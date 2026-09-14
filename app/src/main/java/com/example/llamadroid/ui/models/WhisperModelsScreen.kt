@@ -160,7 +160,8 @@ fun WhisperModelsScreen(navController: NavController) {
             repoId = repoId,
             progressKey = progressKey,
             type = ModelType.WHISPER,
-            destPath = destPath
+            destPath = destPath,
+            classificationSource = com.example.llamadroid.data.model.library.ModelClassificationSource.CATALOG.storedValue
         )
         // Track progress
         DownloadProgressHolder.updateProgress(progressKey, model.filename, 0f)
@@ -823,7 +824,8 @@ private suspend fun importWhisperModel(
             sizeBytes = sizeBytes,
             type = ModelType.WHISPER,
             repoId = ModelBackupPolicy.LOCAL_IMPORT_REPO_ID,
-            isDownloaded = false
+            isDownloaded = false,
+            classificationSource = com.example.llamadroid.data.model.library.ModelClassificationSource.USER_OVERRIDE.storedValue
         )
         db.modelDao().insertModel(model)
 

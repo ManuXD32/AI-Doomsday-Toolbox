@@ -51,6 +51,8 @@ fun PendingDownload.toDownloadTaskEntity(
         artifactFamily = artifactFamily,
         artifactRole = artifactRole,
         pendingArtifactId = pendingArtifactId,
+        classificationSource = classificationSource,
+        detectedClassificationJson = detectedClassificationJson,
         stageOnly = stageOnly,
         status = status,
         bytesDownloaded = partFile.length().coerceAtLeast(0L),
@@ -94,6 +96,8 @@ fun DownloadTaskEntity.toPendingDownload(): PendingDownload {
         artifactFamily = artifactFamily,
         artifactRole = artifactRole,
         pendingArtifactId = pendingArtifactId,
+        classificationSource = classificationSource,
+        detectedClassificationJson = detectedClassificationJson,
         stageOnly = stageOnly
     )
 }

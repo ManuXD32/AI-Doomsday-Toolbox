@@ -176,7 +176,7 @@ class Converters {
         com.example.llamadroid.data.model.library.ModelDeletionJournalOperationEntity::class,
         com.example.llamadroid.data.model.library.ModelDeletionJournalPathEntity::class
     ], 
-    version = 121,
+    version = 122,
     exportSchema = true
 )
 @TypeConverters(Converters::class)

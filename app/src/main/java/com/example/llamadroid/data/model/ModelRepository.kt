@@ -24,7 +24,6 @@ import com.example.llamadroid.sd.resolveSdCompatProfiles
 import com.example.llamadroid.sd.SdArtifactInspection
 import com.example.llamadroid.sd.SdArtifactInspector
 import com.example.llamadroid.sd.SdArtifactRole
-import com.example.llamadroid.sd.SdInspectionConfidence
 import com.example.llamadroid.sd.SdModelFamily
 import com.example.llamadroid.sd.SdInspectionCache
 import com.example.llamadroid.sd.needsSdArtifactInspection
@@ -51,6 +50,8 @@ import com.example.llamadroid.data.model.library.ModelDeletionResult
 import com.example.llamadroid.data.model.library.ModelDeletionStatus
 import com.example.llamadroid.data.model.library.ModelLibraryErrorCode
 import com.example.llamadroid.data.model.library.ModelLibraryException
+import com.example.llamadroid.data.model.library.ModelClassificationPolicy
+import com.example.llamadroid.data.model.library.ModelClassificationSource
 import com.example.llamadroid.data.model.library.RoomModelDeletionJournal
 import com.example.llamadroid.data.model.library.activeDownloadDependencies
 import com.example.llamadroid.data.model.library.activeAudioJobDependencies
@@ -443,7 +444,8 @@ class ModelRepository(
                     audioFamily = audioDescriptor?.family,
                     audioLanguage = audioDescriptor?.language,
                     audioComponentRole = audioDescriptor?.role,
-                    audioArtifactIdentity = audioIdentity
+                    audioArtifactIdentity = audioIdentity,
+                    classificationSource = ModelClassificationSource.CATALOG.storedValue
                 )
                 try {
                     // insertModel performs the same bounded SD inspection used
@@ -493,7 +495,8 @@ class ModelRepository(
         downloadUrlOverride: String? = null,
         localFilenameOverride: String? = null,
         artifactFamily: String? = null,
-        artifactRole: String? = null
+        artifactRole: String? = null,
+        classificationSource: ModelClassificationSource = ModelClassificationSource.USER_OVERRIDE
     ) {
         val modelDir = getModelDir(type)
         val localFilename = localFilenameOverride?.let { requested ->
@@ -545,7 +548,8 @@ class ModelRepository(
             onnxReferenceUri = onnxReferenceUri,
             onnxReferencePath = onnxReferencePath,
             artifactFamily = artifactFamily,
-            artifactRole = artifactRole
+            artifactRole = artifactRole,
+            classificationSource = classificationSource.storedValue
         )
         
         // Start foreground service (this is called from main thread via onClick)
@@ -621,7 +625,8 @@ class ModelRepository(
             onnxReferencePath = null,
             onnxInstallKind = installKind,
             onnxInstallDirPath = if (installKind == ONNX_INSTALL_KIND_FILE) null else OnnxStorage.managedBundleDir(context, modelId).absolutePath,
-            huggingFaceToken = if (entry.gated) huggingFaceToken() else null
+            huggingFaceToken = if (entry.gated) huggingFaceToken() else null,
+            classificationSource = ModelClassificationSource.CATALOG.storedValue
         )
 
         com.example.llamadroid.service.DownloadService.startDownload(
@@ -1424,6 +1429,14 @@ class ModelRepository(
             val resolvedFamily = sdFamily ?: inferredFamily.first?.storedValue
             val resolvedVariant = sdVariant ?: inferredFamily.second
             val resolvedFamilyEnum = SdModelFamily.fromStoredValue(resolvedFamily)
+            val classificationChanged = newType != original.type ||
+                resolvedFamily != original.sdFamily ||
+                resolvedVariant != original.sdVariant ||
+                sdCapabilities != original.sdCapabilities ||
+                sdCompatProfiles != original.sdCompatProfiles ||
+                onnxCapabilities != original.onnxCapabilities ||
+                onnxAssetKind != original.onnxAssetKind ||
+                onnxPipelineFamily != original.onnxPipelineFamily
             val updated = original.copy(
                 filename = normalizedFilename,
                 path = if (isManagedSource) finalFile.absolutePath else original.path,
@@ -1448,7 +1461,14 @@ class ModelRepository(
                 onnxAssetKind = onnxAssetKind,
                 onnxPipelineFamily = onnxPipelineFamily,
                 onnxReferenceUri = onnxReferenceUri,
-                onnxReferencePath = onnxReferencePath ?: original.onnxReferencePath
+                onnxReferencePath = onnxReferencePath ?: original.onnxReferencePath,
+                classificationSource = if (classificationChanged) {
+                    ModelClassificationSource.USER_OVERRIDE.storedValue
+                } else {
+                    original.classificationSource
+                },
+                detectedClassificationJson = original.detectedClassificationJson
+                    ?: preflightInspection?.toJson()?.let(ModelClassificationPolicy::boundedEvidence)
             ).let { candidate ->
                 preflightInspection?.let(candidate::withSdArtifactInspection) ?: candidate
             }
@@ -1554,10 +1574,11 @@ class ModelRepository(
         )
 
         /**
-         * Validate structural evidence against the role/family selected by the
-         * user or curated metadata.  Unknown/low-confidence evidence remains
-         * manually configurable; high-confidence contradictions are blockers.
+         * Validate payload integrity only. Role/family disagreements are
+         * semantic warnings surfaced by the resolver and model UI; an explicit
+         * user classification remains authoritative at runtime.
          */
+        @Suppress("UNUSED_PARAMETER")
         fun validateSdArtifactInspection(
             configuredType: ModelType,
             inspection: SdArtifactInspection,
@@ -1590,45 +1611,6 @@ class ModelRepository(
                 )
             }
 
-            val expectedRole = configuredType.sdArtifactRole()
-            val detectedRole = inspection.detectedRole
-            val roleContradiction = inspection.confidence == SdInspectionConfidence.HIGH &&
-                expectedRole != null && detectedRole != null &&
-                when (expectedRole) {
-                    SdArtifactRole.FULL_MODEL -> detectedRole != SdArtifactRole.FULL_MODEL &&
-                        detectedRole != SdArtifactRole.MAIN_MODEL
-                    // SD_DIFFUSION is the generic standalone-diffusion
-                    // storage role, but the import UI also uses it for
-                    // architecture-specific SD3 files. Structural layout is
-                    // authoritative: retain the generic row type while
-                    // allowing a proven full model to be resolved as -m.
-                    SdArtifactRole.STANDALONE_DIFFUSION ->
-                        detectedRole != SdArtifactRole.STANDALONE_DIFFUSION &&
-                            !(configuredType == ModelType.SD_DIFFUSION &&
-                                detectedRole == SdArtifactRole.FULL_MODEL)
-                    else -> detectedRole != expectedRole
-                }
-            if (roleContradiction) {
-                return Result.failure(
-                    SdArtifactValidationException(
-                        code = SdArtifactValidationCode.ROLE_CONTRADICTION,
-                        detail = "Detected role ${detectedRole?.storedValue} contradicts configured role ${expectedRole?.storedValue}"
-                    )
-                )
-            }
-
-            val configuredFamilyEnum = SdModelFamily.fromStoredValue(configuredFamily)
-            if (inspection.confidence == SdInspectionConfidence.HIGH &&
-                configuredFamilyEnum != null && inspection.detectedFamily != null &&
-                configuredFamilyEnum != inspection.detectedFamily
-            ) {
-                return Result.failure(
-                    SdArtifactValidationException(
-                        code = SdArtifactValidationCode.FAMILY_CONTRADICTION,
-                        detail = "Detected family ${inspection.detectedFamily.storedValue} contradicts configured family ${configuredFamilyEnum.storedValue}"
-                    )
-                )
-            }
             return Result.success(inspection)
         }
 
@@ -1663,6 +1645,16 @@ class ModelRepository(
             supportedCapabilities = detectedCapabilities.ifEmpty { setOf(ONNX_CAPABILITY_TXT2IMG) },
             referenceUri = referenceUri,
             referencePath = referencePath
+        ).copy(
+            classificationSource = ModelClassificationSource.AUTO.storedValue,
+            detectedClassificationJson = ModelClassificationPolicy.evidenceJson(
+                com.example.llamadroid.data.model.library.ModelClassification(
+                    family = com.example.llamadroid.data.model.library.ModelFamily.ONNX,
+                    type = ModelType.ONNX_IMAGE_GEN,
+                    role = "image_gen",
+                    capabilities = detectedCapabilities
+                )
+            )
         )
 
         fun isSupportedMediaModelFile(path: String): Boolean {
@@ -2088,6 +2080,10 @@ data class PendingDownload(
     val artifactRole: String? = null,
     /** Pending staged-artifact row used when a custom file needs inspection. */
     val pendingArtifactId: String? = null,
+    /** AUTO/CATALOG/USER_OVERRIDE/LEGACY for the effective task selection. */
+    val classificationSource: String = "LEGACY",
+    /** Immutable bounded inspector evidence, if already available. */
+    val detectedClassificationJson: String? = null,
     val stageOnly: Boolean = false
 )
 
@@ -2135,6 +2131,8 @@ object PendingDownloadHolder {
         artifactFamily: String? = null,
         artifactRole: String? = null,
         pendingArtifactId: String? = null,
+        classificationSource: String = "LEGACY",
+        detectedClassificationJson: String? = null,
         stageOnly: Boolean = false
     ) {
         val taskId = downloadId ?: progressKey
@@ -2170,6 +2168,8 @@ object PendingDownloadHolder {
             artifactFamily = artifactFamily,
             artifactRole = artifactRole,
             pendingArtifactId = pendingArtifactId,
+            classificationSource = classificationSource,
+            detectedClassificationJson = detectedClassificationJson,
             stageOnly = stageOnly
         )
         putPending(taskId, pending)

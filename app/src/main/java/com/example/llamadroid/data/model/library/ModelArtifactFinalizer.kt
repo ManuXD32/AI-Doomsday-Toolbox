@@ -236,10 +236,10 @@ object ModelArtifactFinalizer {
     ): Result<PendingArtifactFinalization> = runCatching {
         val dao = database.modelLibraryDao()
         val persisted = ensurePendingArtifactActive(dao, artifact.id)
-        if (persisted?.status == PendingArtifactStatus.PROMOTED.storedValue && downloadedFile.exists()) {
+        if (persisted.status == PendingArtifactStatus.PROMOTED.storedValue && downloadedFile.exists()) {
             val existing = database.modelDao().getModelByPath(downloadedFile.absolutePath)
             val liteRt = database.liteRtModelDao().getByPath(downloadedFile.absolutePath)
-            val family = ModelFamily.fromStoredValue(persisted.detectedFamily ?: persisted.requestedFamily)
+            val family = ModelFamily.fromStoredValue(persisted.requestedFamily ?: persisted.detectedFamily)
             if (family != null && (existing != null || liteRt != null)) {
                 // A manually classified row is authoritative after recovery. Reinspection must
                 // never demote it or overwrite its edited runtime compatibility settings.
@@ -264,17 +264,27 @@ object ModelArtifactFinalizer {
             effectiveMetadata.stableAudioComponentRole ?: requestedRole
         )
         val observedRecognition = ModelArtifactRecognizer.inspect(downloadedFile)
+        val detectedEvidence = artifact.detectedClassificationJson
+            ?: observedRecognition.classificationEvidenceJson()
+        val classificationSource = effectiveClassificationSource(artifact)
+        val selectionConfirmed = classificationSource in setOf(
+            ModelClassificationSource.CATALOG.storedValue,
+            ModelClassificationSource.USER_OVERRIDE.storedValue
+        )
         // An explicit LLM bundle role is part of the structural contract. This
         // matters for adapters, embeddings, drafts, and vision projectors:
         // the generic inspector may correctly see their container as an SD
         // component or a base LLM, while the selected role determines the
         // existing runtime ModelType after a second validation pass.
         val roleValidatedRecognition = if (
-            artifact.bundleId != null &&
-            requestedFamily == ModelFamily.LLM &&
-            !requestedRole.isNullOrBlank()
+            selectionConfirmed && requestedFamily != null && !requestedRole.isNullOrBlank()
         ) {
-            ModelArtifactRecognizer.validateForPromotion(downloadedFile, ModelFamily.LLM, requestedRole)
+            ModelArtifactRecognizer.validateForPromotion(
+                downloadedFile,
+                requestedFamily,
+                requestedRole,
+                allowClassificationMismatch = true
+            )
         } else {
             observedRecognition
         }
@@ -291,11 +301,11 @@ object ModelArtifactFinalizer {
                     // Keep the user's selected family/role/type alongside
                     // the recognition result so manual promotion can resume
                     // with the original intent after a process restart.
-                    detectedFamily = recognition.family?.storedValue ?: requestedFamily?.storedValue,
-                    detectedRole = recognition.role ?: requestedRole,
-                    detectedType = recognition.detectedType ?: requestedFamily?.let {
-                        ModelSourceRepository.runtimeModelTypeFor(it, requestedRole).name
-                    },
+                    detectedFamily = observedRecognition.family?.storedValue ?: artifact.detectedFamily,
+                    detectedRole = observedRecognition.role ?: artifact.detectedRole,
+                    detectedType = observedRecognition.detectedType ?: artifact.detectedType,
+                    classificationSource = classificationSource,
+                    detectedClassificationJson = detectedEvidence,
                     status = PendingArtifactStatus.NEEDS_MANUAL_PROMOTION.storedValue,
                     validationJson = recognition.validationJson,
                     validationMessage = recognition.validationMessage,
@@ -307,23 +317,50 @@ object ModelArtifactFinalizer {
         }
         val family = recognition.family
             ?: return@runCatching PendingArtifactFinalization(promoted = false, recognition = recognition)
-        val type = recognition.detectedType?.let { runCatching { ModelType.valueOf(it) }.getOrNull() }
+        val detectedType = recognition.detectedType?.let { runCatching { ModelType.valueOf(it) }.getOrNull() }
             ?: return@runCatching PendingArtifactFinalization(promoted = false, recognition = recognition)
-        val runtimeFamily = if (artifact.bundleId == null) family else requestedFamily ?: family
-        val familyCompatible = artifact.bundleId == null || requestedFamily == null || requestedFamily == family ||
-            isCompatibleSourceFamily(family, requestedFamily, requestedRole)
-        val requestedType = requestedRole?.let { ModelSourceRepository.runtimeModelTypeFor(runtimeFamily, it) }
-        val roleCompatible = requestedType == null || requestedType == type ||
+        val runtimeFamily = if (selectionConfirmed) requestedFamily ?: family else family
+        val observedFamily = observedRecognition.family
+        val observedType = observedRecognition.detectedType
+            ?.let { runCatching { ModelType.valueOf(it) }.getOrNull() }
+        val familyCompatible = requestedFamily == null || observedFamily == null ||
+            requestedFamily == observedFamily ||
+            isCompatibleSourceFamily(observedFamily, requestedFamily, requestedRole)
+        val requestedType = effectiveMetadata.portableModelType
+            ?.let { runCatching { ModelType.valueOf(it) }.getOrNull() }
+            ?: requestedRole?.let { ModelSourceRepository.runtimeModelTypeFor(runtimeFamily, it) }
+        val roleCompatible = requestedType == null || observedType == null || requestedType == observedType ||
             (runtimeFamily == ModelFamily.LITERT && stableAudioRole != null &&
-                type == ModelType.LLM) ||
-            runtimeFamily == ModelFamily.LLM && type == ModelType.LLM &&
+                observedType == ModelType.LLM) ||
+            runtimeFamily == ModelFamily.LLM && observedType == ModelType.LLM &&
             normalizedModelLibraryRole(requestedRole) in setOf("embedding", "embeddings", "draft", "llm_draft")
-        // Auto-promotion already requires high structural confidence. The selected
-        // bundle role must map to that observed runtime type, including video companions.
-        if (!familyCompatible || !roleCompatible) {
+        val semanticMismatch = !familyCompatible || !roleCompatible
+        // A confirmed catalog/manual selection is authoritative. Keep the
+        // disagreement as a warning, while automatic classification remains
+        // conservative and stays pending for explicit confirmation.
+        val effectiveRecognition = if (semanticMismatch && selectionConfirmed) {
+            recognition.copy(
+                family = runtimeFamily,
+                detectedType = requestedType?.name ?: detectedType.name,
+                role = requestedRole ?: recognition.role,
+                requiresManualPromotion = false,
+                validationMessage = ModelClassificationPolicy.warningFor(
+                    detectedFamily = observedRecognition.family?.storedValue,
+                    selectedFamily = runtimeFamily.storedValue,
+                    detectedType = observedRecognition.detectedType,
+                    selectedType = requestedType?.name,
+                    detectedRole = observedRecognition.role,
+                    selectedRole = requestedRole
+                ) ?: "Selected classification differs from detected artifact evidence",
+                errorCode = null
+            )
+        } else {
+            recognition
+        }
+        if (semanticMismatch && !selectionConfirmed) {
             val mismatch = recognition.copy(
                 family = runtimeFamily,
-                detectedType = requestedType?.name ?: type.name,
+                detectedType = requestedType?.name ?: detectedType.name,
                 role = requestedRole ?: recognition.role,
                 requiresManualPromotion = true,
                 validationMessage = when {
@@ -335,9 +372,11 @@ object ModelArtifactFinalizer {
             )
             dao.upsertActiveArtifact(
                 artifact.copy(
-                    detectedFamily = runtimeFamily.storedValue,
-                    detectedRole = requestedRole ?: recognition.role,
-                    detectedType = requestedType?.name ?: type.name,
+                    detectedFamily = observedRecognition.family?.storedValue ?: artifact.detectedFamily,
+                    detectedRole = observedRecognition.role ?: artifact.detectedRole,
+                    detectedType = observedRecognition.detectedType ?: artifact.detectedType,
+                    classificationSource = classificationSource,
+                    detectedClassificationJson = detectedEvidence,
                     status = PendingArtifactStatus.NEEDS_MANUAL_PROMOTION.storedValue,
                     validationJson = recognition.validationJson,
                     validationMessage = mismatch.validationMessage,
@@ -347,6 +386,11 @@ object ModelArtifactFinalizer {
             )
             return@runCatching PendingArtifactFinalization(promoted = false, recognition = mismatch)
         }
+
+        val type = effectiveRecognition.detectedType
+            ?.let { runCatching { ModelType.valueOf(it) }.getOrNull() }
+            ?: return@runCatching PendingArtifactFinalization(promoted = false, recognition = effectiveRecognition)
+        val selectedRole = requestedRole ?: effectiveRecognition.role
 
         val destination = destinationOverride ?: artifact.destinationPath
             ?.trim()
@@ -363,7 +407,7 @@ object ModelArtifactFinalizer {
         val sourceEntity = artifact.sourceId?.let { dao.getSourceById(it) }
         val liteRtDisplayName = effectiveMetadata.liteRtDisplayName ?: destination.nameWithoutExtension
         val inspectedAudio = if (type.isAudioTtsComponentType()) {
-            SdArtifactInspection.fromJson(recognition.validationJson)
+            SdArtifactInspection.fromJson(effectiveRecognition.validationJson)
                 ?.let { AudioModelSupport.recognize(it, destination.name) }
         } else {
             null
@@ -374,7 +418,7 @@ object ModelArtifactFinalizer {
             repoId = effectiveMetadata.repoId,
             filename = destination.name,
             familyHint = inspectedAudio?.family ?: effectiveMetadata.audioFamily,
-            roleHint = inspectedAudio?.role ?: effectiveMetadata.audioComponentRole ?: recognition.role,
+            roleHint = inspectedAudio?.role ?: effectiveMetadata.audioComponentRole ?: selectedRole,
             sourceUrl = sourceEntity?.url,
             context = context
         )
@@ -398,7 +442,7 @@ object ModelArtifactFinalizer {
         }
         val result = database.withTransaction {
         requiredArtifactIds.forEach { ensurePendingArtifactActive(dao, it) }
-        val inspection = SdArtifactInspection.fromJson(recognition.validationJson)
+        val inspection = SdArtifactInspection.fromJson(effectiveRecognition.validationJson)
         val registeredKey = if (stableAudioComponent) {
             val filename = availableModelRecordKey(database, destination, artifact.id)
             database.modelDao().insertModel(
@@ -411,7 +455,9 @@ object ModelArtifactFinalizer {
                     isDownloaded = true,
                     audioFamily = stableAudioFamily,
                     audioComponentRole = StableAudioModelSupport.canonicalRole(stableAudioRole),
-                    audioArtifactIdentity = stableAudioIdentity
+                    audioArtifactIdentity = stableAudioIdentity,
+                    classificationSource = classificationSource,
+                    detectedClassificationJson = detectedEvidence
                 )
             )
             filename
@@ -435,7 +481,9 @@ object ModelArtifactFinalizer {
                     supportsVision = effectiveMetadata.liteRtSupportsVision ?: false,
                     supportsAudio = effectiveMetadata.liteRtSupportsAudio ?: false,
                     supportsEmbedding = effectiveMetadata.liteRtSupportsEmbedding ?: false,
-                    maxContextTokens = effectiveMetadata.liteRtMaxContextTokens
+                    maxContextTokens = effectiveMetadata.liteRtMaxContextTokens,
+                    classificationSource = classificationSource,
+                    detectedClassificationJson = detectedEvidence
                 )
             )
             "litert:$liteRtId"
@@ -448,7 +496,7 @@ object ModelArtifactFinalizer {
                 type = type,
                 repoId = effectiveMetadata.repoId,
                 isDownloaded = true,
-                isVision = effectiveMetadata.isVision || recognition.role?.contains("vision", ignoreCase = true) == true,
+                isVision = effectiveMetadata.isVision || effectiveRecognition.role?.contains("vision", ignoreCase = true) == true,
                 sdCapabilities = effectiveMetadata.sdCapabilities ?: "vid_gen".takeIf {
                     type in setOf(ModelType.SD_DIFFUSION, ModelType.SD_CHECKPOINT) &&
                         com.example.llamadroid.sd.SdVideoFamily.fromStoredValue(inspection?.detectedFamily?.storedValue) != null
@@ -462,9 +510,11 @@ object ModelArtifactFinalizer {
                 onnxReferenceUri = effectiveMetadata.onnxReferenceUri,
                 onnxReferencePath = effectiveMetadata.onnxReferencePath,
                 audioFamily = audioDescriptor?.family ?: effectiveMetadata.audioFamily,
-                audioLanguage = audioDescriptor?.language ?: inspectedAudio?.language ?: effectiveMetadata.audioLanguage,
-                audioComponentRole = audioDescriptor?.role ?: effectiveMetadata.audioComponentRole,
-                audioArtifactIdentity = audioIdentity
+                    audioLanguage = audioDescriptor?.language ?: inspectedAudio?.language ?: effectiveMetadata.audioLanguage,
+                    audioComponentRole = audioDescriptor?.role ?: effectiveMetadata.audioComponentRole,
+                    audioArtifactIdentity = audioIdentity,
+                    classificationSource = classificationSource,
+                    detectedClassificationJson = detectedEvidence
             )
             database.modelDao().insertModel(inspection?.let(model::withSdArtifactInspection) ?: model)
             filename
@@ -472,12 +522,14 @@ object ModelArtifactFinalizer {
         dao.upsert(
             artifact.copy(
                 stagingPath = destination.absolutePath,
-                detectedFamily = runtimeFamily.storedValue,
-                detectedRole = requestedRole ?: recognition.role,
-                detectedType = requestedType?.name ?: type.name,
+                detectedFamily = observedRecognition.family?.storedValue ?: artifact.detectedFamily,
+                detectedRole = observedRecognition.role ?: artifact.detectedRole,
+                detectedType = observedRecognition.detectedType ?: artifact.detectedType,
+                classificationSource = classificationSource,
+                detectedClassificationJson = detectedEvidence,
                 status = PendingArtifactStatus.PROMOTED.storedValue,
-                validationJson = recognition.validationJson,
-                validationMessage = recognition.validationMessage,
+                validationJson = effectiveRecognition.validationJson,
+                validationMessage = effectiveRecognition.validationMessage,
                 requiresManualPromotion = false,
                 promotedModelKey = registeredKey,
                 promotedAt = System.currentTimeMillis(),
@@ -494,10 +546,12 @@ object ModelArtifactFinalizer {
                     sourceId = sourceId,
                     modelKey = registeredKey,
                     family = runtimeFamily.storedValue,
-                    role = requestedRole ?: recognition.role,
+                    role = selectedRole,
                     localPath = destination.absolutePath,
                     artifactSha256 = installedHash,
                     sizeBytes = installedSize,
+                    classificationSource = classificationSource,
+                    detectedClassificationJson = detectedEvidence,
                     importedAt = artifact.createdAt,
                     updatedAt = System.currentTimeMillis()
                 )
@@ -511,7 +565,7 @@ object ModelArtifactFinalizer {
                 if (runtimeFamily == ModelFamily.LITERT && !stableAudioComponent) liteRtDisplayName else registeredKey,
                 registeredKey
             ),
-            recognition = recognition
+            recognition = effectiveRecognition
         )
         }
         // The durable runtime and provenance transaction owns the new copy before the
@@ -589,7 +643,8 @@ object ModelArtifactFinalizer {
         val validated = ModelArtifactRecognizer.validateForPromotion(
             downloadedFile,
             family,
-            requestedRole
+            requestedRole,
+            allowClassificationMismatch = true
         )
         if (!validated.isStructurallyValid || validated.family != family) return observed
         return validated.copy(
@@ -619,6 +674,24 @@ object ModelArtifactFinalizer {
                 json.optString("modelType", "").equals(ModelType.LLAMA_TTS.name, ignoreCase = true) ||
                 json.optString("modelType", "").equals(ModelType.LLAMA_TTS_COMPANION.name, ignoreCase = true)
             else -> false
+        }
+    }
+
+    /**
+     * Normalizes rows written before classification provenance existed while
+     * preserving an explicit catalog/manual choice made by the current flow.
+     */
+    private fun effectiveClassificationSource(artifact: PendingModelArtifactEntity): String {
+        val stored = ModelClassificationSource.fromStoredValue(artifact.classificationSource)
+        if (stored != null && stored != ModelClassificationSource.LEGACY) {
+            return stored.storedValue
+        }
+        return when {
+            artifact.bundleId != null -> ModelClassificationSource.CATALOG.storedValue
+            !artifact.requestedFamily.isNullOrBlank() || !artifact.requestedRole.isNullOrBlank() ->
+                ModelClassificationSource.USER_OVERRIDE.storedValue
+            !artifact.detectedClassificationJson.isNullOrBlank() -> ModelClassificationSource.AUTO.storedValue
+            else -> ModelClassificationSource.LEGACY.storedValue
         }
     }
 }

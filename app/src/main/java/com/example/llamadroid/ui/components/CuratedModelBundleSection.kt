@@ -209,7 +209,8 @@ internal fun requestCuratedBundleDownload(
                     downloadUrlOverride = resolved.file.downloadUrl,
                     localFilenameOverride = resolved.expectedName,
                     artifactFamily = resolved.file.audioFamily,
-                    artifactRole = resolved.file.componentRole
+                    artifactRole = resolved.file.componentRole,
+                    classificationSource = com.example.llamadroid.data.model.library.ModelClassificationSource.CATALOG
                 )
             }
         }.onFailure {

@@ -1,5 +1,6 @@
 package com.example.llamadroid.audio.music
 
+import com.example.llamadroid.data.model.StableAudioModelSupport
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
@@ -28,8 +29,13 @@ enum class StableAudio3Kind(val wireValue: String, val family: String) {
 
     companion object {
         fun fromWire(value: String?): StableAudio3Kind = entries.firstOrNull {
-            it.wireValue.equals(value?.trim(), ignoreCase = true) ||
-                it.name.equals(value?.trim(), ignoreCase = true)
+            val normalized = value?.trim()?.lowercase(Locale.US)
+                ?.replace('_', '-')
+                ?.removePrefix("stable-audio-")
+            it.wireValue.equals(normalized, ignoreCase = true) ||
+                it.name.equals(normalized, ignoreCase = true) ||
+                (it == MUSIC && normalized == "music") ||
+                (it == SFX && normalized == "sfx")
         } ?: throw StableAudio3ValidationException("Unknown Stable Audio model kind")
     }
 }
@@ -57,8 +63,11 @@ enum class StableAudio3DitPrecision(val wireValue: String, val supportsLora: Boo
 
     companion object {
         fun fromWire(value: String?): StableAudio3DitPrecision = entries.firstOrNull {
-            it.wireValue.equals(value?.trim(), ignoreCase = true) ||
-                it.name.equals(value?.trim(), ignoreCase = true)
+            val normalized = value?.trim()?.lowercase(Locale.US)
+                ?.replace('_', '-')
+            it.wireValue.equals(normalized, ignoreCase = true) ||
+                it.name.equals(normalized, ignoreCase = true) ||
+                (it == W8A8_DYNAMIC && normalized in setOf("w8a8-dynamic", "w8a8dyn"))
         } ?: throw StableAudio3ValidationException("Unknown Stable Audio DiT precision")
     }
 }
@@ -69,8 +78,10 @@ enum class StableAudio3CodecPrecision(val wireValue: String) {
 
     companion object {
         fun fromWire(value: String?): StableAudio3CodecPrecision = entries.firstOrNull {
-            it.wireValue.equals(value?.trim(), ignoreCase = true) ||
-                it.name.equals(value?.trim(), ignoreCase = true)
+            val normalized = value?.trim()?.lowercase(Locale.US)
+                ?.replace('_', '-')
+            it.wireValue.equals(normalized, ignoreCase = true) ||
+                it.name.equals(normalized, ignoreCase = true)
         } ?: throw StableAudio3ValidationException("Unknown Stable Audio codec precision")
     }
 }
@@ -173,17 +184,24 @@ data class StableAudio3Components(
     }
 
     companion object {
-        fun fromJson(value: JSONObject): StableAudio3Components = StableAudio3Components(
-            tokenizer = StableAudio3ComponentRef.fromJson(value.optJSONObject("tokenizer"))
-                ?: throw StableAudio3ValidationException("tokenizer component is missing"),
-            textEncoder = StableAudio3ComponentRef.fromJson(value.optJSONObject("textEncoder"))
-                ?: throw StableAudio3ValidationException("text encoder component is missing"),
-            dit = StableAudio3ComponentRef.fromJson(value.optJSONObject("dit"))
-                ?: throw StableAudio3ValidationException("DiT component is missing"),
-            codecDecoder = StableAudio3ComponentRef.fromJson(value.optJSONObject("codecDecoder"))
-                ?: throw StableAudio3ValidationException("codec decoder component is missing"),
-            codecEncoder = StableAudio3ComponentRef.fromJson(value.optJSONObject("codecEncoder"))
-        )
+        fun fromJson(value: JSONObject): StableAudio3Components {
+            fun find(role: String): JSONObject? = value.keys().asSequence()
+                .firstOrNull {
+                    com.example.llamadroid.data.model.StableAudioModelSupport.canonicalRole(it) == role
+                }
+                ?.let(value::optJSONObject)
+            return StableAudio3Components(
+                tokenizer = StableAudio3ComponentRef.fromJson(find(StableAudioModelSupport.ROLE_TOKENIZER))
+                    ?: throw StableAudio3ValidationException("tokenizer component is missing"),
+                textEncoder = StableAudio3ComponentRef.fromJson(find(StableAudioModelSupport.ROLE_TEXT_ENCODER))
+                    ?: throw StableAudio3ValidationException("text encoder component is missing"),
+                dit = StableAudio3ComponentRef.fromJson(find(StableAudioModelSupport.ROLE_DIT))
+                    ?: throw StableAudio3ValidationException("DiT component is missing"),
+                codecDecoder = StableAudio3ComponentRef.fromJson(find(StableAudioModelSupport.ROLE_CODEC_DECODER))
+                    ?: throw StableAudio3ValidationException("codec decoder component is missing"),
+                codecEncoder = StableAudio3ComponentRef.fromJson(find(StableAudioModelSupport.ROLE_CODEC_ENCODER))
+            )
+        }
     }
 }
 

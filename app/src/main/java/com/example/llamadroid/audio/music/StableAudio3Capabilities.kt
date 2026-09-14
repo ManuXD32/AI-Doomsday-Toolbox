@@ -100,9 +100,22 @@ data class StableAudio3ManifestEntry(
         )
     )
 
-    fun component(role: String): StableAudio3ManifestComponent? =
-        components.firstOrNull { it.role == role }
+    fun component(role: String): StableAudio3ManifestComponent? {
+        val requested = com.example.llamadroid.data.model.StableAudioModelSupport.canonicalRole(role)
+            ?: role.trim()
+        return components.firstOrNull {
+            (com.example.llamadroid.data.model.StableAudioModelSupport.canonicalRole(it.role)
+                ?: it.role.trim()) == requested
+        }
+    }
 }
+
+/** A persisted draft can outlive the manifest revision that created it. */
+data class StableAudio3PrecisionSelection(
+    val dit: StableAudio3DitPrecision,
+    val decoder: StableAudio3CodecPrecision,
+    val encoder: StableAudio3CodecPrecision
+)
 
 data class StableAudio3ComponentManifest(
     val schemaVersion: Int,
@@ -122,6 +135,43 @@ data class StableAudio3ComponentManifest(
     }
 
     fun verifiedEntries(): List<StableAudio3ManifestEntry> = entries.filter { it.downloadEligible }
+
+    fun entriesFor(kind: StableAudio3Kind): List<StableAudio3ManifestEntry> =
+        entries.filter { it.kind == kind }
+
+    /**
+     * Returns the exact persisted selection when it still exists, otherwise
+     * the first manifest entry for the kind. This is intentionally driven by
+     * the manifest instead of enum values so an old draft cannot request a
+     * graph that is no longer downloadable.
+     */
+    fun repairPrecisionSelection(
+        kind: StableAudio3Kind,
+        dit: String?,
+        decoder: String?,
+        encoder: String?
+    ): StableAudio3PrecisionSelection? {
+        val candidates = verifiedEntries().filter { it.kind == kind }
+        if (candidates.isEmpty()) return null
+        val requested = StableAudio3PrecisionSelection(
+            dit = runCatching { StableAudio3DitPrecision.fromWire(dit) }.getOrNull()
+                ?: candidates.first().ditPrecision,
+            decoder = runCatching { StableAudio3CodecPrecision.fromWire(decoder) }.getOrNull()
+                ?: candidates.first().decoderPrecision,
+            encoder = runCatching { StableAudio3CodecPrecision.fromWire(encoder) }.getOrNull()
+                ?: candidates.first().encoderPrecision
+        )
+        val exact = candidates.firstOrNull {
+            it.ditPrecision == requested.dit &&
+                it.decoderPrecision == requested.decoder &&
+                it.encoderPrecision == requested.encoder
+        } ?: candidates.first()
+        return StableAudio3PrecisionSelection(
+            dit = exact.ditPrecision,
+            decoder = exact.decoderPrecision,
+            encoder = exact.encoderPrecision
+        )
+    }
 }
 
 object StableAudio3ManifestLoader {
@@ -148,7 +198,9 @@ object StableAudio3ManifestLoader {
                         val file = files.optJSONObject(fileIndex) ?: continue
                         add(
                             StableAudio3ManifestComponent(
-                                role = file.optString("role"),
+                                role = com.example.llamadroid.data.model.StableAudioModelSupport
+                                    .canonicalRole(file.optString("role"))
+                                    ?: file.optString("role").trim(),
                                 remotePath = file.optString("remotePath"),
                                 localFileName = file.optString("localFileName"),
                                 sha256 = file.optString("sha256")

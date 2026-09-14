@@ -198,7 +198,12 @@ internal suspend fun attachModelSource(
                 modelKey = asset.stableId
             ),
             role = request.role?.trim()?.takeIf { it.isNotBlank() } ?: asset.role,
-            sizeBytes = sizeBytes
+            sizeBytes = sizeBytes,
+            classificationSource = asset.model?.classificationSource
+                ?: asset.liteRt?.classificationSource
+                ?: "LEGACY",
+            detectedClassificationJson = asset.model?.detectedClassificationJson
+                ?: asset.liteRt?.detectedClassificationJson
         ).getOrThrow()
         Unit
     }

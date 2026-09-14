@@ -528,7 +528,8 @@ fun startSdCuratedBundleFileDownload(
         sdCapabilities = file.sdCapabilities,
         sdFamily = file.sdFamily,
         sdVariant = file.sdVariant,
-        sdCompatProfiles = file.sdCompatProfiles
+        sdCompatProfiles = file.sdCompatProfiles,
+        classificationSource = com.example.llamadroid.data.model.library.ModelClassificationSource.CATALOG.storedValue
     )
     DownloadService.startDownload(
         context = context,
