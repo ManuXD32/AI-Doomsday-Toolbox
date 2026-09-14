@@ -12,8 +12,22 @@ jobs:
   export:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Fetch only Tama sprite sources
+        shell: bash
+        run: |
+          mkdir source
+          cd source
+          git init -q
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git sparse-checkout init --no-cone
+          cat > .git/info/sparse-checkout <<'EOF'
+          /app/src/main/assets/tama/pets/
+          /app/src/main/java/com/example/llamadroid/tama/data/PetSpeciesLine.kt
+          /app/src/main/java/com/example/llamadroid/tama/data/TamaPet.kt
+          /app/src/main/java/com/example/llamadroid/tama/ui/TamaPetSprite.kt
+          EOF
+          git fetch --depth=1 --filter=blob:none origin "${GITHUB_SHA}"
+          git checkout -q --detach FETCH_HEAD
 
       - name: Stage Tama sources
         shell: bash
@@ -21,10 +35,10 @@ jobs:
           mkdir -p export/app/src/main/assets/tama
           mkdir -p export/app/src/main/java/com/example/llamadroid/tama/data
           mkdir -p export/app/src/main/java/com/example/llamadroid/tama/ui
-          cp -a app/src/main/assets/tama/pets export/app/src/main/assets/tama/
-          cp app/src/main/java/com/example/llamadroid/tama/data/PetSpeciesLine.kt export/app/src/main/java/com/example/llamadroid/tama/data/
-          cp app/src/main/java/com/example/llamadroid/tama/data/TamaPet.kt export/app/src/main/java/com/example/llamadroid/tama/data/
-          cp app/src/main/java/com/example/llamadroid/tama/ui/TamaPetSprite.kt export/app/src/main/java/com/example/llamadroid/tama/ui/
+          cp -a source/app/src/main/assets/tama/pets export/app/src/main/assets/tama/
+          cp source/app/src/main/java/com/example/llamadroid/tama/data/PetSpeciesLine.kt export/app/src/main/java/com/example/llamadroid/tama/data/
+          cp source/app/src/main/java/com/example/llamadroid/tama/data/TamaPet.kt export/app/src/main/java/com/example/llamadroid/tama/data/
+          cp source/app/src/main/java/com/example/llamadroid/tama/ui/TamaPetSprite.kt export/app/src/main/java/com/example/llamadroid/tama/ui/
 
       - name: Upload Tama sources
         uses: actions/upload-artifact@v4
