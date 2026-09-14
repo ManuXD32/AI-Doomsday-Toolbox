@@ -1,0 +1,35 @@
+name: ChatGPT Export Tama Sprite Sources
+
+on:
+  push:
+    branches:
+      - chatgpt-tama-sprite-export
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Stage Tama sources
+        shell: bash
+        run: |
+          mkdir -p export/app/src/main/assets/tama
+          mkdir -p export/app/src/main/java/com/example/llamadroid/tama/data
+          mkdir -p export/app/src/main/java/com/example/llamadroid/tama/ui
+          cp -a app/src/main/assets/tama/pets export/app/src/main/assets/tama/
+          cp app/src/main/java/com/example/llamadroid/tama/data/PetSpeciesLine.kt export/app/src/main/java/com/example/llamadroid/tama/data/
+          cp app/src/main/java/com/example/llamadroid/tama/data/TamaPet.kt export/app/src/main/java/com/example/llamadroid/tama/data/
+          cp app/src/main/java/com/example/llamadroid/tama/ui/TamaPetSprite.kt export/app/src/main/java/com/example/llamadroid/tama/ui/
+
+      - name: Upload Tama sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: adt-tama-sprite-sources
+          path: export/
+          retention-days: 1
+          if-no-files-found: error
