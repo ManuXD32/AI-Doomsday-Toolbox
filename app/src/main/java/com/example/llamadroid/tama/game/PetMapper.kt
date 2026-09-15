@@ -28,6 +28,9 @@ object PetMapper {
         health = pet.stats.health,
         energy = pet.stats.energy,
         hygiene = pet.stats.hygiene,
+        hydration = pet.stats.hydration,
+        social = pet.stats.social,
+        curiosity = pet.stats.curiosity,
         mood = pet.mood.name,
         personality = pet.personality.name,
         eyeStyle = pet.genetics.eyeStyle,
@@ -88,7 +91,10 @@ object PetMapper {
             happiness = entity.happiness,
             health = entity.health,
             energy = entity.energy,
-            hygiene = entity.hygiene
+            hygiene = entity.hygiene,
+            hydration = entity.hydration,
+            social = entity.social,
+            curiosity = entity.curiosity
         ),
         mood = try { Mood.valueOf(entity.mood) } catch (e: Exception) { Mood.HAPPY },
         personality = try { Personality.valueOf(entity.personality) } catch (e: Exception) { Personality.random() },

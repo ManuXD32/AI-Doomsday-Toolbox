@@ -44,6 +44,8 @@ fun farmDroneIdForFuelUpgradeId(upgradeId: String): String? = when (upgradeId) {
 fun farmToolFamilyId(itemId: String): String? = when (itemId) {
     "hoe", "hoe_starter" -> "hoe"
     "watering_can", "watering_can_starter" -> "watering_can"
+    "axe", "axe_starter" -> "axe"
+    "pickaxe", "pickaxe_starter" -> "pickaxe"
     else -> null
 }
 

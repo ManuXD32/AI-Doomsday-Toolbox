@@ -15,7 +15,7 @@ class FarmEngine(
      * Update all farm elements based on current time.
      * This handles "offline" progress.
      */
-    suspend fun updateFarm(petId: String, now: Long = System.currentTimeMillis()) {
+    suspend fun updateFarm(petId: String, now: Long = System.currentTimeMillis()) = TamaActionGate.run {
         val tiles = repository.ensureUnlockedFarmTiles(petId)
         val updatedTiles = tiles.map { advanceFarmTileCrop(it, now) }
         // Compare each updated tile with its original using zip, not by ID index

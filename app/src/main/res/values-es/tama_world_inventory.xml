@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_world_already_awake">%1$s ya está despierto.</string>
+    <string name="tama_world_use_one_item">Usa un objeto cada vez.</string>
+</resources>

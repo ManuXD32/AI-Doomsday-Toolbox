@@ -236,7 +236,10 @@ fun ToolList(
     val tools = listOf(
         ToolShopItem("hoe", stringResource(R.string.tama_inventory_hoe), 100, "Others/hoe.png"),
         ToolShopItem("watering_can", stringResource(R.string.tama_inventory_watering_can), 150, "Others/watering_can.png")
-    )
+    ) + com.example.llamadroid.tama.data.WorldToolCatalog.tools.map { tool ->
+        ToolShopItem(tool.id, com.example.llamadroid.tama.data.WorldResourceCatalog.displayName(tool.id,
+            LocalConfiguration.current.locales[0]) ?: tool.id, tool.price, tool.assetPath)
+    }
     val drones = listOf(
         Triple(FARM_PLANTING_DRONE_ID, stringResource(R.string.tama_farm_planting_drone), "Others/planting_drone.png"),
         Triple(FARM_HARVESTING_DRONE_ID, stringResource(R.string.tama_farm_harvesting_drone), "Others/harvesting_drone.png")
@@ -292,14 +295,14 @@ fun MaterialList(onBuy: suspend (InventoryItem, Int) -> TamaGameEngine.ActionRes
     val fuelBatchSize = FarmShopCatalog.FUEL_BUCKET_BUY_BATCH_SIZE
     val materials = listOf(
         MaterialShopItem(
-            name = "Fertilizer",
+            name = stringResource(R.string.tama_item_fertilizer),
             itemId = "fertilizer",
             price = FarmShopCatalog.FERTILIZER_BUY_PRICE,
             icon = "Others/fertilizer.png",
             description = stringResource(R.string.tama_farm_store_material_desc)
         ),
         MaterialShopItem(
-            name = "Water",
+            name = stringResource(R.string.tama_item_water),
             itemId = "water",
             price = FarmShopCatalog.materialBuyPrice("water"),
             icon = "Others/water.png",
@@ -534,7 +537,7 @@ fun StoreItemRow(
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalAlignment = Alignment.Top
             ) {
-                val assetUri = remember(icon) { "file:///android_asset/farm/$icon" }
+                val assetUri = remember(icon) { "file:///android_asset/${if (icon.startsWith("tama/")) icon else "farm/$icon"}" }
                 AsyncImage(
                     model = rememberFarmAssetModel(assetUri),
                     contentDescription = name,

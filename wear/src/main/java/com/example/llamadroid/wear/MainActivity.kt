@@ -55,7 +55,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -2093,7 +2095,13 @@ private fun PetScreen(store: WearCompanionStore, listState: androidx.wear.compos
         } else {
             item { TamaScene(pet) }
             item {
-                Text("${pet.name} · ${hub?.locationLabel.orEmpty().ifBlank { pet.location.orEmpty() }} · ${pet.activityLabel}", fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(
+                    "${pet.name} · ${context.localizedTamaLocationLabel(pet.location, hub?.locationLabel)} · ${pet.activityLabel}",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
             item { SectionLabel(stringResource(R.string.wear_tama_stats)) }
             item { StatsGrid(pet) }
@@ -3111,19 +3119,116 @@ private fun GenerationStatus(requestId: String, store: WearCompanionStore) {
 @Composable
 private fun TamaScene(pet: PetSnapshot) {
     Box(modifier = Modifier.fillMaxWidth().height(118.dp).clip(RoundedCornerShape(18.dp)).background(Color(0xFF20242C)), contentAlignment = Alignment.BottomCenter) {
-        AssetImage(pet.backgroundAssetId, Modifier.fillMaxSize(), ContentScale.Crop)
-        AssetImage(pet.spriteAssetId, Modifier.size(86.dp), ContentScale.Fit)
+        AssetImage(
+            pet.backgroundAssetId,
+            Modifier.fillMaxSize(),
+            ContentScale.Crop,
+            fallbackAssetPath = pet.locationBackgroundAssetPath()
+        )
+        AssetImage(
+            pet.spriteAssetId,
+            Modifier.size(86.dp),
+            ContentScale.Fit,
+            fallbackAssetPath = pet.legacyIdleSpriteAssetPath()
+        )
     }
 }
 
 @Composable
-private fun AssetImage(assetPath: String?, modifier: Modifier, contentScale: ContentScale) {
-    if (assetPath.isNullOrBlank()) return
+private fun AssetImage(
+    assetPath: String?,
+    modifier: Modifier,
+    contentScale: ContentScale,
+    fallbackAssetPath: String? = null
+) {
+    if (assetPath.isNullOrBlank() && fallbackAssetPath.isNullOrBlank()) return
     val context = LocalContext.current
-    val image = remember(assetPath) {
-        runCatching { context.assets.open(assetPath).use { BitmapFactory.decodeStream(it) }?.asImageBitmap() }.getOrNull()
+    val image = remember(assetPath, fallbackAssetPath) {
+        sequenceOf(assetPath, fallbackAssetPath)
+            .filterNot { it.isNullOrBlank() }
+            .filterNotNull()
+            .mapNotNull { path ->
+                runCatching {
+                    context.assets.open(path).use { BitmapFactory.decodeStream(it) }?.asImageBitmap()
+                }.getOrNull()
+            }
+            .firstOrNull()
     } ?: return
-    Image(bitmap = image, contentDescription = null, modifier = modifier, contentScale = contentScale)
+    Image(
+        painter = BitmapPainter(image, filterQuality = FilterQuality.None),
+        contentDescription = null,
+        modifier = modifier,
+        contentScale = contentScale
+    )
+}
+
+private fun Context.localizedTamaLocationLabel(locationId: String?, suppliedLabel: String?): String {
+    val id = locationId?.trim()?.lowercase().orEmpty()
+    val labelRes = when {
+        id == "fixed_0_0" || id == "home" || id == "house" -> R.string.wear_tama_location_home
+        id == "fixed_1_0" || id == "shop" || id == "store" -> R.string.wear_tama_location_shop
+        id == "fixed_2_0" || id == "park" -> R.string.wear_tama_location_park
+        id == "fixed_3_0" || id == "hospital" || id == "clinic" -> R.string.wear_tama_location_hospital
+        id == "fixed_4_0" || id == "arcade" -> R.string.wear_tama_location_arcade
+        id == "fixed_0_1" || id == "alchemist" || id == "alchemy" -> R.string.wear_tama_location_alchemist
+        id == "fixed_1_1" || id == "school" || id == "class" -> R.string.wear_tama_location_school
+        id == "fixed_2_1" || id == "workplace" || id == "work" || id == "office" -> R.string.wear_tama_location_workplace
+        id == "fixed_3_1" || id == "farm" -> R.string.wear_tama_location_farm
+        id == "fixed_4_1" || id == "boxing_ring" || id == "boxing ring" || id == "gym" -> R.string.wear_tama_location_boxing_ring
+        id == "fixed_0_2" || id == "fixed_4_2" || id == "dungeon" || id == "dungeon_a" || id == "dungeon_b" -> R.string.wear_tama_location_dungeon
+        id == "fixed_2_2" || id == "adventure_gate" || id == "adventure gate" || id == "gate" -> R.string.wear_tama_location_adventure_gate
+        id == "farm_barn" || id.endsWith("farm_barn") -> R.string.wear_tama_location_farm_barn
+        id == "market_stall" || id.endsWith("market_stall") -> R.string.wear_tama_location_market_stall
+        id == "npc_home_a" || id.endsWith("npc_home_a") -> R.string.wear_tama_location_npc_home
+        id == "npc_home_b" || id.endsWith("npc_home_b") -> R.string.wear_tama_location_npc_home
+        id == "npc_home_c" || id.endsWith("npc_home_c") -> R.string.wear_tama_location_npc_home
+        id == "world" || id == "hometown" || id.startsWith("world_") -> R.string.wear_tama_location_world
+        else -> null
+    }
+    if (labelRes != null) return getString(labelRes)
+    val supplied = suppliedLabel?.trim().orEmpty()
+    if (supplied.isNotBlank() && !supplied.isGenericTamaLocationLabel()) return supplied
+    return if (id.isBlank()) getString(R.string.wear_tama_location_unknown) else id
+        .replace('_', ' ')
+        .replaceFirstChar { it.titlecase(Locale.getDefault()) }
+}
+
+private fun String.isGenericTamaLocationLabel(): Boolean = when (trim().lowercase()) {
+    "world", "living world", "mundo", "mundo vivo", "farm barn", "fixed" -> true
+    else -> startsWith("fixed_")
+}
+
+private fun PetSnapshot.locationBackgroundAssetPath(): String {
+    val id = location?.trim()?.lowercase().orEmpty()
+    return when {
+        id == "fixed_0_0" || id == "home" || id == "house" -> "tama/backgrounds/bedroom.png"
+        id == "fixed_1_0" || id == "shop" || id == "store" -> "tama/backgrounds/shop.png"
+        id == "fixed_2_0" || id == "park" -> "tama/backgrounds/park.png"
+        id == "fixed_3_0" || id == "hospital" || id == "clinic" -> "tama/backgrounds/hospital.png"
+        id == "fixed_4_0" || id == "arcade" -> "tama/backgrounds/arcade_location.png"
+        id == "fixed_0_1" || id == "alchemist" || id == "alchemy" -> "tama/backgrounds/alchemist.png"
+        id == "fixed_1_1" || id == "school" || id == "class" -> "tama/backgrounds/classroom.png"
+        id == "fixed_2_1" || id == "workplace" || id == "work" || id == "office" -> "tama/backgrounds/workplace.png"
+        id == "fixed_3_1" || id == "farm" || id.endsWith("farm_barn") -> "tama/backgrounds/farm.png"
+        id == "fixed_4_1" || id == "boxing_ring" || id == "boxing ring" || id == "gym" -> "tama/backgrounds/boxing_ring.png"
+        id == "fixed_0_2" || id == "fixed_4_2" || id == "dungeon" || id == "dungeon_a" || id == "dungeon_b" -> "tama/backgrounds/dungeon.png"
+        id == "fixed_2_2" || id == "adventure_gate" || id == "adventure gate" || id == "gate" -> "tama/backgrounds/adventure_gate.png"
+        id == "market_stall" || id.endsWith("market_stall") -> "tama/backgrounds/street_market.png"
+        id.startsWith("npc_home_") || id.startsWith("house_npc_") -> "tama/backgrounds/bedroom.png"
+        else -> "tama/backgrounds/park.png"
+    }
+}
+
+private fun PetSnapshot.legacyIdleSpriteAssetPath(): String? {
+    val normalizedSpecies = species?.trim()?.lowercase()
+        ?.takeIf { it == "dragon" || it == "kitsune" || it == "unicorn" }
+    val normalizedStage = stage?.trim()?.lowercase()
+        ?.takeIf { it in setOf("egg", "baby", "child", "teen", "adult", "senior") }
+    return if (normalizedSpecies != null && normalizedStage != null) {
+        "tama/pets/$normalizedSpecies/$normalizedStage/idle_0.png"
+    } else {
+        null
+    }
 }
 
 @Composable

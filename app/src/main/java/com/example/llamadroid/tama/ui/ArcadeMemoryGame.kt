@@ -696,7 +696,8 @@ private fun MemoryFeedbackOverlay(
 fun MemoryResultDialog(
     summary: MemoryGameResult,
     onPlayAgain: () -> Unit,
-    onBackToHub: () -> Unit
+    onBackToHub: () -> Unit,
+    receiptStatusLabel: String? = null
 ) {
     val title = when {
         summary.perfectClear -> R.string.tama_arcade_memory_result_perfect
@@ -739,6 +740,14 @@ fun MemoryResultDialog(
                     stringResource(R.string.tama_arcade_result_happiness, summary.happiness),
                     fontFamily = FontFamily.Monospace
                 )
+                receiptStatusLabel?.let { status ->
+                    Text(
+                        status,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        color = TamaMutedText
+                    )
+                }
                 if (summary.perfectClear) {
                     Text(
                         stringResource(R.string.tama_arcade_memory_result_perfect_hint),

@@ -23,7 +23,7 @@ class PetSpeciesLineTest {
     @Test
     fun `asset path matches species stage state and frame`() {
         assertEquals(
-            "tama/pets/unicorn/teen/walk_1.png",
+            "tama/animations/frames/unicorn/teen/walk_1.png",
             resolvePetSpriteAssetPath(
                 speciesLine = PetSpeciesLine.UNICORN,
                 stage = GrowthStage.TEEN,
@@ -32,7 +32,7 @@ class PetSpeciesLineTest {
             )
         )
         assertEquals(
-            "tama/pets/kitsune/adult/sleep_0.png",
+            "tama/animations/frames/kitsune/adult/sleep_1.png",
             resolvePetSpriteAssetPath(
                 speciesLine = PetSpeciesLine.KITSUNE,
                 stage = GrowthStage.ADULT,
@@ -48,9 +48,21 @@ class PetSpeciesLineTest {
             val resolved = mapPetActionToSpriteState(action, isSleeping = false)
             assertTrue(
                 "Unexpected sprite state for action $action",
-                resolved in setOf(PetSpriteState.IDLE, PetSpriteState.WALK, PetSpriteState.SLEEP, PetSpriteState.EAT)
+                resolved in PetSpriteState.entries
             )
         }
         assertEquals(PetSpriteState.SLEEP, mapPetActionToSpriteState("playing", isSleeping = true))
+    }
+
+    @Test fun `activities have authored clips and eggs always select stationary idle`() {
+        mapOf("playing" to PetSpriteState.PLAY, "studying" to PetSpriteState.STUDY,
+            "working" to PetSpriteState.WORK, "training" to PetSpriteState.TRAIN,
+            "cleaning" to PetSpriteState.CLEAN).forEach { (action, expected) ->
+            assertEquals(expected, mapPetActionToSpriteState(action, false))
+        }
+        PetSpriteState.entries.forEach { state ->
+            assertEquals("tama/animations/frames/dragon/egg/idle_1.png",
+                resolvePetSpriteAssetPath(PetSpeciesLine.DRAGON, GrowthStage.EGG, state, 3))
+        }
     }
 }

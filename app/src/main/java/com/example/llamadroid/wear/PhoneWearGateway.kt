@@ -46,12 +46,10 @@ import com.example.llamadroid.service.OrganizerAlarmScheduler
 import com.example.llamadroid.service.ServerState
 import com.example.llamadroid.service.isForegroundServiceStartNotAllowed
 import com.example.llamadroid.tama.data.ActivityType
-import com.example.llamadroid.tama.data.EventType
 import com.example.llamadroid.tama.data.FarmTradeItemCatalog
 import com.example.llamadroid.tama.data.InventoryItem
-import com.example.llamadroid.tama.data.LocationType
+import com.example.llamadroid.tama.data.ItemType
 import com.example.llamadroid.tama.data.PetSpeciesLine
-import com.example.llamadroid.tama.data.PlantedCrop
 import com.example.llamadroid.tama.data.TamaPet
 import com.example.llamadroid.tama.data.TamaRoomCatalog
 import com.example.llamadroid.tama.data.TamaTrainingCatalog
@@ -1518,10 +1516,7 @@ private class WearRequestRouter(
             "clean" -> tamaGameEngine.clean()
             "play" -> tamaGameEngine.play()
             "sleep" -> tamaGameEngine.goToBed()
-            "wake" -> {
-                tamaGameEngine.wakeUp()
-                TamaGameEngine.ActionResult(true, appContext.getString(R.string.wear_tama_action_done))
-            }
+            "wake" -> tamaGameEngine.wakeUp()
             "stop_activity" -> tamaGameEngine.stopActivity()
             "study" -> tamaGameEngine.startNormalStudySession(emptySet(), emptyList())
             "work" -> tamaGameEngine.startWork(request.args["jobId"] ?: "paper_route")
@@ -1529,19 +1524,18 @@ private class WearRequestRouter(
             "travel" -> {
                 val locationId = request.args["locationId"].orEmpty()
                 require(locationId.isNotBlank()) { appContext.getString(R.string.wear_bridge_invalid_id) }
-                tamaDatabase.tamaDao().updateLocation(pet.id, locationId)
-                TamaGameEngine.ActionResult(true, appContext.getString(R.string.wear_tama_action_done), "travel")
+                tamaGameEngine.travelToId(locationId)
             }
             "use_item" -> {
-                val item = pet.inventory.firstOrNull { it.id == request.args["itemId"] }
-                    ?: throw IllegalArgumentException(appContext.getString(R.string.wear_bridge_invalid_id))
-                val used = tamaGameEngine.consumeItem(item, request.args["quantity"]?.toIntOrNull()?.coerceIn(1, 99) ?: 1)
-                TamaGameEngine.ActionResult(used, appContext.getString(if (used) R.string.wear_tama_action_done else R.string.wear_tama_action_failed))
+                tamaGameEngine.useInventoryItem(request.args["itemId"].orEmpty(),
+                    request.args["quantity"]?.let { it.toIntOrNull() ?: 0 } ?: 1)
             }
             "sell_item" -> {
                 val item = pet.inventory.firstOrNull { it.id == request.args["itemId"] }
                     ?: throw IllegalArgumentException(appContext.getString(R.string.wear_bridge_invalid_id))
-                tamaGameEngine.sellItem(item, request.args["quantity"]?.toIntOrNull()?.coerceIn(1, 99) ?: 1, request.args["price"]?.toLongOrNull() ?: FarmTradeItemCatalog.sellPrice(item.id).toLong().coerceAtLeast(1L))
+                val price = com.example.llamadroid.tama.data.TamaCommerceCatalog.sellPrice(item.id)
+                if (price == null) TamaGameEngine.ActionResult(false, appContext.getString(R.string.wear_tama_action_failed))
+                else tamaGameEngine.sellItem(item, request.args["quantity"]?.let { it.toIntOrNull() ?: 0 } ?: 1, price.toLong())
             }
             "delete_artwork" -> {
                 val artworkId = request.args["artworkId"].orEmpty()
@@ -1563,52 +1557,24 @@ private class WearRequestRouter(
         val pet = tamaGameEngine.loadPet() ?: throw IllegalStateException(appContext.getString(R.string.wear_tama_no_pet))
         request.petId?.takeIf { it.isNotBlank() }?.let { require(it == pet.id) { appContext.getString(R.string.wear_bridge_invalid_id) } }
         val tileId = request.tileId?.toIntOrNull()
-        val result = when (request.action) {
-            "till" -> {
-                val tile = farmRepository.ensureUnlockedFarmTiles(pet.id).firstOrNull { it.id == tileId }
-                    ?: throw IllegalArgumentException(appContext.getString(R.string.wear_bridge_invalid_id))
-                farmRepository.saveTile(pet.id, tile.copy(status = TileStatus.FARMLAND))
-                tamaGameEngine.logEvent(pet.id, EventType.OTHER, appContext.getString(R.string.tama_event_tilled))
-                appContext.getString(R.string.wear_tama_action_done)
-            }
-            "water" -> {
-                val tile = farmRepository.ensureUnlockedFarmTiles(pet.id).firstOrNull { it.id == tileId }
-                    ?: throw IllegalArgumentException(appContext.getString(R.string.wear_bridge_invalid_id))
-                val water = pet.inventory.firstOrNull { it.id == "water" && it.quantity > 0 }
-                    ?: throw IllegalStateException(appContext.getString(R.string.wear_tama_no_water))
-                require(tamaGameEngine.consumeItem(water, 1)) { appContext.getString(R.string.wear_tama_action_failed) }
-                farmRepository.saveTile(pet.id, tile.copy(status = TileStatus.WET_FARMLAND, lastWateredTime = System.currentTimeMillis()))
-                appContext.getString(R.string.wear_tama_action_done)
-            }
-            "plant" -> {
-                val tile = farmRepository.ensureUnlockedFarmTiles(pet.id).firstOrNull { it.id == tileId }
-                    ?: throw IllegalArgumentException(appContext.getString(R.string.wear_bridge_invalid_id))
-                val seed = pet.inventory.firstOrNull { it.id == request.itemId && it.quantity > 0 }
-                    ?: throw IllegalStateException(appContext.getString(R.string.wear_tama_no_seed))
-                require(tile.status == TileStatus.WET_FARMLAND && tile.crop == null) { appContext.getString(R.string.wear_tama_action_failed) }
-                require(tamaGameEngine.consumeItem(seed, 1)) { appContext.getString(R.string.wear_tama_action_failed) }
-                farmRepository.saveTile(
-                    pet.id,
-                    tile.copy(
-                        crop = PlantedCrop(
-                            type = seed.id.removePrefix("seed_"),
-                            plantedTime = System.currentTimeMillis(),
-                            lastStageUpdateTime = System.currentTimeMillis()
-                        )
-                    )
-                )
-                appContext.getString(R.string.wear_tama_action_done)
-            }
-            "harvest" -> {
-                val tile = farmRepository.ensureUnlockedFarmTiles(pet.id).firstOrNull { it.id == tileId }
-                    ?: throw IllegalArgumentException(appContext.getString(R.string.wear_bridge_invalid_id))
-                val crop = tile.crop ?: throw IllegalStateException(appContext.getString(R.string.wear_tama_action_failed))
-                val harvest = tamaGameEngine.harvestCrop(crop)
-                if (harvest.success) farmRepository.saveTile(pet.id, tile.copy(crop = null, status = TileStatus.SOIL))
-                harvest.message
-            }
-            else -> appContext.getString(R.string.wear_tama_action_needs_phone_args)
+        val tile = farmRepository.ensureUnlockedFarmTiles(pet.id).firstOrNull { it.id == tileId }
+            ?: throw IllegalArgumentException(appContext.getString(R.string.wear_bridge_invalid_id))
+        val action = when (request.action) {
+            "till" -> com.example.llamadroid.tama.world.core.ActionId.TILL_SOIL
+            "water" -> com.example.llamadroid.tama.world.core.ActionId.POUR_WATER
+            "plant" -> com.example.llamadroid.tama.world.core.ActionId.PLANT
+            "harvest" -> if (tile.crop?.isDecayed == true) com.example.llamadroid.tama.world.core.ActionId.REMOVE_DEAD_CROP
+                else com.example.llamadroid.tama.world.core.ActionId.HARVEST_CROP
+            else -> null
         }
+        val arguments = if (request.action == "plant") {
+            val seed = pet.inventory.firstOrNull { it.id == request.itemId && it.type == ItemType.SEED && it.quantity > 0 }
+                ?: throw IllegalStateException(appContext.getString(R.string.wear_tama_no_seed))
+            mapOf("cropId" to seed.id.removePrefix("seed_"))
+        } else emptyMap()
+        val result = if (action != null) com.example.llamadroid.tama.world.runtime.WorldFarmActions.request(
+            appContext, tamaGameEngine, tile.id, action, arguments
+        ) else appContext.getString(R.string.wear_tama_action_needs_phone_args)
         return ok(request.meta, TamaFarmSnapshot.serializer(), currentFarmSnapshot(pet.id, result))
     }
 
@@ -1641,8 +1607,12 @@ private class WearRequestRouter(
         val pet = activeTamaPet(petId)
         val snapshot = pet.toPetSnapshot(appContext, sourceDeviceId(), revision.incrementAndGet())
         val events = tamaDatabase.tamaDao().getRecentEvents(pet.id, 6).map { it.details.wearLimit(140) }
-        val locationLabel = tamaDatabase.tamaDao().getLocation(pet.currentLocationId)?.name
-            ?: pet.currentLocationId.replace('_', ' ').replaceFirstChar { it.titlecase(Locale.getDefault()) }
+        val legacyLocationName = tamaDatabase.tamaDao().getLocation(pet.currentLocationId)?.name
+        val locationLabel = TamaWearLocationCatalog.label(
+            context = appContext,
+            locationId = pet.currentLocationId,
+            legacyName = legacyLocationName
+        )
         return TamaHubSnapshot(
             revisioned = revisioned(),
             pet = snapshot,
@@ -1676,7 +1646,7 @@ private class WearRequestRouter(
     }
 
     private suspend fun currentFarmSnapshot(petId: String, status: String = ""): TamaFarmSnapshot {
-        farmEngine.updateFarm(petId)
+        if (!activeTamaPet(petId).cycleFrozen) farmEngine.updateFarm(petId)
         val tiles = farmRepository.ensureUnlockedFarmTiles(petId).take(18).map { tile ->
             val crop = tile.crop
             TamaFarmTileSummary(
@@ -2618,38 +2588,10 @@ private fun TamaPet.tamaBackgroundAsset(): String {
         ActivityType.STUDYING -> "tama/backgrounds/classroom.png"
         ActivityType.TRAINING -> TamaTrainingCatalog.tierById(currentWorkJobId)?.backgroundAssetPath ?: "tama/backgrounds/boxing_ring.png"
         ActivityType.RELAXING -> "tama/backgrounds/park.png"
-        ActivityType.NONE -> when (wearLocationType(currentLocationId)) {
-            LocationType.HOME -> TamaRoomCatalog.homeRoomAssetPath(homeRoomId)
-            LocationType.SCHOOL -> "tama/backgrounds/classroom.png"
-            LocationType.WORKPLACE -> "tama/backgrounds/workplace.png"
-            LocationType.SHOP -> "tama/backgrounds/shop.png"
-            LocationType.ARCADE -> "tama/backgrounds/arcade_location.png"
-            LocationType.PARK -> "tama/backgrounds/park.png"
-            LocationType.HOSPITAL -> "tama/backgrounds/hospital.png"
-            LocationType.ALCHEMIST -> "tama/backgrounds/alchemist.png"
-            LocationType.FARM -> "tama/backgrounds/farm.png"
-            LocationType.DUNGEON -> "tama/backgrounds/dungeon.png"
-            LocationType.BOXING_RING -> "tama/backgrounds/boxing_ring.png"
-            LocationType.ADVENTURE_GATE -> "tama/backgrounds/adventure_gate.png"
+        ActivityType.NONE -> TamaWearLocationCatalog.resolve(currentLocationId).let { location ->
+            if (location.usesHomeRoom) TamaRoomCatalog.homeRoomAssetPath(homeRoomId)
+            else location.backgroundAssetPath
         }
-    }
-}
-
-private fun wearLocationType(locationId: String?): LocationType {
-    val id = locationId.orEmpty().lowercase()
-    return when {
-        id.contains("school") || id.contains("class") -> LocationType.SCHOOL
-        id.contains("work") || id.contains("office") -> LocationType.WORKPLACE
-        id.contains("shop") -> LocationType.SHOP
-        id.contains("arcade") -> LocationType.ARCADE
-        id.contains("park") -> LocationType.PARK
-        id.contains("hospital") -> LocationType.HOSPITAL
-        id.contains("alchemist") -> LocationType.ALCHEMIST
-        id.contains("farm") -> LocationType.FARM
-        id.contains("dungeon") -> LocationType.DUNGEON
-        id.contains("boxing") || id.contains("training") -> LocationType.BOXING_RING
-        id.contains("adventure_gate") || id.contains("gate") -> LocationType.ADVENTURE_GATE
-        else -> LocationType.HOME
     }
 }
 

@@ -89,6 +89,7 @@ fun seedDisplayText(cropId: String): TamaLocalizedText {
 }
 
 fun inventoryItemDisplayName(context: Context, item: InventoryItem): String {
+    WorldResourceCatalog.displayName(item.id, context.resources.configuration.locales[0])?.let { return it }
     when (item.id) {
         "hoe", "hoe_starter" -> return context.getString(R.string.tama_inventory_hoe)
         "watering_can", "watering_can_starter" -> return context.getString(R.string.tama_inventory_watering_can)

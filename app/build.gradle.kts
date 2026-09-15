@@ -222,6 +222,11 @@ android {
         }
     }
     
+    testOptions {
+        // Room integration tests use the canonical resource catalog and world manifests.
+        unitTests.isIncludeAndroidResources = true
+    }
+
     // Asset Packs for on-demand native binary delivery
     assetPacks += setOf(
         ":asset_upscaler",
@@ -327,6 +332,9 @@ tasks.matching { it.name == "bundleRelease" }.configureEach {
 
 dependencies {
     implementation(project(":wear-protocol"))
+    implementation(project(":tama-world-core"))
+    implementation(project(":tama-world-policy"))
+    implementation(project(":tama-world-training"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

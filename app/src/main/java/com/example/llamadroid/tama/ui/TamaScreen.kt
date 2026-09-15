@@ -73,6 +73,7 @@ import com.example.llamadroid.tama.db.TamaStudySessionEntity
 import com.example.llamadroid.tama.game.TamaAgentService
 import com.example.llamadroid.tama.game.TamaArtworkManager
 import com.example.llamadroid.tama.game.TamaDailyDreamManager
+import com.example.llamadroid.tama.game.FarmRepository
 import com.example.llamadroid.tama.game.TamaGameEngine
 import com.example.llamadroid.tama.game.TamaStudySessionSupport
 import com.example.llamadroid.tama.rpg.AdventureGateCatalog
@@ -87,6 +88,16 @@ import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.ui.components.rememberPressAndHoldRepeatState
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.tama.world.core.PresenceMode
+import com.example.llamadroid.tama.world.core.LegacyLocationAliases
+import com.example.llamadroid.tama.world.presentation.WorldActivityArrival
+import com.example.llamadroid.tama.world.presentation.activityArrivalOrNull
+import com.example.llamadroid.tama.world.presentation.WorldArrivalDestination
+import com.example.llamadroid.tama.world.presentation.TamaWorldRouteHost
+import com.example.llamadroid.tama.world.presentation.localizedBrainUiLabels
+import com.example.llamadroid.tama.world.presentation.localizedWorldUiLabels
+import com.example.llamadroid.tama.world.ui.WorldRelationshipUi
+import com.example.llamadroid.tama.world.ui.WorldHatchEffect
 import androidx.navigation.NavController
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.flowOf
@@ -94,10 +105,6 @@ import java.io.File
 import java.util.Calendar
 import kotlin.math.roundToInt
 
-private const val STUDY_ACTION_ICON_ASSET = "tama/actions/study.png"
-private const val WORK_ACTION_ICON_ASSET = "tama/actions/work.png"
-private const val PLAY_ACTION_ICON_ASSET = "tama/actions/play.png"
-private const val SHOWER_ACTION_ICON_ASSET = "tama/actions/shower.png"
 private const val MOP_ACTION_ICON_ASSET = "tama/actions/mop.png"
 private const val POOP_PROP_ASSET = "tama/decor/poop.png"
 private const val PARK_GIFT_PRESENT_ASSET = "tama/props/park_present.png"
@@ -149,6 +156,7 @@ fun TamaScreen(
     settingsRepo: SettingsRepository,
     agentService: TamaAgentService,
     onChat: () -> Unit = {},
+    farmRepository: FarmRepository? = null,
     modifier: Modifier = Modifier
 ) {
     val pet by gameEngine.pet.collectAsState()
@@ -312,7 +320,6 @@ fun TamaScreen(
     val requestAdventureGateEntry = {
         showAdventureGateWarningDialog = true
     }
-    var questCompletionPresentation by remember { mutableStateOf<TamaQuestCompletionPresentation?>(null) }
     var sleepyFairyReminder by remember { mutableStateOf<TamaSleepyFairyReminder?>(null) }
     var wasInPrincipalHomeRoom by remember { mutableStateOf(false) }
 
@@ -337,6 +344,26 @@ fun TamaScreen(
     // View mode: Pet or Map
     var showMap by remember { mutableStateOf(false) }
     val currentLocation by gameEngine.currentLocation.collectAsState()
+    val worldController = remember(gameEngine) { gameEngine.world }
+    val worldState by worldController.state.collectAsState()
+    val currentDungeonStructureId = worldState?.actor
+        ?.takeIf { it.presence == PresenceMode.INTERIOR }
+        ?.structureId
+        ?.takeIf { it == LegacyLocationAliases.DUNGEON_A || it == LegacyLocationAliases.DUNGEON_B }
+    val farmTilesFeed = remember(pet?.id, farmRepository) {
+        val activePetId = pet?.id
+        if (activePetId != null && farmRepository != null) {
+            farmRepository.observeTiles(activePetId)
+        } else {
+            flowOf<List<FarmTile>>(emptyList())
+        }
+    }
+    val observedFarmTiles by farmTilesFeed.collectAsState(initial = emptyList())
+    val isWorldPresence = pet != null && worldState?.actor?.presence == PresenceMode.WORLD
+    var worldRouteOpen by remember(pet?.id) { mutableStateOf(false) }
+    var requestedWorldRoute by remember(pet?.id) { mutableStateOf("WORLD") }
+    var showingWorldSubroute by remember(pet?.id) { mutableStateOf(false) }
+    var wasWorldPresence by remember(pet?.id) { mutableStateOf(isWorldPresence) }
     val isPrincipalHomeRoomVisible = !showMap &&
         pet != null &&
         currentLocation?.type == LocationType.HOME &&
@@ -344,6 +371,41 @@ fun TamaScreen(
     val configuration = LocalConfiguration.current
     val localeTag = remember(configuration) {
         configuration.locales.takeIf { !it.isEmpty }?.get(0)?.toLanguageTag().orEmpty()
+    }
+
+    fun openWorldActivity(arrival: WorldActivityArrival) {
+        // Close the inline world host before pushing the existing activity
+        // route. The core snapshot remains authoritative, so returning with
+        // Back shows the pet at the same durable interior instead of issuing
+        // another travel request.
+        requestedWorldRoute = "WORLD"
+        showingWorldSubroute = false
+        showMap = false
+        worldRouteOpen = false
+        when (arrival.destination) {
+            WorldArrivalDestination.DUNGEON -> {
+                navController.navigate(Screen.Dungeon.createRoute(arrival.destinationId))
+            }
+            WorldArrivalDestination.ADVENTURE_GATE -> {
+                navController.navigate(Screen.AdventureGate.route)
+            }
+        }
+    }
+
+    LaunchedEffect(isWorldPresence, worldState?.actor?.presence, requestedWorldRoute, pet?.id) {
+        val arrivedFromWorld = requestedWorldRoute == "WORLD" && !showingWorldSubroute &&
+            wasWorldPresence &&
+            !isWorldPresence &&
+            worldState?.actor?.presence in setOf(PresenceMode.HOME, PresenceMode.INTERIOR)
+        if (arrivedFromWorld) {
+            // This parent owns disposal of the inline map. Dispatch the
+            // activity here so the child cannot disappear before its effect
+            // observes the final interior snapshot.
+            worldState?.activityArrivalOrNull()?.let(::openWorldActivity)
+            showMap = false
+            worldRouteOpen = false
+        }
+        wasWorldPresence = isWorldPresence
     }
 
     LaunchedEffect(isPrincipalHomeRoomVisible, pet?.id) {
@@ -372,7 +434,6 @@ fun TamaScreen(
     }
 
     // Fixed city and location state (no city generation)
-    val cityName = stringResource(R.string.tama_city_hometown)
     val cityLocations = remember(localeTag) {
         val coreLocations = listOf(
             Triple(0, 0, com.example.llamadroid.tama.data.LocationType.HOME),
@@ -402,8 +463,6 @@ fun TamaScreen(
             )
         }
     }
-    var selectedLocation by remember { mutableStateOf<TamaLocation?>(null) }
-
     // Helper to perform action with cooldown and Toast feedback
     fun actionDisplayDuration(actionName: String?): Long = when (actionName?.lowercase()) {
         "eating" -> 2200L
@@ -527,7 +586,54 @@ fun TamaScreen(
         }
     }
 
-    BoxWithConstraints(modifier = modifier.fillMaxSize().background(TamaBackground)) {
+    TamaParkReceiptHost(pet, gameEngine) { questBoard = null }
+
+
+    if ((isWorldPresence || worldRouteOpen) && pet != null) {
+        TamaWorldRouteHost(
+            world = worldController,
+            brainProvider = { gameEngine.brain },
+            database = TamaDatabase.getInstance(context),
+            petId = pet!!.id,
+            petName = pet!!.name,
+            petSpeciesId = pet!!.species,
+            petStage = pet!!.stage.name.lowercase(),
+            initialRoute = requestedWorldRoute,
+            farmTiles = observedFarmTiles,
+            worldLabels = localizedWorldUiLabels(context, pet!!.name),
+            brainLabels = localizedBrainUiLabels(context, pet!!.name),
+            relationshipByNpc = pet!!.relationships.mapValues { (_, friendship) ->
+                val score = friendship.coerceIn(0, 100)
+                WorldRelationshipUi(
+                    familiarity = score,
+                    friendship = score,
+                    trust = 0,
+                    recentInteraction = "",
+                    lastMetAt = "",
+                    helpCount = 0,
+                    sharedEvents = 0
+                )
+            },
+            // While the pet is physically outside, Room is not a state change:
+            // the world overview remains mounted. OpenHome is the explicit
+            // ReturnHome command and keeps the physical arrival contract.
+            exitShortcutLabelRes = if (isWorldPresence) null else R.string.tama_world_shortcut_room,
+            onNonWorldRouteChanged = { isNonWorldRoute ->
+                showingWorldSubroute = isNonWorldRoute
+                // Keep the live world overview mounted while returning from
+                // Journal or Brain. The Room shortcut closes it from home or
+                // an interior; while WORLD, OpenHome requests physical return.
+                if (isNonWorldRoute) worldRouteOpen = true else requestedWorldRoute = "WORLD"
+            },
+            onCloseWorld = {
+                requestedWorldRoute = "WORLD"
+                showMap = false
+                worldRouteOpen = false
+            },
+            onOpenInventory = { showInventoryDialog = true },
+            modifier = modifier
+        )
+    } else BoxWithConstraints(modifier = modifier.fillMaxSize().background(TamaBackground)) {
         // Reserve the pet header before sizing the scene on short tablet windows.
         val roomMaxSize = minOf(560.dp, (maxHeight - 64.dp).coerceAtLeast(240.dp))
         Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -571,6 +677,8 @@ fun TamaScreen(
                     IconButton(
                         onClick = {
                             showMap = false
+                            requestedWorldRoute = "WORLD"
+                            worldRouteOpen = false
                             walkthroughTargets?.recordEvent("tama.room")
                         },
                         modifier = Modifier.size(48.dp).semantics {
@@ -583,6 +691,8 @@ fun TamaScreen(
                     IconButton(
                         onClick = {
                             showMap = true
+                            requestedWorldRoute = "WORLD"
+                            worldRouteOpen = true
                             walkthroughTargets?.recordEvent("tama.room")
                         },
                         modifier = Modifier.size(48.dp).semantics {
@@ -623,43 +733,32 @@ fun TamaScreen(
         ) {
             val currentPet = pet
             if (currentPet != null) {
-                if (showMap) {
-                    // Show map view
-                    TamaMapView(
-                        cityName = cityName,
-                        locations = cityLocations,
-                        currentLocation = currentLocation ?: cityLocations.firstOrNull(),
-                        discoveredLocationIds = currentPet.discoveredLocationIds,
-                        onLocationClick = { loc -> selectedLocation = loc }
-                    )
-                } else {
-                    // Show pet view
-                    TamaPetDisplay(
-                        pet = currentPet,
-                        currentAction = displayAction,
-                        locationTypeName = currentLocation?.type?.name?.lowercase(),
-                        homeRoomId = currentPet.homeRoomId,
-                        sleepyFairyReminder = sleepyFairyReminder,
-                        activeStudySession = activeStudySession,
-                        currentTime = currentTime,
-                        onQuestBoard = if (currentLocation?.type == LocationType.PARK) {
-                            {
-                                scope.launch {
-                                    questBoard = gameEngine.getParkQuestBoard(currentTime)
-                                    showQuestBoardDialog = true
-                                }
+                // Show pet view
+                TamaPetDisplay(
+                    pet = currentPet,
+                    currentAction = displayAction,
+                    locationTypeName = currentLocation?.type?.name?.lowercase(),
+                    homeRoomId = currentPet.homeRoomId,
+                    sleepyFairyReminder = sleepyFairyReminder,
+                    activeStudySession = activeStudySession,
+                    currentTime = currentTime,
+                    onQuestBoard = if (currentLocation?.type == LocationType.PARK) {
+                        {
+                            scope.launch {
+                                questBoard = gameEngine.getParkQuestBoard(currentTime)
+                                showQuestBoardDialog = true
                             }
-                        } else null,
-                        onMarketBoard = if (currentLocation?.type == LocationType.PARK) {
-                            {
-                                scope.launch {
-                                    marketBoard = gameEngine.getParkMarketBoard(currentTime)
-                                    showMarketBoardDialog = true
-                                }
+                        }
+                    } else null,
+                    onMarketBoard = if (currentLocation?.type == LocationType.PARK) {
+                        {
+                            scope.launch {
+                                marketBoard = gameEngine.getParkMarketBoard(currentTime)
+                                showMarketBoardDialog = true
                             }
-                        } else null
-                    )
-                }
+                        }
+                    } else null
+                )
             } else {
                 // No pet yet
                 Column(
@@ -785,7 +884,7 @@ fun TamaScreen(
             },
             onBuy = { showShopDialog = true },
             onChat = onChat,
-            onDungeon = { navController.navigate(Screen.Dungeon.route) },
+            onDungeon = { navController.navigate(Screen.Dungeon.createRoute(currentDungeonStructureId)) },
             onAdventureGate = requestAdventureGateEntry,
             onNightArena = { navController.navigate(Screen.NightArena.route) },
             onInventory = { showInventoryDialog = true },
@@ -845,6 +944,18 @@ fun TamaScreen(
             onGallery = {
                 showMenu = false
                 navController.navigate(Screen.TamaGallery.route)
+            },
+            onJournal = {
+                showMenu = false
+                showMap = true
+                requestedWorldRoute = "JOURNAL"
+                worldRouteOpen = true
+            },
+            onBrain = {
+                showMenu = false
+                showMap = true
+                requestedWorldRoute = "BRAIN"
+                worldRouteOpen = true
             },
             onStore = {
                 showMenu = false
@@ -922,219 +1033,6 @@ fun TamaScreen(
             onDismiss = {
                 if (queuedPaintingArtworkId == artwork.id) queuedPaintingArtworkId = null
                 artworkDialog = null
-            }
-        )
-    }
-
-    // Location details dialog
-    if (selectedLocation != null && pet != null) {
-        val loc = selectedLocation!!
-        val isDiscovered = pet!!.discoveredLocationIds.contains(loc.id) || loc.type == LocationType.HOME
-        val isHere = currentLocation?.id == loc.id || (currentLocation == null && loc.x == 0 && loc.y == 0)
-        val travelCost = if (isHere) 0 else gameEngine.previewTravelEnergyCost(currentLocation, loc)
-
-        TamaPopupDialog(
-            title = if (isDiscovered) loc.type.localizedName(context) else stringResource(R.string.tama_unknown_place),
-            backgroundAsset = when (loc.type) {
-                LocationType.HOME -> "tama/backgrounds/bedroom.png"
-                LocationType.SHOP -> "tama/backgrounds/shop.png"
-                LocationType.SCHOOL -> "tama/backgrounds/classroom.png"
-                LocationType.WORKPLACE -> "tama/backgrounds/workplace.png"
-                LocationType.BOXING_RING -> "tama/backgrounds/boxing_ring.png"
-                LocationType.PARK -> "tama/backgrounds/park.png"
-                LocationType.HOSPITAL -> "tama/backgrounds/hospital.png"
-                LocationType.ARCADE -> "tama/backgrounds/arcade_location.png"
-                LocationType.ALCHEMIST -> "tama/backgrounds/alchemist.png"
-                LocationType.FARM -> "tama/backgrounds/farm.png"
-                LocationType.DUNGEON -> "tama/backgrounds/dungeon.png"
-                LocationType.ADVENTURE_GATE -> "tama/backgrounds/adventure_gate.png"
-                else -> "tama/backgrounds/principal_room.png"
-            },
-            compact = true,
-            onDismissRequest = { selectedLocation = null },
-            bodyContent = {
-                if (isDiscovered) {
-                    Text(
-                        loc.type.localizedDescription(context),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 14.sp,
-                        color = TamaDark
-                    )
-                } else {
-                    Text(
-                        stringResource(R.string.tama_unknown_warning),
-                        color = Color(0xFFD32F2F),
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 14.sp
-                    )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-
-                if (isHere) {
-                    Text(stringResource(R.string.tama_you_are_here), color = Color(0xFF4CAF50), fontFamily = FontFamily.Monospace)
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    when (loc.type) {
-                        LocationType.HOME -> {
-                            Text(stringResource(R.string.tama_rest_home), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                        }
-                        LocationType.SHOP -> {
-                            Text(stringResource(R.string.tama_items_available), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                            Text(stringResource(R.string.tama_apple_price), fontFamily = FontFamily.Monospace, fontSize = 11.sp)
-                            Text(stringResource(R.string.tama_bread_price), fontFamily = FontFamily.Monospace, fontSize = 11.sp)
-                            Text(stringResource(R.string.tama_cake_price), fontFamily = FontFamily.Monospace, fontSize = 11.sp)
-                        }
-                        LocationType.SCHOOL -> {
-                            Text(stringResource(R.string.tama_study_gain), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                            Text(stringResource(R.string.tama_current_edu, pet!!.educationLevel.toInt()), fontFamily = FontFamily.Monospace, fontSize = 11.sp)
-                        }
-                        LocationType.WORKPLACE -> {
-                            Text(stringResource(R.string.tama_avail_jobs), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                            TamaWorkCatalog.jobs.take(3).forEach { job ->
-                                Text(
-                                    resources.getString(
-                                        R.string.tama_work_job_summary,
-                                        resources.getString(job.titleRes),
-                                        job.requiredEducation,
-                                        job.hourlyPay.toInt()
-                                    ),
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 11.sp
-                                )
-                            }
-                        }
-                        LocationType.BOXING_RING -> {
-                            Text(stringResource(R.string.tama_training_gain), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                            Text(stringResource(R.string.tama_current_exercise, pet!!.exerciseLevel.toInt()), fontFamily = FontFamily.Monospace, fontSize = 11.sp)
-                        }
-                        LocationType.PARK -> {
-                            Text(stringResource(R.string.tama_park_relax), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                            Text(stringResource(R.string.tama_quest_board_desc), fontFamily = FontFamily.Monospace, fontSize = 11.sp)
-                        }
-                        LocationType.HOSPITAL -> {
-                            Text(stringResource(R.string.tama_hospital_heal), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                        }
-                        LocationType.ARCADE -> {
-                            Text(stringResource(R.string.tama_arcade_location_hint), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                        }
-                        LocationType.ALCHEMIST -> {
-                            Text(stringResource(R.string.tama_alchemist_location_hint), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                        }
-                        LocationType.ADVENTURE_GATE -> {
-                            Text(stringResource(R.string.adventure_gate_location_hint), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                        }
-                        else -> {}
-                    }
-                } else {
-                    Text(
-                        stringResource(R.string.tama_travel_cost, travelCost),
-                        color = if (pet!!.stats.energy >= travelCost) TamaAccent else Color.Red,
-                        fontFamily = FontFamily.Monospace
-                    )
-                    if (pet!!.stats.energy < travelCost) {
-                        Text(stringResource(R.string.tama_not_enough_energy), color = Color.Red, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-                    }
-                }
-            },
-            footerContent = {
-                if (!isHere) {
-                    TextButton(
-                        onClick = {
-                            val alreadyDiscovered = pet!!.discoveredLocationIds.contains(loc.id)
-                            scope.launch {
-                                val result = gameEngine.travelTo(loc)
-                                if (result.success) {
-                                    if (!alreadyDiscovered) {
-                                        Toast.makeText(context, resources.getString(R.string.tama_discovered, loc.name, loc.description), Toast.LENGTH_LONG).show()
-                                    }
-                                    showMap = false  // Switch to pet view
-                                } else {
-                                    showResultToast(result)
-                                }
-                            }
-                            selectedLocation = null
-                        },
-                        enabled = pet!!.stats.energy >= travelCost
-                    ) {
-                        Text(if (isDiscovered) stringResource(R.string.tama_btn_travel) else stringResource(R.string.tama_btn_explore))
-                    }
-                } else {
-                    when (loc.type) {
-                        LocationType.SHOP -> {
-                            TextButton(onClick = {
-                                if (pet!!.money >= 10) {
-                                    scope.launch {
-                                        Toast.makeText(context, resources.getString(R.string.tama_bought_apple), Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                                selectedLocation = null
-                            }) { Text(stringResource(R.string.tama_btn_buy_apple)) }
-                        }
-                        LocationType.SCHOOL -> {
-                            TextButton(onClick = {
-                                showStudyDialog = true
-                                showMap = false
-                                selectedLocation = null
-                            }) { Text(stringResource(R.string.tama_btn_study)) }
-                        }
-                        LocationType.WORKPLACE -> {
-                            TextButton(onClick = {
-                                showWorkDialog = true
-                                selectedLocation = null
-                                showMap = false
-                            }) { Text(stringResource(R.string.tama_btn_work)) }
-                        }
-                        LocationType.BOXING_RING -> {
-                            TextButton(onClick = {
-                                showTrainingDialog = true
-                                selectedLocation = null
-                                showMap = false
-                            }) { Text(stringResource(R.string.tama_btn_train)) }
-                        }
-                        LocationType.ARCADE -> {
-                            TextButton(onClick = {
-                                selectedLocation = null
-                                navController.navigate(Screen.Arcade.route)
-                            }) { Text(stringResource(R.string.tama_btn_arcade)) }
-                        }
-                        LocationType.PARK -> {
-                            TextButton(onClick = {
-                                scope.launch {
-                                    questBoard = gameEngine.getParkQuestBoard(currentTime)
-                                    showQuestBoardDialog = true
-                                }
-                                selectedLocation = null
-                                showMap = false
-                            }) { Text(stringResource(R.string.tama_btn_quests)) }
-                        }
-                        LocationType.ALCHEMIST -> {
-                            TextButton(onClick = {
-                                showAlchemistDialog = true
-                                selectedLocation = null
-                                showMap = false
-                            }) { Text(stringResource(R.string.tama_btn_change)) }
-                        }
-                        LocationType.HOSPITAL -> {
-                            TextButton(onClick = {
-                                showHospitalDialog = true
-                                selectedLocation = null
-                                showMap = false
-                            }) { Text(stringResource(R.string.tama_btn_heal)) }
-                        }
-                        LocationType.ADVENTURE_GATE -> {
-                            TextButton(onClick = {
-                                selectedLocation = null
-                                showMap = false
-                                requestAdventureGateEntry()
-                            }) { Text(stringResource(R.string.tama_btn_adventure_gate)) }
-                        }
-                        else -> {
-                            TextButton(onClick = { selectedLocation = null }) { Text(stringResource(R.string.action_ok)) }
-                        }
-                    }
-                    TextButton(onClick = { selectedLocation = null }) { Text(stringResource(R.string.action_close)) }
-                }
             }
         )
     }
@@ -1333,7 +1231,12 @@ fun TamaScreen(
             pet = pet!!,
             onBuy = { item, cost ->
                 scope.launch {
-                    val result = gameEngine.buyItem(item, 1, cost)
+                    val result = gameEngine.buyItem(
+                        item,
+                        1,
+                        cost,
+                        vendorId = LegacyLocationAliases.ALCHEMIST
+                    )
                     Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
                 }
             },
@@ -1347,7 +1250,12 @@ fun TamaScreen(
             pet = pet!!,
             onBuy = { item, cost ->
                 scope.launch {
-                    val result = gameEngine.buyItem(item, 1, cost)
+                    val result = gameEngine.buyItem(
+                        item,
+                        1,
+                        cost,
+                        vendorId = LegacyLocationAliases.HOSPITAL
+                    )
                     Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
                 }
             },
@@ -1376,11 +1284,7 @@ fun TamaScreen(
             onFinish = { questId ->
                 scope.launch {
                     val result = gameEngine.finishParkQuest(questId, currentTime)
-                    if (!result.success) {
-                        Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
-                    } else {
-                        questCompletionPresentation = result.presentation
-                    }
+                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
                     questBoard = gameEngine.getParkQuestBoard(currentTime)
                 }
             },
@@ -1399,16 +1303,6 @@ fun TamaScreen(
             board = marketBoard,
             onDismiss = { showMarketBoardDialog = false }
         )
-    }
-
-    questCompletionPresentation?.let { presentation ->
-        pet?.let { currentPet ->
-            TamaQuestRewardDialog(
-                pet = currentPet,
-                presentation = presentation,
-                onDismiss = { questCompletionPresentation = null }
-            )
-        }
     }
 
     pendingDecorationId?.let { decorId ->
@@ -1767,7 +1661,7 @@ private fun TamaParkEncounterDialog(
 }
 
 @Composable
-private fun TamaQuestRewardDialog(
+internal fun TamaQuestRewardDialog(
     pet: TamaPet,
     presentation: TamaQuestCompletionPresentation,
     onDismiss: () -> Unit
@@ -2647,6 +2541,11 @@ data class FoodItem(
     val isShopItem: Boolean = false
 )
 
+@Composable
+private fun TamaFoodDefinition.toUiFood(): FoodItem = FoodItem(
+    id, emoji, stringResource(titleRes), hungerGain, happinessGain, price, price != null
+)
+
 private data class TamaDreamAlbumPreview(
     val albumId: String,
     val story: String,
@@ -2668,16 +2567,7 @@ fun ShopDialog(
     currentSeason: TamaSeason = TamaSeason.current()
 ) {
     val context = LocalContext.current
-    val shopItems = listOf(
-        FoodItem("apple", "🍎", stringResource(R.string.tama_food_apple), 15, 5, 10, true),
-        FoodItem("bread", "🍞", stringResource(R.string.tama_food_bread), 25, 3, 15, true),
-        FoodItem("cake", "🎂", stringResource(R.string.tama_food_cake), 10, 25, 25, true),
-        FoodItem("pizza", "🍕", stringResource(R.string.tama_food_pizza), 30, 10, 30, true),
-        FoodItem("burger", "🍔", stringResource(R.string.tama_food_burger), 35, 8, 35, true),
-        FoodItem("sushi", "🍣", stringResource(R.string.tama_food_sushi), 20, 15, 40, true),
-        FoodItem("donut", "🍩", stringResource(R.string.tama_food_donut), 5, 20, 20, true),
-        FoodItem("salad", "🥗", stringResource(R.string.tama_food_salad), 20, 2, 12, true)
-    )
+    val shopItems = TamaFoodCatalog.shopFoods.map { it.toUiFood() }
     var selectedCategory by rememberSaveable { mutableStateOf<TamaShopCategory?>(null) }
     val roomItems = remember { TamaRoomCatalog.shopRooms() }
     val seasonalRoomItems = remember(currentSeason) { TamaRoomCatalog.seasonalRoomsForSeason(currentSeason) }
@@ -4777,22 +4667,10 @@ fun FeedingDialog(
     onDismiss: () -> Unit
 ) {
     // Free foods always available
-    val freeFoods = listOf(
-        FoodItem("lettuce", "🥬", stringResource(R.string.tama_food_lettuce), 5, 0, null),
-        FoodItem("candy", "🍬", stringResource(R.string.tama_food_candy), 0, 1, null)
-    )
+    val freeFoods = TamaFoodCatalog.freeFoods.map { it.toUiFood() }
 
     // Foods from inventory
-    val allShopFoods = listOf(
-        FoodItem("apple", "🍎", stringResource(R.string.tama_food_apple), 15, 5, 10, true),
-        FoodItem("bread", "🍞", stringResource(R.string.tama_food_bread), 25, 3, 15, true),
-        FoodItem("cake", "🎂", stringResource(R.string.tama_food_cake), 10, 25, 25, true),
-        FoodItem("pizza", "🍕", stringResource(R.string.tama_food_pizza), 30, 10, 30, true),
-        FoodItem("burger", "🍔", stringResource(R.string.tama_food_burger), 35, 8, 35, true),
-        FoodItem("sushi", "🍣", stringResource(R.string.tama_food_sushi), 20, 15, 40, true),
-        FoodItem("donut", "🍩", stringResource(R.string.tama_food_donut), 5, 20, 20, true),
-        FoodItem("salad", "🥗", stringResource(R.string.tama_food_salad), 20, 2, 12, true)
-    )
+    val allShopFoods = TamaFoodCatalog.shopFoods.map { it.toUiFood() }
 
     // Count items in inventory
     val inventoryCount = pet.inventory.quantityById()
@@ -5125,6 +5003,13 @@ fun TamaPetDisplay(
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
+    var previousStage by remember(pet.id) { mutableStateOf(pet.stage) }
+    var hatchEffectVisible by remember(pet.id) { mutableStateOf(false) }
+    LaunchedEffect(pet.id, pet.stage) {
+        val hatched = previousStage == GrowthStage.EGG && pet.stage != GrowthStage.EGG
+        previousStage = pet.stage
+        if (hatched) hatchEffectVisible = true
+    }
     val speciesName = remember(pet.species, pet.genetics.bodyStyle) {
         speciesDisplayName(context, pet.species, pet.genetics.bodyStyle)
     }
@@ -5297,32 +5182,6 @@ fun TamaPetDisplay(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            val actionTransition = rememberInfiniteTransition(label = "tama_action_overlay")
-            val propFloatY by actionTransition.animateFloat(
-                initialValue = -5f,
-                targetValue = 7f,
-                animationSpec = infiniteRepeatable(animation = tween(1100, easing = FastOutSlowInEasing), repeatMode = RepeatMode.Reverse),
-                label = "prop_float_y"
-            )
-            val playBallX by actionTransition.animateFloat(
-                initialValue = -66f,
-                targetValue = 66f,
-                animationSpec = infiniteRepeatable(animation = tween(900, easing = LinearEasing), repeatMode = RepeatMode.Reverse),
-                label = "play_ball_x"
-            )
-            val playBallY by actionTransition.animateFloat(
-                initialValue = -22f,
-                targetValue = 16f,
-                animationSpec = infiniteRepeatable(animation = tween(520, easing = FastOutSlowInEasing), repeatMode = RepeatMode.Reverse),
-                label = "play_ball_y"
-            )
-            val showerWaterOffset by actionTransition.animateFloat(
-                initialValue = -10f,
-                targetValue = 18f,
-                animationSpec = infiniteRepeatable(animation = tween(480, easing = LinearEasing), repeatMode = RepeatMode.Restart),
-                label = "shower_water_y"
-            )
-
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -5377,6 +5236,16 @@ fun TamaPetDisplay(
                     action = currentAction ?: "idle",
                     modifier = Modifier.offset(x = petSceneOffsetX, y = (-8).dp)
                 )
+
+                if (hatchEffectVisible) {
+                    WorldHatchEffect(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .offset(x = petSceneOffsetX, y = (-8).dp)
+                            .size(184.dp),
+                        onFinished = { hatchEffectVisible = false }
+                    )
+                }
 
                 ambientNpc?.let { npc ->
                     TamaActionAsset(
@@ -5503,53 +5372,10 @@ fun TamaPetDisplay(
                 }
 
                 when (currentAction) {
-                    "playing" -> {
-                        TamaActionAsset(
-                            assetPath = PLAY_ACTION_ICON_ASSET,
-                            modifier = Modifier.offset(x = playBallX.dp, y = playBallY.dp),
-                            size = 92.dp
-                        )
-                    }
                     "sunbathing" -> {
                         TamaEmojiIcon(TAMA_WAKE_EMOJI, modifier = Modifier.offset(x = 52.dp, y = (-48).dp), fontSize = 28.sp)
                         TamaEmojiIcon(TAMA_WAKE_EMOJI, modifier = Modifier.offset(x = (-34).dp, y = (-18).dp), fontSize = 14.sp)
                         TamaEmojiIcon(TAMA_WAKE_EMOJI, modifier = Modifier.offset(x = 26.dp, y = (-10).dp), fontSize = 12.sp)
-                    }
-                    "studying" -> {
-                        TamaActionAsset(
-                            assetPath = STUDY_ACTION_ICON_ASSET,
-                            modifier = Modifier.offset(x = 72.dp, y = (28 + propFloatY).dp),
-                            size = 96.dp
-                        )
-                    }
-                    "working" -> {
-                        TamaActionAsset(
-                            assetPath = WORK_ACTION_ICON_ASSET,
-                            modifier = Modifier.offset(x = (-76).dp, y = (30 + propFloatY).dp),
-                            size = 100.dp
-                        )
-                    }
-                    "training" -> {
-                        TamaEmojiIcon("🥊", modifier = Modifier.offset(x = (-70).dp, y = (26 + propFloatY).dp), fontSize = 34.sp)
-                        TamaEmojiIcon("💥", modifier = Modifier.offset(x = 70.dp, y = (-18 + propFloatY).dp), fontSize = 26.sp)
-                    }
-                    "cleaning" -> {
-                        TamaActionAsset(
-                            assetPath = SHOWER_ACTION_ICON_ASSET,
-                            modifier = Modifier.offset(x = 76.dp, y = (-46).dp),
-                            size = 108.dp
-                        )
-                        repeat(4) { index ->
-                            Box(
-                                modifier = Modifier
-                                    .offset(
-                                        x = (30 + (index * 14)).dp,
-                                        y = (-8 + showerWaterOffset + (index * 5)).dp
-                                    )
-                                    .size(width = 5.dp, height = 20.dp)
-                                    .background(Color(0xFF8ED6FF), RoundedCornerShape(999.dp))
-                            )
-                        }
                     }
                     "poop_cleaning" -> {
                         TamaActionAsset(
@@ -6652,6 +6478,7 @@ fun NewPetDialog(
                     fontWeight = FontWeight.Bold
                 )
                 PetSpeciesLine.entries.forEach { speciesLine ->
+                    val speciesLabel = stringResource(speciesLine.displayNameRes)
                     OutlinedCard(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -6670,22 +6497,21 @@ fun NewPetDialog(
                                 .padding(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            AsyncImage(
-                                model = "file:///android_asset/" + resolvePetSpriteAssetPath(
-                                    speciesLine = speciesLine,
-                                    stage = GrowthStage.ADULT,
-                                    state = PetSpriteState.IDLE,
-                                    frameIndex = 0
-                                ),
-                                contentDescription = stringResource(speciesLine.displayNameRes),
-                                modifier = Modifier.size(72.dp),
-                                contentScale = ContentScale.Fit,
-                                filterQuality = androidx.compose.ui.graphics.FilterQuality.None
+                            TamaFrameAnimation(
+                                speciesLine = speciesLine,
+                                stage = GrowthStage.ADULT,
+                                spriteState = PetSpriteState.IDLE,
+                                frozen = true,
+                                modifier = Modifier
+                                    .size(72.dp)
+                                    .semantics {
+                                        contentDescription = speciesLabel
+                                    }
                             )
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    stringResource(speciesLine.displayNameRes),
+                                    speciesLabel,
                                     fontFamily = FontFamily.Monospace,
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 1,
@@ -6730,6 +6556,8 @@ fun TamaMenuDialog(
     onStatus: () -> Unit,
     onSettings: () -> Unit,
     onGallery: () -> Unit,
+    onJournal: () -> Unit = {},
+    onBrain: () -> Unit = {},
     onStore: () -> Unit,
     onExport: () -> Unit,
     onImport: () -> Unit,
@@ -6749,6 +6577,12 @@ fun TamaMenuDialog(
                 }
                 TextButton(onClick = onGallery, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.tama_menu_gallery))
+                }
+                TextButton(onClick = onJournal, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.tama_world_shortcut_journal))
+                }
+                TextButton(onClick = onBrain, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.tama_world_shortcut_brain))
                 }
                 TextButton(onClick = onStore, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.tama_btn_store))

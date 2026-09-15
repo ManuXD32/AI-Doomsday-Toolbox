@@ -261,7 +261,10 @@ class TamaAgentService(
         val recentSummaries = dao.getRecentSummaries(pet.id, 1)
         val memory = recentSummaries.firstOrNull()?.toStructuredMemory()
             ?: TamaStructuredMemory("", "", emptyList())
-        val systemPrompt = buildSystemPrompt(pet, memory, recentEvents)
+        val livingFacts = com.example.llamadroid.tama.world.memory.LivingWorldJournal(
+            TamaDatabase.getInstance(context)
+        ).contextFacts(pet.id, preparedMessage.normalizedPromptText)
+        val systemPrompt = buildSystemPrompt(pet, memory, recentEvents) + "\n\n" + livingFacts
         val historyContext = _messages.value
             .takeLast(21)
             .filter { it.id != userMsg.id && it.role != "system" }

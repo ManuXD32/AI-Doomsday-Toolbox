@@ -142,7 +142,13 @@ sealed class Screen(val route: String) {
     object Coop : Screen("farm_coop")                          // Chicken coop sub-area
     object Store : Screen("store")                             // Farm supply store
     object SubtitleBurn : Screen("subtitle_burn")              // Subtitle burning tool
-    object Dungeon : Screen("dungeon")                         // Dungeon selection
+    object Dungeon : Screen("dungeon") {                       // Dungeon selection
+        /** Keeps the physical world entrance identity through this shared UI. */
+        fun createRoute(worldStructureId: String? = null): String =
+            worldStructureId?.takeIf { it.isNotBlank() }
+                ?.let { "$route?worldStructureId=$it" }
+                ?: route
+    }
     object Adventure : Screen("adventure/{dungeonType}") {     // Text adventure
         fun createRoute(dungeonType: String): String = "adventure/$dungeonType"
     }

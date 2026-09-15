@@ -24,6 +24,7 @@ rootProject.name = "LlamaDroid"
 include(":app")
 include(":wear")
 include(":wear-protocol")
+include(":tama-world-core", ":tama-world-policy", ":tama-world-training")
 
 // Asset Packs for native binary delivery
 include(":asset_upscaler")

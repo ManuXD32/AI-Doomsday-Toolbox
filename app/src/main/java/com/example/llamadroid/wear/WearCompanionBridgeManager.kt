@@ -16,7 +16,6 @@ import com.example.llamadroid.service.LlamaService
 import com.example.llamadroid.service.OllamaService
 import com.example.llamadroid.service.ServerState
 import com.example.llamadroid.tama.data.ActivityType
-import com.example.llamadroid.tama.data.LocationType
 import com.example.llamadroid.tama.data.PetSpeciesLine
 import com.example.llamadroid.tama.data.TamaPet
 import com.example.llamadroid.tama.data.TamaRoomCatalog
@@ -1080,38 +1079,10 @@ object WearCompanionBridgeManager {
             ActivityType.TRAINING -> TamaTrainingCatalog.tierById(currentWorkJobId)?.backgroundAssetPath
                 ?: "tama/backgrounds/boxing_ring.png"
             ActivityType.RELAXING -> "tama/backgrounds/park.png"
-            ActivityType.NONE -> when (wearLocationType(currentLocationId)) {
-                LocationType.HOME -> TamaRoomCatalog.homeRoomAssetPath(homeRoomId)
-                LocationType.SCHOOL -> "tama/backgrounds/classroom.png"
-                LocationType.WORKPLACE -> "tama/backgrounds/workplace.png"
-                LocationType.SHOP -> "tama/backgrounds/shop.png"
-                LocationType.ARCADE -> "tama/backgrounds/arcade_location.png"
-                LocationType.PARK -> "tama/backgrounds/park.png"
-                LocationType.HOSPITAL -> "tama/backgrounds/hospital.png"
-                LocationType.ALCHEMIST -> "tama/backgrounds/alchemist.png"
-                LocationType.FARM -> "tama/backgrounds/farm.png"
-                LocationType.DUNGEON -> "tama/backgrounds/dungeon.png"
-                LocationType.BOXING_RING -> "tama/backgrounds/boxing_ring.png"
-                LocationType.ADVENTURE_GATE -> "tama/backgrounds/adventure_gate.png"
+            ActivityType.NONE -> TamaWearLocationCatalog.resolve(currentLocationId).let { location ->
+                if (location.usesHomeRoom) TamaRoomCatalog.homeRoomAssetPath(homeRoomId)
+                else location.backgroundAssetPath
             }
-        }
-    }
-
-    private fun wearLocationType(locationId: String?): LocationType {
-        val id = locationId.orEmpty().lowercase()
-        return when {
-            id.contains("school") || id.contains("class") -> LocationType.SCHOOL
-            id.contains("work") || id.contains("office") -> LocationType.WORKPLACE
-            id.contains("shop") -> LocationType.SHOP
-            id.contains("arcade") -> LocationType.ARCADE
-            id.contains("park") -> LocationType.PARK
-            id.contains("hospital") -> LocationType.HOSPITAL
-            id.contains("alchemist") -> LocationType.ALCHEMIST
-            id.contains("farm") -> LocationType.FARM
-            id.contains("dungeon") -> LocationType.DUNGEON
-            id.contains("boxing") || id.contains("training") -> LocationType.BOXING_RING
-            id.contains("adventure_gate") || id.contains("gate") -> LocationType.ADVENTURE_GATE
-            else -> LocationType.HOME
         }
     }
 }

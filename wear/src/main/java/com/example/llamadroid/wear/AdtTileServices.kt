@@ -137,7 +137,7 @@ abstract class AdtBaseTileService : TileService() {
             this,
             (width * scale).toInt().coerceAtLeast(1),
             (height * scale).toInt().coerceAtLeast(1),
-            true
+            false
         )
     }
 

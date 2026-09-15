@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_world_hospital_doctor_name">Doctor Pip</string>
+    <string name="tama_world_hospital_treated">%1$s received %2$d health from Doctor Pip.</string>
+    <string name="tama_world_hospital_treatment_event">%1$s received care from %2$s (+%3$d health).</string>
+    <string name="tama_world_hospital_pet_asleep">%1$s is asleep and cannot visit the clinic.</string>
+    <string name="tama_world_hospital_egg">An egg cannot receive treatment yet.</string>
+    <string name="tama_world_hospital_frozen">Care is frozen for this pet.</string>
+    <string name="tama_world_hospital_full_health">%1$s does not need treatment.</string>
+    <string name="tama_world_hospital_unavailable">The clinic cannot provide that treatment right now.</string>
+    <string name="tama_world_hospital_presence_required">Reach the clinic before requesting treatment.</string>
+    <string name="tama_world_hospital_doctor_unavailable">Doctor Pip is not available at the clinic right now.</string>
+    <string name="tama_world_hospital_no_affordable_treatment">No single hospital treatment is affordable for the missing health.</string>
+    <string name="tama_world_hospital_autonomy_denied">Autonomy settings do not allow this hospital purchase.</string>
+</resources>

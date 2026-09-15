@@ -30,7 +30,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 
-private const val TAMA_TRANSFER_VERSION = 20
+private const val TAMA_TRANSFER_VERSION = 21
 
 @Serializable
 data class TamaTransferBundle(
@@ -60,7 +60,8 @@ data class TamaTransferBundle(
     val adventureGateProfile: TamaTransferAdventureGateProfile? = null,
     val adventureGateWorldProgress: List<TamaTransferAdventureGateWorldProgress> = emptyList(),
     val adventureGateBattleState: TamaTransferAdventureGateBattleState? = null,
-    val adventureGateNightArenaRun: TamaTransferAdventureGateNightArenaRun? = null
+    val adventureGateNightArenaRun: TamaTransferAdventureGateNightArenaRun? = null,
+    val livingWorld: com.example.llamadroid.tama.world.persistence.WorldTransfer? = null
 )
 
 @Serializable

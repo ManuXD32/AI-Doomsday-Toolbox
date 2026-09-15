@@ -1,5 +1,7 @@
 package com.example.llamadroid.tama.ui
 
+import android.widget.Toast
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -48,9 +50,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -58,12 +59,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.llamadroid.R
+import com.example.llamadroid.tama.data.GrowthStage
 import com.example.llamadroid.tama.data.PetSpeciesLine
 import com.example.llamadroid.tama.data.PetSpriteState
 import com.example.llamadroid.tama.data.TamaPet
-import com.example.llamadroid.tama.data.resolvePetSpriteAssetPath
-import com.example.llamadroid.tama.game.TamaGameEngine
-import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.tama.data.mapPetActionToSpriteState
+import com.example.llamadroid.tama.world.presentation.ArcadeReceiptStatus
+import com.example.llamadroid.tama.world.presentation.ArcadeSessionReceipt
+import com.example.llamadroid.tama.world.presentation.ArcadeSessionRequest
+import com.example.llamadroid.tama.world.presentation.ArcadeSessionLease
+import com.example.llamadroid.tama.world.presentation.ArcadeSessionLeaseStatus
+import com.example.llamadroid.tama.world.presentation.ArcadeSessionRecovery
+import com.example.llamadroid.tama.world.presentation.ArcadeSessionRecoveryStatus
+import com.example.llamadroid.tama.world.presentation.ArcadeSessionTerminal
+import com.example.llamadroid.tama.world.presentation.ArcadeWorldActionBridge
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import androidx.navigation.NavController
@@ -72,6 +81,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import kotlin.random.Random
+import java.util.UUID
 
 private const val ARCade_BACKGROUND = "tama/minigames/arcade/background.png"
 private const val ARCade_STAR = "tama/minigames/arcade/star.png"
@@ -136,15 +146,21 @@ private data class ArcadeResult(
     val totalObjects: Int,
     val score: Int,
     val coins: Int,
-    val happiness: Int
+    val happiness: Int,
+    val receiptStatus: ArcadeReceiptStatus = ArcadeReceiptStatus.SUBMITTING
+)
+
+private data class ArcadeSubmitOutcome(
+    val receipt: ArcadeSessionReceipt,
+    val retryable: Boolean
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ArcadeScreen(
     navController: NavController,
-    gameEngine: TamaGameEngine,
-    pet: TamaPet
+    pet: TamaPet,
+    worldActionBridge: ArcadeWorldActionBridge = ArcadeWorldActionBridge.Unavailable
 ) {
     val scrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
@@ -152,16 +168,296 @@ fun ArcadeScreen(
     var catchGameState by remember { mutableStateOf(ArcadeCatchGameState()) }
     var catchResult by remember { mutableStateOf<ArcadeResult?>(null) }
     var catchRewardClaimed by remember { mutableStateOf(false) }
+    var catchSessionId by rememberSaveable { mutableStateOf("") }
     var memoryGameState by remember { mutableStateOf(startMemoryGame()) }
     var memoryResult by remember { mutableStateOf<MemoryGameResult?>(null) }
     var memoryRewardClaimed by remember { mutableStateOf(false) }
+    var memorySessionId by rememberSaveable { mutableStateOf("") }
+    var memoryReceiptStatus by remember { mutableStateOf(ArcadeReceiptStatus.UNAVAILABLE) }
+    var sessionLease by remember { mutableStateOf<ArcadeSessionLease?>(null) }
+    var sessionRecoveryLoaded by remember { mutableStateOf(false) }
+    var sessionRecoveryUnavailable by remember { mutableStateOf(false) }
+    var sessionRecoveryAttempt by rememberSaveable { mutableStateOf(0) }
+    var sessionStarting by remember { mutableStateOf(false) }
+    var sessionCancelling by remember { mutableStateOf(false) }
     var tickToken by rememberSaveable { mutableStateOf(0L) }
-    val context = LocalContext.current
-    val resources = LocalResources.current
     val walkthroughTargets = LocalWalkthroughTargets.current
+    val context = LocalContext.current
 
-    LaunchedEffect(arcadeMode, tickToken) {
-        if (arcadeMode != ArcadeMode.CATCH) return@LaunchedEffect
+    fun restoreTerminalArcadeResult(terminal: ArcadeSessionTerminal) {
+        val request = terminal.request
+        val receipt = terminal.receipt
+        sessionLease = ArcadeSessionLease(
+            petId = request.petId,
+            sessionId = request.sessionId,
+            gameId = request.gameId,
+            status = ArcadeSessionLeaseStatus.TERMINAL
+        )
+        when (request.gameId) {
+            "catch" -> {
+                catchSessionId = request.sessionId
+                catchRewardClaimed = true
+                catchResult = ArcadeResult(
+                    catches = request.catches,
+                    misses = request.misses,
+                    totalObjects = request.totalObjects,
+                    score = request.score,
+                    coins = receipt.coins,
+                    happiness = receipt.happiness,
+                    receiptStatus = receipt.status
+                )
+                arcadeMode = ArcadeMode.CATCH
+            }
+            "memory" -> {
+                memorySessionId = request.sessionId
+                memoryRewardClaimed = true
+                memoryReceiptStatus = receipt.status
+                memoryResult = MemoryGameResult(
+                    pairsMatched = request.pairsMatched,
+                    turnsUsed = request.turnsUsed,
+                    score = request.score,
+                    coins = receipt.coins,
+                    happiness = receipt.happiness,
+                    perfectClear = request.pairsMatched >= 8 && request.turnsUsed < 12
+                )
+                arcadeMode = ArcadeMode.MEMORY
+            }
+        }
+    }
+
+    // Recover before beginning a local game. A durable active lease keeps the
+    // actor at the arcade; a committed terminal result rebuilds its summary
+    // from canonical metrics after process death.
+    LaunchedEffect(pet.id, sessionRecoveryAttempt) {
+        sessionRecoveryLoaded = false
+        val recovery = try {
+            worldActionBridge.recover(pet.id)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            ArcadeSessionRecovery(status = ArcadeSessionRecoveryStatus.UNAVAILABLE)
+        }
+        sessionRecoveryUnavailable = recovery.status == ArcadeSessionRecoveryStatus.UNAVAILABLE
+        sessionLease = recovery.activeLease
+        recovery.terminal?.let(::restoreTerminalArcadeResult)
+        if (recovery.status == ArcadeSessionRecoveryStatus.NONE) {
+            sessionLease = null
+        }
+        sessionRecoveryLoaded = true
+    }
+
+    // Create the durable world lease before the local game timer starts. The
+    // development fallback returns UNAVAILABLE and therefore keeps the game
+    // blocked; it never claims a reward or changes simulation state.
+    LaunchedEffect(
+        arcadeMode,
+        catchSessionId,
+        memorySessionId,
+        sessionRecoveryLoaded,
+        sessionRecoveryAttempt
+    ) {
+        if (!sessionRecoveryLoaded || arcadeMode == ArcadeMode.HUB) return@LaunchedEffect
+        val sessionId = when (arcadeMode) {
+            ArcadeMode.CATCH -> catchSessionId
+            ArcadeMode.MEMORY -> memorySessionId
+            ArcadeMode.HUB -> ""
+        }
+        if (sessionId.isBlank() || sessionLease?.sessionId == sessionId ||
+            sessionLease?.keepsPetAtArcade == true) return@LaunchedEffect
+        val gameId = if (arcadeMode == ArcadeMode.CATCH) "catch" else "memory"
+        val request = ArcadeSessionRequest(
+            petId = pet.id,
+            sessionId = sessionId,
+            gameId = gameId,
+            score = 0
+        )
+        sessionStarting = true
+        val lease = try {
+            worldActionBridge.begin(request)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            ArcadeSessionLease(
+                petId = request.petId,
+                sessionId = request.sessionId,
+                gameId = request.gameId,
+                status = ArcadeSessionLeaseStatus.UNAVAILABLE
+            )
+        }
+        if (sessionId == when (arcadeMode) {
+                ArcadeMode.CATCH -> catchSessionId
+                ArcadeMode.MEMORY -> memorySessionId
+                ArcadeMode.HUB -> ""
+            }) {
+            sessionLease = lease
+            sessionRecoveryUnavailable = lease.status == ArcadeSessionLeaseStatus.UNAVAILABLE
+            sessionStarting = false
+        }
+    }
+
+    val currentSessionId = when (arcadeMode) {
+        ArcadeMode.CATCH -> catchSessionId
+        ArcadeMode.MEMORY -> memorySessionId
+        ArcadeMode.HUB -> ""
+    }
+    val currentLease = sessionLease?.takeIf { it.sessionId == currentSessionId }
+    val localGameMayRun = currentLease?.let { arcadeSessionMayRun(it) } == true
+
+    fun acknowledgeAnd(request: ArcadeSessionRequest, after: () -> Unit) {
+        if (sessionCancelling) return
+        sessionCancelling = true
+        coroutineScope.launch {
+            val acknowledged = try {
+                worldActionBridge.acknowledge(request)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                false
+            }
+            if (acknowledged) {
+                after()
+            } else {
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.tama_arcade_session_ack_failed),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            sessionCancelling = false
+        }
+    }
+
+    fun cancelLease(lease: ArcadeSessionLease, afterCancel: (ArcadeSessionRequest) -> Unit) {
+        if (sessionCancelling) return
+        sessionCancelling = true
+        coroutineScope.launch {
+            val request = ArcadeSessionRequest(
+                petId = lease.petId,
+                sessionId = lease.sessionId,
+                gameId = lease.gameId,
+                score = 0
+            )
+            val receipt = try {
+                worldActionBridge.cancel(request)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
+            if (receipt?.status?.isTerminal() == true) {
+                sessionLease = lease.copy(status = ArcadeSessionLeaseStatus.TERMINAL)
+                sessionCancelling = false
+                afterCancel(request)
+                return@launch
+            } else {
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.tama_arcade_session_cancel_failed),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            sessionCancelling = false
+        }
+    }
+
+    fun leaveArcade() {
+        val lease = sessionLease?.takeIf { it.keepsPetAtArcade }
+        if (lease == null) {
+            navController.popBackStack()
+            return
+        }
+        cancelLease(lease) { request ->
+            acknowledgeAnd(request) { navController.popBackStack() }
+        }
+    }
+
+    fun catchRequest(summary: ArcadeResult): ArcadeSessionRequest = ArcadeSessionRequest(
+        petId = pet.id,
+        sessionId = catchSessionId,
+        gameId = "catch",
+        score = summary.score,
+        catches = summary.catches,
+        misses = summary.misses,
+        totalObjects = summary.totalObjects
+    )
+
+    fun memoryRequest(summary: MemoryGameResult): ArcadeSessionRequest = ArcadeSessionRequest(
+        petId = pet.id,
+        sessionId = memorySessionId,
+        gameId = "memory",
+        score = summary.score,
+        totalObjects = 8,
+        pairsMatched = summary.pairsMatched,
+        turnsUsed = summary.turnsUsed
+    )
+
+    fun submitCatchResult(summary: ArcadeResult) {
+        val request = catchRequest(summary)
+        catchResult = summary.copy(coins = 0, happiness = 0, receiptStatus = ArcadeReceiptStatus.SUBMITTING)
+        sessionLease = sessionLease?.copy(status = ArcadeSessionLeaseStatus.RUNNING)
+        coroutineScope.launch {
+            val outcome = submitArcadeSession(worldActionBridge, request)
+            if (catchSessionId != request.sessionId) return@launch
+            val receipt = outcome.receipt
+            catchResult = summary.copy(
+                coins = receipt.coins,
+                happiness = receipt.happiness,
+                receiptStatus = receipt.status
+            )
+            sessionLease = sessionLease?.copy(
+                status = if (outcome.retryable) ArcadeSessionLeaseStatus.RECONCILE_REQUIRED
+                else ArcadeSessionLeaseStatus.TERMINAL
+            )
+        }
+    }
+
+    fun submitMemoryResult(summary: MemoryGameResult) {
+        val request = memoryRequest(summary)
+        memoryReceiptStatus = ArcadeReceiptStatus.SUBMITTING
+        memoryResult = summary.copy(coins = 0, happiness = 0)
+        sessionLease = sessionLease?.copy(status = ArcadeSessionLeaseStatus.RUNNING)
+        coroutineScope.launch {
+            val outcome = submitArcadeSession(worldActionBridge, request)
+            if (memorySessionId != request.sessionId) return@launch
+            val receipt = outcome.receipt
+            memoryReceiptStatus = receipt.status
+            memoryResult = summary.copy(coins = receipt.coins, happiness = receipt.happiness)
+            sessionLease = sessionLease?.copy(
+                status = if (outcome.retryable) ArcadeSessionLeaseStatus.RECONCILE_REQUIRED
+                else ArcadeSessionLeaseStatus.TERMINAL
+            )
+        }
+    }
+
+    fun restartCatchGame() {
+        val lease = sessionLease?.takeIf { it.gameId == "catch" && it.keepsPetAtArcade }
+        val start = {
+            sessionLease = null
+            catchRewardClaimed = false
+            catchResult = null
+            catchSessionId = UUID.randomUUID().toString()
+            catchGameState = startCatchGame()
+            tickToken = System.currentTimeMillis()
+        }
+        if (lease == null) start() else cancelLease(lease) { request -> acknowledgeAnd(request, start) }
+    }
+
+    fun restartMemoryGame() {
+        val lease = sessionLease?.takeIf { it.gameId == "memory" && it.keepsPetAtArcade }
+        val start = {
+            sessionLease = null
+            memoryRewardClaimed = false
+            memoryResult = null
+            memorySessionId = UUID.randomUUID().toString()
+            memoryReceiptStatus = ArcadeReceiptStatus.SUBMITTING
+            memoryGameState = startMemoryGame()
+            tickToken = System.currentTimeMillis()
+        }
+        if (lease == null) start() else cancelLease(lease) { request -> acknowledgeAnd(request, start) }
+    }
+
+    LaunchedEffect(arcadeMode, tickToken, currentLease?.status) {
+        if (arcadeMode != ArcadeMode.CATCH || !localGameMayRun) return@LaunchedEffect
         while (isActive && !catchGameState.finished) {
             delay(50L)
             val now = System.currentTimeMillis()
@@ -169,8 +465,8 @@ fun ArcadeScreen(
         }
     }
 
-    LaunchedEffect(arcadeMode, tickToken) {
-        if (arcadeMode != ArcadeMode.MEMORY) return@LaunchedEffect
+    LaunchedEffect(arcadeMode, tickToken, currentLease?.status) {
+        if (arcadeMode != ArcadeMode.MEMORY || !localGameMayRun) return@LaunchedEffect
         while (isActive && !memoryGameState.finished) {
             delay(50L)
             val now = System.currentTimeMillis()
@@ -178,46 +474,27 @@ fun ArcadeScreen(
         }
     }
 
-    LaunchedEffect(catchGameState.finished, catchRewardClaimed, arcadeMode) {
-        if (arcadeMode != ArcadeMode.CATCH || !catchGameState.finished || catchRewardClaimed) return@LaunchedEffect
-        val reward = catchGameCoins(catchGameState.catches, catchGameState.totalObjects)
+    LaunchedEffect(catchGameState.finished, catchRewardClaimed, arcadeMode, currentLease?.status) {
+        if (arcadeMode != ArcadeMode.CATCH || !catchGameState.finished || catchRewardClaimed ||
+            !currentLease.canSubmitArcadeSession()) return@LaunchedEffect
         val summary = ArcadeResult(
             catches = catchGameState.catches,
             misses = catchGameState.misses,
             totalObjects = catchGameState.totalObjects,
             score = catchGameState.catches,
-            coins = reward,
-            happiness = arcadeHappinessForCoins(reward)
+            coins = 0,
+            happiness = 0
         )
         catchRewardClaimed = true
-        catchResult = summary
-        coroutineScope.launch {
-            gameEngine.awardMoney(
-                reward.toLong(),
-                resources.getString(R.string.tama_event_arcade_reward, reward, resources.getString(R.string.tama_arcade_game_title))
-            )
-            gameEngine.awardHappiness(
-                summary.happiness.toFloat(),
-                resources.getString(R.string.tama_event_arcade_happiness_reward, summary.happiness, resources.getString(R.string.tama_arcade_game_title))
-            )
-        }
+        submitCatchResult(summary)
     }
 
-    LaunchedEffect(memoryGameState.finished, memoryRewardClaimed, arcadeMode) {
-        if (arcadeMode != ArcadeMode.MEMORY || !memoryGameState.finished || memoryRewardClaimed) return@LaunchedEffect
+    LaunchedEffect(memoryGameState.finished, memoryRewardClaimed, arcadeMode, currentLease?.status) {
+        if (arcadeMode != ArcadeMode.MEMORY || !memoryGameState.finished || memoryRewardClaimed ||
+            !currentLease.canSubmitArcadeSession()) return@LaunchedEffect
         val summary = buildMemoryGameResult(memoryGameState) ?: return@LaunchedEffect
         memoryRewardClaimed = true
-        memoryResult = summary
-        coroutineScope.launch {
-            gameEngine.awardMoney(
-                summary.coins.toLong(),
-                resources.getString(R.string.tama_event_arcade_reward, summary.coins, resources.getString(R.string.tama_arcade_memory_game_title))
-            )
-            gameEngine.awardHappiness(
-                summary.happiness.toFloat(),
-                resources.getString(R.string.tama_event_arcade_happiness_reward, summary.happiness, resources.getString(R.string.tama_arcade_memory_game_title))
-            )
-        }
+        submitMemoryResult(summary)
     }
 
     Scaffold(
@@ -227,10 +504,15 @@ fun ArcadeScreen(
                 title = { Text(stringResource(R.string.tama_arcade_title), fontFamily = FontFamily.Monospace) },
                 navigationIcon = {
                     IconButton(
-                        onClick = { navController.popBackStack() },
+                        onClick = ::leaveArcade,
+                        enabled = !sessionCancelling,
                         modifier = Modifier.walkthroughTarget("back")
                     ) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.action_back))
+                        if (sessionCancelling) {
+                            Text("…", color = TamaLight)
+                        } else {
+                            Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.action_back))
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
@@ -284,18 +566,36 @@ fun ArcadeScreen(
                         )
                     }
 
+                    sessionLease?.takeIf { it.keepsPetAtArcade }?.let {
+                        ArcadeSessionRecoveryPanel(onCancel = ::leaveArcade)
+                    }
+                    if (sessionRecoveryUnavailable) {
+                        ArcadeSessionUnavailablePanel(
+                            onRetry = {
+                                sessionRecoveryUnavailable = false
+                                sessionRecoveryAttempt += 1
+                            }
+                        )
+                    }
                     ArcadeHub(
+                        canStartGame = sessionRecoveryLoaded && !sessionRecoveryUnavailable &&
+                            sessionLease?.keepsPetAtArcade != true,
                         onPlayCatchGame = {
+                            sessionLease = null
                             catchRewardClaimed = false
                             catchResult = null
+                            catchSessionId = UUID.randomUUID().toString()
                             catchGameState = startCatchGame()
                             tickToken = System.currentTimeMillis()
                             arcadeMode = ArcadeMode.CATCH
                             walkthroughTargets?.recordEvent("tama.arcade")
                         },
                         onPlayMemoryGame = {
+                            sessionLease = null
                             memoryRewardClaimed = false
                             memoryResult = null
+                            memorySessionId = UUID.randomUUID().toString()
+                            memoryReceiptStatus = ArcadeReceiptStatus.SUBMITTING
                             memoryGameState = startMemoryGame()
                             tickToken = System.currentTimeMillis()
                             arcadeMode = ArcadeMode.MEMORY
@@ -322,10 +622,7 @@ fun ArcadeScreen(
                         )
                     },
                     onRestart = {
-                        catchRewardClaimed = false
-                        catchResult = null
-                        catchGameState = startCatchGame()
-                        tickToken = System.currentTimeMillis()
+                        restartCatchGame()
                     }
                 )
             } else {
@@ -341,54 +638,328 @@ fun ArcadeScreen(
                         memoryGameState = flipMemoryCard(memoryGameState)
                     },
                     onRestart = {
-                        memoryRewardClaimed = false
-                        memoryResult = null
-                        memoryGameState = startMemoryGame()
-                        tickToken = System.currentTimeMillis()
+                        restartMemoryGame()
                     }
                 )
+            }
+
+            if (arcadeMode != ArcadeMode.HUB && !localGameMayRun) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(TamaDark.copy(alpha = 0.96f))
+                        .verticalScroll(rememberScrollState())
+                        .padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = when {
+                            sessionStarting -> stringResource(R.string.tama_arcade_session_starting)
+                            sessionLease?.status == ArcadeSessionLeaseStatus.UNAVAILABLE ->
+                                stringResource(R.string.tama_arcade_reward_unavailable)
+                            else -> stringResource(R.string.tama_arcade_session_recovery)
+                        },
+                        fontFamily = FontFamily.Monospace,
+                        color = TamaLight,
+                        textAlign = TextAlign.Center
+                    )
+                    if (sessionRecoveryLoaded && sessionLease?.keepsPetAtArcade == true) {
+                        TextButton(onClick = ::leaveArcade, enabled = !sessionCancelling) {
+                            Text(stringResource(R.string.tama_arcade_session_cancel))
+                        }
+                    }
+                    if (sessionLease?.status == ArcadeSessionLeaseStatus.UNAVAILABLE) {
+                        TextButton(
+                            onClick = {
+                                sessionLease = null
+                                sessionRecoveryUnavailable = false
+                                sessionRecoveryAttempt += 1
+                            },
+                            enabled = !sessionCancelling
+                        ) {
+                            Text(stringResource(R.string.tama_arcade_session_retry))
+                        }
+                    }
+                }
             }
         }
     }
 
     catchResult?.let { summary ->
-        ArcadeResultDialog(
-            summary = summary,
-            onPlayAgain = {
-                catchRewardClaimed = false
-                catchResult = null
-                catchGameState = startCatchGame()
-                tickToken = System.currentTimeMillis()
-                arcadeMode = ArcadeMode.CATCH
-            },
-            onBackToHub = {
-                catchResult = null
-                arcadeMode = ArcadeMode.HUB
-            },
-            onDismiss = { catchResult = null }
-        )
+        val request = catchRequest(summary)
+        if (summary.receiptStatus == ArcadeReceiptStatus.SUCCEEDED) {
+            ArcadeResultDialog(
+                summary = summary,
+                onPlayAgain = {
+                    acknowledgeAnd(request) { restartCatchGame() }
+                },
+                onBackToHub = {
+                    acknowledgeAnd(request) {
+                        catchResult = null
+                        sessionLease = null
+                        arcadeMode = ArcadeMode.HUB
+                    }
+                },
+                onDismiss = {
+                    acknowledgeAnd(request) {
+                        catchResult = null
+                        sessionLease = null
+                        arcadeMode = ArcadeMode.HUB
+                    }
+                }
+            )
+        } else {
+            ArcadePendingResultPanel(
+                gameId = "catch",
+                status = summary.receiptStatus,
+                catches = summary.catches,
+                misses = summary.misses,
+                totalObjects = summary.totalObjects,
+                pairsMatched = 0,
+                turnsUsed = 0,
+                onRetry = if (summary.receiptStatus == ArcadeReceiptStatus.REJECTED) null else {
+                    { submitCatchResult(summary) }
+                },
+                onCancel = {
+                    val lease = sessionLease?.takeIf { it.keepsPetAtArcade }
+                    if (lease != null) {
+                        cancelLease(lease) { cancelledRequest ->
+                            acknowledgeAnd(cancelledRequest) {
+                                catchResult = null
+                                sessionLease = null
+                                arcadeMode = ArcadeMode.HUB
+                            }
+                        }
+                    } else {
+                        acknowledgeAnd(request) {
+                            catchResult = null
+                            sessionLease = null
+                            arcadeMode = ArcadeMode.HUB
+                        }
+                    }
+                }
+            )
+        }
     }
 
     memoryResult?.let { summary ->
-        MemoryResultDialog(
-            summary = summary,
-            onPlayAgain = {
-                memoryRewardClaimed = false
-                memoryResult = null
-                memoryGameState = startMemoryGame()
-                tickToken = System.currentTimeMillis()
-                arcadeMode = ArcadeMode.MEMORY
-            },
-            onBackToHub = {
-                memoryResult = null
-                arcadeMode = ArcadeMode.HUB
-            }
-        )
+        val request = memoryRequest(summary)
+        if (memoryReceiptStatus == ArcadeReceiptStatus.SUCCEEDED) {
+            MemoryResultDialog(
+                summary = summary,
+                receiptStatusLabel = stringResource(arcadeReceiptStatusRes(memoryReceiptStatus)),
+                onPlayAgain = {
+                    acknowledgeAnd(request) { restartMemoryGame() }
+                },
+                onBackToHub = {
+                    acknowledgeAnd(request) {
+                        memoryResult = null
+                        sessionLease = null
+                        arcadeMode = ArcadeMode.HUB
+                    }
+                }
+            )
+        } else {
+            ArcadePendingResultPanel(
+                gameId = "memory",
+                status = memoryReceiptStatus,
+                catches = 0,
+                misses = 0,
+                totalObjects = 8,
+                pairsMatched = summary.pairsMatched,
+                turnsUsed = summary.turnsUsed,
+                onRetry = if (memoryReceiptStatus == ArcadeReceiptStatus.REJECTED) null else {
+                    { submitMemoryResult(summary) }
+                },
+                onCancel = {
+                    val lease = sessionLease?.takeIf { it.keepsPetAtArcade }
+                    if (lease != null) {
+                        cancelLease(lease) { cancelledRequest ->
+                            acknowledgeAnd(cancelledRequest) {
+                                memoryResult = null
+                                sessionLease = null
+                                arcadeMode = ArcadeMode.HUB
+                            }
+                        }
+                    } else {
+                        acknowledgeAnd(request) {
+                            memoryResult = null
+                            sessionLease = null
+                            arcadeMode = ArcadeMode.HUB
+                        }
+                    }
+                }
+            )
+        }
     }
 }
 
 @Composable
+private fun ArcadeSessionRecoveryPanel(onCancel: () -> Unit) {
+    ArcadePanelCard(alpha = 0.94f) {
+        Text(
+            text = stringResource(R.string.tama_arcade_session_recovery),
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            color = TamaLight
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        TextButton(onClick = onCancel) {
+            Text(stringResource(R.string.tama_arcade_session_cancel))
+        }
+    }
+}
+
+@Composable
+private fun ArcadeSessionUnavailablePanel(onRetry: () -> Unit) {
+    ArcadePanelCard(alpha = 0.94f) {
+        Text(
+            text = stringResource(R.string.tama_arcade_session_recovery_unavailable),
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            color = TamaLight
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        TextButton(onClick = onRetry) {
+            Text(stringResource(R.string.tama_arcade_session_retry))
+        }
+    }
+}
+
+@Composable
+private fun ArcadePendingResultPanel(
+    gameId: String,
+    status: ArcadeReceiptStatus,
+    catches: Int,
+    misses: Int,
+    totalObjects: Int,
+    pairsMatched: Int,
+    turnsUsed: Int,
+    onRetry: (() -> Unit)?,
+    onCancel: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(TamaDark.copy(alpha = 0.97f))
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = stringResource(R.string.tama_arcade_session_pending),
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            color = TamaLight,
+            textAlign = TextAlign.Center
+        )
+        Text(
+            text = stringResource(arcadeReceiptStatusRes(status)),
+            fontFamily = FontFamily.Monospace,
+            color = TamaMutedText,
+            textAlign = TextAlign.Center
+        )
+        if (gameId == "catch") {
+            Text(
+                text = stringResource(R.string.tama_arcade_result_summary, catches, misses, totalObjects),
+                fontFamily = FontFamily.Monospace,
+                color = TamaLight,
+                textAlign = TextAlign.Center
+            )
+        } else {
+            Text(
+                text = stringResource(R.string.tama_arcade_memory_result_pairs, pairsMatched),
+                fontFamily = FontFamily.Monospace,
+                color = TamaLight,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                text = stringResource(R.string.tama_arcade_memory_result_turns, turnsUsed),
+                fontFamily = FontFamily.Monospace,
+                color = TamaLight,
+                textAlign = TextAlign.Center
+            )
+        }
+        onRetry?.let { retry ->
+            FilledTonalButton(onClick = retry, enabled = status != ArcadeReceiptStatus.SUBMITTING) {
+                Text(stringResource(R.string.tama_arcade_session_retry))
+            }
+        }
+        TextButton(onClick = onCancel) {
+            Text(stringResource(R.string.tama_arcade_session_cancel))
+        }
+    }
+}
+
+private fun arcadeSessionMayRun(lease: ArcadeSessionLease): Boolean = when (lease.status) {
+    ArcadeSessionLeaseStatus.QUEUED,
+    ArcadeSessionLeaseStatus.RUNNING -> true
+    ArcadeSessionLeaseStatus.UNAVAILABLE,
+    ArcadeSessionLeaseStatus.RECONCILE_REQUIRED,
+    ArcadeSessionLeaseStatus.TERMINAL -> false
+}
+
+private fun ArcadeSessionLease?.canSubmitArcadeSession(): Boolean = this != null && when (status) {
+    ArcadeSessionLeaseStatus.QUEUED,
+    ArcadeSessionLeaseStatus.RUNNING -> true
+    ArcadeSessionLeaseStatus.UNAVAILABLE,
+    ArcadeSessionLeaseStatus.RECONCILE_REQUIRED,
+    ArcadeSessionLeaseStatus.TERMINAL -> false
+}
+
+private fun ArcadeReceiptStatus.isTerminal(): Boolean = when (this) {
+    ArcadeReceiptStatus.SUCCEEDED,
+    ArcadeReceiptStatus.REJECTED,
+    ArcadeReceiptStatus.FAILED -> true
+    ArcadeReceiptStatus.SUBMITTING,
+    ArcadeReceiptStatus.QUEUED,
+    ArcadeReceiptStatus.UNAVAILABLE -> false
+}
+
+private suspend fun submitArcadeSession(
+    bridge: ArcadeWorldActionBridge,
+    request: ArcadeSessionRequest
+): ArcadeSubmitOutcome {
+    return try {
+        val receipt = bridge.submit(request)
+        if (receipt.sessionId == request.sessionId) {
+            ArcadeSubmitOutcome(
+                receipt = receipt,
+                retryable = receipt.status == ArcadeReceiptStatus.SUBMITTING ||
+                    receipt.status == ArcadeReceiptStatus.QUEUED ||
+                    receipt.status == ArcadeReceiptStatus.FAILED ||
+                    receipt.status == ArcadeReceiptStatus.UNAVAILABLE
+            )
+        } else {
+            ArcadeSubmitOutcome(
+                ArcadeSessionReceipt(request.sessionId, status = ArcadeReceiptStatus.FAILED),
+                retryable = true
+            )
+        }
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        ArcadeSubmitOutcome(
+            ArcadeSessionReceipt(request.sessionId, status = ArcadeReceiptStatus.FAILED),
+            retryable = true
+        )
+    }
+}
+
+private fun arcadeReceiptStatusRes(status: ArcadeReceiptStatus): Int = when (status) {
+    ArcadeReceiptStatus.SUBMITTING -> R.string.tama_arcade_reward_submitting
+    ArcadeReceiptStatus.QUEUED -> R.string.tama_arcade_reward_queued
+    ArcadeReceiptStatus.SUCCEEDED -> R.string.tama_arcade_reward_saved
+    ArcadeReceiptStatus.REJECTED -> R.string.tama_arcade_reward_rejected
+    ArcadeReceiptStatus.FAILED -> R.string.tama_arcade_reward_failed
+    ArcadeReceiptStatus.UNAVAILABLE -> R.string.tama_arcade_reward_unavailable
+}
+
+@Composable
 private fun ArcadeHub(
+    canStartGame: Boolean,
     onPlayCatchGame: () -> Unit,
     onPlayMemoryGame: () -> Unit
 ) {
@@ -421,7 +992,7 @@ private fun ArcadeHub(
                 color = TamaLight.copy(alpha = 0.8f)
             )
             Spacer(modifier = Modifier.height(8.dp))
-            FilledTonalButton(onClick = onPlayCatchGame) {
+            FilledTonalButton(onClick = onPlayCatchGame, enabled = canStartGame) {
                 Text(stringResource(R.string.tama_arcade_play_now))
             }
         }
@@ -447,7 +1018,7 @@ private fun ArcadeHub(
                 previewTextRes = R.string.tama_arcade_memory_preview_text
             )
             Spacer(modifier = Modifier.height(12.dp))
-            FilledTonalButton(onClick = onPlayMemoryGame) {
+            FilledTonalButton(onClick = onPlayMemoryGame, enabled = canStartGame) {
                 Text(stringResource(R.string.tama_arcade_memory_play_now))
             }
         }
@@ -664,6 +1235,7 @@ private fun ArcadeBoard(
             val playerY = boardHeight - playerSpriteSize - 24.dp
             ArcadePlayerSprite(
                 pet = pet,
+                pose = state.playerPose,
                 modifier = Modifier.offset(x = playerX, y = playerY).size(playerSpriteSize)
             )
 
@@ -724,25 +1296,25 @@ private fun ArcadeObjectSprite(
 @Composable
 private fun ArcadePlayerSprite(
     pet: TamaPet,
+    pose: ArcadePlayerPose,
     modifier: Modifier = Modifier
 ) {
     val speciesLine = remember(pet.species, pet.genetics.bodyStyle) {
         PetSpeciesLine.fromSpeciesId(pet.species, pet.genetics.bodyStyle)
     }
-    val assetPath = remember(speciesLine, pet.stage) {
-        resolvePetSpriteAssetPath(
-            speciesLine = speciesLine,
-            stage = pet.stage,
-            state = PetSpriteState.IDLE,
-            frameIndex = 0
-        )
+    val spriteState = remember(pose, pet.isSleeping) {
+        mapPetActionToSpriteState(pose.petAction, pet.isSleeping)
     }
-    AsyncImage(
-        model = "file:///android_asset/$assetPath",
-        contentDescription = null,
-        modifier = modifier,
-        contentScale = ContentScale.Fit,
-        filterQuality = FilterQuality.None
+    TamaFrameAnimation(
+        speciesLine = speciesLine,
+        stage = pet.stage,
+        spriteState = if (pet.stage == GrowthStage.EGG) {
+            PetSpriteState.IDLE
+        } else {
+            spriteState
+        },
+        frozen = pet.cycleFrozen,
+        modifier = modifier
     )
 }
 
@@ -825,7 +1397,13 @@ private fun ArcadeResultDialog(
                     stringResource(R.string.tama_arcade_result_happiness, summary.happiness),
                     fontFamily = FontFamily.Monospace
                 )
-                if (summary.coins > 0) {
+                Text(
+                    stringResource(arcadeReceiptStatusRes(summary.receiptStatus)),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    color = TamaMutedText
+                )
+                if (summary.receiptStatus == ArcadeReceiptStatus.SUCCEEDED && summary.coins > 0) {
                     Text(
                         stringResource(R.string.tama_arcade_result_rewarded),
                         fontFamily = FontFamily.Monospace,

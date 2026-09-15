@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_world_hospital_doctor_name">Doctor Pip</string>
+    <string name="tama_world_hospital_treated">%1$s recibió %2$d de salud de Doctor Pip.</string>
+    <string name="tama_world_hospital_treatment_event">%1$s recibió atención de %2$s (+%3$d de salud).</string>
+    <string name="tama_world_hospital_pet_asleep">%1$s está dormido y no puede visitar la clínica.</string>
+    <string name="tama_world_hospital_egg">El huevo aún no puede recibir tratamiento.</string>
+    <string name="tama_world_hospital_frozen">El ciclo de cuidados de esta mascota está congelado.</string>
+    <string name="tama_world_hospital_full_health">%1$s no necesita tratamiento.</string>
+    <string name="tama_world_hospital_unavailable">La clínica no puede ofrecer ese tratamiento ahora.</string>
+    <string name="tama_world_hospital_presence_required">Llega a la clínica del Doctor Pip antes de pedir tratamiento.</string>
+    <string name="tama_world_hospital_doctor_unavailable">El Doctor Pip no está disponible en la clínica ahora.</string>
+    <string name="tama_world_hospital_no_affordable_treatment">No hay un tratamiento hospitalario único asequible para la salud que falta.</string>
+    <string name="tama_world_hospital_autonomy_denied">La configuración de autonomía no permite esta compra hospitalaria.</string>
+</resources>

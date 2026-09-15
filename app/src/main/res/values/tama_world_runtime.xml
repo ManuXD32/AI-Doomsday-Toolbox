@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_world_runtime_travel_started">Walking to %1$s.</string>
+    <string name="tama_world_runtime_farm_queued">Your pet will walk to the plot and tend it.</string>
+    <string name="tama_world_runtime_stopped">Activity stopped.</string>
+    <string name="tama_world_runtime_action_unavailable">That action is not available right now.</string>
+    <string name="tama_world_runtime_loading">Opening your world…</string>
+    <string name="tama_world_runtime_continue">Continue</string>
+    <string name="tama_world_runtime_retry">The world paused. Your saved progress is safe. Tap Continue to try again.</string>
+    <string name="tama_world_runtime_activity">Activity</string>
+    <string name="tama_world_runtime_adventure">Adventure</string>
+    <string name="tama_world_runtime_pending_memory">Memory waiting for the configured summarizer</string>
+    <string name="tama_world_runtime_charging">Training paused until the device is charging.</string>
+    <string name="tama_world_runtime_battery">Training paused to preserve battery.</string>
+    <string name="tama_world_runtime_thermal">Training paused while the device cools down.</string>
+    <string name="tama_world_runtime_action_queued">Your pet will complete this action.</string>
+</resources>
