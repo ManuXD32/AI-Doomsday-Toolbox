@@ -323,6 +323,7 @@ class SdCliSupportTest {
               --clip_g FILE
               --photo-maker FILE
               --model-args key=value
+              --auto-fit on|off (default: on)
               -r FILE
             """.trimIndent()
         )
@@ -332,10 +333,25 @@ class SdCliSupportTest {
         assertTrue(caps.supports("--clip_g"))
         assertTrue(caps.supports("--photo-maker"))
         assertTrue(caps.supports("--model-args"))
+        assertTrue(caps.supports("--auto-fit"))
+        assertTrue(caps.autoFitRequiresValue)
         assertTrue(caps.supports("-r"))
         assertTrue(caps.supportsMode("adetailer"))
         assertTrue(caps.supportsMode("IMG_GEN"))
         assertFalse(caps.supportsMode("not_a_native_mode"))
+    }
+
+    @Test
+    fun `capability parsing does not borrow auto fit syntax from the next option`() {
+        val caps = parseSdBinaryCapabilities(
+            """
+              --auto-fit legacy boolean placement
+              --type on|off (default: model type)
+            """.trimIndent()
+        )
+
+        assertTrue(caps.supports("--auto-fit"))
+        assertFalse(caps.autoFitRequiresValue)
     }
 
     @Test(expected = SdUnsupportedModesException::class)
@@ -463,6 +479,7 @@ class SdCliSupportTest {
         assertTrue(args.contains("/tmp/input.png"))
         assertTrue(args.contains("-t"))
         assertTrue(args.contains("4"))
+        assertOption(args, "--auto-fit", "off")
         assertFalse(args.contains("-p"))
     }
 
@@ -481,6 +498,7 @@ class SdCliSupportTest {
         assertFalse(args.contains("--backend"))
         assertFalse(args.contains("--params-backend"))
         assertFalse(args.contains("--max-vram"))
+        assertOption(args, "--auto-fit", "off")
     }
 
     @Test
@@ -501,6 +519,7 @@ class SdCliSupportTest {
         assertOption(args, "--params-backend", "disk")
         assertOption(args, "--backend", "cpu")
         assertOption(args, "--max-vram", "cpu=4")
+        assertOption(args, "--auto-fit", "off")
         assertFalse(args.windowed(2).any { it == listOf("--backend", "disk") })
     }
 
@@ -570,6 +589,7 @@ class SdCliSupportTest {
         assertFalse(args.windowed(2).any { it == listOf("--params-backend", "disk") })
         assertFalse(args.windowed(2).any { it == listOf("--max-vram", "cpu=4") })
         assertTrue(args.contains("--rpc-servers"))
+        assertOption(args, "--auto-fit", "off")
     }
 
     @Test
@@ -611,6 +631,7 @@ class SdCliSupportTest {
         assertOption(args, "--params-backend", "disk")
         assertOption(args, "--backend", "cpu")
         assertOption(args, "--max-vram", "cpu=2.5")
+        assertOption(args, "--auto-fit", "off")
         assertFalse(args.windowed(2).any { it == listOf("--backend", "disk") })
     }
 
@@ -638,6 +659,7 @@ class SdCliSupportTest {
         assertFalse(args.windowed(2).any { it == listOf("--params-backend", "disk") })
         assertFalse(args.windowed(2).any { it == listOf("--max-vram", "cpu=2.5") })
         assertTrue(args.contains("--rpc-servers"))
+        assertOption(args, "--auto-fit", "off")
     }
 
     @Test

@@ -1,8 +1,8 @@
 FFmpeg: d4ff0020b40b524a490cf62eccbd3a318f4c0e58 (n6.1)
-whisper.cpp: 642b5d3260e020c2fc6f34a9569d10ddd7672963
-stable-diffusion.cpp: 6b3edaaf32cc19e5bb2d819c788bd557eddc8eba
-llama.cpp: 64e9bceb2c3a856efed96feda784a50947049feb (requested-ref=64e9bceb2c3a856efed96feda784a50947049feb)
-llama.cpp-sd-rpc: dff15d4ac95de1a3c73e8b784d4c436f5e5e36eb
+whisper.cpp: 1d549b3cecc2d98d76d4ddc2edca0d1512f5d7a0 (requested-ref=1d549b3cecc2d98d76d4ddc2edca0d1512f5d7a0)
+stable-diffusion.cpp: 59c23bce0d82be3a922023ab811194f05b3e2faa (requested-ref=59c23bce0d82be3a922023ab811194f05b3e2faa)
+llama.cpp: 1e7bcf3da4b2741868d152fa47976fb2501c85e3 (requested-ref=1e7bcf3da4b2741868d152fa47976fb2501c85e3)
+llama.cpp-sd-rpc: dff15d4ac95de1a3c73e8b784d4c436f5e5e36eb (requested-ref=dff15d4ac95de1a3c73e8b784d4c436f5e5e36eb)
 ncnn: 3b7bdba7fc8aea8fd46779533eee027df77c639d
 realcugan-ncnn-vulkan: 395302c5c70f1bff604c974e92e0a87e45c9f9ee (20220728)
 realsr-ncnn-vulkan: b7f890ee2704ccea76c73d9fd4d5b3298dd1beca (20220728)

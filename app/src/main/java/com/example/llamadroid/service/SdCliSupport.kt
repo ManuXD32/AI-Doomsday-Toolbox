@@ -23,7 +23,9 @@ import java.util.Locale
 data class SdBinaryCapabilities(
     val supportedFlags: Set<String>,
     val supportedModes: Set<String> = emptySet(),
-    val allowAll: Boolean = false
+    val allowAll: Boolean = false,
+    /** New stable-diffusion.cpp parses `--auto-fit` as an `on|off` value. */
+    val autoFitRequiresValue: Boolean = false
 ) {
     fun supports(flag: String): Boolean = allowAll || supportedFlags.contains(flag)
 
@@ -32,7 +34,11 @@ data class SdBinaryCapabilities(
         allowAll || mode.lowercase(Locale.US) in supportedModes
 
     companion object {
-        val ALLOW_ALL = SdBinaryCapabilities(emptySet(), allowAll = true)
+        val ALLOW_ALL = SdBinaryCapabilities(
+            emptySet(),
+            allowAll = true,
+            autoFitRequiresValue = true
+        )
     }
 }
 
@@ -56,11 +62,25 @@ class SdDisallowedDistributedFlagException(
 fun parseSdBinaryCapabilities(helpText: String): SdBinaryCapabilities {
     val flagRegex = Regex("""(?<![A-Za-z0-9_-])(--[A-Za-z0-9][A-Za-z0-9_-]*|-[A-Za-z])(?![A-Za-z0-9_-])""")
     val nativeModeRegex = Regex("""(?i)\b(?:txt2img|img2img|img_gen|upscale|adetailer|txt2vid|img2vid|vid_gen)\b""")
+    val autoFitOption = Regex("(?m)^\\s*--auto-fit\\b").find(helpText)
+    val autoFitHelp = if (autoFitOption != null) {
+        val optionEnd = helpText.indexOf('\n', autoFitOption.range.last)
+            .takeIf { it >= 0 }
+            ?.plus(1)
+            ?: helpText.length
+        val nextOption = Regex("(?m)^\\s*(?:-[^\\s,]+\\s*,\\s*)?--[A-Za-z0-9][A-Za-z0-9_-]*\\b")
+            .find(helpText, optionEnd)
+        helpText.substring(autoFitOption.range.first, nextOption?.range?.first ?: helpText.length)
+    } else {
+        ""
+    }
     return SdBinaryCapabilities(
         supportedFlags = flagRegex.findAll(helpText).map { it.value }.toSet(),
         supportedModes = nativeModeRegex.findAll(helpText)
             .map { it.value.lowercase(Locale.US) }
-            .toSet()
+            .toSet(),
+        autoFitRequiresValue = autoFitHelp.contains("on|off", ignoreCase = true) ||
+            autoFitHelp.contains("on or off", ignoreCase = true)
     )
 }
 
@@ -162,6 +182,17 @@ fun buildSdCommandArgs(
             args.addAll(listOf("-t", config.threads.toString()))
         }
         if (!config.distributedRuntime.enabled) {
+            appendSdAutoFitArg(
+                args = args,
+                enabled = false,
+                binaryCapabilities = binaryCapabilities,
+                flagSupported = { flag ->
+                    binaryCapabilities == null ||
+                        binaryCapabilities == SdBinaryCapabilities.ALLOW_ALL ||
+                        binaryCapabilities.supports(flag)
+                },
+                onUnsupported = { requiredFlags += "--auto-fit" }
+            )
             appendLocalSdBackendArgs(
                 args = args,
                 paramsBackendSpec = config.sdParamsBackendSpec,
@@ -470,6 +501,17 @@ fun buildSdCommandArgs(
     }
 
     if (!config.distributedRuntime.enabled) {
+        appendSdAutoFitArg(
+            args = args,
+            enabled = false,
+            binaryCapabilities = binaryCapabilities,
+            flagSupported = { flag ->
+                binaryCapabilities == null ||
+                    binaryCapabilities == SdBinaryCapabilities.ALLOW_ALL ||
+                    binaryCapabilities.supports(flag)
+            },
+            onUnsupported = { requiredFlags += "--auto-fit" }
+        )
         appendLocalSdBackendArgs(
             args = args,
             paramsBackendSpec = config.sdParamsBackendSpec,
@@ -531,6 +573,17 @@ fun buildSdUpscaleCommandArgs(
         args.addAll(listOf("-t", config.threads.toString()))
     }
     if (!config.distributedRuntime.enabled) {
+        appendSdAutoFitArg(
+            args = args,
+            enabled = false,
+            binaryCapabilities = binaryCapabilities,
+            flagSupported = { flag ->
+                binaryCapabilities == null ||
+                    binaryCapabilities == SdBinaryCapabilities.ALLOW_ALL ||
+                    binaryCapabilities.supports(flag)
+            },
+            onUnsupported = { requiredFlags += "--auto-fit" }
+        )
         appendLocalSdBackendArgs(
             args = args,
             paramsBackendSpec = config.sdParamsBackendSpec,
@@ -560,6 +613,36 @@ fun appendSdCustomFlags(args: MutableList<String>, customFlags: String) {
         args.addAll(splitShellLikeArgs(customFlags))
     }
 }
+
+/**
+ * Keep the app's pre-refresh default (manual backend placement) across the
+ * stable-diffusion.cpp auto-fit default change. Older binaries exposed this
+ * as a bare boolean flag, while refreshed binaries require `on` or `off`.
+ */
+internal fun appendSdAutoFitArg(
+    args: MutableList<String>,
+    enabled: Boolean,
+    binaryCapabilities: SdBinaryCapabilities?,
+    flagSupported: (String) -> Boolean = { true },
+    onUnsupported: () -> Unit = {}
+) {
+    val requiresValue = sdAutoFitUsesValueSyntax(binaryCapabilities)
+    if (!requiresValue && !enabled) return
+    if (!flagSupported("--auto-fit")) {
+        onUnsupported()
+        return
+    }
+    if (requiresValue) {
+        args.addAll(listOf("--auto-fit", if (enabled) "on" else "off"))
+    } else if (enabled) {
+        args.add("--auto-fit")
+    }
+}
+
+internal fun sdAutoFitUsesValueSyntax(binaryCapabilities: SdBinaryCapabilities?): Boolean =
+    binaryCapabilities == null ||
+        binaryCapabilities.allowAll ||
+        binaryCapabilities.autoFitRequiresValue
 
 fun appendLocalSdBackendArgs(
     args: MutableList<String>,

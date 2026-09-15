@@ -1,17 +1,17 @@
 {
   "schema": 2,
-  "selection": "llama-all",
-  "run_dir": "/home/manu/.gemini/antigravity/scratch/android_native_build/runs/adt-audio-20260908",
-  "output_dir": "/home/manu/.gemini/antigravity/scratch/android_native_build/runs/adt-audio-20260908/binaries",
-  "project_head": "5762599c1277ea7329d8c04d195872a267ee3106",
+  "selection": "core-ai",
+  "run_dir": "/home/manu/.gemini/antigravity/scratch/android_native_build/runs/adt-native-20260915",
+  "output_dir": "/home/manu/.gemini/antigravity/scratch/android_native_build/runs/adt-native-20260915/binaries",
+  "project_head": "d2f3d723ba0366e83d3ac1c5d46ed84db0e39383",
   "files": [
     {
       "source": "armv9/libllama-bench_armv9.so",
       "targets": [
         "llama"
       ],
-      "sha256": "aa2b7925db86db1255631972d232288dce017970ff70de06172c6d99d3bd71b0",
-      "bytes": 8535960,
+      "sha256": "196c8af21dcb20c9b9c55cf2906fce75c8689e6397253a0984c6ac65b9374416",
+      "bytes": 8524336,
       "mode": 493,
       "destinations": [
         "feature_llm_armv9/src/main/jniLibs/arm64-v8a/libllama-bench_armv9.so"
@@ -22,8 +22,8 @@
       "targets": [
         "llama"
       ],
-      "sha256": "6edd97b49b5969b77b2f430e2df1e95f6c1d61d545aa0222fa428a1778f7fc56",
-      "bytes": 9585256,
+      "sha256": "80a809112eeb97f0a36fd5115e7672ddb5d2ac0c3d1e828bc024cbae4e6f1bfc",
+      "bytes": 9575888,
       "mode": 493,
       "destinations": [
         "feature_llm_armv9/src/main/jniLibs/arm64-v8a/libllama-tts_armv9.so"
@@ -34,8 +34,8 @@
       "targets": [
         "llama"
       ],
-      "sha256": "fc8ec7d262b1e52f7460169d6f7ac424c3e57c320b6c5e22189fcc61e91de6a6",
-      "bytes": 14175816,
+      "sha256": "fcd37846b885990ec1d2460424fbf813cdc93fa29dc146e46bb17d9e8501fb7e",
+      "bytes": 14207552,
       "mode": 493,
       "destinations": [
         "feature_llm_armv9/src/main/jniLibs/arm64-v8a/libllama_server_armv9.so"
@@ -46,8 +46,8 @@
       "targets": [
         "llama"
       ],
-      "sha256": "8c4d850585024e8acf8629350e8c5e85208b18b2fee7e16e0a1550c80aec2779",
-      "bytes": 9581144,
+      "sha256": "305a51910ffef7559e15b3f709d5c42665c558a69ac6106e5084b8ff619b6363",
+      "bytes": 9571808,
       "mode": 493,
       "destinations": [
         "feature_llm_armv9/src/main/jniLibs/arm64-v8a/libmtmd_armv9.so"
@@ -58,11 +58,48 @@
       "targets": [
         "rpc"
       ],
-      "sha256": "eb512dbddb4fb1a715ec495b012566f537a954268aab3b0375119ea1dd759fc5",
-      "bytes": 2381264,
+      "sha256": "15e2cf1e6a7b81b2197c8832df40112862cef55f291bc291807813fc5ee2eaa7",
+      "bytes": 2381312,
       "mode": 493,
       "destinations": [
         "feature_llm_armv9/src/main/jniLibs/arm64-v8a/librpc-server_armv9.so"
+      ]
+    },
+    {
+      "source": "armv9/libsd-rpc-server_armv9.so",
+      "targets": [
+        "sd-rpc"
+      ],
+      "sha256": "ffece4da9050c59b8e9c23588e6c1cf4e3917f725f09d47277cd414ef7cbb75b",
+      "bytes": 2290288,
+      "mode": 493,
+      "destinations": [
+        "feature_media_armv9/src/main/jniLibs/arm64-v8a/libsd-rpc-server_armv9.so"
+      ]
+    },
+    {
+      "source": "armv9/libsd_armv9.so",
+      "targets": [
+        "sd"
+      ],
+      "sha256": "811523991162122d3466884bf7f038598f8493d9723a1155b2a97d0ae3116ab4",
+      "bytes": 38682288,
+      "mode": 493,
+      "destinations": [
+        "feature_media_armv9/src/main/jniLibs/arm64-v8a/libsd_armv9.so"
+      ]
+    },
+    {
+      "source": "armv9/libwhisper-cli_armv9.so",
+      "targets": [
+        "whisper"
+      ],
+      "sha256": "1b3729f4680680852f09bca9963faddbfb45e09db347c321e3d5e1161885024d",
+      "bytes": 3078168,
+      "mode": 493,
+      "destinations": [
+        "feature_llm_armv9/src/main/jniLibs/arm64-v8a/libwhisper-cli_armv9.so",
+        "feature_media_armv9/src/main/jniLibs/arm64-v8a/libwhisper-cli_armv9.so"
       ]
     },
     {
@@ -70,8 +107,8 @@
       "targets": [
         "llama"
       ],
-      "sha256": "d18da0ab94e856ce2c6b902e240b9bd36e26f1ac9c1f1a552a9f99f6703cc705",
-      "bytes": 8564128,
+      "sha256": "3756db1199ca985f60f859f4d1f580895e9280cb049f597c78902a95064666e3",
+      "bytes": 8551928,
       "mode": 493,
       "destinations": [
         "feature_llm_baseline/src/main/jniLibs/arm64-v8a/libllama-bench_baseline.so"
@@ -82,8 +119,8 @@
       "targets": [
         "llama"
       ],
-      "sha256": "83ab0e1031377c6361e95777e5c99ef7650e0ce8769e49e1ebfbead37cecb451",
-      "bytes": 9605680,
+      "sha256": "fe1e49a232f76bed943294154082f7c1b1bc5f837b55caf6fe2168ac9306cc8c",
+      "bytes": 9595800,
       "mode": 493,
       "destinations": [
         "feature_llm_baseline/src/main/jniLibs/arm64-v8a/libllama-tts_baseline.so"
@@ -94,8 +131,8 @@
       "targets": [
         "llama"
       ],
-      "sha256": "3b2dbea0d97a4a4c8c2e9f9e9165e0e3f1f363dad5635f853fb054b0f2b12b5b",
-      "bytes": 14192176,
+      "sha256": "fbfd6ec93f617b6da4347552de0faf92b837261db7e2d341dc299ac8d2488e9c",
+      "bytes": 14222856,
       "mode": 493,
       "destinations": [
         "feature_llm_baseline/src/main/jniLibs/arm64-v8a/libllama_server_baseline.so"
@@ -106,8 +143,8 @@
       "targets": [
         "llama"
       ],
-      "sha256": "cceec75503aeda5bb5d4cfe2b89da9123101808953b970502c3b11f8dfdc6f28",
-      "bytes": 9601552,
+      "sha256": "3412ab43b7c7b03120ff863f735c6701b53e6b374ab669c43ca45043ab9a5e6f",
+      "bytes": 9591672,
       "mode": 493,
       "destinations": [
         "feature_llm_baseline/src/main/jniLibs/arm64-v8a/libmtmd_baseline.so"
@@ -118,11 +155,48 @@
       "targets": [
         "rpc"
       ],
-      "sha256": "ba11fa5bfb0808d4b828ebfac67c98046e575113bf031a5db2bcd2f6983ce153",
-      "bytes": 2436728,
+      "sha256": "e47ff59a560089bab93b40c1e01b9282ed56447c22633f72bae285323c13066e",
+      "bytes": 2436792,
       "mode": 493,
       "destinations": [
         "feature_llm_baseline/src/main/jniLibs/arm64-v8a/librpc-server_baseline.so"
+      ]
+    },
+    {
+      "source": "baseline/libsd-rpc-server_baseline.so",
+      "targets": [
+        "sd-rpc"
+      ],
+      "sha256": "124cdd0db81bbe99f0e5a57c12643665fe62b44b9b2b7a3bff6d5362d9a4a5c8",
+      "bytes": 2343880,
+      "mode": 493,
+      "destinations": [
+        "feature_media_baseline/src/main/jniLibs/arm64-v8a/libsd-rpc-server_baseline.so"
+      ]
+    },
+    {
+      "source": "baseline/libsd_baseline.so",
+      "targets": [
+        "sd"
+      ],
+      "sha256": "83fc20f4f65760ee2c90926df12e8296ae40e0260aec3b9735a89ee18d372228",
+      "bytes": 38623928,
+      "mode": 493,
+      "destinations": [
+        "feature_media_baseline/src/main/jniLibs/arm64-v8a/libsd_baseline.so"
+      ]
+    },
+    {
+      "source": "baseline/libwhisper-cli_baseline.so",
+      "targets": [
+        "whisper"
+      ],
+      "sha256": "60b8d77b66ff93f808acd046699aa460c5f2188ae33492d97a3309f4178eb6e4",
+      "bytes": 3081536,
+      "mode": 493,
+      "destinations": [
+        "feature_llm_baseline/src/main/jniLibs/arm64-v8a/libwhisper-cli_baseline.so",
+        "feature_media_baseline/src/main/jniLibs/arm64-v8a/libwhisper-cli_baseline.so"
       ]
     },
     {
@@ -130,8 +204,8 @@
       "targets": [
         "llama"
       ],
-      "sha256": "32287c5097114ee3af8d41390cd27441f55a7db781123834043702b1c3e1f497",
-      "bytes": 8577552,
+      "sha256": "4f1b1f6adcaecb7bec22ddabaf856beb0218300d39453efaa0bcaf0c9abbddbb",
+      "bytes": 8565320,
       "mode": 493,
       "destinations": [
         "feature_llm_dotprod/src/main/jniLibs/arm64-v8a/libllama-bench_dotprod.so"
@@ -142,8 +216,8 @@
       "targets": [
         "llama"
       ],
-      "sha256": "e1c50c32b2831c9566b2b176f89f815d06edc35012e6cbf6fe61290e06a3a3e8",
-      "bytes": 9619104,
+      "sha256": "94010d0905afa21953d3c0238076feee5f85b84e05ff4e0f72db6009fe244394",
+      "bytes": 9609176,
       "mode": 493,
       "destinations": [
         "feature_llm_dotprod/src/main/jniLibs/arm64-v8a/libllama-tts_dotprod.so"
@@ -154,8 +228,8 @@
       "targets": [
         "llama"
       ],
-      "sha256": "e3a6b2408d10f59124f8e7a3faccd74c89f5f0e9b017890bbacb0f28d87c23fd",
-      "bytes": 14203856,
+      "sha256": "a9330ac7541c0514fb5166ffcf9195e0257b57cb146fc21bb76425b7c3ff9730",
+      "bytes": 14234488,
       "mode": 493,
       "destinations": [
         "feature_llm_dotprod/src/main/jniLibs/arm64-v8a/libllama_server_dotprod.so"
@@ -166,8 +240,8 @@
       "targets": [
         "llama"
       ],
-      "sha256": "0de9c5327d6208122f8808ad8bc94258c9f3645aeb2449b1decf4bf0b6cb9c8c",
-      "bytes": 9614976,
+      "sha256": "574692347d7294b1debf0cff5bd4dfce8cf95eeb5451bf159803719b333caa4c",
+      "bytes": 9605064,
       "mode": 493,
       "destinations": [
         "feature_llm_dotprod/src/main/jniLibs/arm64-v8a/libmtmd_dotprod.so"
@@ -178,11 +252,48 @@
       "targets": [
         "rpc"
       ],
-      "sha256": "ea230abb990e18c4b85a3823ea6a11c79072397c7d75ff62570d52fa7e11c29f",
-      "bytes": 2472344,
+      "sha256": "87d5a90693bba2f5163b4b04572b9ee4bb7d4321ca5abd46ecbc1c194423ef2d",
+      "bytes": 2472408,
       "mode": 493,
       "destinations": [
         "feature_llm_dotprod/src/main/jniLibs/arm64-v8a/librpc-server_dotprod.so"
+      ]
+    },
+    {
+      "source": "dotprod/libsd-rpc-server_dotprod.so",
+      "targets": [
+        "sd-rpc"
+      ],
+      "sha256": "e0cb756be42831a179ef8885965978b4bcafa284a1e616203a954d8d0efe4756",
+      "bytes": 2379656,
+      "mode": 493,
+      "destinations": [
+        "feature_media_dotprod/src/main/jniLibs/arm64-v8a/libsd-rpc-server_dotprod.so"
+      ]
+    },
+    {
+      "source": "dotprod/libsd_dotprod.so",
+      "targets": [
+        "sd"
+      ],
+      "sha256": "792420eef3ac900d45c84d96972bca1a1ff77374c86533463ec8b5b1fc70a0e1",
+      "bytes": 38614344,
+      "mode": 493,
+      "destinations": [
+        "feature_media_dotprod/src/main/jniLibs/arm64-v8a/libsd_dotprod.so"
+      ]
+    },
+    {
+      "source": "dotprod/libwhisper-cli_dotprod.so",
+      "targets": [
+        "whisper"
+      ],
+      "sha256": "653ba7afb06bc90102eb13dc4e0f1b7ca0241b8bb7c81b55f24e6008ba5c0db2",
+      "bytes": 3079168,
+      "mode": 493,
+      "destinations": [
+        "feature_llm_dotprod/src/main/jniLibs/arm64-v8a/libwhisper-cli_dotprod.so",
+        "feature_media_dotprod/src/main/jniLibs/arm64-v8a/libwhisper-cli_dotprod.so"
       ]
     },
     {
@@ -190,8 +301,8 @@
       "targets": [
         "llama"
       ],
-      "sha256": "8799c894caa74dd180ea827d7fe169b78cc585c7b31165908b44ba1ff8f6fd3f",
-      "bytes": 8695184,
+      "sha256": "29e44d2c46bcd8d7846783fddb17457381aab9ba239754cee4f81339c085a0f5",
+      "bytes": 8682984,
       "mode": 493,
       "destinations": [
         "feature_llm_i8mm/src/main/jniLibs/arm64-v8a/libllama-bench_i8mm.so"
@@ -202,8 +313,8 @@
       "targets": [
         "llama"
       ],
-      "sha256": "deecbd48ec2a9e7afbdf266ce6d8f1fbabc81ecd5245630a42a207cac52e0bd3",
-      "bytes": 9736768,
+      "sha256": "4080c64cf9027897da8b7eef3e04ecfbaa4c93fe88f47ab139b07cea50064090",
+      "bytes": 9726840,
       "mode": 493,
       "destinations": [
         "feature_llm_i8mm/src/main/jniLibs/arm64-v8a/libllama-tts_i8mm.so"
@@ -214,8 +325,8 @@
       "targets": [
         "llama"
       ],
-      "sha256": "c10af98f29031a09e7629fac488ec77bf845c350583f4e67ac4d27ceaffce955",
-      "bytes": 14321504,
+      "sha256": "08fe38063b2c41fc82ef828fb51b3f92f9af2bc09dd188feb72cea4f1bebe970",
+      "bytes": 14352200,
       "mode": 493,
       "destinations": [
         "feature_llm_i8mm/src/main/jniLibs/arm64-v8a/libllama_server_i8mm.so"
@@ -226,8 +337,8 @@
       "targets": [
         "llama"
       ],
-      "sha256": "cf178e8c9dd5798fa210b79568df8609c29050bcb6e2e46970bff0fd754e1634",
-      "bytes": 9732640,
+      "sha256": "b2c920ada6538ee407248a8f046e16ef790d6a95ca2a7646f843735b8dc4ade5",
+      "bytes": 9722744,
       "mode": 493,
       "destinations": [
         "feature_llm_i8mm/src/main/jniLibs/arm64-v8a/libmtmd_i8mm.so"
@@ -238,11 +349,35 @@
       "targets": [
         "rpc"
       ],
-      "sha256": "38214e2a722104fc506a4f7c79886008b4ed7fb3b56723f39a93699239eb7c4f",
-      "bytes": 2397320,
+      "sha256": "35d21743e23d4abeec7ff4659178054eaa678e43fd6c155390a723af071c2df8",
+      "bytes": 2397352,
       "mode": 493,
       "destinations": [
         "feature_llm_i8mm/src/main/jniLibs/arm64-v8a/librpc-server_i8mm.so"
+      ]
+    },
+    {
+      "source": "i8mm/libsd_i8mm.so",
+      "targets": [
+        "sd-i8mm"
+      ],
+      "sha256": "db4bb59ae077ec7a672cdb1461fa080d63111529c0d8c275441d5aec8689e213",
+      "bytes": 38818936,
+      "mode": 493,
+      "destinations": [
+        "feature_media_i8mm/src/main/jniLibs/arm64-v8a/libsd_i8mm.so"
+      ]
+    },
+    {
+      "source": "i8mm/libwhisper-cli_i8mm.so",
+      "targets": [
+        "whisper"
+      ],
+      "sha256": "05d6a8a02deeae758a0cc53ac827e76d228b12b268f71d264e5e9c78a0b77d6d",
+      "bytes": 3283536,
+      "mode": 493,
+      "destinations": [
+        "feature_llm_i8mm/src/main/jniLibs/arm64-v8a/libwhisper-cli_i8mm.so"
       ]
     },
     {
@@ -250,8 +385,8 @@
       "targets": [
         "metadata"
       ],
-      "sha256": "8ceea8a6552cfb83fa1f1d27fb094104228db3e6df5e9029225dc302ca503d89",
-      "bytes": 109,
+      "sha256": "fb6ef7ecb98b1fb7e6b714352bcb1794c4871609ec7a6c9471518c1a90e4a827",
+      "bytes": 456,
       "mode": 420
     },
     {
@@ -260,8 +395,8 @@
         "llama-snapdragon-opencl",
         "sd-snapdragon-opencl"
       ],
-      "sha256": "26515998eae3d980b28ac971a187e3112e8cfd222e6da65eca78d51170324c30",
-      "bytes": 17088,
+      "sha256": "b5ab40b062fcbc63cfbfb99863abd2a2b858aaecc1e9e3fdac9b1aabab807ba1",
+      "bytes": 17680,
       "mode": 493,
       "destinations": [
         "feature_llm_snapdragon_opencl/src/main/jniLibs/arm64-v8a/libAIDOCL.so",
@@ -273,8 +408,8 @@
       "targets": [
         "llama-snapdragon-opencl"
       ],
-      "sha256": "8f55b6aca114c57d8f047d489ce1d79fe1639a2e3fd28e8e181f976999f4dfe1",
-      "bytes": 11168656,
+      "sha256": "12bbf2cfb128ded5a2e7443c6a2f507abdf22fc26100ee3293e4f46fc659dae7",
+      "bytes": 11184104,
       "mode": 493,
       "destinations": [
         "feature_llm_snapdragon_opencl/src/main/jniLibs/arm64-v8a/libllama-bench_snapdragon_opencl.so"
@@ -285,17 +420,41 @@
       "targets": [
         "llama-snapdragon-opencl"
       ],
-      "sha256": "f3f86b6603a359590717c575fa49398d7f7571e26ffbf0e94c90e9abd053c234",
-      "bytes": 16794720,
+      "sha256": "8480900f0bcadc30218ffd0ab412e8b7efcd975458c79a65702603aaa2c29f5e",
+      "bytes": 16853032,
       "mode": 493,
       "destinations": [
         "feature_llm_snapdragon_opencl/src/main/jniLibs/arm64-v8a/libllama_server_snapdragon_opencl.so"
+      ]
+    },
+    {
+      "source": "snapdragon_opencl/libsd_snapdragon_opencl.so",
+      "targets": [
+        "sd-snapdragon-opencl"
+      ],
+      "sha256": "740c3ea7961e1f0fddd0901491a8be253d810cd4c10181f01f07cc02eb4a5537",
+      "bytes": 41132056,
+      "mode": 493,
+      "destinations": [
+        "feature_media_snapdragon_opencl/src/main/jniLibs/arm64-v8a/libsd_snapdragon_opencl.so"
+      ]
+    },
+    {
+      "source": "snapdragon_vulkan/libsd_snapdragon_vulkan.so",
+      "targets": [
+        "sd-snapdragon-vulkan"
+      ],
+      "sha256": "398c5917a5c2235e0413eb7721752bc4f020788942d5d79c502d384f491f3cc2",
+      "bytes": 90407776,
+      "mode": 493,
+      "destinations": [
+        "feature_media_snapdragon_vulkan/src/main/jniLibs/arm64-v8a/libsd_snapdragon_vulkan.so"
       ]
     }
   ],
   "source_lock": {
     "schema": 2,
-    "selection": "llama-all",
+    "selection": "core-ai",
     "android": {
       "api_level": 28,
       "ndk_path": "/home/manu/.gemini/antigravity/scratch/android_native_build/android-ndk-r26d"
@@ -303,25 +462,68 @@
     "repositories": {
       "llama.cpp": {
         "url": "https://github.com/ggml-org/llama.cpp.git",
-        "requested_ref": "64e9bceb2c3a856efed96feda784a50947049feb",
-        "commit": "64e9bceb2c3a856efed96feda784a50947049feb",
+        "requested_ref": "1e7bcf3da4b2741868d152fa47976fb2501c85e3",
+        "commit": "1e7bcf3da4b2741868d152fa47976fb2501c85e3",
         "submodules": false
+      },
+      "llama.cpp-sd-rpc": {
+        "url": "https://github.com/ggml-org/llama.cpp.git",
+        "requested_ref": "dff15d4ac95de1a3c73e8b784d4c436f5e5e36eb",
+        "commit": "dff15d4ac95de1a3c73e8b784d4c436f5e5e36eb",
+        "submodules": false,
+        "sync_from": "stable-diffusion.cpp/ggml/scripts/sync-llama.last"
+      },
+      "whisper.cpp": {
+        "url": "https://github.com/ggml-org/whisper.cpp.git",
+        "requested_ref": "1d549b3cecc2d98d76d4ddc2edca0d1512f5d7a0",
+        "commit": "1d549b3cecc2d98d76d4ddc2edca0d1512f5d7a0",
+        "submodules": false
+      },
+      "stable-diffusion.cpp": {
+        "url": "https://github.com/leejet/stable-diffusion.cpp.git",
+        "requested_ref": "59c23bce0d82be3a922023ab811194f05b3e2faa",
+        "commit": "59c23bce0d82be3a922023ab811194f05b3e2faa",
+        "submodules": true,
+        "submodule_status": [
+          "c4bce3d6b3f236614cca21014f076083b7270ba8 examples/server/frontend (heads/master)",
+          " e20c3a14aa70ee84ca58499814206dd08d8026bc ggml (remotes/origin/sd.cpp)",
+          " 5bf12267eea773a32fcf4949de52b0add158a8d5 thirdparty/libwebm (libwebm-1.0.0.32-6-g5bf1226)",
+          " 0c9546f7efc61eac7f79ae115c3f99c91c21c443 thirdparty/libwebp (v1.6.0-158-g0c9546f7)"
+        ]
       },
       "OpenCL-Headers": {
         "url": "https://github.com/KhronosGroup/OpenCL-Headers.git",
-        "requested_ref": "default",
-        "commit": "c4c8fd6f9556c92b212308880854e6294d61b314",
+        "requested_ref": "386ca390b2f52efeb3e1a55a500690eb8013f60e",
+        "commit": "386ca390b2f52efeb3e1a55a500690eb8013f60e",
         "submodules": false
+      },
+      "Vulkan-Headers": {
+        "url": "https://github.com/KhronosGroup/Vulkan-Headers.git",
+        "requested_ref": "ee2ec5fd83dafce291024683b50dc89219333076",
+        "commit": "ee2ec5fd83dafce291024683b50dc89219333076",
+        "submodules": false
+      },
+      "SPIRV-Headers": {
+        "url": "https://github.com/KhronosGroup/SPIRV-Headers.git",
+        "requested_ref": "04fd3caa1e8267e4d95c806cad901181728e1006",
+        "commit": "04fd3caa1e8267e4d95c806cad901181728e1006",
+        "submodules": false
+      }
+    },
+    "compatibility": {
+      "sd_rpc_llama_sync_marker": {
+        "file": "stable-diffusion.cpp/ggml/scripts/sync-llama.last",
+        "commit": "dff15d4ac95de1a3c73e8b784d4c436f5e5e36eb"
       }
     },
     "auxiliary_assets": {
       "llama-ui": {
-        "source": "llama.cpp/tools/ui",
-        "repository_commit": "64e9bceb2c3a856efed96feda784a50947049feb",
-        "mode": "built-from-source",
-        "built": true
+        "url": "https://huggingface.co/buckets/ggml-org/llama-ui/resolve/latest/dist.tar.gz?download=true",
+        "sha256": "f814514b198b4c42bcb9afa45e083dd901af92592e7cea5df39726c6381de417",
+        "bytes": 3081176,
+        "mode": "downloaded-archive"
       }
     }
   },
-  "published_from": "/home/manu/.gemini/antigravity/scratch/android_native_build/runs/adt-audio-20260908/native_build_manifest.json"
+  "published_from": "/home/manu/.gemini/antigravity/scratch/android_native_build/runs/adt-native-20260915/native_build_manifest.json"
 }

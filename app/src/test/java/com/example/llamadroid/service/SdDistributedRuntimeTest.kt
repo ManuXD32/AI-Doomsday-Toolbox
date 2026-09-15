@@ -18,7 +18,53 @@ class SdDistributedRuntimeTest {
     }
 
     @Test
-    fun `auto fit config emits rpc params backend max vram and layer split`() {
+    fun `legacy auto fit capability keeps bare flag syntax`() {
+        val args = mutableListOf<String>()
+
+        appendSdDistributedArgs(
+            args = args,
+            config = SdDistributedRuntimeConfig(
+                enabled = true,
+                placementMode = SdDistributedPlacementMode.AUTO_FIT,
+                autoFit = true,
+                paramsBackendSpec = "disk"
+            ),
+            binaryCapabilities = SdBinaryCapabilities(
+                supportedFlags = setOf("--auto-fit", "--params-backend", "--split-mode")
+            )
+        )
+
+        assertEquals(
+            listOf("--auto-fit", "--params-backend", "disk", "--split-mode", "layer"),
+            args
+        )
+    }
+
+    @Test
+    fun `refreshed auto fit capability requires explicit off for manual placement`() {
+        val args = mutableListOf<String>()
+
+        appendSdDistributedArgs(
+            args = args,
+            config = SdDistributedRuntimeConfig(
+                enabled = true,
+                placementMode = SdDistributedPlacementMode.MANUAL,
+                paramsBackendSpec = "disk"
+            ),
+            binaryCapabilities = SdBinaryCapabilities(
+                supportedFlags = setOf("--auto-fit", "--params-backend", "--split-mode"),
+                autoFitRequiresValue = true
+            )
+        )
+
+        assertEquals(
+            listOf("--auto-fit", "off", "--params-backend", "disk", "--split-mode", "layer"),
+            args
+        )
+    }
+
+    @Test
+    fun `refreshed auto fit omits params backend but keeps rpc max vram and layer split`() {
         val args = buildSdDistributedPreviewArgs(
             SdDistributedRuntimeConfig(
                 enabled = true,
@@ -36,8 +82,7 @@ class SdDistributedRuntimeTest {
                 "--rpc-servers",
                 "10.0.0.2:50062,10.0.0.3:50062",
                 "--auto-fit",
-                "--params-backend",
-                "disk",
+                "on",
                 "--max-vram",
                 "4096",
                 "--split-mode",
@@ -45,6 +90,7 @@ class SdDistributedRuntimeTest {
             ),
             args
         )
+        assertFalse(args.contains("--params-backend"))
     }
 
     @Test
@@ -67,7 +113,7 @@ class SdDistributedRuntimeTest {
         assertTrue(args.contains("--split-mode"))
         assertTrue(args.contains("layer"))
         assertFalse(args.contains("row"))
-        assertFalse(args.contains("--auto-fit"))
+        assertOption(args, "--auto-fit", "off")
     }
 
     @Test
@@ -81,7 +127,10 @@ class SdDistributedRuntimeTest {
             )
         )
 
-        assertEquals(listOf("--split-mode", "layer", "--foo", "bar baz", "--flag"), args)
+        assertEquals(
+            listOf("--auto-fit", "off", "--split-mode", "layer", "--foo", "bar baz", "--flag"),
+            args
+        )
     }
 
     @Test
@@ -145,6 +194,41 @@ class SdDistributedRuntimeTest {
         )
 
         assertEquals(listOf("--max-vram", "--params-backend", "--split-mode"), missing)
+    }
+
+    @Test
+    fun `refreshed manual capability still validates explicit backend`() {
+        val missing = missingSdDistributedFlags(
+            SdDistributedRuntimeConfig(
+                enabled = true,
+                placementMode = SdDistributedPlacementMode.COMPONENTS,
+                backendSpec = "diffusion=RPC0"
+            ),
+            SdBinaryCapabilities(
+                supportedFlags = setOf("--auto-fit", "--split-mode"),
+                autoFitRequiresValue = true
+            )
+        )
+
+        assertEquals(listOf("--backend"), missing)
+    }
+
+    @Test
+    fun `refreshed auto fit omits saved params backend from capability requirements`() {
+        val missing = missingSdDistributedFlags(
+            SdDistributedRuntimeConfig(
+                enabled = true,
+                placementMode = SdDistributedPlacementMode.AUTO_FIT,
+                autoFit = true,
+                paramsBackendSpec = "disk"
+            ),
+            SdBinaryCapabilities(
+                supportedFlags = setOf("--auto-fit", "--split-mode"),
+                autoFitRequiresValue = true
+            )
+        )
+
+        assertTrue(missing.isEmpty())
     }
 
     @Test
@@ -233,7 +317,7 @@ class SdDistributedRuntimeTest {
         assertTrue(args.contains("--backend"))
         assertTrue(args.contains("diffusion=RPC0&RPC1,vae=RPC0"))
         assertTrue(args.contains("--params-backend"))
-        assertFalse(args.contains("--auto-fit"))
+        assertOption(args, "--auto-fit", "off")
         assertFalse(args.contains("--max-vram"))
     }
 
@@ -256,7 +340,16 @@ class SdDistributedRuntimeTest {
         val args = buildSdDistributedPreviewArgs(config)
 
         assertEquals(
-            listOf("--rpc-servers", "a:50062", "--split-mode", "layer", "--backend", "diffusion=RPC0"),
+            listOf(
+                "--rpc-servers",
+                "a:50062",
+                "--auto-fit",
+                "off",
+                "--split-mode",
+                "layer",
+                "--backend",
+                "diffusion=RPC0"
+            ),
             args
         )
     }
@@ -445,5 +538,11 @@ class SdDistributedRuntimeTest {
         assertEquals("karras", restored.videoScheduler)
         assertEquals("4.5", restored.imageFlowShift)
         assertEquals("4.5", restored.videoFlowShift)
+    }
+
+    private fun assertOption(args: List<String>, flag: String, value: String) {
+        val index = args.indexOf(flag)
+        assertTrue("$flag should be present", index >= 0)
+        assertEquals(value, args.getOrNull(index + 1))
     }
 }
