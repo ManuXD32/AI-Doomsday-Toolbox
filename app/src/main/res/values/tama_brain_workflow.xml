@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_world_brain_workflow_subtitle">Practice, save a checkpoint, evaluate it, then decide whether to adopt it.</string>
+    <string name="tama_world_brain_workflow_practice_title">Disposable practice</string>
+    <string name="tama_world_brain_workflow_practice_body">Practice runs use local disposable environments. They do not change the active living-world brain until you explicitly adopt a passing candidate.</string>
+    <string name="tama_world_brain_workflow_active_title">Active brain</string>
+    <string name="tama_world_brain_workflow_active_body">This is the policy currently used by the living world. Training candidates stay separate until an evaluation and an explicit adoption.</string>
+    <string name="tama_world_brain_workflow_candidate_title">Practice candidate</string>
+    <string name="tama_world_brain_workflow_candidate_body">A saved practice checkpoint is a candidate only. Evaluate this saved candidate before choosing Adopt or Keep current.</string>
+    <string name="tama_world_brain_workflow_candidate_empty">No saved candidate yet. Start practice, then save a checkpoint to make one available for evaluation.</string>
+    <string name="tama_world_brain_workflow_candidate_not_active">Not active</string>
+    <string name="tama_world_brain_workflow_evaluate_candidate">Evaluate candidate</string>
+    <string name="tama_world_brain_workflow_details_title">Practice details</string>
+    <string name="tama_world_brain_workflow_curriculum_title">Curriculum and speed</string>
+    <string name="tama_world_brain_workflow_validation_only">Level 0 validates the environment contract only; it does not update policy weights.</string>
+    <string name="tama_world_brain_workflow_trainable_default">Level 1 is the default trainable starting point.</string>
+    <string name="tama_world_brain_workflow_checkpoints_body">Saved checkpoints remain training artifacts until you explicitly adopt a candidate.</string>
+    <string name="tama_world_brain_workflow_try_again">Try again</string>
+    <string name="tama_world_brain_workflow_loading_title">Preparing practice</string>
+    <string name="tama_world_brain_workflow_loading_body">The trainer is loading its saved state. No progress is shown until a real snapshot is available.</string>
+    <string name="tama_world_brain_workflow_evaluating_title">Evaluating candidate</string>
+    <string name="tama_world_brain_workflow_evaluating_body">The saved candidate is being compared on holdout environments. Actions stay disabled until the completed comparison is available.</string>
+    <string name="tama_world_brain_workflow_blocked_title">Training blocked</string>
+    <string name="tama_world_brain_workflow_error_title">Training needs attention</string>
+</resources>

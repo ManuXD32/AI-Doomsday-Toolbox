@@ -1,6 +1,7 @@
 package com.example.llamadroid.tama.world.ui
 
 import android.os.SystemClock
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -69,6 +70,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
@@ -133,8 +135,14 @@ fun WorldScreen(
     modifier: Modifier = Modifier,
     spriteAtlas: WorldSpriteAtlas? = null,
     loadAssets: Boolean = true,
-    exitShortcutLabelRes: Int? = R.string.tama_world_shortcut_room
+    exitShortcutLabelRes: Int? = R.string.tama_world_shortcut_room,
+    isSimulationActive: Boolean = false,
+    homeActionLabelRes: Int = R.string.tama_world_open_home,
+    onSystemBack: (() -> Unit)? = null
 ) {
+    BackHandler(enabled = isSimulationActive && onSystemBack != null) {
+        onSystemBack?.invoke()
+    }
     val visibleAssetIds = remember(state.tiles, state.actors, state.structures, state.resources, state.farmTiles, state.minimap) {
         buildSet {
             addAll(state.tiles.asSequence().filter { it.known }.map(WorldTileUi::terrainId))
@@ -182,7 +190,7 @@ fun WorldScreen(
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
         ) {
-            WorldHud(state.hud, callbacks)
+            WorldHud(state.hud, callbacks, homeActionLabelRes)
 
             Box(
                 modifier = Modifier
@@ -239,7 +247,8 @@ fun WorldScreen(
 @Composable
 private fun WorldHud(
     hud: WorldHudUi,
-    callbacks: WorldUiCallbacks
+    callbacks: WorldUiCallbacks,
+    homeActionLabelRes: Int
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -283,7 +292,7 @@ private fun WorldHud(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Home,
-                        contentDescription = stringResource(R.string.tama_world_open_home)
+                        contentDescription = stringResource(homeActionLabelRes)
                     )
                 }
             }
@@ -1116,7 +1125,10 @@ private fun WorldShortcutRow(
                 label = { Text(stringResource(labelRes), maxLines = 1) },
                 leadingIcon = {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, null, Modifier.size(18.dp))
-                }
+                },
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .testTag(WORLD_HOME_EXIT_TEST_TAG)
             )
         }
         AssistChip(
@@ -1168,6 +1180,8 @@ private fun WorldShortcutRow(
         )
     }
 }
+
+const val WORLD_HOME_EXIT_TEST_TAG = "tama_world_home_exit"
 
 @Composable
 private fun WorldCommandRow(

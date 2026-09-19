@@ -20,6 +20,7 @@ import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
@@ -86,6 +87,7 @@ class WorldCompactUiConnectedTest {
         )
         compact(language) { BrainTrainingScreen(projectBrainRuntimeState(BrainRuntimeState()), callbacks) }
         scrollLazyTo(target)
+        compose.onNodeWithText(target).performClick()
         compose.onNodeWithText(context.getString(R.string.tama_world_brain_resources_body))
             .performScrollTo().assertIsDisplayed()
     }

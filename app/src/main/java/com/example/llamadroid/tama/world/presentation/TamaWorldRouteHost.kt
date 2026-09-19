@@ -1,5 +1,6 @@
 package com.example.llamadroid.tama.world.presentation
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -53,7 +54,6 @@ import com.example.llamadroid.tama.world.core.NpcRole
 import com.example.llamadroid.tama.world.core.PresenceMode
 import com.example.llamadroid.tama.world.core.StructureType
 import com.example.llamadroid.tama.world.core.WorldObjectType
-import com.example.llamadroid.tama.world.core.WorldCommand
 import com.example.llamadroid.tama.world.core.WorldNpcCatalog
 import com.example.llamadroid.tama.world.memory.AdventureMemoryPreferences
 import com.example.llamadroid.tama.world.persistence.TamaWorldRelationshipEntity
@@ -122,6 +122,7 @@ fun TamaWorldRouteHost(
     onActivityArrival: (WorldActivityArrival) -> Unit = {},
     exitShortcutLabelRes: Int? = R.string.tama_world_shortcut_room,
     onCloseWorld: () -> Unit = {},
+    onReturnHome: (() -> Unit)? = null,
     onOpenInventory: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -129,6 +130,7 @@ fun TamaWorldRouteHost(
     val context = LocalContext.current
     val coreState by world.state.collectAsState()
     val worldError by world.error.collectAsState()
+    val adventureActive by world.adventureActive.collectAsState()
     var routeName by remember(petId, initialRoute) {
         mutableStateOf(initialRoute.toWorldRoute().name)
     }
@@ -145,6 +147,7 @@ fun TamaWorldRouteHost(
     var showMinimap by remember(petId) { mutableStateOf(true) }
     var selectedEpisodeId by remember(petId) { mutableStateOf<String?>(null) }
     var journalFilter by remember(petId) { mutableStateOf(WorldJournalFilter.ALL) }
+    var savedAutonomyForPresentation by remember(petId) { mutableStateOf<AutonomyPolicy?>(null) }
     val autonomyMutationMutex = remember(world, petId) { Mutex() }
     val route = runCatching { WorldRoute.valueOf(routeName) }.getOrDefault(WorldRoute.WORLD)
 
@@ -173,8 +176,10 @@ fun TamaWorldRouteHost(
         }
     }
 
-    LaunchedEffect(route, world) {
-        world.setVisible(route == WorldRoute.WORLD)
+    LaunchedEffect(route, world, adventureActive) {
+        // Brain/Journal may be opened from the classic room, but the living
+        // simulation must not tick or catch up while it is not opted in.
+        world.setVisible(route == WorldRoute.WORLD && adventureActive)
     }
     LaunchedEffect(route) {
         onNonWorldRouteChanged(route != WorldRoute.WORLD)
@@ -183,18 +188,57 @@ fun TamaWorldRouteHost(
         onDispose { world.setVisible(false) }
     }
 
+    val returnHomeAction = if (adventureActive) {
+        onReturnHome ?: onCloseWorld
+    } else {
+        onCloseWorld
+    }
+    val effectiveExitShortcutLabelRes = if (adventureActive) {
+        R.string.tama_classic_map_return_home
+    } else {
+        exitShortcutLabelRes
+    }
+
+    // Route-level Back remains active while world state is loading or has
+    // failed. Contextual routes first return to WORLD only for an active
+    // session; a Brain/Journal opened from the classic menu closes directly
+    // back to the classic room. WORLD itself always exits the active session
+    // through the immediate root callback.
+    BackHandler {
+        if (route != WorldRoute.WORLD) {
+            if (adventureActive) {
+                routeName = WorldRoute.WORLD.name
+            } else {
+                onCloseWorld()
+            }
+        } else if (adventureActive) {
+            returnHomeAction()
+        } else {
+            onCloseWorld()
+        }
+    }
+
     val current = coreState
     if (route == WorldRoute.BRAIN) {
         val brain = remember(petId) { brainProvider() }
         val runtime by brain.state.collectAsState()
-        LaunchedEffect(brain, petId) { brain.initialize() }
+        LaunchedEffect(brain, petId, world) {
+            try {
+                savedAutonomyForPresentation = world.loadSavedAutonomyForPresentation(petId)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                showTransientCommandRejection(context, "world_unavailable")
+            }
+            brain.initialize()
+        }
         val profiles = listOf(
             profileUi(TrainerProfile.ECO, runtime),
             profileUi(TrainerProfile.BALANCED, runtime),
             profileUi(TrainerProfile.FAST, runtime),
             profileUi(TrainerProfile.CUSTOM, runtime)
         )
-        val displayedAutonomy = coreState?.autonomy ?: AutonomyPolicy()
+        val displayedAutonomy = coreState?.autonomy ?: savedAutonomyForPresentation ?: AutonomyPolicy()
         val brainUi = projectBrainRuntimeState(
             runtime = runtime,
             labels = brainLabels,
@@ -204,7 +248,9 @@ fun TamaWorldRouteHost(
         BrainTrainingScreen(
             state = brainUi,
             callbacks = BrainTrainingCallbacks(
-                onBack = { routeName = WorldRoute.WORLD.name },
+                onBack = {
+                    if (adventureActive) routeName = WorldRoute.WORLD.name else onCloseWorld()
+                },
                 onStart = brain::start,
                 onPause = brain::pause,
                 onResume = brain::resume,
@@ -299,7 +345,9 @@ fun TamaWorldRouteHost(
         WorldJournalScreen(
             state = journalState,
             callbacks = WorldJournalCallbacks(
-                onBack = { routeName = WorldRoute.WORLD.name },
+                onBack = {
+                    if (adventureActive) routeName = WorldRoute.WORLD.name else onCloseWorld()
+                },
                 onSelectEpisode = { selectedEpisodeId = it },
                 onFilterChanged = { journalFilter = it },
                 onCommand = { command ->
@@ -307,6 +355,8 @@ fun TamaWorldRouteHost(
                         command,
                         setRoute = { routeName = it.name },
                         onCloseWorld = onCloseWorld,
+                        onReturnHome = returnHomeAction,
+                        isSimulationActive = adventureActive,
                         onCommandRejected = { reason ->
                             showTransientCommandRejection(context, reason)
                         }
@@ -322,6 +372,41 @@ fun TamaWorldRouteHost(
             ),
             modifier = modifier
         )
+        return
+    }
+
+    // A persisted WORLD snapshot is not permission to render or catch up the
+    // optional simulation. The root normally removes this host as soon as the
+    // session exits; this bounded placeholder also covers the one-frame
+    // transition while that route state is being disposed.
+    if (!adventureActive) {
+        Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = stringResource(R.string.tama_classic_map_simulated_world_title),
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    text = stringResource(R.string.tama_classic_map_simulated_world_description),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                if (onReturnHome != null) {
+                    Button(
+                        onClick = returnHomeAction,
+                        modifier = Modifier.heightIn(min = 48.dp)
+                    ) {
+                        Text(stringResource(R.string.tama_classic_map_return_home))
+                    }
+                }
+            }
+        }
         return
     }
 
@@ -420,22 +505,36 @@ fun TamaWorldRouteHost(
     Box(modifier = modifier.fillMaxSize()) {
         WorldScreen(
             state = projected,
-                callbacks = WorldUiCallbacks { command ->
-                    handleRouteCommand(command, current, projected, world, scope,
-                        onOpenInventory = onOpenInventory,
-                        setRoute = { routeName = it.name },
-                        onCloseWorld = onCloseWorld,
-                        onCommandRejected = { reason ->
-                            showTransientCommandRejection(context, reason)
-                        },
-                        setCamera = { camera = it },
-                        setInspector = { inspectorTarget = it },
+            callbacks = WorldUiCallbacks { command ->
+                handleRouteCommand(
+                    command,
+                    current,
+                    projected,
+                    world,
+                    scope,
+                    onOpenInventory = onOpenInventory,
+                    setRoute = { routeName = it.name },
+                    onCloseWorld = onCloseWorld,
+                    onReturnHome = returnHomeAction,
+                    isSimulationActive = adventureActive,
+                    onCommandRejected = { reason ->
+                        showTransientCommandRejection(context, reason)
+                    },
+                    setCamera = { camera = it },
+                    setInspector = { inspectorTarget = it },
                     setActiveCommand = { activeCommand = it },
                     toggleMinimap = { showMinimap = !showMinimap }
                 )
             },
             modifier = Modifier.fillMaxSize(),
-            exitShortcutLabelRes = exitShortcutLabelRes
+            exitShortcutLabelRes = effectiveExitShortcutLabelRes,
+            isSimulationActive = adventureActive,
+            homeActionLabelRes = if (adventureActive) {
+                R.string.tama_classic_map_return_home
+            } else {
+                R.string.tama_world_open_home
+            },
+            onSystemBack = if (adventureActive) returnHomeAction else null
         )
         worldError?.let { message ->
             WorldRuntimeErrorPanel(message, onRetry = { scope.launch { world.retryFromUi() } })
@@ -468,6 +567,7 @@ fun TamaWorldArrivalGate(
     onNonWorldRouteChanged: (Boolean) -> Unit = {},
     exitShortcutLabelRes: Int? = R.string.action_back,
     onCloseWorld: () -> Unit = {},
+    onReturnHome: (() -> Unit)? = null,
     onOpenInventory: () -> Unit = {},
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit
@@ -526,6 +626,7 @@ fun TamaWorldArrivalGate(
             onNonWorldRouteChanged = onNonWorldRouteChanged,
             exitShortcutLabelRes = exitShortcutLabelRes,
             onCloseWorld = onCloseWorld,
+            onReturnHome = onReturnHome,
             onOpenInventory = onOpenInventory,
             modifier = modifier
         )
@@ -643,6 +744,8 @@ private fun handleRouteCommand(
     scope: kotlinx.coroutines.CoroutineScope? = null,
     onOpenInventory: () -> Unit = {},
     onCloseWorld: () -> Unit = {},
+    onReturnHome: (() -> Unit)? = null,
+    isSimulationActive: Boolean = false,
     onCommandRejected: (String) -> Unit = {},
     setRoute: (WorldRoute) -> Unit = {},
     setCamera: (WorldCameraUi) -> Unit = {},
@@ -650,30 +753,24 @@ private fun handleRouteCommand(
     setActiveCommand: (com.example.llamadroid.tama.world.ui.WorldPetCommandKind?) -> Unit = {},
     toggleMinimap: () -> Unit = {}
 ) {
+    fun returnHome() {
+        if (isSimulationActive) {
+            (onReturnHome ?: onCloseWorld)()
+        } else {
+            onCloseWorld()
+        }
+    }
+
     when (command) {
-        WorldUiCommand.CloseWorld -> onCloseWorld()
+        WorldUiCommand.CloseWorld -> returnHome()
         WorldUiCommand.OpenWorld -> setRoute(WorldRoute.WORLD)
         WorldUiCommand.OpenJournal -> setRoute(WorldRoute.JOURNAL)
         WorldUiCommand.OpenBrainTraining -> setRoute(WorldRoute.BRAIN)
         WorldUiCommand.OpenInventory -> onOpenInventory()
-        WorldUiCommand.OpenHome -> scope?.launch {
-            val controller = world
-            if (controller == null) {
-                onCommandRejected("world_unavailable")
-                return@launch
-            }
-            val result = try {
-                controller.command(WorldCommand.ReturnHome)
-            } catch (error: kotlinx.coroutines.CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                onCommandRejected(error.message ?: "world_unavailable")
-                return@launch
-            }
-            if (!result.acceptedCommand) {
-                onCommandRejected(result.rejectionReason ?: "world_unavailable")
-            }
-        }
+        // The optional development session has a process-local exit boundary.
+        // It must not enqueue the slower autonomous ReturnHome command, which
+        // can leave the user waiting in WORLD.
+        WorldUiCommand.OpenHome -> returnHome()
         WorldUiCommand.Recenter -> state?.let { current ->
             setCamera(
                 WorldCameraUi(

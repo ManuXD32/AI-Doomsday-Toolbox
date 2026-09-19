@@ -24,6 +24,14 @@ object WorldControllerRegistry {
     @Synchronized
     fun ownsClock(engine: TamaGameEngine): Boolean = controllers.values.any { it.engines.firstOrNull() === engine }
 
+    /**
+     * Session state is deliberately process-local. A persisted world snapshot
+     * never opts a fresh engine into the development adventure by itself.
+     */
+    @Synchronized
+    fun isAdventureActive(database: TamaDatabase): Boolean =
+        controllers[database]?.controller?.isAdventureActive == true
+
     @Synchronized
     fun release(engine: TamaGameEngine) {
         val iterator = controllers.entries.iterator()

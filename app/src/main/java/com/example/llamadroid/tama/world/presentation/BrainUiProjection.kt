@@ -118,6 +118,7 @@ fun projectBrainRuntimeState(
             maxThreads = runtime.maxThreads,
             environmentCount = runtime.environmentCount
         ),
+        isEvaluating = runtime.evaluating,
         isLoading = snapshot == null && runtime.error == null,
         error = runtime.error ?: runtime.pauseReason
     )

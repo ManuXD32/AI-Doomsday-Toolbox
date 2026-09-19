@@ -7,11 +7,30 @@ import com.example.llamadroid.tama.world.core.ActionId
 import com.example.llamadroid.tama.world.core.LegacyLocationAliases
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.CancellationException
+import com.example.llamadroid.tama.notifications.TamaNotificationScheduler
 
-/** Every maintenance request walks to the farm and commits costs/output in one transaction. */
+/** Shared maintenance rules; only an active development adventure requires travel. */
 object WorldFarmMaintenance {
     suspend fun request(context: Context, engine: TamaGameEngine, operation: String,
                         arguments: Map<String, String> = emptyMap()): TamaGameEngine.ActionResult {
+        if (!engine.isSimulatedWorldActive) {
+            return try {
+                engine.runClassicTransaction { _, farm ->
+                    val result = complete(context, engine, farm, arguments + ("operation" to operation))
+                    engine.pet.value?.id?.let { petId ->
+                        TamaCommitEffects.deferOrRun("notifications:$petId") {
+                            TamaNotificationScheduler.scheduleForPet(context.applicationContext, petId)
+                        }
+                    }
+                    result
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                TamaGameEngine.ActionResult(false, context.getString(R.string.tama_world_runtime_action_unavailable))
+            }
+        }
         val action = if (operation == "harvester_collect") ActionId.STORE_PRODUCE else ActionId.USE
         val result = engine.world.queueAction(action, LegacyLocationAliases.FARM,
             arguments + mapOf("canonicalAction" to "farmMaintenance", "operation" to operation), LegacyLocationAliases.FARM)

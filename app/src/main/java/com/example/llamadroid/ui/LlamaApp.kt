@@ -251,7 +251,16 @@ fun LlamaApp(
         arcadeWorldActionBridgeFactory?.invoke(tamaGameEngine)
             ?: arcadeWorldActionBridge.takeUnless { it === ArcadeWorldActionBridge.Unavailable }
             ?: ArcadeWorldActionBridge.from(
-                beginSession = { tamaGameEngine.world.beginArcadeSession(it) },
+                beginSession = { request ->
+                    // Classic play shares the durable reward receipt, without physical travel.
+                    val admitted = tamaGameEngine.isSimulatedWorldActive ||
+                        tamaGameEngine.travelToId(LegacyLocationAliases.ARCADE).success
+                    if (admitted) tamaGameEngine.world.beginArcadeSession(request)
+                    else com.example.llamadroid.tama.world.presentation.ArcadeSessionLease(
+                        request.petId, request.sessionId, request.gameId,
+                        com.example.llamadroid.tama.world.presentation.ArcadeSessionLeaseStatus.UNAVAILABLE
+                    )
+                },
                 submitSession = { tamaGameEngine.world.submitArcadeSession(it) },
                 cancelSession = { tamaGameEngine.world.cancelArcadeSession(it) },
                 reconcileSession = { tamaGameEngine.world.reconcileArcadeSession(it) },
@@ -489,6 +498,12 @@ fun LlamaApp(
             popUpTo(navController.graph.startDestinationId) { saveState = true }
             launchSingleTop = true
             restoreState = true
+        }
+    }
+
+    fun returnToPetHome() {
+        if (!navController.popBackStack(Screen.Tama.route, inclusive = false)) {
+            navigateFromAppNavigation(AppRootDestination.Tama)
         }
     }
 
@@ -855,6 +870,7 @@ fun LlamaApp(
                     database = tamaDatabase,
                     farmRepository = farmRepository,
                     destinationStructureId = LegacyLocationAliases.FARM,
+                    onReturnToHome = ::returnToPetHome,
                     onBack = { navController.popBackStack() }
                 ) {
                     com.example.llamadroid.tama.ui.FarmScreen(
@@ -875,6 +891,7 @@ fun LlamaApp(
                         database = tamaDatabase,
                         farmRepository = farmRepository,
                         destinationStructureId = "farm_barn",
+                        onReturnToHome = ::returnToPetHome,
                         onBack = { navController.popBackStack() }
                     ) {
                         com.example.llamadroid.tama.ui.BarnScreen(
@@ -896,6 +913,7 @@ fun LlamaApp(
                         database = tamaDatabase,
                         farmRepository = farmRepository,
                         destinationStructureId = "farm_barn",
+                        onReturnToHome = ::returnToPetHome,
                         onBack = { navController.popBackStack() }
                     ) {
                         com.example.llamadroid.tama.ui.ChickenCoopScreen(
@@ -964,6 +982,7 @@ fun LlamaApp(
                         database = tamaDatabase,
                         farmRepository = farmRepository,
                         destinationStructureId = LegacyLocationAliases.SHOP,
+                        onReturnToHome = ::returnToPetHome,
                         onBack = { navController.popBackStack() }
                     ) {
                     com.example.llamadroid.tama.ui.StoreScreen(
@@ -1067,6 +1086,7 @@ fun LlamaApp(
                     database = tamaDatabase,
                     farmRepository = farmRepository,
                     destinationStructureId = LegacyLocationAliases.ARCADE,
+                    onReturnToHome = ::returnToPetHome,
                     onBack = { navController.popBackStack() }
                 ) {
                     com.example.llamadroid.tama.ui.ArcadeScreen(
@@ -1097,12 +1117,13 @@ fun LlamaApp(
                 )
             ) { backStackEntry ->
                 val pet by tamaGameEngine.pet.collectAsState()
+                val adventureActive by tamaGameEngine.world.adventureActive.collectAsState()
                 val worldState by tamaGameEngine.world.state.collectAsState()
                 val requestedDungeonId = backStackEntry.arguments
                     ?.getString("worldStructureId")
                     ?.takeIf { it == LegacyLocationAliases.DUNGEON_A || it == LegacyLocationAliases.DUNGEON_B }
                 val destinationDungeonId = requestedDungeonId
-                    ?: worldState?.actor?.takeIf { it.presence == PresenceMode.INTERIOR }
+                    ?: worldState?.actor?.takeIf { adventureActive && it.presence == PresenceMode.INTERIOR }
                         ?.structureId
                         ?.takeIf { it == LegacyLocationAliases.DUNGEON_A || it == LegacyLocationAliases.DUNGEON_B }
                     ?: LegacyLocationAliases.DUNGEON_A
@@ -1121,6 +1142,7 @@ fun LlamaApp(
                         farmRepository = farmRepository,
                         destinationStructureId = destinationDungeonId,
                         arrivalAction = ActionId.ENTER_DUNGEON,
+                        onReturnToHome = ::returnToPetHome,
                         onBack = { navController.popBackStack() }
                     ) {
                         com.example.llamadroid.tama.ui.DungeonScreen(
@@ -1163,6 +1185,7 @@ fun LlamaApp(
                         farmRepository = farmRepository,
                         destinationStructureId = LegacyLocationAliases.ADVENTURE_GATE,
                         arrivalAction = ActionId.ENTER_ADVENTURE_GATE,
+                        onReturnToHome = ::returnToPetHome,
                         onBack = { navController.popBackStack() }
                     ) {
                         com.example.llamadroid.tama.ui.AdventureGateScreen(
@@ -1193,6 +1216,7 @@ fun LlamaApp(
                         farmRepository = farmRepository,
                         destinationStructureId = LegacyLocationAliases.ADVENTURE_GATE,
                         arrivalAction = ActionId.ENTER_ADVENTURE_GATE,
+                        onReturnToHome = ::returnToPetHome,
                         onBack = { navController.popBackStack() },
                         content = arenaContent
                     )
@@ -1205,9 +1229,8 @@ fun LlamaApp(
 }
 
 /**
- * Opens a contextual Tama feature only after its world actor reaches the
- * canonical structure. The route remains a world view during travel, so the
- * user can follow the same actor that the feature is waiting for.
+ * Classic features open directly. Only an explicitly started development
+ * adventure waits for its physical actor to reach the matching structure.
  */
 @Composable
 private fun TamaWorldArrivalContent(
@@ -1218,10 +1241,36 @@ private fun TamaWorldArrivalContent(
     destinationStructureId: String,
     arrivalAction: ActionId? = null,
     onBack: () -> Unit,
+    onReturnToHome: () -> Unit,
     content: @Composable () -> Unit
 ) {
     val context = LocalContext.current
     val world = remember(gameEngine) { gameEngine.world }
+    val adventureActive by world.adventureActive.collectAsState()
+    val exitScope = rememberCoroutineScope()
+    var exiting by remember(pet.id) { mutableStateOf(false) }
+    val returnHome: () -> Unit = {
+        if (!exiting) {
+            exiting = true
+            exitScope.launch {
+                try {
+                    val result = gameEngine.exitSimulatedWorld()
+                    if (result.success) onReturnToHome()
+                    else Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    Toast.makeText(context, R.string.tama_world_runtime_action_unavailable, Toast.LENGTH_SHORT).show()
+                } finally {
+                    exiting = false
+                }
+            }
+        }
+    }
+    if (!adventureActive) {
+        content()
+        return
+    }
     val farmTiles by remember(pet.id, farmRepository) {
         farmRepository.observeTiles(pet.id)
     }.collectAsState(initial = emptyList())
@@ -1335,7 +1384,8 @@ private fun TamaWorldArrivalContent(
         farmTiles = farmTiles,
         worldLabels = localizedWorldUiLabels(context, pet.name),
         brainLabels = localizedBrainUiLabels(context, pet.name),
-        onCloseWorld = onBack,
+        onCloseWorld = returnHome,
+        onReturnHome = returnHome,
         content = content
     )
 }

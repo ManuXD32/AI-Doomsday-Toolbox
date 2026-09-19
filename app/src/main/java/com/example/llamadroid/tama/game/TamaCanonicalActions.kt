@@ -18,8 +18,9 @@ import com.example.llamadroid.tama.world.core.LegacyLocationAliases
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.CancellationException
 
-/** Android-only compatibility dispatch. The pure executor owns duration and interruption. */
+/** Shared validation: direct classic controls or physical development-world actions. */
 internal object TamaCanonicalActions {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -130,6 +131,15 @@ internal object TamaCanonicalActions {
             "brewAdventureGatePotion" -> Rule(ActionId.USE_ALCHEMY, LegacyLocationAliases.ALCHEMIST, LegacyLocationAliases.ALCHEMIST)
             else -> error("unknown_canonical_action")
         }
+        if (!engine.isSimulatedWorldActive) {
+            return try {
+                engine.runClassicTransaction { _, _ -> complete(context, engine, action, arguments) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                rejected(R.string.tama_world_runtime_action_unavailable)
+            }
+        }
         val result = engine.world.queueAction(rule.action, rule.targetId,
             arguments + ("canonicalAction" to action), rule.destinationId)
         return TamaGameEngine.ActionResult(result.acceptedCommand,
@@ -137,7 +147,7 @@ internal object TamaCanonicalActions {
             if (result.acceptedCommand) rule.action.name.lowercase() else "")
     }
 
-    /** Called only by WorldEffectCommitter inside the living Room transaction. */
+    /** Called inside a serialized Room transaction by either action path. */
     suspend fun complete(context: Context, engine: TamaGameEngine, action: String, arguments: Map<String, String>): TamaGameEngine.ActionResult = when (action) {
         "goToBed" -> engine.goToBedLocked()
         "wakeUp" -> {
@@ -169,7 +179,9 @@ internal object TamaCanonicalActions {
             val vendor = arguments["vendorId"] ?: LegacyLocationAliases.SHOP
             val offer = TamaCommerceCatalog.offer(context, selected.id, vendor) ?: error("unknown_vendor_offer")
             require(offer.price == arguments.getValue("pricePerUnit").toInt() && offer.item.type == selected.type) { "invalid_vendor_offer" }
-            require(LegacyLocationAliases.normalize(engine.pet.value?.currentLocationId.orEmpty()) == vendor) { "vendor_required" }
+            if (engine.isSimulatedWorldActive) {
+                require(LegacyLocationAliases.normalize(engine.pet.value?.currentLocationId.orEmpty()) == vendor) { "vendor_required" }
+            }
             engine.buyItemLocked(offer.item, arguments.getValue("quantity").toInt(), offer.price)
         }
         "buyLegacyItem" -> {

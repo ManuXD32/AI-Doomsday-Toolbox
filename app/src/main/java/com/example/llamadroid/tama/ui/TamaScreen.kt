@@ -99,7 +99,10 @@ import com.example.llamadroid.tama.world.presentation.localizedWorldUiLabels
 import com.example.llamadroid.tama.world.ui.WorldRelationshipUi
 import com.example.llamadroid.tama.world.ui.WorldHatchEffect
 import androidx.navigation.NavController
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.flowOf
 import java.io.File
 import java.util.Calendar
@@ -300,6 +303,7 @@ fun TamaScreen(
     }
 
     // Dialogs
+    var selectedLocation by remember { mutableStateOf<TamaLocation?>(null) }
     var showFeedDialog by remember { mutableStateOf(false) }
     var showShopDialog by remember { mutableStateOf(false) }
     var showStatusDialog by remember { mutableStateOf(false) }
@@ -341,10 +345,13 @@ fun TamaScreen(
         }
     }
 
-    // View mode: Pet or Map
+    // View mode: keep the authored room as the normal Tama landing surface.
+    // The map toggle opens the bounded classic map; the optional world has its
+    // own route and must never become the persisted/default room.
     var showMap by remember { mutableStateOf(false) }
     val currentLocation by gameEngine.currentLocation.collectAsState()
     val worldController = remember(gameEngine) { gameEngine.world }
+    val simulationActive by worldController.adventureActive.collectAsState()
     val worldState by worldController.state.collectAsState()
     val currentDungeonStructureId = worldState?.actor
         ?.takeIf { it.presence == PresenceMode.INTERIOR }
@@ -359,11 +366,13 @@ fun TamaScreen(
         }
     }
     val observedFarmTiles by farmTilesFeed.collectAsState(initial = emptyList())
-    val isWorldPresence = pet != null && worldState?.actor?.presence == PresenceMode.WORLD
     var worldRouteOpen by remember(pet?.id) { mutableStateOf(false) }
     var requestedWorldRoute by remember(pet?.id) { mutableStateOf("WORLD") }
     var showingWorldSubroute by remember(pet?.id) { mutableStateOf(false) }
+    val isWorldPresence = pet != null && worldState?.actor?.presence == PresenceMode.WORLD
     var wasWorldPresence by remember(pet?.id) { mutableStateOf(isWorldPresence) }
+    var simulationEntryInFlight by remember(pet?.id) { mutableStateOf(false) }
+    var simulationExitInFlight by remember(pet?.id) { mutableStateOf(false) }
     val isPrincipalHomeRoomVisible = !showMap &&
         pet != null &&
         currentLocation?.type == LocationType.HOME &&
@@ -392,10 +401,20 @@ fun TamaScreen(
         }
     }
 
-    LaunchedEffect(isWorldPresence, worldState?.actor?.presence, requestedWorldRoute, pet?.id) {
+    LaunchedEffect(
+        isWorldPresence,
+        worldState?.actor?.presence,
+        requestedWorldRoute,
+        simulationActive,
+        pet?.id
+    ) {
+        // Physical WORLD -> INTERIOR arrival is distinct from the process-local
+        // simulation session. Keep this handoff alive while the optional world
+        // is active, but never treat session exit as an activity arrival.
         val arrivedFromWorld = requestedWorldRoute == "WORLD" && !showingWorldSubroute &&
             wasWorldPresence &&
             !isWorldPresence &&
+            simulationActive &&
             worldState?.actor?.presence in setOf(PresenceMode.HOME, PresenceMode.INTERIOR)
         if (arrivedFromWorld) {
             // This parent owns disposal of the inline map. Dispatch the
@@ -433,36 +452,8 @@ fun TamaScreen(
         }
     }
 
-    // Fixed city and location state (no city generation)
-    val cityLocations = remember(localeTag) {
-        val coreLocations = listOf(
-            Triple(0, 0, com.example.llamadroid.tama.data.LocationType.HOME),
-            Triple(1, 0, com.example.llamadroid.tama.data.LocationType.SHOP),
-            Triple(2, 0, com.example.llamadroid.tama.data.LocationType.PARK),
-            Triple(3, 0, com.example.llamadroid.tama.data.LocationType.HOSPITAL),
-            Triple(4, 0, com.example.llamadroid.tama.data.LocationType.ARCADE),
-            Triple(0, 1, com.example.llamadroid.tama.data.LocationType.ALCHEMIST),
-            Triple(1, 1, com.example.llamadroid.tama.data.LocationType.SCHOOL),
-            Triple(2, 1, com.example.llamadroid.tama.data.LocationType.WORKPLACE),
-            Triple(3, 1, com.example.llamadroid.tama.data.LocationType.FARM),
-            Triple(4, 1, com.example.llamadroid.tama.data.LocationType.BOXING_RING),
-            Triple(0, 2, com.example.llamadroid.tama.data.LocationType.DUNGEON),
-            Triple(2, 2, com.example.llamadroid.tama.data.LocationType.ADVENTURE_GATE),
-            Triple(4, 2, com.example.llamadroid.tama.data.LocationType.DUNGEON),
-        )
-
-        coreLocations.map { (x, y, type) ->
-            com.example.llamadroid.tama.data.TamaLocation(
-                id = "fixed_${x}_${y}",
-                name = type.localizedName(context),
-                type = type,
-                description = type.localizedDescription(context),
-                cityId = "hometown",
-                x = x, y = y,
-                isDiscovered = type == com.example.llamadroid.tama.data.LocationType.HOME
-            )
-        }
-    }
+    // Fixed city and location state (no city generation).
+    val cityLocations = remember(localeTag) { classicMapLocations(context) }
     // Helper to perform action with cooldown and Toast feedback
     fun actionDisplayDuration(actionName: String?): Long = when (actionName?.lowercase()) {
         "eating" -> 2200L
@@ -478,9 +469,11 @@ fun TamaScreen(
         return result.action in setOf("harvesting", "buying", "selling", "transforming", "sleeping")
     }
 
-    fun showResultToast(result: TamaGameEngine.ActionResult, force: Boolean = false) {
+    suspend fun showResultToast(result: TamaGameEngine.ActionResult, force: Boolean = false) {
         if (force || shouldShowResultToast(result)) {
-            Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+            withContext(Dispatchers.Main.immediate) {
+                Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -496,6 +489,55 @@ fun TamaScreen(
                 currentAction = null
             }
             actionCooldown = false
+        }
+    }
+
+    fun enterSimulation() {
+        if (simulationEntryInFlight || simulationActive) return
+        simulationEntryInFlight = true
+        scope.launch {
+            val result = try {
+                gameEngine.enterSimulatedWorld()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                TamaGameEngine.ActionResult(
+                    success = false,
+                    message = resources.getString(R.string.error_generic)
+                )
+            }
+            showResultToast(result, force = true)
+            if (result.success) {
+                showMap = false
+                requestedWorldRoute = "WORLD"
+                worldRouteOpen = true
+            }
+            simulationEntryInFlight = false
+        }
+    }
+
+    fun exitSimulation() {
+        if (simulationExitInFlight) return
+        simulationExitInFlight = true
+        scope.launch {
+            val result = try {
+                gameEngine.exitSimulatedWorld()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                TamaGameEngine.ActionResult(
+                    success = false,
+                    message = resources.getString(R.string.error_generic)
+                )
+            }
+            showResultToast(result, force = true)
+            if (result.success) {
+                requestedWorldRoute = "WORLD"
+                showingWorldSubroute = false
+                worldRouteOpen = false
+                showMap = false
+            }
+            simulationExitInFlight = false
         }
     }
 
@@ -589,7 +631,7 @@ fun TamaScreen(
     TamaParkReceiptHost(pet, gameEngine) { questBoard = null }
 
 
-    if ((isWorldPresence || worldRouteOpen) && pet != null) {
+    if ((worldRouteOpen || (simulationActive && isWorldPresence)) && pet != null) {
         TamaWorldRouteHost(
             world = worldController,
             brainProvider = { gameEngine.brain },
@@ -614,22 +656,29 @@ fun TamaScreen(
                     sharedEvents = 0
                 )
             },
-            // While the pet is physically outside, Room is not a state change:
-            // the world overview remains mounted. OpenHome is the explicit
-            // ReturnHome command and keeps the physical arrival contract.
-            exitShortcutLabelRes = if (isWorldPresence) null else R.string.tama_world_shortcut_room,
+            // Journal and Brain can be opened without entering the optional
+            // simulation. While active, the route host owns the clearly
+            // labeled Return home action and delegates the actual exit to the
+            // root engine boundary.
+            exitShortcutLabelRes = null,
             onNonWorldRouteChanged = { isNonWorldRoute ->
                 showingWorldSubroute = isNonWorldRoute
-                // Keep the live world overview mounted while returning from
-                // Journal or Brain. The Room shortcut closes it from home or
-                // an interior; while WORLD, OpenHome requests physical return.
-                if (isNonWorldRoute) worldRouteOpen = true else requestedWorldRoute = "WORLD"
+                if (isNonWorldRoute) {
+                    worldRouteOpen = true
+                } else if (simulationActive) {
+                    requestedWorldRoute = "WORLD"
+                } else {
+                    requestedWorldRoute = "WORLD"
+                    worldRouteOpen = false
+                    showMap = false
+                }
             },
             onCloseWorld = {
                 requestedWorldRoute = "WORLD"
                 showMap = false
                 worldRouteOpen = false
             },
+            onReturnHome = ::exitSimulation,
             onOpenInventory = { showInventoryDialog = true },
             modifier = modifier
         )
@@ -692,7 +741,7 @@ fun TamaScreen(
                         onClick = {
                             showMap = true
                             requestedWorldRoute = "WORLD"
-                            worldRouteOpen = true
+                            worldRouteOpen = simulationActive
                             walkthroughTargets?.recordEvent("tama.room")
                         },
                         modifier = Modifier.size(48.dp).semantics {
@@ -733,32 +782,44 @@ fun TamaScreen(
         ) {
             val currentPet = pet
             if (currentPet != null) {
-                // Show pet view
-                TamaPetDisplay(
-                    pet = currentPet,
-                    currentAction = displayAction,
-                    locationTypeName = currentLocation?.type?.name?.lowercase(),
-                    homeRoomId = currentPet.homeRoomId,
-                    sleepyFairyReminder = sleepyFairyReminder,
-                    activeStudySession = activeStudySession,
-                    currentTime = currentTime,
-                    onQuestBoard = if (currentLocation?.type == LocationType.PARK) {
-                        {
-                            scope.launch {
-                                questBoard = gameEngine.getParkQuestBoard(currentTime)
-                                showQuestBoardDialog = true
+                if (showMap) {
+                    TamaMapView(
+                        cityName = stringResource(R.string.tama_city_hometown),
+                        locations = cityLocations,
+                        currentLocation = currentLocation ?: cityLocations.firstOrNull(),
+                        discoveredLocationIds = currentPet.discoveredLocationIds,
+                        onLocationClick = { location -> selectedLocation = location },
+                        onOpenSimulation = ::enterSimulation,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    // The authored room remains the only pet-animation surface.
+                    TamaPetDisplay(
+                        pet = currentPet,
+                        currentAction = displayAction,
+                        locationTypeName = currentLocation?.type?.name?.lowercase(),
+                        homeRoomId = currentPet.homeRoomId,
+                        sleepyFairyReminder = sleepyFairyReminder,
+                        activeStudySession = activeStudySession,
+                        currentTime = currentTime,
+                        onQuestBoard = if (currentLocation?.type == LocationType.PARK) {
+                            {
+                                scope.launch {
+                                    questBoard = gameEngine.getParkQuestBoard(currentTime)
+                                    showQuestBoardDialog = true
+                                }
                             }
-                        }
-                    } else null,
-                    onMarketBoard = if (currentLocation?.type == LocationType.PARK) {
-                        {
-                            scope.launch {
-                                marketBoard = gameEngine.getParkMarketBoard(currentTime)
-                                showMarketBoardDialog = true
+                        } else null,
+                        onMarketBoard = if (currentLocation?.type == LocationType.PARK) {
+                            {
+                                scope.launch {
+                                    marketBoard = gameEngine.getParkMarketBoard(currentTime)
+                                    showMarketBoardDialog = true
+                                }
                             }
-                        }
-                    } else null
-                )
+                        } else null
+                    )
+                }
             } else {
                 // No pet yet
                 Column(
@@ -929,6 +990,83 @@ fun TamaScreen(
         )
     }
 
+    // Classic map location dialog. This remains a direct legacy action surface;
+    // the optional living world has its own route and session boundary.
+    if (!simulationActive && selectedLocation != null && pet != null) {
+        val location = selectedLocation!!
+        val isDiscovered = pet!!.discoveredLocationIds.contains(location.id) ||
+            location.type == LocationType.HOME
+        val isHere = currentLocation?.id == location.id ||
+            (currentLocation == null && location.type == LocationType.HOME)
+        val travelCost = if (isHere) 0 else classicTravelEnergyCost(currentLocation, location)
+        LocationDetailsDialog(
+            location = location,
+            isCurrentLocation = isHere,
+            isDiscovered = isDiscovered,
+            petEnergy = pet!!.stats.energy.toInt(),
+            travelCost = travelCost,
+            onTravel = {
+                val alreadyDiscovered = pet!!.discoveredLocationIds.contains(location.id)
+                selectedLocation = null
+                scope.launch {
+                    val result = gameEngine.travelTo(location)
+                    if (result.success) {
+                        if (!alreadyDiscovered) {
+                            Toast.makeText(
+                                context,
+                                resources.getString(
+                                    R.string.tama_discovered,
+                                    location.name,
+                                    location.description
+                                ),
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                        showMap = false
+                    } else {
+                        showResultToast(result, force = true)
+                    }
+                }
+            },
+            onAction = { action ->
+                selectedLocation = null
+                showMap = false
+                when (action) {
+                    TamaClassicLocationAction.SHOP -> showShopDialog = true
+                    TamaClassicLocationAction.SCHOOL -> showStudyDialog = true
+                    TamaClassicLocationAction.WORK -> showWorkDialog = true
+                    TamaClassicLocationAction.TRAIN -> showTrainingDialog = true
+                    TamaClassicLocationAction.FARM -> navController.navigate(Screen.Farm.route)
+                    TamaClassicLocationAction.DUNGEON -> {
+                        val classicDungeonId = location.id.takeIf {
+                            it == LegacyLocationAliases.DUNGEON_A ||
+                                it == LegacyLocationAliases.DUNGEON_B
+                        } ?: LegacyLocationAliases.DUNGEON_A
+                        navController.navigate(
+                            Screen.Dungeon.createRoute(classicDungeonId)
+                        )
+                    }
+                    TamaClassicLocationAction.QUESTS -> {
+                        scope.launch {
+                            questBoard = gameEngine.getParkQuestBoard(currentTime)
+                            showQuestBoardDialog = true
+                        }
+                    }
+                    TamaClassicLocationAction.CHANGE -> showAlchemistDialog = true
+                    TamaClassicLocationAction.HEAL -> showHospitalDialog = true
+                    TamaClassicLocationAction.ADVENTURE_GATE -> requestAdventureGateEntry()
+                    TamaClassicLocationAction.ARCADE -> Unit
+                }
+            },
+            onArcade = {
+                selectedLocation = null
+                showMap = false
+                navController.navigate(Screen.Arcade.route)
+            },
+            onDismiss = { selectedLocation = null }
+        )
+    }
+
     // Menu dialog
     if (showMenu) {
         TamaMenuDialog(
@@ -947,13 +1085,11 @@ fun TamaScreen(
             },
             onJournal = {
                 showMenu = false
-                showMap = true
                 requestedWorldRoute = "JOURNAL"
                 worldRouteOpen = true
             },
             onBrain = {
                 showMenu = false
-                showMap = true
                 requestedWorldRoute = "BRAIN"
                 worldRouteOpen = true
             },

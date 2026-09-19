@@ -27,6 +27,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -47,6 +49,8 @@ import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.encodeToJsonElement
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.roundToInt
 import kotlin.random.Random
 import java.util.zip.ZipEntry
@@ -82,6 +86,10 @@ class TamaGameEngine(
         )
     }
     val world by worldDelegate
+    /** True only after an explicit process-local development-world entry. */
+    val isSimulatedWorldActive: Boolean
+        get() = com.example.llamadroid.tama.world.runtime.WorldControllerRegistry
+            .isAdventureActive(petDatabase)
     private val brainDelegate = lazy {
         com.example.llamadroid.tama.world.training.TamaBrainController(
             context.applicationContext, backgroundScope, { _pet.value?.id },
@@ -178,7 +186,7 @@ class TamaGameEngine(
                     val syncedPet = TamaActionGate.run {
                         // The observer may have waited behind a newer mutation; read the current row.
                         val latest = dao.getActivePet() ?: return@run null
-                        PetMapper.toDomain(latest).also { current ->
+                        loadNormalizedPet(latest).also { current ->
                             _pet.value = current
                             _currentLocation.value = resolveLocation(current.currentLocationId)
                         }
@@ -202,17 +210,20 @@ class TamaGameEngine(
                         mutate {
                             ensurePetLoadedForBackgroundUpdates()
                             updateForTimePassedLocked()
-                            val controller = world
-                            if (com.example.llamadroid.tama.world.runtime.WorldControllerRegistry.ownsClock(this@TamaGameEngine)) {
+                            val controller = worldDelegate.takeIf { it.isInitialized() }?.value
+                            if (controller?.isAdventureActive == true &&
+                                com.example.llamadroid.tama.world.runtime.WorldControllerRegistry.ownsClock(this@TamaGameEngine)
+                            ) {
                                 _pet.value?.let { controller.advance(it, System.currentTimeMillis()) }
                             }
                         }
                     }.onFailure { error ->
                         if (error is kotlinx.coroutines.CancellationException) throw error
                         DebugLog.log("[TamaGameEngine] Background decay tick failed: ${error.message}")
-                        world.reportFailure()
+                        if (worldDelegate.isInitialized() && world.isAdventureActive) world.reportFailure()
                     }
-                    delay(if (world.visible) 100L else 5_000L)
+                    val controller = worldDelegate.takeIf { it.isInitialized() }?.value
+                    delay(if (controller?.isAdventureActive == true && controller.visible) 100L else 5_000L)
                 }
             }
 
@@ -222,7 +233,9 @@ class TamaGameEngine(
                 )
                 while (true) {
                     delay(60_000L)
-                    _pet.value?.let { current -> runCatching { memories.processPending(current.id) } }
+                    if (isSimulatedWorldActive) {
+                        _pet.value?.let { current -> runCatching { memories.processPending(current.id) } }
+                    }
                 }
             }
         }
@@ -266,7 +279,7 @@ class TamaGameEngine(
 
     private suspend fun resetPetLocked() {
         _pet.value?.let { pet ->
-            world.invalidate()
+            if (worldDelegate.isInitialized()) world.invalidate()
             petDatabase.worldDao().clearPet(pet.id)
             dao.deletePet(PetMapper.toEntity(pet))
             dao.deleteArtworksForPet(pet.id)
@@ -284,7 +297,7 @@ class TamaGameEngine(
 
     private suspend fun loadPetLocked(): TamaPet? {
         val entity = dao.getActivePet() ?: return null
-        val pet = PetMapper.toDomain(entity)
+        val pet = loadNormalizedPet(entity)
         pruneExtraPetsKeeping(pet.id)
         _pet.value = pet
         _currentLocation.value = resolveLocation(pet.currentLocationId)
@@ -310,7 +323,7 @@ class TamaGameEngine(
         val currentPet = _pet.value
         if (currentPet != null) return currentPet
         val entity = dao.getActivePet() ?: return null
-        val pet = PetMapper.toDomain(entity)
+        val pet = loadNormalizedPet(entity)
         pruneExtraPetsKeeping(pet.id)
         _pet.value = pet
         _currentLocation.value = resolveLocation(pet.currentLocationId)
@@ -768,6 +781,72 @@ class TamaGameEngine(
         val message: String,
         val action: String = ""
     )
+
+    /** Explicit opt-in boundary for the development simulated world. */
+    suspend fun enterSimulatedWorld(): ActionResult = mutate {
+        val pet = _pet.value ?: return@mutate ActionResult(false, context.getString(R.string.tama_error_no_pet))
+        val result = world.enterSimulatedWorld(pet)
+        if (!result.acceptedCommand) {
+            return@mutate ActionResult(false, context.getString(R.string.tama_world_runtime_action_unavailable))
+        }
+        reloadPersistedPet()
+        ActionResult(true, context.getString(R.string.tama_world_runtime_loading), "world")
+    }
+
+    /** Cancels development navigation/receipts and returns the canonical pet home. */
+    suspend fun exitSimulatedWorld(): ActionResult = mutate {
+        val pet = _pet.value ?: return@mutate ActionResult(false, context.getString(R.string.tama_error_no_pet))
+        if (!isSimulatedWorldActive) {
+            return@mutate travelToId(LegacyLocationAliases.HOME)
+        }
+        // Commit pending world effects first, then settle any canonical
+        // activity against the latest Room row before resetting the actor.
+        world.flush()
+        reloadPersistedPet()
+        val latest = _pet.value ?: pet
+        if (latest.currentActivity != ActivityType.NONE) {
+            stopActivityLocked()
+            reloadPersistedPet()
+        }
+        val result = world.exitSimulatedWorld(_pet.value ?: latest)
+        val updatedPet = result.pet
+        if (result.changed && updatedPet != null) {
+            _pet.value = updatedPet
+            _currentLocation.value = resolveLocation(updatedPet.currentLocationId)
+        }
+        ActionResult(
+            success = result.changed,
+            message = context.getString(R.string.tama_arrived_home_free, resolveLocation(LegacyLocationAliases.HOME)?.name
+                ?: context.getString(R.string.tama_location_home)),
+            action = "home"
+        )
+    }
+
+    /**
+     * Shared transaction seam for classic farm controls. It intentionally
+     * owns the existing mutation lane and reloads after rollback/cancellation
+     * so a failed direct transition cannot leave a stale in-memory pet.
+     */
+    internal suspend fun <T> runClassicTransaction(
+        block: suspend (TamaDatabase, FarmRepository) -> T
+    ): T = TamaActionGate.run {
+        dao.getActivePet()?.let { entity ->
+            val current = loadNormalizedPet(entity)
+            _pet.value = current
+            _currentLocation.value = resolveLocation(current.currentLocationId)
+        }
+        try {
+            TamaCommitEffects.afterCommit {
+                petDatabase.withTransaction { block(petDatabase, farmRepository) }
+            }
+        } catch (cancelled: CancellationException) {
+            withContext(NonCancellable) { reloadPersistedPet() }
+            throw cancelled
+        } catch (failure: Exception) {
+            reloadPersistedPet()
+            throw failure
+        }
+    }
 
     internal suspend fun completeWorldCanonicalAction(
         action: String,
@@ -1792,6 +1871,9 @@ class TamaGameEngine(
     internal suspend fun stopActivityLocked(): ActionResult {
         val pet = _pet.value ?: return ActionResult(false, context.getString(R.string.tama_error_no_pet))
         if (pet.currentActivity == ActivityType.NONE) {
+            if (!isSimulatedWorldActive) {
+                return ActionResult(false, context.getString(R.string.tama_action_not_doing_anything))
+            }
             val actor = world.state.value?.actor
             if (actor != null && (actor.path.isNotEmpty() || actor.pendingActivity != null || actor.pendingCommand != null ||
                     actor.actionState == com.example.llamadroid.tama.world.core.ActionState.RUNNING)) {
@@ -2049,6 +2131,11 @@ class TamaGameEngine(
         if (pet.isSleeping) return ActionResult(false, context.getString(R.string.tama_sleeping_busy, pet.name))
         if (pet.currentActivity != ActivityType.NONE) return ActionResult(false, context.getString(R.string.tama_busy_cannot_travel, pet.name))
         if (pet.stage == GrowthStage.EGG) return ActionResult(false, context.getString(R.string.tama_eggs_cannot_travel))
+        if (!isSimulatedWorldActive) {
+            val location = FIXED_LOCATIONS_BY_ID[id]
+                ?: return ActionResult(false, context.getString(R.string.tama_world_runtime_action_unavailable))
+            return travelToClassicLocked(pet, location)
+        }
         val command = if (home) {
             com.example.llamadroid.tama.world.core.WorldCommand.ReturnHome
         } else com.example.llamadroid.tama.world.core.WorldCommand.GoToStructure(id)
@@ -2058,12 +2145,133 @@ class TamaGameEngine(
             else context.getString(R.string.tama_world_runtime_action_unavailable), "walking")
     }
 
+    /** Restored pre-world map travel: immediate arrival, fixed-grid energy cost, and encounters. */
+    private suspend fun travelToClassicLocked(pet: TamaPet, location: TamaLocation): ActionResult {
+        val currentLocation = _currentLocation.value ?: resolveLocation(pet.currentLocationId)
+        if (currentLocation?.id == location.id) {
+            val message = if (location.type == LocationType.HOME) {
+                context.getString(R.string.tama_arrived_home_free, location.name)
+            } else {
+                context.getString(R.string.tama_arrived_energy_cost, location.name, 0)
+            }
+            return ActionResult(true, message, "walking")
+        }
+        val energyCost = previewTravelEnergyCost(currentLocation, location)
+        if (pet.stats.energy < energyCost) {
+            return ActionResult(false, context.getString(R.string.tama_too_tired_to_travel, pet.name, energyCost))
+        }
+
+        val now = System.currentTimeMillis()
+        val (parkEncounter, parkGiftItem) = if (location.type == LocationType.PARK) {
+            buildParkEncounter(pet, now)
+        } else {
+            null to null
+        }
+        val ambientNpcState = if (location.type == LocationType.PARK) {
+            null
+        } else {
+            TamaAmbientNpcCatalog.createState(location.type, now)
+        }
+        val updatedInventory = if (parkGiftItem != null) {
+            addInventoryItem(pet.inventory, parkGiftItem, parkGiftItem.quantity.coerceAtLeast(1))
+        } else {
+            pet.inventory
+        }
+        val updatedPet = pet.copy(
+            stats = pet.stats.copy(energy = pet.stats.energy - energyCost),
+            currentLocationId = location.id,
+            discoveredLocationIds = pet.discoveredLocationIds + location.id,
+            currentParkEncounter = parkEncounter,
+            currentAmbientNpc = ambientNpcState,
+            inventory = updatedInventory
+        )
+        _pet.value = updatedPet
+        savePet(updatedPet)
+        _currentLocation.value = location
+
+        // A world snapshot may already exist behind an Arcade/other adapter.
+        // Keep its actor location aligned without entering or ticking it.
+        if (worldDelegate.isInitialized()) {
+            world.syncClassicLocation(updatedPet.id, location.id, now)
+        }
+
+        if (location.id !in pet.discoveredLocationIds) {
+            logEvent(
+                pet.id,
+                EventType.DISCOVERED,
+                context.getString(R.string.tama_event_discovered, location.name, location.type.emoji),
+                locationId = location.id
+            )
+        }
+        logEvent(
+            pet.id,
+            EventType.TRAVELED,
+            context.getString(R.string.tama_event_traveled, pet.name, location.name),
+            locationId = location.id,
+            statsChange = if (energyCost > 0) mapOf("energy" to -energyCost.toFloat()) else emptyMap()
+        )
+        parkEncounter?.let { encounter ->
+            val npcName = TamaParkSocialCatalog.localizedName(context, encounter.npcId)
+            val line = localizeParkEncounterLine(encounter)
+            logEvent(
+                updatedPet.id,
+                EventType.MET_NPC,
+                context.getString(R.string.tama_park_event_met_friend_line, npcName, line),
+                locationId = location.id,
+                npcId = encounter.npcId
+            )
+            if (encounter.giftItemId != null && parkGiftItem != null) {
+                logEvent(
+                    updatedPet.id,
+                    EventType.RECEIVED_GIFT,
+                    context.getString(
+                        R.string.tama_park_gift_event,
+                        npcName,
+                        inventoryItemDisplayName(context, parkGiftItem)
+                    ),
+                    locationId = location.id,
+                    npcId = encounter.npcId
+                )
+            }
+        }
+        ambientNpcState?.let { ambientNpc ->
+            val npcName = TamaAmbientNpcCatalog.resolveName(context, ambientNpc.npcId)
+            val line = TamaAmbientNpcCatalog.resolveLine(context, ambientNpc)
+            logEvent(
+                updatedPet.id,
+                EventType.MET_NPC,
+                context.getString(R.string.tama_event_met_ambient_npc, npcName, line),
+                locationId = location.id,
+                npcId = ambientNpc.npcId
+            )
+        }
+
+        val arrivalMessage = if (location.type == LocationType.HOME && energyCost == 0) {
+            context.getString(R.string.tama_arrived_home_free, location.name)
+        } else {
+            context.getString(R.string.tama_arrived_energy_cost, location.name, energyCost)
+        }
+        return ActionResult(true, arrivalMessage, "walking")
+    }
+
+    fun previewTravelEnergyCost(currentLocation: TamaLocation?, destination: TamaLocation): Int {
+        if (destination.type == LocationType.HOME) return 0
+        val distance = currentLocation?.let {
+            abs(it.x - destination.x) + abs(it.y - destination.y)
+        } ?: return 3
+        return sharedTravelEnergyCost(distance)
+    }
+
+    private fun sharedTravelEnergyCost(distance: Int): Int =
+        ceil((distance.coerceAtLeast(1) * 3f) / 2f).toInt().coerceAtLeast(2)
+
     private suspend fun queueActivityTravel(
         pet: TamaPet,
         destinationId: String,
         action: String,
         arguments: Map<String, String> = emptyMap()
     ): ActionResult? {
+        if (!isSimulatedWorldActive) return null
         if (com.example.llamadroid.tama.world.persistence.WorldInitializer.normalizeLocation(pet.currentLocationId) == destinationId) return null
         if (pet.isSleeping) return ActionResult(false, context.getString(R.string.tama_sleeping_busy, pet.name))
         if (pet.currentActivity != ActivityType.NONE) return ActionResult(false, context.getString(R.string.tama_busy_cannot_travel, pet.name))
@@ -3245,7 +3453,9 @@ class TamaGameEngine(
         )
         _events.value = listOf(event) + _events.value.take(99)  // Keep last 100
         dao.saveEvent(eventToEntity(event))
-        world.recordActivityEvent(event)
+        if (worldDelegate.isInitialized() && isSimulatedWorldActive) {
+            world.recordActivityEvent(event)
+        }
     }
 
     fun observeArtworks(petId: String): Flow<List<TamaArtworkEntity>> = dao.observeArtworks(petId)
@@ -3275,7 +3485,7 @@ class TamaGameEngine(
     }
 
     private suspend fun buildBackupPackage(): TamaBackupPackage {
-        world.flush()
+        if (worldDelegate.isInitialized()) world.flush()
         val database = petDatabase
         val pet = _pet.value ?: dao.getActivePet()?.let(PetMapper::toDomain)
             ?: throw IllegalStateException("No active pet to export")
@@ -3587,7 +3797,7 @@ class TamaGameEngine(
         }
         // The durable world has changed; invalidate before post-commit file
         // cleanup/settings work so no cached previous actor can be flushed.
-        world.invalidate()
+        if (worldDelegate.isInitialized()) world.invalidate()
         mediaStaging?.commit()
         val importedSessionIds = bundle.adventureSessions.map { it.id }.toSet()
         oldPetMedia.forEach { snapshot ->
@@ -3960,16 +4170,29 @@ class TamaGameEngine(
     /** Reload under the shared gate so background/watch engine instances cannot save stale pet copies. */
     internal suspend fun reloadPersistedPet() = TamaActionGate.run {
         val entity = dao.getActivePet()
-        _pet.value = entity?.let(PetMapper::toDomain)
-        _currentLocation.value = entity?.let { resolveLocation(it.currentLocationId) }
+        val current = entity?.let { loadNormalizedPet(it) }
+        _pet.value = current
+        _currentLocation.value = current?.let { resolveLocation(it.currentLocationId) }
     }
 
     private suspend fun <T> mutate(block: suspend () -> T): T = TamaActionGate.run {
         dao.getActivePet()?.let { entity ->
-            _pet.value = PetMapper.toDomain(entity)
-            _currentLocation.value = resolveLocation(entity.currentLocationId)
+            val current = loadNormalizedPet(entity)
+            _pet.value = current
+            _currentLocation.value = resolveLocation(current.currentLocationId)
         }
         block()
+    }
+
+    /** Legacy world-only location rows must not hide a pet on the classic map. */
+    private suspend fun loadNormalizedPet(entity: TamaPetEntity): TamaPet {
+        val raw = PetMapper.toDomain(entity)
+        if (isSimulatedWorldActive || !raw.currentLocationId.equals("world", ignoreCase = true)) {
+            return raw
+        }
+        val normalized = raw.copy(currentLocationId = LegacyLocationAliases.HOME)
+        dao.savePet(PetMapper.toEntity(normalized))
+        return normalized
     }
 
 
@@ -3988,7 +4211,12 @@ class TamaGameEngine(
         }
         val normalized = com.example.llamadroid.tama.world.persistence.WorldRelationships.projectLegacyWrites(
             petDatabase, normalizeGrowthTimerState(
-            ensurePoopSchedule(pet, System.currentTimeMillis()),
+            ensurePoopSchedule(
+                if (!isSimulatedWorldActive && pet.currentLocationId.equals("world", ignoreCase = true)) {
+                    pet.copy(currentLocationId = LegacyLocationAliases.HOME)
+                } else pet,
+                System.currentTimeMillis()
+            ),
             System.currentTimeMillis()
         ))
         _pet.value = normalized

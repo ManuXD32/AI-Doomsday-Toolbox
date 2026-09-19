@@ -68,6 +68,8 @@ class WorldCanonicalActionTest {
         ), current)
         engine.world.invalidate()
         assertTrue(engine.world.command(WorldCommand.Stop).acceptedCommand)
+        // These fixtures exercise the optional physical-world action contract.
+        assertTrue(engine.enterSimulatedWorld().success)
     }
 
     private suspend fun advance() {

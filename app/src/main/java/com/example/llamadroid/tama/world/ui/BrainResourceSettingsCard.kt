@@ -14,9 +14,15 @@ import kotlin.math.roundToInt
 
 /** Resource limits belong to the synthetic trainer, independently of living pet permissions. */
 @Composable
-internal fun BrainResourceSettingsCard(settings: BrainResourceSettingsUi, onChanged: (BrainResourceSettingsUi) -> Unit) {
+internal fun BrainResourceSettingsCard(
+    settings: BrainResourceSettingsUi,
+    onChanged: (BrainResourceSettingsUi) -> Unit,
+    showTitle: Boolean = true
+) {
     BrainCard {
-        Text(stringResource(R.string.tama_world_brain_resources_title), style = MaterialTheme.typography.titleMedium)
+        if (showTitle) {
+            Text(stringResource(R.string.tama_world_brain_resources_title), style = MaterialTheme.typography.titleMedium)
+        }
         SafeSwitchRow(stringResource(R.string.tama_world_brain_charging_only), settings.chargingOnly) {
             onChanged(settings.copy(chargingOnly = it))
         }

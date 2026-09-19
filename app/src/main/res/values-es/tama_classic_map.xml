@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_classic_map_simulated_world_title">Mundo simulado — Desarrollo</string>
+    <string name="tama_classic_map_development_badge">Desarrollo</string>
+    <string name="tama_classic_map_simulated_world_description">Simulación opcional del mundo vivo. El mapa clásico de Tama sigue siendo el predeterminado.</string>
+    <string name="tama_classic_map_return_home">Volver a casa</string>
+    <string name="tama_classic_map_open_shop">Abrir tienda</string>
+    <string name="tama_classic_map_open_farm">Abrir granja</string>
+    <string name="tama_classic_map_open_dungeon">Abrir mazmorra</string>
+</resources>

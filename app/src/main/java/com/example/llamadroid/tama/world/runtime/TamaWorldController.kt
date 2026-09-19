@@ -36,6 +36,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 /** One living world, driven by the existing engine's single clock and mutation lane. */
 class TamaWorldController(
@@ -61,6 +63,10 @@ class TamaWorldController(
     val state: StateFlow<WorldState?> = _state.asStateFlow()
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
+    private val _adventureActive = MutableStateFlow(false)
+    /** Process-local opt-in; a persisted snapshot never reopens the world. */
+    val adventureActive: StateFlow<Boolean> = _adventureActive.asStateFlow()
+    val isAdventureActive: Boolean get() = _adventureActive.value
     @Volatile var visible: Boolean = false
         private set
     private var saved: WorldState? = null
@@ -68,6 +74,7 @@ class TamaWorldController(
     var navigationPolicy: NavigationPolicy? = null
         private set
     private var navigationVersion = "baseline-v1"
+    private val receiptJson = Json { encodeDefaults = true; ignoreUnknownKeys = true }
 
     private data class ArcadeTransactionOutcome<T>(
         val value: T,
@@ -112,6 +119,219 @@ class TamaWorldController(
 
     fun setVisible(value: Boolean) { visible = value }
     internal fun bindEngine(engine: TamaGameEngine) { effects.engine = engine }
+
+    /**
+     * Reads the saved autonomy policy for a presentation-only Brain host.
+     * This deliberately does not hydrate controller state: a later explicit
+     * world entry must still run [ensure] so policy references and durable
+     * Arcade leases are restored through their normal path.
+     */
+    suspend fun loadSavedAutonomyForPresentation(petId: String): AutonomyPolicy? =
+        TamaActionGate.run { store.load(petId)?.autonomy }
+
+    /**
+     * Enters the optional development world without simulating time spent in
+     * the classic activity. Geometry, policy, NPCs and progress are loaded as
+     * saved; only the simulation clock is rebased at explicit entry.
+     */
+    internal suspend fun enterSimulatedWorld(
+        pet: TamaPet,
+        now: Long = System.currentTimeMillis()
+    ): SimulationResult = TamaActionGate.run {
+        val current = ensure(pet, now)
+        if (_error.value != null) {
+            return@run SimulationResult(current, acceptedCommand = false, rejectionReason = _error.value)
+        }
+        if (_adventureActive.value) return@run SimulationResult(current)
+
+        val next = current.copy(
+            actor = current.actor.copy(needs = pet.stats.worldNeeds()),
+            lastSimulatedAt = now
+        )
+        val worldLocation = if (next.actor.presence == PresenceMode.WORLD) {
+            "world"
+        } else {
+            next.actor.structureId ?: LegacyLocationAliases.HOME
+        }
+        val updatedPet = pet.copy(
+            currentLocationId = worldLocation,
+            discoveredLocationIds = pet.discoveredLocationIds +
+                next.knownPlaces.map { it.id }.filter { it in LegacyLocationAliases.allIds }
+        )
+        // The actor and canonical pet location enter the optional session as
+        // one Room commit. A failed entry cannot leave only one side moved.
+        TamaCommitEffects.afterCommit {
+            database.withTransaction {
+                store.save(next, saved)
+                database.tamaDao().savePet(PetMapper.toEntity(updatedPet))
+            }
+        }
+        saved = next
+        pendingEffects = emptyList()
+        _error.value = null
+        _adventureActive.value = true
+        _state.value = next
+        SimulationResult(next)
+    }
+
+    data class SimulatedWorldExit(
+        val state: WorldState?,
+        val pet: TamaPet?,
+        val changed: Boolean
+    )
+
+    /** Stops the development session immediately, retaining all world data. */
+    internal suspend fun exitSimulatedWorld(
+        pet: TamaPet,
+        now: Long = System.currentTimeMillis()
+    ): SimulatedWorldExit = TamaActionGate.run {
+        val current = _state.value?.takeIf { it.petId == pet.id } ?: store.load(pet.id)
+        if (current == null) {
+            _adventureActive.value = false
+            return@run SimulatedWorldExit(null, pet = null, changed = false)
+        }
+        val homePet = pet.copy(
+            currentLocationId = LegacyLocationAliases.HOME,
+            discoveredLocationIds = pet.discoveredLocationIds + LegacyLocationAliases.HOME,
+            currentParkEncounter = null,
+            currentAmbientNpc = null
+        )
+        val home = current.structures.firstOrNull { it.type == StructureType.HOME }
+        if (home == null) {
+            // A malformed imported snapshot must still have a safe direct
+            // escape. Keep its rows, cancel receipts, and close only the
+            // process-local session; never delete or regenerate the world.
+            TamaCommitEffects.afterCommit {
+                database.withTransaction {
+                    cancelActiveReceipts(pet.id, now)
+                    database.tamaDao().savePet(PetMapper.toEntity(homePet))
+                }
+            }
+            _adventureActive.value = false
+            return@run SimulatedWorldExit(current, pet = homePet, changed = true)
+        }
+        val entrance = home.entrance
+        val next = current.copy(
+            actor = current.actor.copy(
+                x = entrance.x,
+                y = entrance.y,
+                preciseX = entrance.x.toDouble(),
+                preciseY = entrance.y.toDouble(),
+                presence = PresenceMode.HOME,
+                structureId = home.id,
+                goal = GoalId.IDLE,
+                action = ActionId.WAIT,
+                actionState = ActionState.IDLE,
+                actionTicksRemaining = 0,
+                destinationX = null,
+                destinationY = null,
+                pendingStructureId = null,
+                actionTargetId = null,
+                actionTargetX = null,
+                actionTargetY = null,
+                path = emptyList(),
+                actionArguments = emptyMap(),
+                pendingCommand = null,
+                pendingActivity = null,
+                followTargetId = null,
+                needs = pet.stats.worldNeeds(),
+                stuckTicks = 0
+            ),
+            lastSimulatedAt = now
+        )
+        TamaCommitEffects.afterCommit {
+            database.withTransaction {
+                cancelActiveReceipts(pet.id, now)
+                store.save(next, current)
+                database.tamaDao().savePet(PetMapper.toEntity(homePet))
+            }
+        }
+        saved = next
+        pendingEffects = emptyList()
+        _state.value = next
+        _error.value = null
+        _adventureActive.value = false
+        SimulatedWorldExit(next, pet = homePet, changed = true)
+    }
+
+    /**
+     * Aligns a persisted actor with classic direct travel without creating a
+     * world or enabling simulation. This is used when a classic destination
+     * (notably Arcade) has a durable world adapter behind it.
+     */
+    internal suspend fun syncClassicLocation(
+        petId: String,
+        locationId: String,
+        now: Long = System.currentTimeMillis()
+    ): Boolean = TamaActionGate.run {
+        if (_adventureActive.value) return@run false
+        val current = _state.value?.takeIf { it.petId == petId } ?: store.load(petId)
+            ?: return@run false
+        val normalized = WorldInitializer.normalizeLocation(locationId) ?: return@run false
+        val structure = current.structures.firstOrNull { it.id == normalized } ?: return@run false
+        val expectedPresence = if (structure.type == StructureType.HOME) PresenceMode.HOME else PresenceMode.INTERIOR
+        if (current.actor.structureId == structure.id && current.actor.presence == expectedPresence) {
+            return@run true
+        }
+        // Do not erase an in-flight Arcade lease while a classic UI retries
+        // its begin call or replays a terminal receipt.
+        if (TamaArcadeWorldActions.leaseSessionId(current) != null) return@run false
+        val entrance = structure.entrance
+        val next = current.copy(
+            actor = current.actor.copy(
+                x = entrance.x,
+                y = entrance.y,
+                preciseX = entrance.x.toDouble(),
+                preciseY = entrance.y.toDouble(),
+                presence = expectedPresence,
+                structureId = structure.id,
+                goal = GoalId.IDLE,
+                action = ActionId.WAIT,
+                actionState = ActionState.IDLE,
+                actionTicksRemaining = 0,
+                destinationX = null,
+                destinationY = null,
+                pendingStructureId = null,
+                actionTargetId = null,
+                actionTargetX = null,
+                actionTargetY = null,
+                path = emptyList(),
+                actionArguments = emptyMap(),
+                pendingCommand = null,
+                pendingActivity = null,
+                followTargetId = null
+            ),
+            lastSimulatedAt = now
+        )
+        store.save(next, current)
+        saved = next
+        pendingEffects = emptyList()
+        _state.value = next
+        _error.value = null
+        true
+    }
+
+    private suspend fun cancelActiveReceipts(petId: String, now: Long) {
+        val dao = database.worldActionReceiptDao()
+        dao.active(petId).forEach { row ->
+            val resultJson = receiptJson.encodeToString(
+                TamaWorldActionReceiptResult(
+                    success = false,
+                    action = row.kind,
+                    errorCode = "world_session_closed",
+                    completedAt = now
+                )
+            )
+            dao.completeActive(
+                petId = row.petId,
+                id = row.id,
+                status = TamaWorldActionReceiptStatus.REJECTED,
+                updatedAt = now,
+                completedAt = now,
+                resultJson = resultJson
+            )
+        }
+    }
 
     internal suspend fun installNavigation(policy: NavigationPolicy?, version: String) {
         navigationPolicy = policy
@@ -199,7 +419,13 @@ class TamaWorldController(
 
     suspend fun setAutonomy(policy: AutonomyPolicy) = TamaActionGate.run {
         flush()
-        val current = _state.value ?: return@run
+        val activePet = database.tamaDao().getActivePet()?.let(PetMapper::toDomain)
+        val current = _state.value ?: if (activePet != null) {
+            // Changing this setting is an explicit opt-in to persisting a
+            // policy. It may create the first world snapshot, but never
+            // enables the process-local adventure session or advances time.
+            ensure(activePet, System.currentTimeMillis())
+        } else return@run
         val next = current.copy(autonomy = policy)
         store.save(next, saved)
         saved = next
@@ -285,12 +511,16 @@ class TamaWorldController(
      * can flush that stale candidate back into storage.
      */
     internal suspend fun recoverAfterWorldTransactionFailure() {
-        invalidate()
+        val wasAdventureActive = _adventureActive.value
+        invalidate(resetAdventureSession = false)
         runCatching { effects.engine.reloadPersistedPet() }
         val pet = runCatching {
             database.tamaDao().getActivePet()?.let(PetMapper::toDomain)
         }.getOrNull() ?: return
-        runCatching { ensure(pet, System.currentTimeMillis()) }
+        runCatching {
+            ensure(pet, System.currentTimeMillis())
+            _adventureActive.value = wasAdventureActive
+        }
     }
 
     /** Terminal Park results survive process death for the result dialog. */
@@ -317,6 +547,12 @@ class TamaWorldController(
             val pet = database.tamaDao().getActivePet()?.let(PetMapper::toDomain)
                 ?.takeIf { it.id == request.petId }
                 ?: return@run TamaArcadeWorldActions.lease(request, ArcadeSessionLeaseStatus.UNAVAILABLE)
+            val existingReceipt = database.worldActionReceiptDao().byId(pet.id, request.sessionId)
+            if (!_adventureActive.value && existingReceipt == null) {
+                // Classic Arcade is direct. If a world snapshot already
+                // exists, align its actor without opening the simulation.
+                syncClassicLocation(pet.id, pet.currentLocationId, now)
+            }
             val current = ensure(pet, now)
             if (_error.value != null || !TamaArcadeWorldActions.atArcade(current)) {
                 return@run TamaArcadeWorldActions.lease(request, ArcadeSessionLeaseStatus.UNAVAILABLE)
@@ -686,6 +922,10 @@ class TamaWorldController(
         }
 
     internal suspend fun recordActivityEvent(event: com.example.llamadroid.tama.data.TamaEvent) {
+        // Classic activity logging must not lazily initialize or catch up the
+        // optional world. World events are recorded only during an explicit
+        // development session.
+        if (!_adventureActive.value) return
         val importance = when (event.eventType) {
             com.example.llamadroid.tama.data.EventType.QUEST_COMPLETED,
             com.example.llamadroid.tama.data.EventType.BATTLE_WON,
@@ -843,6 +1083,7 @@ class TamaWorldController(
     }
 
     suspend fun flush() = TamaActionGate.run {
+        if (!_adventureActive.value) return@run
         val current = _state.value ?: return@run
         if (_error.value != null) return@run
         val pet = database.tamaDao().getPet(current.petId)?.let(PetMapper::toDomain) ?: return@run
@@ -851,7 +1092,8 @@ class TamaWorldController(
     }
 
     /** Called after import, reset or adoption; no stale actor can overwrite restored progress. */
-    fun invalidate() {
+    fun invalidate(resetAdventureSession: Boolean = true) {
+        if (resetAdventureSession) _adventureActive.value = false
         _state.value = null
         saved = null
         pendingEffects = emptyList()

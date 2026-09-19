@@ -775,6 +775,7 @@ data class BrainTrainingUiState(
     val evaluation: BrainEvaluationUi? = null,
     val profiles: List<BrainTrainingProfileUi> = emptyList(),
     val safeAutonomy: SafeAutonomyUi,
+    val isEvaluating: Boolean = false,
     val isLoading: Boolean = false,
     val error: String? = null,
     val resourceSettings: BrainResourceSettingsUi = BrainResourceSettingsUi()
