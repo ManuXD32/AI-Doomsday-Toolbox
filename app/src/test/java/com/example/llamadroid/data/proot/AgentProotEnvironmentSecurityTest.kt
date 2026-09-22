@@ -52,6 +52,42 @@ class AgentProotEnvironmentSecurityTest {
     }
 
     @Test
+    fun extractorPreservesExecutableModeForHardlink() {
+        val archive = createArchive(
+            listOf(
+                fileEntry("etc/os-release", "Debian\n"),
+                executableFileEntry("usr/bin/sh", "#!/bin/sh\n"),
+                hardlinkEntry("usr/bin/sh-copy", "usr/bin/sh")
+            )
+        )
+        val destination = File(temporaryRoot, "hardlink-executable")
+
+        AgentProotRootfsExtractor.extract(archive, destination)
+
+        assertTrue(File(destination, "usr/bin/sh-copy").canExecute())
+        assertEquals("#!/bin/sh\n", File(destination, "usr/bin/sh-copy").readText())
+    }
+
+    @Test
+    fun extractorRejectsSelfHardlinkBeforeTruncatingSource() {
+        val archive = createArchive(
+            listOf(
+                fileEntry("etc/os-release", "Debian\n"),
+                executableFileEntry("usr/bin/sh", "preserve-me"),
+                hardlinkEntry("usr/bin/sh", "usr/bin/sh")
+            )
+        )
+        val destination = File(temporaryRoot, "self-hardlink")
+
+        val failure = runCatching {
+            AgentProotRootfsExtractor.extract(archive, destination)
+        }.exceptionOrNull()
+
+        assertTrue(failure is IllegalArgumentException)
+        assertEquals("preserve-me", File(destination, "usr/bin/sh").readText())
+    }
+
+    @Test
     fun extractorRejectsTraversalAndRewritesGuestRootAbsoluteLinks() {
         val traversal = createArchive(
             listOf(
@@ -98,6 +134,15 @@ class AgentProotEnvironmentSecurityTest {
         val bytes = content.toByteArray()
         return TarArchiveEntrySpec(TarArchiveEntry(name).apply { size = bytes.size.toLong() }, content)
     }
+
+    private fun executableFileEntry(name: String, content: String): TarArchiveEntrySpec =
+        fileEntry(name, content).also { it.entry.mode = 0b111101101 }
+
+    private fun hardlinkEntry(name: String, target: String): TarArchiveEntrySpec =
+        TarArchiveEntrySpec(
+            TarArchiveEntry(name, TarArchiveEntry.LF_LINK).apply { linkName = target },
+            ""
+        )
 
     private fun symlinkEntry(name: String, target: String): TarArchiveEntrySpec =
         TarArchiveEntrySpec(TarArchiveEntry(name, TarArchiveEntry.LF_SYMLINK).apply { linkName = target }, "")

@@ -2010,99 +2010,6 @@ class StableDiffusionService : Service() {
         SdComponentRole.MAIN_MODEL -> getString(R.string.imagegen_component_main_model)
     }
 
-    private suspend fun probeSdBinaryCapabilities(
-        sdBinary: File,
-        binaryRepo: BinaryRepository
-    ): SdBinaryCapabilities? = withContext(Dispatchers.IO) {
-        if (cachedSdCapabilityBinaryPath == sdBinary.absolutePath && cachedSdCapabilities != null) {
-            return@withContext cachedSdCapabilities
-        }
-
-        val libDir = File(applicationContext.filesDir, "lib").apply { mkdirs() }
-        setupLibrarySymlinks(sdBinary.parentFile, libDir, sdBinary.absolutePath)
-        val envPath = sdProcessLibraryPath(binaryRepo, sdBinary, libDir)
-
-        val helpCapabilities = listOf("--help", "-h").mapNotNull { flag ->
-            runCatching {
-                val process = ProcessBuilder(sdBinary.absolutePath, flag)
-                    .redirectErrorStream(true)
-                    .directory(sdBinary.parentFile)
-                    .apply {
-                        environment()["LD_LIBRARY_PATH"] = envPath
-                    }
-                    .start()
-                val output = process.inputStream.bufferedReader().use { it.readText() }
-                process.waitFor()
-                output.takeIf { it.isNotBlank() }?.let(::parseSdBinaryCapabilities)
-            }.getOrNull()
-        }
-        val capabilities = helpCapabilities.maxByOrNull {
-            it.supportedFlags.size + it.supportedModes.size
-        } ?: return@withContext null
-
-        capabilities.also {
-            cachedSdCapabilityBinaryPath = sdBinary.absolutePath
-            cachedSdCapabilities = capabilities
-        }
-    }
-
-    /**
-     * Create symlinks for versioned library names (.so.0 -> .so)
-     */
-    private fun setupLibrarySymlinks(sourceDir: File?, targetDir: File, binaryPath: String) {
-        if (sourceDir == null) return
-
-        val binaryName = File(binaryPath).name
-        val tier = inferSdRuntimeTierSuffix(binaryName)
-
-        DebugLog.log("StableDiffusionService: Inferred tier '$tier' from $binaryName")
-
-        val librariesToLink = listOf(
-            "libmtmd.so" to listOf("libmtmd${tier}.so", "libmtmd.so"),
-            "libmtmd.so.0" to listOf("libmtmd${tier}.so", "libmtmd.so"),
-            "libllama.so" to listOf("libllama.so", "libllama.so.0.so"),
-            "libllama.so.0" to listOf("libllama.so.0", "libllama.so", "libllama.so.0.so"),
-            "libggml.so" to listOf("libggml.so", "libggml.so.0.so"),
-            "libggml.so.0" to listOf("libggml.so.0", "libggml.so", "libggml.so.0.so"),
-            "libggml-cpu.so" to listOf("libggml-cpu.so", "libggml-cpu.so.0.so"),
-            "libggml-cpu.so.0" to listOf("libggml-cpu.so.0", "libggml-cpu.so", "libggml-cpu.so.0.so"),
-            "libggml-base.so" to listOf("libggml-base.so", "libggml-base.so.0.so"),
-            "libggml-base.so.0" to listOf("libggml-base.so.0", "libggml-base.so", "libggml-base.so.0.so")
-        )
-
-        for ((linkName, sourceCandidates) in librariesToLink) {
-            var sourceFile: File? = null
-            for (candidateName in sourceCandidates) {
-                val candidate = File(sourceDir, candidateName)
-                if (candidate.exists()) {
-                    sourceFile = candidate
-                    break
-                }
-            }
-
-            val linkFile = File(targetDir, linkName)
-            if (sourceFile != null) {
-                try {
-                    if (linkFile.exists()) {
-                        linkFile.delete()
-                    }
-                    val result = Runtime.getRuntime()
-                        .exec(arrayOf("ln", "-sf", sourceFile.absolutePath, linkFile.absolutePath))
-                        .waitFor()
-                    if (result != 0 || !linkFile.exists()) {
-                        sourceFile.copyTo(linkFile, overwrite = true)
-                    }
-                } catch (e: Exception) {
-                    DebugLog.log("StableDiffusionService: Error creating link/copy for $linkName: ${e.message}")
-                    try {
-                        sourceFile.copyTo(linkFile, overwrite = true)
-                    } catch (_: Exception) {
-                    }
-                }
-            }
-        }
-    }
-
     companion object {
         private const val ACTION_START_GENERATION = "com.example.llamadroid.action.START_SD_GENERATION"
         private const val ACTION_START_UPSCALE = "com.example.llamadroid.action.START_SD_UPSCALE"
@@ -2124,8 +2031,6 @@ class StableDiffusionService : Service() {
         private const val DEFAULT_NATIVE_OUTPUT_WINDOW_MS = 5 * 60_000L
         private const val DIAGNOSTIC_SOURCE = "image_generation"
         private const val COMMAND_BREADCRUMB_LIMIT = 768
-        private var cachedSdCapabilityBinaryPath: String? = null
-        private var cachedSdCapabilities: SdBinaryCapabilities? = null
 
         fun createStartIntent(
             context: Context,

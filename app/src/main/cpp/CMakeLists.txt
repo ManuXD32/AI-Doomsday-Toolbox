@@ -4,7 +4,11 @@ project("cpufeatures")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_library(cpufeatures SHARED CpuFeatures.cpp)
+if(ADT_HARNESS_QA_X86 AND ANDROID_ABI STREQUAL "x86_64")
+    add_library(cpufeatures SHARED harness_qa/CpuFeaturesQa.cpp)
+else()
+    add_library(cpufeatures SHARED CpuFeatures.cpp)
+endif()
 
 # Pinned from Termux v0.118.0. This is built in-tree because the upstream Maven artifact's
 # prebuilt helper is only 4 KiB page aligned. Android 15+ requires 16 KiB-compatible ELF loads.

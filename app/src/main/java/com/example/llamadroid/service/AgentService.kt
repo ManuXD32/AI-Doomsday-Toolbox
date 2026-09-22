@@ -236,7 +236,8 @@ data class WorkspaceTerminalUiState(
     val isConnected: Boolean = false,
     val openedAt: Long = 0L,
     val lastActivityAt: Long = 0L,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val exitCode: Int? = null
 )
 
 data class ProjectShellSessionSummary(
@@ -309,7 +310,8 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
     private val prootTerminalManagerDelegate = lazy { AgentProotTerminalSessionManager(context.applicationContext) }
     private val prootTerminalManager by prootTerminalManagerDelegate
     val localProjectRunStates: StateFlow<Map<Long, AgentLocalRunState>>
-        get() = if (isProotWorkspaceBackend()) prootRunCoordinator.projectStates else localProjectRunner.states
+        get() = if (harnessWorkspaceSelected) com.example.llamadroid.harness.HarnessAppRuntime.get(context).projectRuns.states
+            else if (isProotWorkspaceBackend()) prootRunCoordinator.projectStates else localProjectRunner.states
     val prootTerminalStates: StateFlow<Map<Long, List<WorkspaceTerminalUiState>>>
         get() = prootTerminalManager.states
 
@@ -1618,338 +1620,27 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
         }
     }
 
+    private fun imageOperations() = AgentImageOperations(
+        context = context,
+        inputFileForPath = { path -> File(sanitizePath(path)) },
+        sanitizePath = ::sanitizePath,
+        persistBytes = { path, bytes -> writeFileBytes(path, bytes, trackChange = true).getOrThrow() },
+        toProjectRelativePath = ::toProjectRelativePath,
+        onStatus = ::setStatusText
+    )
+
     suspend fun generateImage(
         prompt: String,
         negativePrompt: String,
         outputPath: String,
-        settingsRepo: com.example.llamadroid.data.SettingsRepository
-    ): Result<String> = withContext(Dispatchers.IO) {
-        try {
-            if (!settingsRepo.agentImageGenerationToolEnabled.value) {
-                return@withContext Result.failure(Exception(context.getString(R.string.agent_generate_image_tool_disabled)))
-            }
-            if (settingsRepo.agentImageGenerationEngine.value.equals("SD", ignoreCase = true)) {
-                return@withContext generateSdAgentImage(prompt, negativePrompt, outputPath, settingsRepo)
-            }
-            val db = AppDatabase.getDatabase(context.applicationContext)
-            val selectedModelId = settingsRepo.agentImageGenerationModel.value?.trim().orEmpty()
-            if (selectedModelId.isBlank()) {
-                return@withContext Result.failure(Exception(context.getString(R.string.agent_generate_image_model_missing)))
-            }
-            val model = db.modelDao()
-                .getModelsByTypesSync(listOf(ModelType.ONNX_IMAGE_GEN))
-                .filter { it.isOnnxTxt2ImgBundle() }
-                .find { it.filename == selectedModelId || it.path == selectedModelId }
-                ?: return@withContext Result.failure(Exception(context.getString(R.string.agent_generate_image_model_missing)))
-            val (width, height) = parseAgentImageGenerationResolution(settingsRepo.agentImageGenerationResolution.value)
-                ?: return@withContext Result.failure(Exception(context.getString(R.string.agent_generate_image_resolution_invalid)))
-            val normalizedOutputPath = if (File(outputPath).extension.isBlank()) "$outputPath.png" else outputPath
-            val safeOutputPath = sanitizePath(normalizedOutputPath)
-            val localTempDir = File(context.cacheDir, "agent_image_generation").apply { mkdirs() }
-            val localTempFile = File.createTempFile("generated_", ".png", localTempDir)
-
-            val result = OnnxTxt2ImgPipeline().generate(
-                config = OnnxImageGenConfig(
-                    modelPath = model.path,
-                    modelName = model.filename,
-                    mode = OnnxImageGenMode.TXT2IMG,
-                    prompt = prompt,
-                    negativePrompt = negativePrompt,
-                    width = width,
-                    height = height,
-                    steps = settingsRepo.agentImageGenerationSteps.value.coerceAtLeast(1),
-                    cfgScale = settingsRepo.agentImageGenerationCfg.value,
-                    seed = -1L,
-                    requestedWidth = width,
-                    requestedHeight = height,
-                    backend = OnnxRuntimeBackend.CPU,
-                    runtimeOptions = OnnxRuntimeOptions(),
-                    outputPath = localTempFile.absolutePath
-                ),
-                onProgress = { _, status ->
-                    setStatusText(context.getString(R.string.agent_generating_image_status, status))
-                }
-            )
-
-            writeFileBytes(safeOutputPath, result.outputFile.readBytes(), trackChange = true).getOrThrow()
-            runCatching { result.outputFile.delete() }
-
-            Result.success(
-                buildString {
-                    appendLine(context.getString(R.string.agent_generate_image_result_saved, toProjectRelativePath(safeOutputPath)))
-                    appendLine(context.getString(R.string.model_filename_label, model.filename))
-                    appendLine(context.getString(R.string.agent_generate_image_result_resolution, "${width}x${height}"))
-                    appendLine(context.getString(R.string.agent_generate_image_result_steps, settingsRepo.agentImageGenerationSteps.value))
-                    append(context.getString(R.string.agent_generate_image_result_cfg, String.format(java.util.Locale.US, "%.1f", settingsRepo.agentImageGenerationCfg.value)))
-                }
-            )
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
-
-    private suspend fun generateSdAgentImage(
-        prompt: String,
-        negativePrompt: String,
-        outputPath: String,
         settingsRepo: SettingsRepository
-    ): Result<String> {
-        val db = AppDatabase.getDatabase(context.applicationContext)
-        val selectedModelId = settingsRepo.agentSdImageGenerationModel.value?.trim().orEmpty()
-        if (selectedModelId.isBlank()) {
-            return Result.failure(Exception(context.getString(R.string.agent_generate_image_sd_model_missing)))
-        }
-        val mainModels = db.modelDao()
-            .getModelsByTypesSync(listOf(ModelType.SD_CHECKPOINT, ModelType.SD_DIFFUSION))
-            .filter { it.isSdImageMainModel() && it.supportsSdTxt2Img() }
-        val model = mainModels.find { it.filename == selectedModelId || it.path == selectedModelId }
-            ?: return Result.failure(Exception(context.getString(R.string.agent_generate_image_sd_model_missing)))
-        val (family, variant) = model.resolvedSdFamily()
-        val spec = family?.let { com.example.llamadroid.sd.resolveSdFamilySpec(it, variant) }
-            ?: return Result.failure(Exception(context.getString(R.string.agent_generate_image_sd_model_missing)))
-        val supportModels = db.modelDao().getModelsByTypesSync(
-            listOf(
-                ModelType.SD_VAE,
-                ModelType.SD_TAE,
-                ModelType.SD_CLIP_L,
-                ModelType.SD_CLIP_G,
-                ModelType.SD_T5XXL,
-                ModelType.LLM,
-                ModelType.VISION_PROJECTOR,
-                ModelType.SD_PHOTOMAKER
-            )
-        )
-        val sampler = SamplingMethod.entries.firstOrNull {
-            it.name.equals(settingsRepo.agentSdImageGenerationSampler.value, ignoreCase = true) ||
-                it.cliName.equals(settingsRepo.agentSdImageGenerationSampler.value, ignoreCase = true)
-        } ?: SamplingMethod.EULER_A
-        val sdParams = NativeChatSdImageToolParams(
-            model = model.filename,
-            vaePath = settingsRepo.agentSdImageGenerationVae.value,
-            taePath = settingsRepo.agentSdImageGenerationTae.value,
-            clipLPath = settingsRepo.agentSdImageGenerationClipL.value,
-            clipGPath = settingsRepo.agentSdImageGenerationClipG.value,
-            t5xxlPath = settingsRepo.agentSdImageGenerationT5xxl.value,
-            llmPath = settingsRepo.agentSdImageGenerationLlm.value,
-            llmVisionPath = settingsRepo.agentSdImageGenerationLlmVision.value,
-            photoMakerPath = settingsRepo.agentSdImageGenerationPhotoMaker.value,
-            width = settingsRepo.agentSdImageGenerationWidth.value,
-            height = settingsRepo.agentSdImageGenerationHeight.value,
-            steps = settingsRepo.agentSdImageGenerationSteps.value,
-            cfgScale = settingsRepo.agentSdImageGenerationCfg.value,
-            sampler = sampler,
-            seed = settingsRepo.agentSdImageGenerationSeed.value,
-            negativePrompt = settingsRepo.agentSdImageGenerationNegativePrompt.value,
-            threads = settingsRepo.agentSdImageGenerationThreads.value,
-            flowShift = settingsRepo.agentSdImageGenerationFlowShift.value,
-            diffusionFa = settingsRepo.agentSdImageGenerationDiffusionFa.value,
-            mmap = settingsRepo.agentSdImageGenerationMmap.value,
-            vaeConvDirect = settingsRepo.agentSdImageGenerationVaeConvDirect.value,
-            qwenImageZeroCondT = settingsRepo.agentSdImageGenerationQwenZeroCondT.value,
-            chromaDisableDitMask = settingsRepo.agentSdImageGenerationChromaDisableDitMask.value
-        )
-        val components = resolveSdToolComponents(supportModels, sdParams, model)
-        val missingRequired = spec.requiredRoles.filter { components.pathForRole(it).isNullOrBlank() }
-        if (missingRequired.isNotEmpty()) {
-            return Result.failure(
-                Exception(
-                    context.getString(
-                        R.string.agent_generate_image_sd_components_missing,
-                        missingRequired.joinToString(", ") { it.name }
-                    )
-                )
-            )
-        }
-        val normalizedOutputPath = if (File(outputPath).extension.isBlank()) "$outputPath.png" else outputPath
-        val safeOutputPath = sanitizePath(normalizedOutputPath)
-        val localTempDir = File(context.cacheDir, "agent_image_generation").apply { mkdirs() }
-        val localTempFile = File.createTempFile("generated_sd_", ".png", localTempDir)
-        val resolvedNegativePrompt = negativePrompt.takeIf { it.isNotBlank() } ?: sdParams.negativePrompt
-        val seed = sdParams.seed.trim().toLongOrNull() ?: -1L
-
-        val resultFile = SdToolGenerationRunner(context).generateTxt2Img(
-            config = SDConfig(
-                modelPath = model.path,
-                prompt = prompt,
-                negativePrompt = resolvedNegativePrompt,
-                width = sdParams.width,
-                height = sdParams.height,
-                steps = sdParams.steps,
-                cfgScale = sdParams.cfgScale,
-                seed = seed,
-                samplingMethod = sampler,
-                outputPath = localTempFile.absolutePath,
-                mode = SDMode.TXT2IMG,
-                threads = sdParams.threads,
-                modelLayout = model.sdArtifactLayout
-                    ?.let(SdMainLayout::fromStoredValue)
-                    ?.takeUnless { it == SdMainLayout.UNKNOWN }
-                    ?: if (model.type == ModelType.SD_CHECKPOINT) {
-                        SdMainLayout.FULL_MODEL
-                    } else {
-                        SdMainLayout.STANDALONE_DIFFUSION
-                    },
-                modelFamily = family.storedValue,
-                modelVariant = variant,
-                vaePath = components.vaePath,
-                taePath = components.taePath,
-                clipLPath = components.clipLPath,
-                clipGPath = components.clipGPath,
-                t5xxlPath = components.t5xxlPath,
-                llmPath = components.llmPath,
-                llmVisionPath = components.llmVisionPath,
-                photoMakerPath = components.photoMakerPath,
-                loras = sdParams.loras,
-                loraApplyMode = sdParams.loraApplyMode,
-                flowShift = sdParams.flowShift.toFloatOrNull(),
-                diffusionFa = sdParams.diffusionFa && spec.supportsDiffusionFa,
-                mmap = sdParams.mmap && spec.supportsMmap,
-                vaeConvDirect = sdParams.vaeConvDirect && spec.supportsVaeConvDirect,
-                qwenImageZeroCondT = sdParams.qwenImageZeroCondT && spec.supportsQwenImageZeroCondT,
-                chromaDisableDitMask = sdParams.chromaDisableDitMask && spec.supportsChromaDisableDitMask,
-                sdParamsBackendSpec = model.sdParamsBackendSpec,
-                sdParamsBackendMode = model.sdParamsBackendMode,
-                sdRuntimeBackendMode = model.sdRuntimeBackendMode,
-                maxVramCpuGiB = if (settingsRepo.sdMaxCpuRamEnabled.value) settingsRepo.sdMaxCpuRamGiB.value else ""
-            ),
-            onProgress = { snapshot ->
-                setStatusText(context.getString(R.string.agent_generating_image_status, "${snapshot.currentStep}/${snapshot.totalSteps}"))
-            },
-            onStatus = { status ->
-                if (status.isNotBlank()) {
-                    setStatusText(context.getString(R.string.agent_generating_image_status, status.take(80)))
-                }
-            }
-        )
-
-        writeFileBytes(safeOutputPath, resultFile.readBytes(), trackChange = true).getOrThrow()
-        runCatching { resultFile.delete() }
-
-        return Result.success(
-            buildString {
-                appendLine(context.getString(R.string.agent_generate_image_result_saved, toProjectRelativePath(safeOutputPath)))
-                appendLine(context.getString(R.string.agent_generate_image_result_engine, "SD"))
-                appendLine(context.getString(R.string.model_filename_label, model.filename))
-                appendLine(context.getString(R.string.agent_generate_image_result_family, family.storedValue))
-                appendLine(context.getString(R.string.agent_generate_image_result_resolution, "${sdParams.width}x${sdParams.height}"))
-                appendLine(context.getString(R.string.agent_generate_image_result_steps, sdParams.steps))
-                appendLine(context.getString(R.string.agent_generate_image_result_sampler, sampler.cliName))
-                append(context.getString(R.string.agent_generate_image_result_cfg, String.format(java.util.Locale.US, "%.1f", sdParams.cfgScale)))
-            }
-        )
-    }
+    ): Result<String> = imageOperations().generateImage(prompt, negativePrompt, outputPath, settingsRepo)
 
     suspend fun removeImageBackground(
         imagePath: String,
         outputPath: String?,
-        settingsRepo: com.example.llamadroid.data.SettingsRepository
-    ): Result<String> = withContext(Dispatchers.IO) {
-        try {
-            if (!settingsRepo.agentBackgroundRemovalToolEnabled.value) {
-                return@withContext Result.failure(Exception(context.getString(R.string.agent_bgr_tool_disabled)))
-            }
-            val safeInputPath = sanitizePath(imagePath)
-            val inputFile = File(safeInputPath)
-            if (!inputFile.isFile) {
-                return@withContext Result.failure(Exception(context.getString(R.string.agent_bgr_input_missing)))
-            }
-            if (!isSupportedImagePath(safeInputPath)) {
-                return@withContext Result.failure(Exception(context.getString(R.string.agent_bgr_input_unsupported)))
-            }
-            val db = AppDatabase.getDatabase(context.applicationContext)
-            val selectedModelId = settingsRepo.agentBackgroundRemovalModel.value?.trim().orEmpty()
-            if (selectedModelId.isBlank()) {
-                return@withContext Result.failure(Exception(context.getString(R.string.agent_bgr_model_missing)))
-            }
-            val model = db.modelDao()
-                .getModelsByTypesSync(listOf(ModelType.ONNX_BACKGROUND_REMOVAL))
-                .filter { it.isOnnxBackgroundRemovalModel() }
-                .find { it.filename == selectedModelId || it.path == selectedModelId }
-                ?: return@withContext Result.failure(Exception(context.getString(R.string.agent_bgr_model_missing)))
-            val backend = runCatching {
-                OnnxRuntimeBackend.valueOf(settingsRepo.agentBackgroundRemovalBackend.value)
-            }.getOrDefault(OnnxRuntimeBackend.CPU)
-            val graphOptimization = runCatching {
-                OnnxGraphOptimizationLevel.valueOf(settingsRepo.agentBackgroundRemovalGraphOptimization.value)
-            }.getOrDefault(OnnxGraphOptimizationLevel.ALL)
-            val resolvedOutputPath = outputPath?.takeIf { it.isNotBlank() }
-                ?: defaultBackgroundRemovalOutputPath(inputFile)
-            val normalizedOutputPath = if (File(resolvedOutputPath).extension.isBlank()) {
-                "$resolvedOutputPath.png"
-            } else {
-                resolvedOutputPath
-            }
-            val safeOutputPath = sanitizePath(normalizedOutputPath)
-            setStatusText(context.getString(R.string.agent_bgr_status_starting))
-            val result = OnnxBackgroundRemovalPipeline().removeBackground(
-                context = context,
-                config = OnnxBackgroundRemovalConfig(
-                    modelPath = model.path,
-                    modelName = model.filename,
-                    inputPaths = listOf(inputFile.absolutePath),
-                    inputNames = listOf(inputFile.name),
-                    backend = backend,
-                    runtimeOptions = OnnxRuntimeOptions(
-                        runtimeThreadCount = settingsRepo.agentBackgroundRemovalRuntimeThreads.value.takeIf { it > 0 },
-                        graphOptimizationLevel = graphOptimization
-                    ),
-                    alphaThreshold = settingsRepo.agentBackgroundRemovalAlphaThreshold.value,
-                    featherRadius = settingsRepo.agentBackgroundRemovalFeatherRadius.value,
-                    maskSoftness = settingsRepo.agentBackgroundRemovalMaskSoftness.value,
-                    maskContrast = settingsRepo.agentBackgroundRemovalMaskContrast.value,
-                    exportMask = settingsRepo.agentBackgroundRemovalExportMask.value,
-                    resizeBeforeProcessing = settingsRepo.agentBackgroundRemovalResizeBeforeProcessing.value,
-                    resizeMaxEdge = settingsRepo.agentBackgroundRemovalResizeMaxEdge.value,
-                    preserveSourceNames = true
-                ),
-                inputFile = inputFile,
-                sourceName = inputFile.name,
-                onDiagnostic = { DebugLog.log("[AgentBgR] $it") },
-                onProgress = { stage, _ ->
-                    setStatusText(context.getString(R.string.agent_bgr_status_phase, stage.name.lowercase()))
-                }
-            )
-
-            writeFileBytes(safeOutputPath, result.outputFile.readBytes(), trackChange = true).getOrThrow()
-            val maskWorkspacePath = if (settingsRepo.agentBackgroundRemovalExportMask.value) {
-                result.maskFile?.let { maskFile ->
-                    val maskPath = safeOutputPath.substringBeforeLast(".") + "_mask.png"
-                    writeFileBytes(maskPath, maskFile.readBytes(), trackChange = true).getOrThrow()
-                    toProjectRelativePath(maskPath)
-                }
-            } else {
-                null
-            }
-            runCatching { result.outputFile.delete() }
-            runCatching { result.maskFile?.delete() }
-
-            Result.success(
-                buildString {
-                    appendLine(context.getString(R.string.agent_bgr_result_removed, toProjectRelativePath(safeOutputPath)))
-                    appendLine(context.getString(R.string.agent_bgr_result_source, toProjectRelativePath(safeInputPath)))
-                    appendLine(context.getString(R.string.model_filename_label, model.filename))
-                    appendLine(context.getString(R.string.agent_bgr_result_backend, backend.name))
-                    appendLine(
-                        context.getString(
-                            R.string.agent_bgr_result_resize_before,
-                            settingsRepo.agentBackgroundRemovalResizeBeforeProcessing.value.toString()
-                        )
-                    )
-                    appendLine(context.getString(R.string.agent_bgr_result_resize_max_edge, settingsRepo.agentBackgroundRemovalResizeMaxEdge.value))
-                    maskWorkspacePath?.let { appendLine(context.getString(R.string.agent_bgr_result_mask, it)) }
-                }.trimEnd()
-            )
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
-
-    private fun defaultBackgroundRemovalOutputPath(inputFile: File): String {
-        val baseName = inputFile.nameWithoutExtension
-            .replace(Regex("""[^A-Za-z0-9._-]+"""), "_")
-            .ifBlank { "image" }
-        return "generated/background-removal/${baseName}_bgr.png"
-    }
+        settingsRepo: SettingsRepository
+    ): Result<String> = imageOperations().removeImageBackground(imagePath, outputPath, settingsRepo)
 
     suspend fun checkCommand(id: String, lines: Int = 10): Result<String> {
         if (isProotWorkspaceBackend()) {
@@ -2835,6 +2526,10 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
 
     suspend fun runLocalProject(): Result<String> = withContext(Dispatchers.IO) {
         try {
+            if (harnessWorkspaceSelected) return@withContext runCatching {
+                val id = requireNotNull(_activeConversationId.value)
+                formatLocalRunState(com.example.llamadroid.harness.HarnessAppRuntime.get(context).projectRuns.run(id))
+            }
             if (!isLocalWorkspaceBackend()) {
                 return@withContext Result.failure(IllegalStateException("run_project is only available for local projects."))
             }
@@ -2913,6 +2608,10 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
 
     suspend fun checkLocalProjectRun(): Result<String> = withContext(Dispatchers.IO) {
         try {
+            if (harnessWorkspaceSelected) return@withContext runCatching {
+                val id = requireNotNull(_activeConversationId.value)
+                formatLocalRunState(com.example.llamadroid.harness.HarnessAppRuntime.get(context).projectRuns.check(id))
+            }
             val conversationId = _activeConversationId.value
                 ?: return@withContext Result.failure(IllegalStateException("No active project conversation is selected."))
             val state = if (isProotWorkspaceBackend()) {
@@ -2938,6 +2637,10 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
 
     suspend fun stopLocalProjectRun(force: Boolean): Result<String> = withContext(Dispatchers.IO) {
         try {
+            if (harnessWorkspaceSelected) return@withContext runCatching {
+                val id = requireNotNull(_activeConversationId.value)
+                com.example.llamadroid.harness.HarnessAppRuntime.get(context).projectRuns.stop(id)?.let(::formatLocalRunState).orEmpty()
+            }
             val conversationId = _activeConversationId.value
                 ?: return@withContext Result.failure(IllegalStateException("No active project conversation is selected."))
             val state = if (isProotWorkspaceBackend()) {
@@ -4985,6 +4688,7 @@ TODO status. Return via finish_task with JSON:
             questionId: String,
             answerJson: String
         ): Job {
+            if (com.example.llamadroid.harness.HarnessEngineOwnership.legacyExecutionRetired) return Job().apply { complete() }
             rememberRuntimeRefs(context, ollamaService, settingsRepo, agentService)
             val refs = lastRuntimeRefs ?: return agentScope.launch { }
             val answerEpoch = currentRunEpoch()
@@ -5900,6 +5604,17 @@ TODO status. Return via finish_task with JSON:
             initializedBrainProject = null
             ensureBrainScaffoldAsync()
             syncCurrentTaskMemoryAsync(_currentTask.value)
+        }
+
+        /** Compatibility context for the retained manual explorer, without legacy brain/turn work. */
+        @Volatile private var harnessWorkspaceSelected = false
+
+        fun selectHarnessWorkspace(conversation: com.example.llamadroid.data.db.AgentConversationEntity) {
+            harnessWorkspaceSelected = true
+            _preferredConversationId.value = conversation.id
+            _activeConversationId.value = conversation.id
+            _currentProjectFolder.value = conversation.projectFolder
+            setCurrentWorkspaceBackend(AgentWorkspaceBackendType.fromStored(conversation.workspaceBackend))
         }
 
         private fun rememberRuntimeRefs(
@@ -6989,6 +6704,7 @@ TODO status. Return via finish_task with JSON:
             context: Context,
             wake: com.example.llamadroid.data.db.AgentSleepWakeEntity
         ) = withContext(Dispatchers.IO) {
+            if (com.example.llamadroid.harness.HarnessEngineOwnership.legacyExecutionRetired) return@withContext Job().apply { complete() }
             val appContext = context.applicationContext
             val database = AppDatabase.getDatabase(appContext)
             val claimedWake = database.agentWorkflowDao().getSleepWake(wake.id)
@@ -7378,6 +7094,9 @@ TODO status. Return via finish_task with JSON:
             id: String,
             editedPlan: String? = null
         ): PlanApprovalResult {
+            if (com.example.llamadroid.harness.HarnessEngineOwnership.legacyExecutionRetired) {
+                return PlanApprovalResult(false, context.getString(R.string.harness_legacy_execution_retired))
+            }
             return workflowTransitionMutex.withLock {
                 val database = AppDatabase.getDatabase(context.applicationContext)
                 val workflowDao = database.agentWorkflowDao()
@@ -8488,6 +8207,11 @@ TODO status. Return via finish_task with JSON:
             userInitiated: Boolean = false,
             expectedRunEpoch: Long? = null
         ): Job {
+            if (com.example.llamadroid.harness.HarnessEngineOwnership.legacyExecutionRetired) {
+                return agentScope.launch {
+                    setStatusText(context.getString(R.string.harness_legacy_execution_retired))
+                }
+            }
             rememberRuntimeRefs(context, ollamaService, settingsRepo, agentService)
             if (expectedRunEpoch != null && currentRunEpoch() != expectedRunEpoch) {
                 // A queue drain can race with Stop after it has dequeued an item. Do not let that
@@ -11262,6 +10986,7 @@ TODO status. Return via finish_task with JSON:
             agentService: AgentService,
             messageId: String
         ): Job? {
+            if (com.example.llamadroid.harness.HarnessEngineOwnership.legacyExecutionRetired) return null
             val epoch = currentRunEpoch()
             while (true) {
                 val current = _messages.value
@@ -11293,6 +11018,7 @@ TODO status. Return via finish_task with JSON:
             isForced: Boolean = false, // If true, ignore autoMode check
             runEpoch: Long = currentRunEpoch()
         ): Job {
+            if (com.example.llamadroid.harness.HarnessEngineOwnership.legacyExecutionRetired) return Job().apply { complete() }
             if (isForced) {
                 val accepted = synchronized(activeRunEpoch) {
                     if (!isAgentRunActive(runEpoch)) false else {

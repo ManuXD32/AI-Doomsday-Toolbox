@@ -14,6 +14,7 @@ import android.os.Build
 import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.net.toUri
 import com.example.llamadroid.MainActivity
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.R
@@ -532,6 +533,54 @@ object UnifiedNotificationManager {
         } catch (e: SecurityException) {
             // Notification permission not granted
         }
+    }
+
+    /** Runtime-owned Harness notices contain no generated/private text and preserve Back history. */
+    fun dismissHarnessAttention(key: String) {
+        if (!::appContext.isInitialized) return
+        NotificationManagerCompat.from(appContext).cancel("harness:$key", 500_000 + (key.hashCode() and 0x0fffffff))
+    }
+
+    fun showHarnessAttention(key: String, kind: String, route: String): Boolean {
+        if (!::appContext.isInitialized) return false
+        val manager = NotificationManagerCompat.from(appContext)
+        if (!manager.areNotificationsEnabled()) return false
+        val pending = kind in setOf("question", "approval", "plan")
+        val title = when (kind) {
+            "question" -> R.string.agent_attention_user_input_title
+            "approval" -> R.string.agent_attention_approval_title
+            "plan" -> R.string.agent_attention_plan_title
+            "completed" -> R.string.harness_attention_completed
+            "stopped" -> R.string.harness_attention_stopped
+            else -> R.string.harness_attention_interrupted
+        }
+        val body = when (kind) {
+            "question" -> R.string.agent_attention_user_input_body
+            "approval" -> R.string.agent_attention_approval_body
+            "plan" -> R.string.agent_attention_plan_body
+            else -> R.string.harness_attention_open_conversation
+        }
+        val intent = Intent(appContext, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            data = "adt-harness://attention/$key".toUri()
+            putExtra(MainActivity.EXTRA_OPEN_ROUTE, route)
+        }
+        val notificationId = 500_000 + (key.hashCode() and 0x0fffffff)
+        val contentIntent = PendingIntent.getActivity(appContext, notificationId, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val notification = NotificationCompat.Builder(appContext, if (pending) AGENT_ATTENTION_CHANNEL_ID else COMPLETION_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle(appContext.getString(title))
+            .setContentText(appContext.getString(body))
+            .setContentIntent(contentIntent)
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setCategory(if (pending) NotificationCompat.CATEGORY_REMINDER else NotificationCompat.CATEGORY_STATUS)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .build()
+        return try { manager.notify("harness:$key", notificationId, notification); true }
+        catch (_: SecurityException) { false }
     }
 
     fun showAiRuntimeRecoveryNotification(

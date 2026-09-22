@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_inline_file_title">Vista previa del archivo</string>
+    <string name="harness_inline_file_scope">Abierto en el espacio de trabajo de esta conversación. Usa el explorador para editar los archivos del proyecto.</string>
+    <string name="harness_inline_open_document">Abrir o guardar documento</string>
+    <string name="harness_inline_open_skill">Abrir fuente de la habilidad</string>
+    <string name="harness_inline_preview_failed">No se pudo cargar la vista previa. Reintenta o abre el documento para ver imágenes y otros tipos de archivo.</string>
+    <string name="harness_inline_lines">Líneas %1$d–%2$d</string>
+    <string name="harness_inline_empty">Esta página está vacía.</string>
+</resources>

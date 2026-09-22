@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_tab_runtime">Entorno</string>
+    <string name="harness_runtime_shortcut">Entorno: %1$s</string>
+    <string name="harness_runtime_open_tab">Abrir</string>
+    <string name="harness_runtime_error_code">Código de error: %1$s</string>
+    <string name="harness_runtime_diagnostics_title">Diagnóstico del entorno</string>
+    <string name="harness_runtime_diagnostics_description">Solo metadatos: eventos del ciclo de vida, estado, tiempos y códigos de error saneados.</string>
+    <string name="harness_runtime_refresh_diagnostics">Actualizar diagnóstico</string>
+    <string name="harness_runtime_copy_diagnostics">Copiar diagnóstico</string>
+    <string name="harness_runtime_diagnostics_empty">Todavía no se han registrado eventos del entorno.</string>
+    <string name="harness_runtime_diagnostics_last_updated">Actualizado %1$s</string>
+    <string name="harness_runtime_duration">Duración: %1$d ms</string>
+    <string name="harness_runtime_exit_code">Código de salida: %1$d</string>
+</resources>

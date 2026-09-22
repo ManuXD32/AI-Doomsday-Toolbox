@@ -559,46 +559,11 @@ fun ConnectionSettingsDialog(
                 
                 Text(stringResource(R.string.ssh_connection_title), fontWeight = FontWeight.Medium, fontSize = 14.sp)
                 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = host,
-                        onValueChange = onHostChange,
-                        label = { Text(stringResource(R.string.ssh_host_label_short)) },
-                        modifier = Modifier.weight(2f),
-                        singleLine = true,
-                        textStyle = LocalTextStyle.current.copy(fontSize = 14.sp)
-                    )
-                    OutlinedTextField(
-                        value = port,
-                        onValueChange = onPortChange,
-                        label = { Text(stringResource(R.string.ssh_port_label_short)) },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true,
-                        textStyle = LocalTextStyle.current.copy(fontSize = 14.sp)
-                    )
-                }
-                
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = user,
-                        onValueChange = onUserChange,
-                        label = { Text(stringResource(R.string.ssh_user_label_short)) },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true,
-                        textStyle = LocalTextStyle.current.copy(fontSize = 14.sp)
-                    )
-                    OutlinedTextField(
-                        value = password,
-                        onValueChange = onPasswordChange,
-                        label = { Text(stringResource(R.string.ssh_password_label_short)) },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true,
-                        textStyle = LocalTextStyle.current.copy(fontSize = 14.sp)
-                    )
-                }
-                
+                com.example.llamadroid.ui.components.SshConnectionFields(
+                    host, port, user, password,
+                    onHostChange, onPortChange, onUserChange, onPasswordChange
+                )
+
                 HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
                 
                 // Auto Mode Toggle
@@ -892,6 +857,8 @@ fun AgentSettingsDialog(
     onManageKnowledgeBases: () -> Unit,
     onManageProotEnvironments: () -> Unit = {},
     section: AgentSettingsSection = AgentSettingsSection.AGENTS,
+    /** Shared Android tools only; DeepSeek owns agent routing, planning and model delegation. */
+    integrationOnly: Boolean = false,
     onDismiss: () -> Unit,
     runtimeProfileStore: AgentRuntimeProfileStore = EmptyAgentRuntimeProfileStore,
     managedLlamaServers: List<ManagedLlamaServerDescriptor> = emptyList(),
@@ -1289,7 +1256,7 @@ fun AgentSettingsDialog(
                     )
                 }
 
-                if (showToolConfiguration) {
+                if (showToolConfiguration && !integrationOnly) {
                     AgentToolSettingsCard(
                         disabledStandardTools = disabledStandardTools,
                         autoReflectionEnabled = autoReflectionEnabled,
@@ -2211,7 +2178,8 @@ Card(
                 
                 }
                 if (showToolConfiguration) {
-// Web Search Settings
+// Harness owns web search; preserve this editor for the standalone legacy settings only.
+                if (!integrationOnly) {
                 val webSearchEnabled by settingsRepository.agentWebSearchEnabled.collectAsState()
                 val webSearchModel by settingsRepository.agentWebSearchModel.collectAsState()
                 val webSearchMaxResults by settingsRepository.agentWebSearchMaxResults.collectAsState()
@@ -2244,6 +2212,7 @@ Card(
                                 Spacer(modifier = Modifier.height(8.dp))
                                 
                                 // Model dropdown
+                                if (!integrationOnly) {
                                 var wsExpanded by remember { mutableStateOf(false) }
                                 ExposedDropdownMenuBox(
                                     expanded = wsExpanded,
@@ -2275,6 +2244,7 @@ Card(
                                 
                                 Spacer(modifier = Modifier.height(8.dp))
                                 
+                                }
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     // Max results
                                     DraftIntTextField(
@@ -2297,6 +2267,7 @@ Card(
                                 
                                 Spacer(modifier = Modifier.height(8.dp))
                                 
+                                if (!integrationOnly) {
                                 // Context size
                                 DraftIntTextField(
                                     value = webSearchNumCtx,
@@ -2324,9 +2295,13 @@ Card(
                                         modifier = Modifier.scale(0.8f)
                                     )
                                 }
+                                }
                             }
                         }
                     }
+                }
+                } else {
+                    Text(stringResource(R.string.harness_builtin_web_search), style = MaterialTheme.typography.bodySmall)
                 }
                 // Kiwix Search Settings
                 val kiwixEnabled by settingsRepository.agentKiwixEnabled.collectAsState()
@@ -2372,6 +2347,7 @@ Card(
                                 
                                 Spacer(modifier = Modifier.height(8.dp))
                                 
+                                if (!integrationOnly) {
                                 // Model dropdown
                                 var kiwixExpanded by remember { mutableStateOf(false) }
                                 ExposedDropdownMenuBox(
@@ -2404,6 +2380,7 @@ Card(
                                 
                                 Spacer(modifier = Modifier.height(8.dp))
                                 
+                                }
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     // Max results
                                     DraftIntTextField(
@@ -2426,6 +2403,7 @@ Card(
                                 
                                 Spacer(modifier = Modifier.height(8.dp))
                                 
+                                if (!integrationOnly) {
                                 // Context size
                                 DraftIntTextField(
                                     value = kiwixNumCtx,
@@ -2452,6 +2430,7 @@ Card(
                                         onCheckedChange = { settingsRepository.setAgentKiwixThinkingEnabled(it) },
                                         modifier = Modifier.scale(0.8f)
                                     )
+                                }
                                 }
                             }
                         }

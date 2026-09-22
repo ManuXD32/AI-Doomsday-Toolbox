@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_legacy_delete">Delete saved conversation</string>
+    <string name="harness_legacy_open_files">Open project files</string>
+    <string name="harness_legacy_delete_description">This permanently removes this saved conversation and its history.</string>
+    <string name="harness_legacy_delete_files">Also delete this project and all its files</string>
+    <string name="harness_legacy_files_shared">Other threads using these files: %1$d. Only this conversation can be deleted.</string>
+    <string name="harness_legacy_cleanup_pending">Project cleanup pending: %1$s</string>
+    <string name="harness_legacy_retry_description">Finish the project deletion previously requested. If this is an SSH project, its saved connection must be reachable.</string>
+    <string name="harness_legacy_delete_failed">Deletion did not finish. Shared files are protected; unfinished cleanup remains available for retry.</string>
+    <string name="harness_builtin_web_search">Web search is managed by Harness. Configure the app image and offline Kiwix tools here.</string>
+</resources>

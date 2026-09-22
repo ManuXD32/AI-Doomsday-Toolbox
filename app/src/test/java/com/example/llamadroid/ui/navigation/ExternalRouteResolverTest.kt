@@ -63,6 +63,16 @@ class ExternalRouteResolverTest {
     }
 
     @Test
+    fun `routes harness attention to the captured session destination`() {
+        listOf("conversation", "requests", "plan").forEach { tab ->
+            val route = Screen.Agent.createRoute(42, tab)
+            assertEquals(route, ExternalRouteResolver.resolveRoute(route))
+        }
+        assertNull(ExternalRouteResolver.resolveRoute("agent?conversationId=0&harnessTab=requests"))
+        assertNull(ExternalRouteResolver.resolveRoute("agent?conversationId=42&harnessTab=unknown"))
+    }
+
+    @Test
     fun `rejects malformed or unsupported external routes`() {
         listOf(
             null,

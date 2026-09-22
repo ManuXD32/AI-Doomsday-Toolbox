@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="harness_usage_title">Uso de tokens</string>
+    <string name="harness_usage_total">Total</string>
+    <string name="harness_usage_input">Entrada sin caché</string>
+    <string name="harness_usage_output">Salida</string>
+    <string name="harness_usage_cache_read">Entrada en caché</string>
+    <string name="harness_usage_cache_write">Escritura de caché</string>
+    <string name="harness_usage_reasoning">Razonamiento</string>
+    <string name="harness_usage_turn" tools:ignore="PluralsCandidate">Uso de la ronda (tokens): %1$d</string>
+    <string name="harness_usage_context_title">Ocupación del contexto</string>
+    <string name="harness_usage_context_pressure">Presión actual del prompt</string>
+    <string name="harness_usage_context_projected">Próximo prompt estimado</string>
+    <string name="harness_usage_context_window">Ventana de contexto</string>
+    <string name="harness_usage_context_occupancy">Ocupación (%)</string>
+    <string name="harness_usage_breakdown_title">Composición estimada del contexto</string>
+    <string name="harness_usage_context_system">Estimación del sistema</string>
+    <string name="harness_usage_context_tools">Estimación de herramientas</string>
+    <string name="harness_usage_context_messages">Estimación de mensajes</string>
+    <string name="harness_usage_stats_title">Estadísticas de la sesión</string>
+    <string name="harness_usage_stats_ttft_ms">Tiempo hasta el primer token (ms)</string>
+    <string name="harness_usage_stats_decode_ms">Tiempo de decodificación (ms)</string>
+    <string name="harness_usage_stats_decode_tokens">Tokens decodificados</string>
+    <string name="harness_usage_context_compact">Contexto %1$d%%</string>
+    <string name="harness_usage_cache_compact">Caché %1$d%%</string>
+    <string name="harness_usage_speed_compact">%1$.1f tok/s</string>
+    <string name="harness_usage_total_compact">%1$s tok</string>
+    <string name="harness_usage_details_open">Detalles de uso</string>
+    <string name="harness_usage_details_title">Detalles de uso</string>
+    <string name="harness_usage_close">Cerrar detalles de uso</string>
+    <string name="harness_usage_context_used_window">Tokens: %1$d / %2$d</string>
+    <string name="harness_usage_cache_hit">Acierto de caché</string>
+    <string name="harness_usage_speed">Velocidad de generación</string>
+</resources>

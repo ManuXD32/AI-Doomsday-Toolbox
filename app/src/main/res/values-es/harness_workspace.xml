@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_projects_title">Proyectos</string>
+    <string name="harness_projects_description">Elige un proyecto para ver sus hilos y su espacio compartido.</string>
+    <string name="harness_project_create">Crear proyecto</string>
+    <string name="harness_projects_count">Proyectos: %1$d</string>
+    <string name="harness_project_open">Abrir %1$s</string>
+    <string name="harness_project_actions">Acciones para %1$s</string>
+    <string name="harness_projects_empty_title">Aún no hay proyectos</string>
+    <string name="harness_projects_empty_description">Crea un proyecto para mantener juntas sus conversaciones y archivos.</string>
+    <string name="harness_project_threads">Hilos: %1$d</string>
+    <string name="harness_tab_conversation">Conversación</string>
+    <string name="harness_tab_plan">Plan</string>
+    <string name="harness_tab_requests">Solicitudes</string>
+    <string name="harness_tab_changes">Cambios</string>
+    <string name="harness_tab_tools">Herramientas</string>
+    <string name="harness_tab_files">Archivos</string>
+    <string name="harness_tab_terminal">Terminal</string>
+    <string name="harness_more_destinations">Más destinos</string>
+    <string name="harness_back_to_projects">Volver a proyectos</string>
+    <string name="harness_plan_empty_title">No hay un plan para este hilo</string>
+    <string name="harness_plan_empty_description">Aquí aparece un plan cuando el agente crea uno.</string>
+    <string name="harness_requests_empty_title">No hay solicitudes pendientes</string>
+    <string name="harness_requests_empty_description">Las preguntas, aprobaciones y acciones en cola aparecen aquí cuando requieren tu atención.</string>
+    <string name="harness_files_project_title">Archivos del proyecto</string>
+    <string name="harness_files_project_description">Los hilos de este proyecto comparten estos archivos.</string>
+    <string name="harness_open_project_files">Abrir archivos del proyecto</string>
+    <string name="harness_files_thread_title">Adjuntos del hilo</string>
+    <string name="harness_files_uploading">Subiendo</string>
+    <string name="harness_files_attached">Abrir</string>
+    <string name="harness_files_thread_empty">No hay adjuntos en este hilo.</string>
+    <string name="harness_changes_title">Cambios</string>
+    <string name="harness_changes_description">Revisa los archivos creados o usados por este hilo.</string>
+    <string name="harness_changes_empty_title">Aún no hay cambios</string>
+    <string name="harness_changes_empty_description">Los cambios aparecerán aquí mientras trabaja el agente.</string>
+    <string name="harness_terminal_unavailable_title">Terminal no disponible</string>
+    <string name="harness_terminal_unavailable_description">El runtime aún no ha proporcionado contenido de terminal para este hilo.</string>
+    <string name="harness_activity_group_title">Actividad</string>
+    <string name="harness_activity_group_count">Eventos internos: %1$d</string>
+    <string name="harness_activity_group_show">Mostrar</string>
+    <string name="harness_activity_group_hide">Ocultar</string>
+    <string name="harness_tools_empty_title">No hay actividad de herramientas</string>
+    <string name="harness_tools_empty_description">Las llamadas a herramientas, el razonamiento y los detalles del runtime aparecerán aquí.</string>
+    <string name="harness_jump_to_latest">Ir a lo más reciente</string>
+</resources>

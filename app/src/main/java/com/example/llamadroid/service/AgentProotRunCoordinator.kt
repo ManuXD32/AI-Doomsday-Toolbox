@@ -379,6 +379,9 @@ internal class AgentProotRunCoordinator private constructor(private val context:
         .joinToString("") { "%02x".format(it.toInt() and 0xff) }
 
     companion object {
+        // The private constructor is reached only through get(applicationContext); no Activity
+        // or other lifecycle-bound Context is retained by this process-wide coordinator.
+        @android.annotation.SuppressLint("StaticFieldLeak")
         @Volatile private var instance: AgentProotRunCoordinator? = null
 
         fun get(context: Context): AgentProotRunCoordinator = instance ?: synchronized(this) {

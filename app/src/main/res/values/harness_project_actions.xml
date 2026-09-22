@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="harness_project_action_removed">This project has been removed. Select another project to continue.</string>
+    <string name="harness_project_action_rename_title">Rename project</string>
+    <string name="harness_project_action_remove_title">Remove project</string>
+    <string name="harness_project_action_name_label">Project name</string>
+    <string name="harness_project_action_name_required">Enter a project name.</string>
+    <string name="harness_project_action_name_too_long">Use 120 characters or fewer.</string>
+    <string name="harness_project_action_name_supporting">Use a name that is easy to recognize.</string>
+    <string name="harness_project_action_name_disclosure">This changes the display name only. The project folder stays unchanged.</string>
+    <string name="harness_project_action_remove_description">Remove this project and its legacy conversations from the app. Harness conversation history is kept.</string>
+    <string name="harness_project_action_folder_label">Project folder</string>
+    <string name="harness_project_action_thread_count">Threads: %1$d</string>
+    <string name="harness_project_action_delete_files">Also delete project files</string>
+    <string name="harness_project_action_delete_files_warning">This cannot be undone.</string>
+    <string name="harness_project_action_remote_files_unavailable">Project files cannot be deleted from this action for remote projects.</string>
+    <string name="harness_project_action_pending_removal">A previous removal is incomplete. Retry uses the same file-deletion choice.</string>
+    <string name="harness_project_action_type_title_prompt">Type “%1$s” to also delete the project files.</string>
+    <string name="harness_project_action_type_title_label">Project title</string>
+    <string name="harness_project_action_type_title_mismatch">The project title must match exactly.</string>
+    <string name="harness_project_action_cannot_remove">Stop the runtime before removing a project. If cleanup is pending, use Force stop and retry.</string>
+    <string name="harness_project_action_runtime_stop_required">Stop the Harness runtime before removing this project.</string>
+    <string name="harness_project_action_remote_cleanup_pending">Remote cleanup is pending. Reconnect SSH and retry.</string>
+    <string name="harness_project_action_remote_identity_ambiguous">Several SSH connections use this folder name. Remove their legacy conversations separately before removing this project.</string>
+    <string name="harness_project_action_cleanup_pending">Project cleanup is pending. Retry after cleanup completes.</string>
+    <string name="harness_project_action_generic_failure">Project action failed. Try again.</string>
+    <string name="harness_project_action_cancel">Cancel</string>
+    <string name="harness_project_action_save">Save</string>
+    <string name="harness_project_action_remove">Remove</string>
+    <string name="harness_project_action_retry">Retry</string>
+    <string name="harness_project_action_retry_removal">Retry removal</string>
+    <string name="harness_project_batch_select">Select projects</string>
+    <string name="harness_project_batch_cancel_selection">Cancel selection</string>
+    <string name="harness_project_batch_select_all">Select all</string>
+    <string name="harness_project_batch_selected_count" tools:ignore="PluralsCandidate">Selected: %1$d</string>
+    <string name="harness_project_batch_remove">Remove selected</string>
+    <string name="harness_project_action_batch_remove_title" tools:ignore="PluralsCandidate">Remove %1$d projects</string>
+    <string name="harness_project_action_batch_remove_description">Remove the selected projects from the app with one confirmation. Harness session history stays available.</string>
+    <string name="harness_project_action_batch_data_summary">Project records to remove: %1$d; legacy conversations to remove: %2$d; Harness sessions retained: %3$d.</string>
+    <string name="harness_project_action_batch_delete_files">Also delete files for all selected local projects</string>
+    <string name="harness_project_action_batch_delete_files_warning">This applies to every selected project and cannot be undone.</string>
+    <string name="harness_project_action_batch_type_remove_prompt">Type REMOVE once to confirm deleting the selected project files.</string>
+    <string name="harness_project_action_batch_type_remove_label">Batch confirmation</string>
+    <string name="harness_project_action_batch_type_remove_mismatch">Type REMOVE exactly.</string>
+    <string name="harness_project_action_batch_files_present" tools:ignore="PluralsCandidate">Project files are present for %1$d selected project(s) and will be deleted.</string>
+    <string name="harness_project_action_batch_files_retained">Project files stay on this device.</string>
+    <string name="harness_project_action_batch_pending_conflict">Finish pending removals separately before selecting this batch.</string>
+</resources>

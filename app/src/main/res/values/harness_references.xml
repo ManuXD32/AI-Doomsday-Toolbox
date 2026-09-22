@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_references_title">Add a reference</string>
+    <string name="harness_references_search">Find a file, folder, or session</string>
+    <string name="harness_references_root">Workspace root</string>
+    <string name="harness_references_parent">Parent folder</string>
+    <string name="harness_references_failed">Some references could not be loaded. Retry to reconnect.</string>
+    <string name="harness_references_empty">No matching references</string>
+    <string name="harness_references_session">Session</string>
+    <string name="harness_references_folder">Folder</string>
+    <string name="harness_references_file">File</string>
+    <string name="harness_references_insert">Insert reference</string>
+    <string name="harness_references_browse">Browse folder</string>
+    <string name="harness_references_preview">Preview</string>
+</resources>

@@ -1,0 +1,1045 @@
+{
+  "uid": 237,
+  "refs": {
+    "2": {
+      "type": "number",
+      "meta": {
+        "max": 2147483647,
+        "default": 500
+      }
+    },
+    "5": {
+      "type": "number",
+      "meta": {
+        "max": 2147483647,
+        "default": 10000
+      }
+    },
+    "9": {
+      "type": "number",
+      "meta": {
+        "min": 0,
+        "max": 1,
+        "default": 0.1
+      }
+    },
+    "10": {
+      "type": "object",
+      "meta": {
+        "default": {}
+      },
+      "dict": {
+        "initialDelayMs": 2,
+        "maxDelayMs": 5,
+        "jitterRatio": 9
+      }
+    },
+    "12": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "normal"
+    },
+    "17": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 0,
+        "max": 9007199254740991,
+        "default": 5
+      }
+    },
+    "18": {
+      "type": "string",
+      "meta": {}
+    },
+    "20": {
+      "type": "array",
+      "meta": {
+        "default": [
+          "EMPTY_RESPONSE",
+          "RATE_LIMIT",
+          "SERVER",
+          "TIMEOUT",
+          "TRANSPORT"
+        ]
+      },
+      "inner": 18
+    },
+    "21": {
+      "type": "object",
+      "meta": {
+        "default": {}
+      },
+      "dict": {
+        "mode": 12,
+        "maxRetries": 17,
+        "retryableCodes": 20,
+        "backoff": 10
+      }
+    },
+    "23": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "always"
+    },
+    "24": {
+      "type": "object",
+      "meta": {
+        "default": {}
+      },
+      "dict": {
+        "mode": 23,
+        "backoff": 10
+      }
+    },
+    "25": {
+      "type": "union",
+      "meta": {},
+      "list": [
+        21,
+        24
+      ]
+    },
+    "26": {
+      "type": "number",
+      "meta": {}
+    },
+    "27": {
+      "type": "number",
+      "meta": {}
+    },
+    "28": {
+      "type": "number",
+      "meta": {}
+    },
+    "29": {
+      "type": "number",
+      "meta": {}
+    },
+    "30": {
+      "type": "object",
+      "meta": {
+        "default": {}
+      },
+      "dict": {
+        "minimal": 26,
+        "low": 27,
+        "medium": 28,
+        "high": 29
+      }
+    },
+    "31": {
+      "type": "string",
+      "meta": {}
+    },
+    "32": {
+      "type": "number",
+      "meta": {}
+    },
+    "33": {
+      "type": "boolean",
+      "meta": {}
+    },
+    "34": {
+      "type": "const",
+      "meta": {},
+      "value": null
+    },
+    "37": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "thinking.enabled"
+    },
+    "39": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "thinking.effort"
+    },
+    "41": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "thinking.budget"
+    },
+    "42": {
+      "type": "union",
+      "meta": {
+        "required": true
+      },
+      "list": [
+        37,
+        39,
+        41
+      ]
+    },
+    "43": {
+      "type": "boolean",
+      "meta": {}
+    },
+    "44": {
+      "type": "object",
+      "meta": {
+        "default": {}
+      },
+      "dict": {
+        "$var": 42,
+        "omitWhenOff": 43
+      }
+    },
+    "45": {
+      "type": "union",
+      "meta": {},
+      "list": [
+        31,
+        32,
+        33,
+        34,
+        44
+      ]
+    },
+    "46": {
+      "type": "boolean",
+      "meta": {}
+    },
+    "47": {
+      "type": "boolean",
+      "meta": {}
+    },
+    "48": {
+      "type": "boolean",
+      "meta": {}
+    },
+    "49": {
+      "type": "boolean",
+      "meta": {}
+    },
+    "50": {
+      "type": "boolean",
+      "meta": {}
+    },
+    "51": {
+      "type": "union",
+      "meta": {},
+      "list": [
+        53,
+        55
+      ]
+    },
+    "53": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "max_completion_tokens"
+    },
+    "55": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "max_tokens"
+    },
+    "56": {
+      "type": "boolean",
+      "meta": {}
+    },
+    "57": {
+      "type": "boolean",
+      "meta": {}
+    },
+    "58": {
+      "type": "boolean",
+      "meta": {}
+    },
+    "59": {
+      "type": "boolean",
+      "meta": {}
+    },
+    "60": {
+      "type": "union",
+      "meta": {},
+      "list": [
+        62,
+        64,
+        66,
+        68,
+        70,
+        72,
+        74,
+        76,
+        78,
+        80,
+        82
+      ]
+    },
+    "62": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "openai"
+    },
+    "64": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "deepseek"
+    },
+    "66": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "openrouter"
+    },
+    "68": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "together"
+    },
+    "70": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "baseten"
+    },
+    "72": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "zai"
+    },
+    "74": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "qwen"
+    },
+    "76": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "chat-template"
+    },
+    "78": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "qwen-chat-template"
+    },
+    "80": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "string-thinking"
+    },
+    "82": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "ant-ling"
+    },
+    "83": {
+      "type": "dict",
+      "meta": {
+        "default": {}
+      },
+      "inner": 45,
+      "sKey": 84
+    },
+    "84": {
+      "type": "string",
+      "meta": {}
+    },
+    "85": {
+      "type": "dict",
+      "meta": {
+        "default": {}
+      },
+      "inner": 45,
+      "sKey": 86
+    },
+    "86": {
+      "type": "string",
+      "meta": {}
+    },
+    "87": {
+      "type": "boolean",
+      "meta": {}
+    },
+    "88": {
+      "type": "union",
+      "meta": {},
+      "list": [
+        90,
+        92,
+        94
+      ]
+    },
+    "90": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "thinking_token_budget"
+    },
+    "92": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "thinking_budget"
+    },
+    "94": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "thinking_budget_tokens"
+    },
+    "96": {
+      "type": "number",
+      "meta": {
+        "step": 1
+      }
+    },
+    "97": {
+      "type": "boolean",
+      "meta": {}
+    },
+    "98": {
+      "type": "boolean",
+      "meta": {}
+    },
+    "99": {
+      "type": "union",
+      "meta": {},
+      "list": [
+        101
+      ]
+    },
+    "101": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "anthropic"
+    },
+    "102": {
+      "type": "boolean",
+      "meta": {}
+    },
+    "103": {
+      "type": "boolean",
+      "meta": {}
+    },
+    "104": {
+      "type": "boolean",
+      "meta": {}
+    },
+    "105": {
+      "type": "boolean",
+      "meta": {}
+    },
+    "106": {
+      "type": "boolean",
+      "meta": {}
+    },
+    "107": {
+      "type": "boolean",
+      "meta": {}
+    },
+    "108": {
+      "type": "boolean",
+      "meta": {}
+    },
+    "109": {
+      "type": "object",
+      "meta": {
+        "default": {}
+      },
+      "dict": {
+        "supportsStore": 46,
+        "supportsDeveloperRole": 47,
+        "supportsReasoningEffort": 48,
+        "supportsUsageInStreaming": 49,
+        "supportsFinishReason": 50,
+        "maxTokensField": 51,
+        "requiresToolResultName": 56,
+        "requiresAssistantAfterToolResult": 57,
+        "requiresThinkingAsText": 58,
+        "requiresReasoningContentOnAssistantMessages": 59,
+        "thinkingFormat": 60,
+        "chatTemplateKwargs": 83,
+        "chatTemplateArgs": 85,
+        "supportsThinkingTokenBudget": 87,
+        "thinkingTokenBudgetField": 88,
+        "vllmPriority": 96,
+        "supportsMaxOutputTokens": 97,
+        "supportsStrictMode": 98,
+        "cacheControlFormat": 99,
+        "supportsLongCacheRetention": 102,
+        "supportsEagerToolInputStreaming": 103,
+        "supportsCacheControlOnTools": 104,
+        "supportsTemperature": 105,
+        "forceAdaptiveThinking": 106,
+        "allowEmptySignature": 107,
+        "supportsStrictTools": 108
+      }
+    },
+    "110": {
+      "type": "string",
+      "meta": {}
+    },
+    "111": {
+      "type": "const",
+      "meta": {},
+      "value": null
+    },
+    "112": {
+      "type": "union",
+      "meta": {},
+      "list": [
+        110,
+        111
+      ]
+    },
+    "113": {
+      "type": "union",
+      "meta": {},
+      "list": [
+        115,
+        117,
+        119,
+        121,
+        123,
+        125,
+        127
+      ]
+    },
+    "115": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "off"
+    },
+    "117": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "minimal"
+    },
+    "119": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "low"
+    },
+    "121": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "medium"
+    },
+    "123": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "high"
+    },
+    "125": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "xhigh"
+    },
+    "127": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "max"
+    },
+    "128": {
+      "type": "dict",
+      "meta": {
+        "default": {}
+      },
+      "inner": 112,
+      "sKey": 113
+    },
+    "129": {
+      "type": "string",
+      "meta": {}
+    },
+    "132": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 1
+      }
+    },
+    "135": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 1
+      }
+    },
+    "136": {
+      "type": "union",
+      "meta": {},
+      "list": [
+        138,
+        140
+      ]
+    },
+    "138": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "text"
+    },
+    "140": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "image"
+    },
+    "141": {
+      "type": "array",
+      "meta": {
+        "default": []
+      },
+      "inner": 136
+    },
+    "142": {
+      "type": "const",
+      "meta": {},
+      "value": false
+    },
+    "143": {
+      "type": "union",
+      "meta": {},
+      "list": [
+        142,
+        128
+      ]
+    },
+    "145": {
+      "type": "string",
+      "meta": {
+        "required": true
+      }
+    },
+    "146": {
+      "type": "object",
+      "meta": {
+        "default": {}
+      },
+      "dict": {
+        "id": 145,
+        "name": 129,
+        "contextWindow": 132,
+        "maxTokens": 135,
+        "input": 141,
+        "reasoningEfforts": 143,
+        "compat": 109
+      }
+    },
+    "147": {
+      "type": "object",
+      "meta": {
+        "default": {}
+      },
+      "dict": {
+        "name": 129,
+        "contextWindow": 132,
+        "maxTokens": 135,
+        "input": 141,
+        "reasoningEfforts": 143,
+        "compat": 109
+      }
+    },
+    "149": {
+      "type": "string",
+      "meta": {
+        "role": "credential-ref"
+      }
+    },
+    "150": {
+      "type": "string",
+      "meta": {}
+    },
+    "151": {
+      "type": "union",
+      "meta": {},
+      "list": [
+        153,
+        155,
+        157
+      ]
+    },
+    "153": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "openai-completions"
+    },
+    "155": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "openai-responses"
+    },
+    "157": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "anthropic-messages"
+    },
+    "158": {
+      "type": "string",
+      "meta": {}
+    },
+    "159": {
+      "type": "array",
+      "meta": {
+        "default": []
+      },
+      "inner": 146
+    },
+    "160": {
+      "type": "dict",
+      "meta": {
+        "default": {}
+      },
+      "inner": 147,
+      "sKey": 161
+    },
+    "161": {
+      "type": "string",
+      "meta": {}
+    },
+    "165": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 1,
+        "default": 262144
+      }
+    },
+    "169": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 1,
+        "default": 32768
+      }
+    },
+    "170": {
+      "type": "union",
+      "meta": {},
+      "list": [
+        172,
+        174
+      ]
+    },
+    "172": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "text"
+    },
+    "174": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "image"
+    },
+    "176": {
+      "type": "array",
+      "meta": {
+        "default": [
+          "text"
+        ]
+      },
+      "inner": 170
+    },
+    "177": {
+      "type": "string",
+      "meta": {}
+    },
+    "178": {
+      "type": "dict",
+      "meta": {
+        "default": {}
+      },
+      "inner": 177,
+      "sKey": 179
+    },
+    "179": {
+      "type": "string",
+      "meta": {}
+    },
+    "180": {
+      "type": "union",
+      "meta": {},
+      "list": [
+        182,
+        184,
+        186,
+        188,
+        190,
+        192,
+        194
+      ]
+    },
+    "182": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "off"
+    },
+    "184": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "minimal"
+    },
+    "186": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "low"
+    },
+    "188": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "medium"
+    },
+    "190": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "high"
+    },
+    "192": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "xhigh"
+    },
+    "194": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "max"
+    },
+    "195": {
+      "type": "union",
+      "meta": {},
+      "list": [
+        197,
+        199,
+        201
+      ]
+    },
+    "197": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "none"
+    },
+    "199": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "short"
+    },
+    "201": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "long"
+    },
+    "202": {
+      "type": "union",
+      "meta": {},
+      "list": [
+        204,
+        206,
+        208,
+        210
+      ]
+    },
+    "204": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "sse"
+    },
+    "206": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "websocket"
+    },
+    "208": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "websocket-cached"
+    },
+    "210": {
+      "type": "const",
+      "meta": {
+        "required": true
+      },
+      "value": "auto"
+    },
+    "213": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 0
+      }
+    },
+    "216": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 0
+      }
+    },
+    "220": {
+      "type": "number",
+      "meta": {
+        "min": 5e-324,
+        "max": 2147483647,
+        "default": 300000
+      }
+    },
+    "224": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 1,
+        "default": 20971520
+      }
+    },
+    "228": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 1,
+        "default": 4194304
+      }
+    },
+    "232": {
+      "type": "number",
+      "meta": {
+        "step": 1,
+        "min": 1,
+        "default": 1048576
+      }
+    },
+    "233": {
+      "type": "object",
+      "meta": {
+        "default": {}
+      },
+      "dict": {
+        "apiKeyEnv": 149,
+        "displayName": 150,
+        "api": 151,
+        "baseURL": 158,
+        "models": 159,
+        "modelOverrides": 160,
+        "compat": 109,
+        "defaultContextWindow": 165,
+        "defaultMaxTokens": 169,
+        "defaultInput": 176,
+        "headers": 178,
+        "reasoning": 180,
+        "thinkingBudgets": 30,
+        "cacheRetention": 195,
+        "transport": 202,
+        "timeoutMs": 213,
+        "websocketConnectTimeoutMs": 216,
+        "streamIdleTimeoutMs": 220,
+        "maxRequestImageBytes": 224,
+        "requestImagePixelBudget": 228,
+        "requestImageMaxBytes": 232,
+        "retryPolicy": 25
+      }
+    },
+    "235": {
+      "type": "string",
+      "meta": {}
+    },
+    "236": {
+      "type": "dict",
+      "meta": {
+        "default": {}
+      },
+      "inner": 233,
+      "sKey": 235
+    },
+    "237": {
+      "type": "object",
+      "meta": {
+        "default": {}
+      },
+      "dict": {
+        "providers": 236
+      }
+    }
+  }
+}

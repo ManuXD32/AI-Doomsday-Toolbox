@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_preset_files_title">Preset files: %1$s</string>
+    <string name="harness_preset_files_description">Edit this user preset’s files. Existing sessions keep their current composition; start a new session or restart the harness to use a fresh composition.</string>
+    <string name="harness_preset_files_parent">Parent folder</string>
+    <string name="harness_preset_files_refresh">Refresh files</string>
+    <string name="harness_preset_files_new">New file</string>
+    <string name="harness_preset_files_new_directory">New folder</string>
+    <string name="harness_preset_files_rename">Rename</string>
+    <string name="harness_preset_files_name">File or folder name</string>
+    <string name="harness_preset_files_delete">Delete %1$s? Folders must be empty.</string>
+    <string name="harness_preset_files_conflict">This file changed after you opened it. Your edit has not been saved. Reopen the file to review the latest version.</string>
+    <string name="harness_preset_files_text_limit">The editor supports UTF-8 text files up to 256 KiB.</string>
+    <string name="harness_preset_files_failure">The file operation could not finish. Check the name, folder contents, and file access, then try again.</string>
+</resources>

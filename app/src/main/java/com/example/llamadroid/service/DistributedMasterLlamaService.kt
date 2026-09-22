@@ -35,7 +35,14 @@ object DistributedLaunchResolution {
             ?: effectiveProfile.commandTemplate?.let {
                 controller.renderCommandTemplate(it, binary.absolutePath, effectiveConfig)
             }
-            ?: controller.getCommand(binary.absolutePath, effectiveConfig)
+            ?: controller.getCommand(
+                binary.absolutePath,
+                effectiveConfig,
+                controller.probeBinaryCapabilities(
+                    binaryPath = binary.absolutePath,
+                    filesDir = context.filesDir
+                )
+            )
         require(rawArgs.isNotEmpty()) { "The distributed command is empty" }
         if (customArgs != null) {
             require(runCatching { File(customArgs.first()).canonicalPath == binary.canonicalPath }.getOrDefault(false)) {

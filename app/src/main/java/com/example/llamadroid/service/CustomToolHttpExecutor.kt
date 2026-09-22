@@ -2,6 +2,10 @@ package com.example.llamadroid.service
 
 import com.example.llamadroid.data.db.CustomToolEntity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
@@ -166,7 +170,7 @@ object CustomToolHttpExecutor {
             val requestBody = prepared.body?.toRequestBody(prepared.contentType?.toMediaTypeOrNull())
             builder.method(prepared.method, if (prepared.method in setOf("GET", "HEAD")) null else requestBody ?: "".toRequestBody())
             var redirectTarget: String? = null
-            val completed = client.newCall(builder.build()).execute().use { response ->
+            val completed = executeCancellable(client.newCall(builder.build())) { response ->
                 if (response.isRedirect) {
                     require(redirects < MAX_REDIRECTS) { "Custom API tool exceeded $MAX_REDIRECTS redirects." }
                     val location = response.header("Location")
@@ -192,6 +196,14 @@ object CustomToolHttpExecutor {
         }
         @Suppress("UNREACHABLE_CODE")
         error("Unreachable")
+    }
+
+    private suspend fun <T> executeCancellable(call: okhttp3.Call, block: (okhttp3.Response) -> T): T = coroutineScope {
+        val cancellation = launch(start = CoroutineStart.UNDISPATCHED) {
+            try { awaitCancellation() } finally { call.cancel() }
+        }
+        try { call.execute().use(block) }
+        finally { cancellation.cancel(); call.cancel() }
     }
 
     private fun readBoundedBody(body: ResponseBody?): Pair<String, Boolean> {

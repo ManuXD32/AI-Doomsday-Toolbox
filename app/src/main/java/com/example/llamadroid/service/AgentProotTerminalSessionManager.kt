@@ -21,6 +21,7 @@ import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -29,6 +30,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.security.MessageDigest
@@ -38,6 +41,17 @@ import java.util.concurrent.ConcurrentHashMap
 internal const val AGENT_PROOT_TERMINALS_PER_PROJECT = 8
 internal const val AGENT_PROOT_TERMINALS_PER_PROCESS = 24
 internal const val AGENT_PROOT_ACTIVE_PTY_BIND = "__ADT_ACTIVE_PTY_BIND__"
+internal const val AGENT_PROOT_PTY_PARENT_BIND = "/dev/pts:/dev/pts"
+
+/** Startup phases are deliberately metadata-only so diagnostics never retain terminal output. */
+internal enum class AgentProotTerminalStartupPhase {
+    PREPARING_ENVIRONMENT,
+    BUILDING_LAUNCH,
+    CREATING_PTY,
+    WAITING_FOR_PROCESS,
+    WAITING_FOR_GUEST_SHELL,
+    CONNECTED
+}
 
 internal fun canOpenAgentProotTerminal(projectActive: Int, processActive: Int): Boolean =
     projectActive in 0 until AGENT_PROOT_TERMINALS_PER_PROJECT &&
@@ -48,17 +62,152 @@ internal data class AgentProotTerminalLaunch(
     val executable: String,
     val hostWorkingDirectory: String,
     val arguments: Array<String>,
-    val environment: Array<String>
+    val environment: Array<String>,
+    val guestReadyReceipt: AgentProotGuestReadyReceipt
 )
 
-internal fun agentProotInteractiveShellArguments(): List<String> = listOf(
-    "-w", AgentProotEnvironmentPaths.WORKSPACE_MOUNT,
-    "/bin/bash", "--noprofile", "--norc", "-i"
+internal data class AgentProotGuestReadyReceipt(
+    val hostFile: File,
+    val guestFile: String,
+    val nonce: String
 )
 
-/** The PTY JNI replaces this opaque token with `host-slave:guest-slave` before exec. */
+private const val AGENT_PROOT_GUEST_READY_DIRECTORY = "adt-terminal-ready"
+private const val AGENT_PROOT_GUEST_READY_MOUNT = "/run/adt-terminal-ready"
+private val AGENT_PROOT_SESSION_ID = Regex("[A-Za-z0-9_-]+")
+
+/** Allocates a per-session, host-owned receipt path mounted inside the guest at `/run`. */
+internal fun createAgentProotGuestReadyReceipt(
+    runRoot: File,
+    sessionId: String
+): AgentProotGuestReadyReceipt {
+    require(AGENT_PROOT_SESSION_ID.matches(sessionId)) {
+        "Interactive terminal session identity is invalid."
+    }
+    val directory = File(runRoot, AGENT_PROOT_GUEST_READY_DIRECTORY).canonicalFile
+    require(directory.mkdirs() || directory.isDirectory) {
+        "Interactive terminal readiness directory is unavailable."
+    }
+    val hostFile = File(directory, sessionId).canonicalFile
+    require(hostFile.parentFile == directory) {
+        "Interactive terminal readiness path escaped its run directory."
+    }
+    if (hostFile.exists()) require(hostFile.delete()) {
+        "Interactive terminal readiness receipt could not be reset."
+    }
+    val nonce = UUID.randomUUID().toString()
+    return AgentProotGuestReadyReceipt(
+        hostFile = hostFile,
+        guestFile = "$AGENT_PROOT_GUEST_READY_MOUNT/$sessionId",
+        nonce = nonce
+    )
+}
+
+internal fun cleanupAgentProotGuestReadyReceipt(receipt: AgentProotGuestReadyReceipt) {
+    runCatching { receipt.hostFile.delete() }
+}
+
+internal fun agentProotGuestReadyReceiptMatches(receipt: AgentProotGuestReadyReceipt): Boolean {
+    val expected = receipt.nonce.toByteArray(Charsets.UTF_8)
+    return runCatching {
+        receipt.hostFile.isFile &&
+            receipt.hostFile.length() == expected.size.toLong() &&
+            receipt.hostFile.readBytes().contentEquals(expected)
+    }.getOrDefault(false)
+}
+
+/**
+ * Starts Bash through a tiny non-interactive handoff that writes the owned receipt, then execs the
+ * real interactive shell. This proves that PRoot reached the guest rootfs and Bash, rather than
+ * merely proving that the host-side broker has a PID.
+ */
+internal fun agentProotInteractiveShellArguments(
+    workingDirectory: String = AgentProotEnvironmentPaths.WORKSPACE_MOUNT,
+    guestReadyFile: String? = null,
+    guestReadyNonce: String? = null
+): List<String> {
+    require((guestReadyFile == null) == (guestReadyNonce == null)) {
+        "Guest readiness path and nonce must be supplied together."
+    }
+    val base = mutableListOf(
+        "-w", workingDirectory,
+        "/bin/bash", "--noprofile", "--norc"
+    )
+    if (guestReadyFile == null) {
+        base += "-i"
+    } else {
+        base += listOf(
+            "-c",
+            "set -eu; printf '%s' ${agentProotShellQuote(requireNotNull(guestReadyNonce))} > " +
+                "${agentProotShellQuote(guestReadyFile)}; " +
+                "exec /bin/bash --noprofile --norc -i"
+        )
+    }
+    return base
+}
+
+private fun agentProotShellQuote(value: String): String =
+    "'${value.replace("'", "'\\''")}'"
+
+/**
+ * The PTY JNI replaces the opaque token with `host-slave:guest-slave` before exec. The parent
+ * mount is required because the Debian rootfs only owns an empty `/dev` hierarchy; binding the
+ * slave alone leaves the guest without the `/dev/pts` filesystem needed by interactive programs.
+ */
 internal fun agentProotInteractivePtyBindArguments(): List<String> =
-    listOf("-b", AGENT_PROOT_ACTIVE_PTY_BIND)
+    listOf(
+        "-b", AGENT_PROOT_PTY_PARENT_BIND,
+        "-b", AGENT_PROOT_ACTIVE_PTY_BIND
+    )
+
+/** Waits until Termux has created a live child before the UI advertises a connected shell. */
+internal suspend fun awaitAgentProotTerminalProcessReady(
+    terminal: TerminalSession,
+    timeoutMs: Long = 5_000L,
+    pollMs: Long = 50L
+) {
+    val deadline = System.nanoTime() + timeoutMs * 1_000_000L
+    while (terminal.isRunning && terminal.pid <= 0 && System.nanoTime() < deadline) {
+        delay(pollMs)
+    }
+    check(terminal.isRunning && terminal.pid > 0) {
+        "Interactive terminal process did not become ready."
+    }
+}
+
+/** Waits until the guest-side Bash handoff has reached the rootfs and execed the shell. */
+internal suspend fun awaitAgentProotGuestShellReady(
+    terminal: TerminalSession,
+    receipt: AgentProotGuestReadyReceipt,
+    timeoutMs: Long = 5_000L,
+    pollMs: Long = 50L
+) {
+    val deadline = System.nanoTime() + timeoutMs * 1_000_000L
+    while (terminal.isRunning &&
+        !agentProotGuestReadyReceiptMatches(receipt) &&
+        System.nanoTime() < deadline
+    ) {
+        delay(pollMs)
+    }
+    check(terminal.isRunning && agentProotGuestReadyReceiptMatches(receipt)) {
+        "Guest shell did not report readiness."
+    }
+}
+
+internal fun agentProotTerminalFailureCode(
+    phase: AgentProotTerminalStartupPhase,
+    failure: Throwable
+): String = when {
+    failure is kotlinx.coroutines.CancellationException -> "TERMINAL_START_CANCELLED"
+    phase == AgentProotTerminalStartupPhase.PREPARING_ENVIRONMENT ->
+        "TERMINAL_ENVIRONMENT_UNAVAILABLE"
+    phase == AgentProotTerminalStartupPhase.BUILDING_LAUNCH -> "TERMINAL_LAUNCH_FAILED"
+    phase == AgentProotTerminalStartupPhase.CREATING_PTY -> "TERMINAL_PTY_FAILED"
+    phase == AgentProotTerminalStartupPhase.WAITING_FOR_PROCESS -> "TERMINAL_PROCESS_NOT_READY"
+    phase == AgentProotTerminalStartupPhase.WAITING_FOR_GUEST_SHELL ->
+        "TERMINAL_GUEST_SHELL_NOT_READY"
+    else -> "TERMINAL_START_FAILED"
+}
 
 internal fun agentProotInteractiveEnvironment(
     nativeLibraryDir: String,
@@ -114,6 +263,7 @@ internal class AgentProotTerminalSessionManager(private val context: Context) {
     private val database = AppDatabase.getDatabase(appContext)
     private val environmentManager = AgentProotEnvironmentManager(appContext)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val lifecycleLock = Mutex()
     private val sessions = ConcurrentHashMap<String, Session>()
     private val _states = MutableStateFlow<Map<Long, List<WorkspaceTerminalUiState>>>(emptyMap())
     val states: StateFlow<Map<Long, List<WorkspaceTerminalUiState>>> = _states.asStateFlow()
@@ -137,9 +287,11 @@ internal class AgentProotTerminalSessionManager(private val context: Context) {
                 exitStatus == 0 -> AgentProotRunStatus.SUCCEEDED
                 else -> AgentProotRunStatus.FAILED
             }
-            val error = exitStatus.takeIf { it != 0 && !session.closing }
-                ?.let { "Terminal exited with status $it." }
-            scope.launch { finish(session, status, error) }
+            val errorCode = exitStatus.takeIf { it != 0 && !session.closing }
+                ?.let { "TERMINAL_PROCESS_EXITED" }
+            scope.launch {
+                lifecycleLock.withLock { finish(session, status, errorCode) }
+            }
         }
 
         override fun onCopyTextToClipboard(terminalSession: TerminalSession, text: String) {
@@ -180,114 +332,137 @@ internal class AgentProotTerminalSessionManager(private val context: Context) {
 
     suspend fun open(conversationId: Long, projectFolder: String): Result<WorkspaceTerminalUiState> =
         withContext(Dispatchers.IO) {
-            runCatching {
-                startup.await()
-                require(conversationId > 0L) { "A saved project conversation is required." }
-                val projectActive = activeForConversation(conversationId).size
-                val processActive = sessions.values.count { it.connected }
-                require(projectActive < AGENT_PROOT_TERMINALS_PER_PROJECT) {
-                    "A project can keep at most $AGENT_PROOT_TERMINALS_PER_PROJECT Debian terminal sessions open."
-                }
-                require(canOpenAgentProotTerminal(projectActive, processActive)) {
-                    "Too many Debian terminal sessions are already open."
-                }
-                val conversation = database.agentChatDao().getConversation(conversationId)
-                    ?: error("The active project conversation no longer exists.")
-                val environmentId = conversation.prootEnvironmentId
-                    ?: error("Select a Debian environment before opening its terminal.")
-                val environment = database.agentProotEnvironmentDao().getById(environmentId)
-                    ?: error("The selected Debian environment no longer exists.")
-                val id = "terminal_${UUID.randomUUID()}"
-                val now = System.currentTimeMillis()
-                val queuedRow = AgentProotRunEntity(
-                    id = id,
-                    conversationId = conversationId,
-                    environmentId = environmentId,
-                    projectFolder = projectFolder,
-                    commandDigest = "interactive_terminal:${sha256(id)}",
-                    status = AgentProotRunStatus.QUEUED,
-                    processGeneration = AgentProcessGeneration.id,
-                    createdAt = now,
-                    updatedAt = now
-                )
-                database.agentProotRunDao().insert(queuedRow)
-                setEnvironmentInstalling(environment)
-                val rootfs = try {
-                    environmentManager.prepare(
-                        AgentProotEnvironmentSpec(
-                            id = environment.id,
-                            displayName = environment.displayName,
-                            imageId = environment.imageId,
-                            imageSha256 = environment.imageDigest.takeIf { it.matches(SHA256) }
+            lifecycleLock.withLock {
+                var startupPhase = AgentProotTerminalStartupPhase.PREPARING_ENVIRONMENT
+                var queuedId: String? = null
+                runCatching {
+                    try {
+                        startup.await()
+                        require(conversationId > 0L) { "A saved project conversation is required." }
+                        val projectActive = activeForConversation(conversationId).size
+                        val processActive = sessions.values.count { it.connected }
+                        require(projectActive < AGENT_PROOT_TERMINALS_PER_PROJECT) {
+                            "A project can keep at most $AGENT_PROOT_TERMINALS_PER_PROJECT Debian terminal sessions open."
+                        }
+                        require(canOpenAgentProotTerminal(projectActive, processActive)) {
+                            "Too many Debian terminal sessions are already open."
+                        }
+                        val conversation = database.agentChatDao().getConversation(conversationId)
+                            ?: error("The active project conversation no longer exists.")
+                        val environmentId = conversation.prootEnvironmentId
+                            ?: error("Select a Debian environment before opening its terminal.")
+                        val environment = database.agentProotEnvironmentDao().getById(environmentId)
+                            ?: error("The selected Debian environment no longer exists.")
+                        val id = "terminal_${UUID.randomUUID()}"
+                        queuedId = id
+                        val now = System.currentTimeMillis()
+                        val queuedRow = AgentProotRunEntity(
+                            id = id,
+                            conversationId = conversationId,
+                            environmentId = environmentId,
+                            projectFolder = projectFolder,
+                            commandDigest = "interactive_terminal:${sha256(id)}",
+                            status = AgentProotRunStatus.QUEUED,
+                            processGeneration = AgentProcessGeneration.id,
+                            createdAt = now,
+                            updatedAt = now
                         )
-                    ).getOrThrow()
-                } catch (error: Throwable) {
-                    database.agentProotEnvironmentDao().update(
-                        environment.copy(
-                            status = AgentProotEnvironmentStatus.BROKEN,
-                            updatedAt = System.currentTimeMillis()
-                        )
-                    )
-                    failQueued(id, error)
-                    throw error
-                }
+                        database.agentProotRunDao().insert(queuedRow)
+                        setEnvironmentInstalling(environment)
+                        val rootfs = try {
+                            environmentManager.prepare(
+                                AgentProotEnvironmentSpec(
+                                    id = environment.id,
+                                    displayName = environment.displayName,
+                                    imageId = environment.imageId,
+                                    imageSha256 = environment.imageDigest.takeIf { it.matches(SHA256) }
+                                )
+                            ).getOrThrow()
+                        } catch (error: Throwable) {
+                            database.agentProotEnvironmentDao().update(
+                                environment.copy(
+                                    status = AgentProotEnvironmentStatus.BROKEN,
+                                    updatedAt = System.currentTimeMillis()
+                                )
+                            )
+                            throw error
+                        }
 
-                database.agentProotEnvironmentDao().update(
-                    environment.copy(
-                        status = AgentProotEnvironmentStatus.READY,
-                        sizeBytes = environmentManager.usageBytes(environmentId),
-                        lastUsedAt = System.currentTimeMillis(),
-                        updatedAt = System.currentTimeMillis()
-                    )
-                )
-                val launch = buildLaunch(id, environmentId, projectFolder, rootfs)
-                val ordinal = activeForConversation(conversationId).size + 1
-                val displayName = "${environment.displayName} · $ordinal"
-                val terminal = withContext(Dispatchers.Main.immediate) {
-                    TerminalSession(
-                        launch.executable,
-                        launch.hostWorkingDirectory,
-                        launch.arguments,
-                        launch.environment,
-                        TerminalEmulator.DEFAULT_TERMINAL_TRANSCRIPT_ROWS,
-                        terminalClient
-                    ).apply { mSessionName = displayName }
-                }
-                val session = Session(
-                    id = id,
-                    conversationId = conversationId,
-                    environmentId = environmentId,
-                    projectFolder = projectFolder,
-                    displayName = displayName,
-                    terminal = terminal,
-                    openedAt = now,
-                    lastActivityAt = now
-                )
-                sessions[id] = session
-                try {
-                    withContext(Dispatchers.Main.immediate) {
-                        terminal.initializeEmulator(DEFAULT_COLUMNS, DEFAULT_ROWS)
+                        database.agentProotEnvironmentDao().update(
+                            environment.copy(
+                                status = AgentProotEnvironmentStatus.READY,
+                                sizeBytes = environmentManager.usageBytes(environmentId),
+                                lastUsedAt = System.currentTimeMillis(),
+                                updatedAt = System.currentTimeMillis()
+                            )
+                        )
+                        startupPhase = AgentProotTerminalStartupPhase.BUILDING_LAUNCH
+                        val launch = buildLaunch(id, environmentId, projectFolder, rootfs)
+                        var createdTerminal: TerminalSession? = null
+                        try {
+                            val ordinal = activeForConversation(conversationId).size + 1
+                            val displayName = "${environment.displayName} · $ordinal"
+                            startupPhase = AgentProotTerminalStartupPhase.CREATING_PTY
+                            val terminal = withContext(Dispatchers.Main.immediate) {
+                                TerminalSession(
+                                    launch.executable,
+                                    launch.hostWorkingDirectory,
+                                    launch.arguments,
+                                    launch.environment,
+                                    TerminalEmulator.DEFAULT_TERMINAL_TRANSCRIPT_ROWS,
+                                    terminalClient
+                                ).apply { mSessionName = displayName }
+                            }
+                            createdTerminal = terminal
+                            val session = Session(
+                                id = id,
+                                conversationId = conversationId,
+                                environmentId = environmentId,
+                                projectFolder = projectFolder,
+                                displayName = displayName,
+                                terminal = terminal,
+                                openedAt = now,
+                                lastActivityAt = now
+                            )
+                            sessions[id] = session
+                            withContext(Dispatchers.Main.immediate) {
+                                terminal.initializeEmulator(DEFAULT_COLUMNS, DEFAULT_ROWS)
+                            }
+                            startupPhase = AgentProotTerminalStartupPhase.WAITING_FOR_PROCESS
+                            awaitAgentProotTerminalProcessReady(terminal)
+                            startupPhase = AgentProotTerminalStartupPhase.WAITING_FOR_GUEST_SHELL
+                            awaitAgentProotGuestShellReady(terminal, launch.guestReadyReceipt)
+                            database.agentProotRunDao().insert(
+                                queuedRow.copy(
+                                    status = AgentProotRunStatus.RUNNING,
+                                    processId = terminal.pid.takeIf { it > 0 },
+                                    startedAt = now,
+                                    updatedAt = System.currentTimeMillis()
+                                )
+                            )
+                            startupPhase = AgentProotTerminalStartupPhase.CONNECTED
+                            AgentForegroundService.retainRuntime(
+                                appContext,
+                                appContext.getString(R.string.agent_status_workspace_terminal_running, "/workspace")
+                            )
+                            publish(conversationId)
+                            queuedId = null
+                            snapshot(session)
+                        } catch (failure: Throwable) {
+                            val current = createdTerminal ?: sessions[id]?.terminal
+                            sessions.remove(id)
+                            withContext(NonCancellable + Dispatchers.Main.immediate) {
+                                if (current?.isRunning == true) current.finishIfRunning()
+                            }
+                            throw failure
+                        } finally {
+                            cleanupAgentProotGuestReadyReceipt(launch.guestReadyReceipt)
+                        }
+                    } catch (error: Throwable) {
+                        queuedId?.let { failQueued(it, error, startupPhase) }
+                        throw error
                     }
-                } catch (error: Throwable) {
-                    sessions.remove(id)
-                    failQueued(id, error)
-                    throw error
                 }
-
-                database.agentProotRunDao().insert(
-                    queuedRow.copy(
-                        status = AgentProotRunStatus.RUNNING,
-                        processId = terminal.pid.takeIf { it > 0 },
-                        startedAt = now,
-                        updatedAt = System.currentTimeMillis()
-                    )
-                )
-                AgentForegroundService.retainRuntime(
-                    appContext,
-                    appContext.getString(R.string.agent_status_workspace_terminal_running, "/workspace")
-                )
-                publish(conversationId)
-                snapshot(session)
             }
         }
 
@@ -322,7 +497,8 @@ internal class AgentProotTerminalSessionManager(private val context: Context) {
         }
 
     suspend fun close(sessionId: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        lifecycleLock.withLock {
+            runCatching {
             val session = sessions[sessionId] ?: return@runCatching
             session.closing = true
             if (session.terminal.isRunning) {
@@ -335,6 +511,7 @@ internal class AgentProotTerminalSessionManager(private val context: Context) {
             finish(session, AgentProotRunStatus.STOPPED, null)
             sessions.remove(sessionId, session)
             publish(session.conversationId)
+            }
         }
     }
 
@@ -420,19 +597,29 @@ internal class AgentProotTerminalSessionManager(private val context: Context) {
             }
         }
         arguments += agentProotInteractivePtyBindArguments()
-        arguments += agentProotInteractiveShellArguments()
-        return AgentProotTerminalLaunch(
-            executable = broker.absolutePath,
-            hostWorkingDirectory = projectRoot.absolutePath,
-            arguments = arguments.toTypedArray(),
-            environment = agentProotInteractiveEnvironment(
-                nativeLibraryDir = appContext.applicationInfo.nativeLibraryDir,
-                tempRoot = tempRoot.absolutePath,
-                projectFolder = projectFolder,
-                sessionId = sessionId,
-                loaderPath = AgentProotNativeBinaryProvider.locateLoader(appContext)?.absolutePath
+        val guestReadyReceipt = createAgentProotGuestReadyReceipt(runRoot, sessionId)
+        try {
+            arguments += agentProotInteractiveShellArguments(
+                guestReadyFile = guestReadyReceipt.guestFile,
+                guestReadyNonce = guestReadyReceipt.nonce
             )
-        )
+            return AgentProotTerminalLaunch(
+                executable = broker.absolutePath,
+                hostWorkingDirectory = projectRoot.absolutePath,
+                arguments = arguments.toTypedArray(),
+                environment = agentProotInteractiveEnvironment(
+                    nativeLibraryDir = appContext.applicationInfo.nativeLibraryDir,
+                    tempRoot = tempRoot.absolutePath,
+                    projectFolder = projectFolder,
+                    sessionId = sessionId,
+                    loaderPath = AgentProotNativeBinaryProvider.locateLoader(appContext)?.absolutePath
+                ),
+                guestReadyReceipt = guestReadyReceipt
+            )
+        } catch (failure: Throwable) {
+            cleanupAgentProotGuestReadyReceipt(guestReadyReceipt)
+            throw failure
+        }
     }
 
     private fun requireConnected(sessionId: String): Session {
@@ -458,14 +645,16 @@ internal class AgentProotTerminalSessionManager(private val context: Context) {
         runCatching { session.screenListener?.invoke() }
     }
 
-    private suspend fun finish(session: Session, status: String, error: String?) {
+    private suspend fun finish(session: Session, status: String, errorCode: String?) {
         val shouldFinish = synchronized(session.stateLock) {
             if (session.finished) {
                 false
             } else {
                 session.finished = true
                 session.connected = false
-                if (!error.isNullOrBlank()) session.error = error
+                if (!errorCode.isNullOrBlank()) {
+                    session.error = appContext.getString(R.string.agent_proot_terminal_process_exited)
+                }
                 true
             }
         }
@@ -473,20 +662,24 @@ internal class AgentProotTerminalSessionManager(private val context: Context) {
         database.agentProotRunDao().finish(
             id = session.id,
             status = status,
-            errorClass = error?.let { "TERMINAL_ERROR" },
-            errorMessage = error?.take(1_000)
+            errorClass = errorCode,
+            errorMessage = null
         )
         publish(session.conversationId)
         notifyScreen(session)
         AgentForegroundService.releaseRuntime(appContext)
     }
 
-    private suspend fun failQueued(id: String, error: Throwable) {
+    private suspend fun failQueued(
+        id: String,
+        error: Throwable,
+        phase: AgentProotTerminalStartupPhase
+    ) {
         database.agentProotRunDao().finish(
             id = id,
             status = AgentProotRunStatus.FAILED,
-            errorClass = "TERMINAL_START_ERROR",
-            errorMessage = error.message?.take(1_000)
+            errorClass = agentProotTerminalFailureCode(phase, error),
+            errorMessage = null
         )
     }
 

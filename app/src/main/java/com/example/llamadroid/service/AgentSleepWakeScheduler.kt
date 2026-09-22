@@ -34,6 +34,7 @@ object AgentSleepWakeScheduler {
         wakeAtEpochMs: Long,
         reason: String
     ): ScheduledWake = withContext(Dispatchers.IO) {
+        check(!com.example.llamadroid.harness.HarnessEngineOwnership.legacyExecutionRetired) { "LEGACY_EXECUTION_RETIRED" }
         val appContext = context.applicationContext
         val dao = AppDatabase.getDatabase(appContext).agentWorkflowDao()
         dao.getSleepWakeForConversation(conversationId)?.let { previous ->
@@ -69,6 +70,10 @@ object AgentSleepWakeScheduler {
         val appContext = context.applicationContext
         val now = System.currentTimeMillis()
         AppDatabase.getDatabase(appContext).agentWorkflowDao().getPendingSleepWakes().forEach { wake ->
+            if (com.example.llamadroid.harness.HarnessEngineOwnership.legacyExecutionRetired) {
+                cancelConversation(appContext, wake.conversationId)
+                return@forEach
+            }
             if (wake.wakeAtEpochMs <= now) {
                 deliver(appContext, wake.id, wake.runEpoch)
             } else {
@@ -81,6 +86,10 @@ object AgentSleepWakeScheduler {
         val appContext = context.applicationContext
         val dao = AppDatabase.getDatabase(appContext).agentWorkflowDao()
         val wake = dao.getSleepWake(wakeId) ?: return@withContext
+        if (com.example.llamadroid.harness.HarnessEngineOwnership.legacyExecutionRetired) {
+            cancelConversation(appContext, wake.conversationId)
+            return@withContext
+        }
         if (wake.status != "PENDING" || wake.runEpoch != runEpoch) return@withContext
         val now = System.currentTimeMillis()
         if (wake.wakeAtEpochMs > now + 1_000L) {
@@ -125,11 +134,7 @@ object AgentSleepWakeScheduler {
                 // Permission can change between the capability check and scheduling.
             }
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent)
-        } else {
-            manager.set(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent)
-        }
+        manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent)
         return false
     }
 

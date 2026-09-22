@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_turn_copy">Copy turn</string>
+    <string name="harness_turn_cancel_copy">Cancel copy</string>
+    <string name="harness_message_copy">Copy message</string>
+    <string name="harness_turn_branch">Branch here</string>
+    <string name="harness_turn_branch_unavailable">Branch unavailable</string>
+    <string name="harness_turn_usage">Turn usage</string>
+    <string name="harness_turn_time">Turn time</string>
+    <string name="harness_turn_input">Input tokens: %1$d</string>
+    <string name="harness_turn_output">Output tokens: %1$d</string>
+    <string name="harness_turn_cache_read">Cache read: %1$d</string>
+    <string name="harness_turn_cache_write">Cache write: %1$d</string>
+    <string name="harness_turn_reasoning">Reasoning tokens: %1$d</string>
+    <string name="harness_turn_total">Total tokens: %1$d</string>
+    <string name="harness_turn_duration">Duration: %1$d ms</string>
+    <string name="harness_turn_speed">Speed: %1$.1f tokens/s</string>
+    <string name="harness_turn_ttft">First token: %1$d ms</string>
+    <string name="harness_turn_retry_title">Model retry</string>
+    <string name="harness_turn_retry_status">Retry %1$d%2$s · %3$s</string>
+    <string name="harness_turn_retry_delay">Delay: %1$d ms</string>
+    <string name="harness_turn_retry_failure">Failure: %1$s</string>
+    <string name="harness_turn_retry_scheduled">Scheduled</string>
+    <string name="harness_turn_retry_started">Started</string>
+    <string name="harness_turn_retry_cancelled">Cancelled</string>
+    <string name="harness_turn_compaction_title">Compaction</string>
+    <string name="harness_turn_compaction_summary">Items: %1$d · tokens: %2$d</string>
+    <string name="harness_turn_compaction_running">Compaction in progress</string>
+    <string name="harness_turn_compaction_done">Compaction completed</string>
+    <string name="harness_turn_compaction_failed">Compaction status unavailable</string>
+    <string name="harness_turn_no_usage">Turn usage is not complete yet.</string>
+    <string name="harness_turn_no_time">Turn timing is not available yet.</string>
+</resources>

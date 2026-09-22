@@ -54,6 +54,34 @@ class ProcessController {
     @Volatile private var activeBinaryWasOpenCl: Boolean = false
     private val _logs = MutableStateFlow<String>("")
     val logs = _logs.asStateFlow()
+
+    /**
+     * Probe one executable with the same environment shape used by [start].  Callers that need
+     * to publish or persist a generated argv can resolve this once and pass the result to
+     * [getCommand], while direct starts use the same helper internally.
+     */
+    fun probeBinaryCapabilities(
+        binaryPath: String,
+        filesDir: File,
+        workingDirectory: File = filesDir
+    ): LlamaBinaryCapabilities? {
+        val binary = File(binaryPath)
+        val binaryDirectory = binary.parentFile
+        val helpLibraryPath = buildList {
+            add(File(filesDir, "lib").absolutePath)
+            binaryDirectory?.absolutePath?.takeIf { it.isNotBlank() }?.let(::add)
+        }.distinct().joinToString(":")
+        return LlamaBinaryCapabilityCache.capabilitiesOrNull(
+            binary = binary,
+            workingDirectory = workingDirectory,
+            environment = mapOf(
+                "LD_LIBRARY_PATH" to helpLibraryPath,
+                "HOME" to workingDirectory.absolutePath,
+                "PWD" to workingDirectory.absolutePath,
+                "TMPDIR" to workingDirectory.absolutePath
+            )
+        )
+    }
     
     // Flag to distinguish user-initiated stop from error
     @Volatile
@@ -114,7 +142,11 @@ class ProcessController {
     }
     
 
-    fun getCommand(binaryPath: String, config: LlamaConfig): List<String> {
+    fun getCommand(
+        binaryPath: String,
+        config: LlamaConfig,
+        binaryCapabilities: LlamaBinaryCapabilities? = null
+    ): List<String> {
         val forceOpenClCpuTargetGpuDraft = shouldForceOpenClCpuTargetGpuDraft(binaryPath, config)
         val rawCustomFlagsArgs = splitCommandLine(config.customFlags.orEmpty())
         val managedCustomFlags = resolveManagedLlamaCustomFlags(
@@ -134,12 +166,15 @@ class ProcessController {
             baseCustomFlagsArgs
         }
         val customFlagsText = buildCommandString(customFlagsArgs)
+        fun flag(longFlag: String, shortFlag: String): String =
+            binaryCapabilities?.preferredFlag(longFlag, shortFlag) ?: shortFlag
+
         val args = mutableListOf(
             binaryPath,
-            "-m", config.modelPath,
-            "-c", config.contextSize.toString(),
-            "-t", config.threads.toString(),
-            "-b", config.batchSize.toString(),
+            flag("--model", "-m"), config.modelPath,
+            flag("--ctx-size", "-c"), config.contextSize.toString(),
+            flag("--threads", "-t"), config.threads.toString(),
+            flag("--batch-size", "-b"), config.batchSize.toString(),
             "--port", config.port.toString(),
             "--host", config.host
         )
@@ -963,12 +998,21 @@ class ProcessController {
             launchGeneration
         }
         
-        val args = customArgs?.let {
-            appendVideoArgsIfNeeded(it, config, enabled = config.videoEnabled)
-        } ?: getCommand(binaryPath, config)
         val ownershipWorkingDir = runtimeWorkingDir
             ?: nativeToolsWorkspaceDir?.takeIf { config.nativeToolsEnabled }
             ?: filesDir
+        val binaryCapabilities = if (customArgs == null) {
+            probeBinaryCapabilities(
+                binaryPath = binaryPath,
+                filesDir = filesDir,
+                workingDirectory = ownershipWorkingDir
+            )
+        } else {
+            null
+        }
+        val args = customArgs?.let {
+            appendVideoArgsIfNeeded(it, config, enabled = config.videoEnabled)
+        } ?: getCommand(binaryPath, config, binaryCapabilities)
         var launchedProcess: Process? = null
         
         try {

@@ -32,6 +32,21 @@
 -dontwarn org.ietf.jgss.**
 -dontwarn com.jcraft.jsch.jgss.**
 -dontwarn com.jcraft.jsch.jcraft.Compression
+
+# MINA SSHD's Android recovery SFTP path passes a bundled BC provider instance. BC registers its
+# services by class name, so retain the provider mapping and implementation names for R8. The
+# instance is the default SSHD provider for every JCA factory after the Android `BC` registrar is
+# disabled; retaining the complete provider mapping avoids a later RSA/signature/HMAC lookup
+# falling back to a class name that R8 renamed.
+-keep class org.bouncycastle.jce.provider.BouncyCastleProvider { *; }
+-keep class org.bouncycastle.jcajce.provider.** { *; }
+-keep class org.bouncycastle.jcajce.provider.asymmetric.EC { *; }
+-keep class org.bouncycastle.jcajce.provider.asymmetric.EC$Mappings { *; }
+-keep class org.bouncycastle.jcajce.provider.asymmetric.ec.** { *; }
+-keep class org.bouncycastle.jcajce.provider.util.** { *; }
+-keep class org.bouncycastle.jcajce.provider.config.** { *; }
+-keep class org.bouncycastle.asn1.sec.** { *; }
+-keep class org.bouncycastle.asn1.x9.** { *; }
 -dontwarn com.gemalto.jp2.**
 
 # Keep OkHttp
@@ -95,8 +110,10 @@
 -dontwarn javax.management.DynamicMBean
 -dontwarn javax.management.InstanceAlreadyExistsException
 -dontwarn javax.management.MBeanServer
+-dontwarn javax.management.MBeanException
 -dontwarn javax.management.ObjectInstance
 -dontwarn javax.management.ObjectName
+-dontwarn javax.management.ReflectionException
 -dontwarn javax.naming.NamingException
 -dontwarn javax.naming.directory.DirContext
 -dontwarn javax.naming.directory.InitialDirContext
@@ -109,6 +126,11 @@
 -dontwarn javax.security.auth.login.Configuration$Parameters
 -dontwarn javax.security.auth.login.Configuration
 -dontwarn javax.security.auth.login.LoginContext
+# Android exposes LoginException but not these two JDK-only exceptions. MINA SSHD reaches them
+# only while parsing encrypted PEM/private-key material; this app generates an unencrypted,
+# app-private host key and uses password authentication, so that optional branch is unsupported.
+-dontwarn javax.security.auth.login.CredentialException
+-dontwarn javax.security.auth.login.FailedLoginException
 -dontwarn javax.security.auth.spi.LoginModule
 -dontwarn javax.security.sasl.RealmCallback
 -dontwarn javax.security.sasl.RealmChoiceCallback
@@ -212,3 +234,10 @@
 # Termux terminal-emulator enters this class from the locally built libtermux.so PTY helper.
 # The Java native method names must remain stable in minified release builds.
 -keep class com.termux.terminal.JNI { *; }
+
+# The native DSH terminal view installs a parser-only TerminalSession by field name; retain
+# only the two members used by that adapter, without keeping the whole Termux dependency.
+-keepclassmembers,allowoptimization class com.termux.terminal.TerminalSession {
+    com.termux.terminal.TerminalEmulator mEmulator;
+    int mTerminalFileDescriptor;
+}

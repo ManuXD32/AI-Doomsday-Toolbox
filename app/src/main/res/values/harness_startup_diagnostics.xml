@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_start_readiness_failed">Harness did not complete authentication in time. Review the startup events below, then retry Start.</string>
+    <string name="harness_start_auth_failed">Harness started, but authentication failed. Force stop the environment, then retry Start.</string>
+    <string name="harness_start_permission_failed">Android denied a runtime operation. Copy the diagnostics below to identify the failing startup phase.</string>
+    <string name="harness_start_architecture_failed">A bundled executable could not run on this device architecture. Copy the diagnostics below.</string>
+    <string name="harness_start_payload_failed">A required runtime file or native library is unavailable. Retry Start to verify the installation; copy diagnostics if it fails again.</string>
+    <string name="harness_start_proot_failed">PRoot could not start the environment. Copy the diagnostics below, including the startup phase and error code.</string>
+    <string name="harness_start_broker_failed">The runtime supervisor could not launch the environment. Review the error and exit code below, then retry Start.</string>
+    <string name="harness_start_node_failed">The Harness Node process could not initialize. Copy the diagnostics below.</string>
+    <string name="harness_start_port_failed">The local server port is already in use. Force stop the environment, then retry Start.</string>
+    <string name="harness_start_memory_failed">The runtime was terminated or reported insufficient memory. Close unused local models, then retry Start.</string>
+    <string name="harness_start_process_failed">The Harness process exited before it was ready. Review the recorded error and exit code below, then retry Start.</string>
+    <string name="harness_start_failed_detail">Harness could not start or reconnect. Review the startup phase and error code below, then retry Start.</string>
+    <string name="harness_event_start_requested">Start requested</string>
+    <string name="harness_event_environment_preparing">Preparing Debian environment</string>
+    <string name="harness_event_environment_ready">Debian environment ready</string>
+    <string name="harness_event_payload_preparing">Verifying and preparing Harness files</string>
+    <string name="harness_event_payload_ready">Harness files ready</string>
+    <string name="harness_event_bridge_preparing">Preparing Android services</string>
+    <string name="harness_event_bridge_ready">Android services ready</string>
+    <string name="harness_event_process_launching">Starting PRoot and Node</string>
+    <string name="harness_event_process_launched">Runtime process started</string>
+    <string name="harness_event_readiness_waiting">Waiting for authenticated server</string>
+    <string name="harness_event_ready">Harness ready</string>
+    <string name="harness_event_startup_output">Startup failure classified</string>
+    <string name="harness_event_process_exited">Runtime process exited</string>
+    <string name="harness_event_failed">Runtime operation failed</string>
+    <string name="harness_event_recovered">Previous runtime ownership reconciled</string>
+    <string name="harness_event_stopped">Harness stopped</string>
+    <string name="harness_event_force_stopped">Environment force stopped</string>
+    <string name="harness_event_stop_timeout">Stop timed out</string>
+    <string name="harness_event_cleanup_failed">Environment cleanup incomplete</string>
+    <string name="harness_event_journal_unreadable">Previous diagnostics could not be read</string>
+    <string name="harness_event_journal_write_failed">Diagnostics could not be saved</string>
+    <string name="harness_event_phase">Runtime progress</string>
+    <string name="harness_webui_boot_loading">Loading Harness</string>
+    <string name="harness_webui_boot_loading_detail">The authenticated interface is loading its modules and workspace. This can take a moment.</string>
+    <string name="harness_webui_boot_unavailable">Harness WebUI unavailable</string>
+    <string name="harness_webui_boot_unavailable_detail">The authenticated interface could not finish loading on this device. Retry to create a fresh WebView session.</string>
+    <string name="harness_webui_boot_failure_detail">Boot diagnostic: %1$s</string>
+</resources>

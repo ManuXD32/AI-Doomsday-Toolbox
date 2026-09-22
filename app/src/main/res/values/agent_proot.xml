@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="agent_proot_manager_title">Debian environments</string>
     <string name="agent_proot_manager_desc">Create and manage app-owned Debian environments for Local Debian projects. Isolated environments keep packages separate; shared environments intentionally reuse guest state.</string>
     <string name="agent_proot_create_title">Create an environment</string>
@@ -16,7 +16,7 @@
     <string name="agent_proot_existing_title">Existing environments</string>
     <string name="agent_proot_empty">No Debian environments have been created yet.</string>
     <string name="agent_proot_environment_summary">%1$s · %2$s · Debian %3$s</string>
-    <string name="agent_proot_storage_size">Stored size: %1$d bytes</string>
+    <string name="agent_proot_storage_size" tools:ignore="PluralsCandidate">Stored size: %1$d bytes</string>
     <string name="agent_proot_attached_projects">Attached projects: %1$d</string>
     <string name="agent_proot_active_run">A command or preview is using this environment.</string>
     <string name="agent_proot_delete_blocked">Deletion is available only when no project or active run references this environment.</string>
@@ -54,6 +54,4 @@
     <string name="agent_workspace_proot_environment_missing">No Debian environment is assigned to this project.</string>
     <string name="agent_workspace_proot_packages_note">Use the Debian terminal or an approved Agent command to install packages with apt. Installed packages remain inside this environment.</string>
     <string name="agent_proot_terminal_keyboard">Show keyboard</string>
-    <string name="agent_proot_terminal_ctrl_enabled">Ctrl enabled for the next key</string>
-    <string name="agent_proot_terminal_alt_enabled">Alt enabled for the next key</string>
 </resources>

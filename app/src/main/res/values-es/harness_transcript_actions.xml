@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_transcript_copied">Copiado al portapapeles.</string>
+    <string name="harness_transcript_copy_too_large">Este turno supera el límite del portapapeles. Exporta la sesión para conservar todo el contenido.</string>
+    <string name="harness_transcript_action_failed">No se pudo completar la acción. Pulsa Continuar para reconectar y vuelve a intentarlo.</string>
+</resources>

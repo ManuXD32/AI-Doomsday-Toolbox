@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="agent_project_control_packet_title">Project control packet</string>
     <string name="agent_project_control_packet_phase">Phase: %1$s</string>
     <string name="agent_project_control_packet_next_action">Next: %1$s</string>
@@ -23,7 +23,7 @@
     <string name="agent_direct_build_output_label">Build output</string>
     <string name="agent_direct_thinking_label">Thinking</string>
     <string name="agent_direct_thinking_disabled">Disabled for the Spark-class default</string>
-    <string name="agent_direct_tokens_value">%1$d tokens</string>
+    <string name="agent_direct_tokens_value" tools:ignore="PluralsCandidate">%1$d tokens</string>
     <string name="agent_direct_global_override_active">Controlled by override. The global override is authoritative for model, endpoint, and tuning.</string>
     <string name="agent_direct_global_override_inactive">Stored Direct defaults are active. Enable Global override when one connection and tuning snapshot must control every project.</string>
     <string name="agent_direct_tool_policy_note">Direct runtime tools and recovery are fixed for reliability. Specialist delegation, automatic reflection, and model-managed TODO or memory tools are not available.</string>
@@ -37,7 +37,7 @@
     <string name="agent_direct_status_invalidation">Last cache invalidation</string>
     <string name="agent_direct_status_compaction_history">Compaction history</string>
     <string name="agent_direct_status_compaction_item">%1$s · input %2$s · retained %3$s · %4$s</string>
-    <string name="agent_direct_status_tokens">%1$d tokens</string>
+    <string name="agent_direct_status_tokens" tools:ignore="PluralsCandidate">%1$d tokens</string>
     <string name="agent_direct_status_unknown">Unknown</string>
     <string name="agent_direct_status_none">None</string>
     <string name="agent_direct_phase_plan">Plan</string>
@@ -46,17 +46,10 @@
     <string name="agent_direct_phase_complete">Complete</string>
     <string name="agent_direct_phase_managed">Plan, Build, and Verify are controlled by Direct Agent. Build starts only after plan approval.</string>
     <string name="agent_direct_step_completed">Approved step completed: %1$s. The Direct Agent will continue with the next durable step.</string>
-    <string name="agent_harness_profile_title">Execution profile</string>
-    <string name="agent_harness_profile_desc">Choose the workflow policy for this project. The choice is saved with the project and does not change its model or endpoint.</string>
-    <string name="agent_harness_profile_optimized">Optimized</string>
-    <string name="agent_harness_profile_optimized_desc">One direct agent for Plan and Build, focused research, and verification. Existing specialists stay available as optional sequential helpers.</string>
-    <string name="agent_harness_profile_legacy">Legacy</string>
-    <string name="agent_harness_profile_legacy_desc">Keep the existing multi-agent workflow and role settings for this project.</string>
-    <string name="agent_harness_profile_budget_note">Optimized recommends a %1$d-token context (%2$d is a conservative device target) and phase output budgets of %3$d control, %4$d Build, and %5$d summary tokens. Edit context and output in the General or role cards; saved values are respected and are not silently capped.</string>
-    <string name="agent_harness_general_output_recommendation">Optimized recommendation when General is unset: %1$d control tokens; Orchestrator and Coder use %2$d during Build. Saved values are used as entered.</string>
-    <string name="agent_harness_control_output_recommendation">Optimized recommendation when this role is unset: %1$d control tokens. Saved values are used as entered.</string>
-    <string name="agent_harness_build_output_recommendation">Optimized recommendation when this role is unset: %1$d Plan/control tokens and %2$d during Build. Saved values are used as entered.</string>
-    <string name="agent_harness_summary_output_recommendation">Optimized recommendation when this role is unset: %1$d summary tokens. Saved values are used as entered.</string>
+    <string name="agent_harness_general_output_recommendation" tools:ignore="PluralsCandidate">Optimized recommendation when General is unset: %1$d control tokens; Orchestrator and Coder use %2$d during Build. Saved values are used as entered.</string>
+    <string name="agent_harness_control_output_recommendation" tools:ignore="PluralsCandidate">Optimized recommendation when this role is unset: %1$d control tokens. Saved values are used as entered.</string>
+    <string name="agent_harness_build_output_recommendation" tools:ignore="PluralsCandidate">Optimized recommendation when this role is unset: %1$d Plan/control tokens and %2$d during Build. Saved values are used as entered.</string>
+    <string name="agent_harness_summary_output_recommendation" tools:ignore="PluralsCandidate">Optimized recommendation when this role is unset: %1$d summary tokens. Saved values are used as entered.</string>
     <string name="agent_harness_research_limit">Research is bounded for this profile. Continue with the available evidence or ask for direction.</string>
     <string name="agent_harness_no_progress">The agent paused because the workflow made no progress. Continue after reviewing the current state.</string>
     <string name="agent_harness_capacity_limit">Required task state cannot fit this context. Narrow the task, then Continue.</string>

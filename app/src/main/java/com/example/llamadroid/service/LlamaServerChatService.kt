@@ -9,6 +9,7 @@ import com.example.llamadroid.util.DebugLog
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
+import java.io.IOException
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
@@ -35,7 +36,22 @@ data class LlamaServerRequestOptions(
     val returnPromptProgress: Boolean = true,
     val requireToolCall: Boolean = false,
     /** Per-request llama.cpp reasoning cap. Null keeps the server default. */
-    val thinkingBudgetTokens: Int? = null
+    val thinkingBudgetTokens: Int? = null,
+    /** OpenAI tool choice after the Harness adapter has validated its shape. */
+    val toolChoice: String? = null,
+    /**
+     * Network retries are safe only when the transport proves the old request
+     * was rejected before admission. Harness requests disable the historical
+     * retry because a dropped connection cannot prove server-side generation
+     * termination; the owning request/session identity then remains unique.
+     */
+    val allowRecoveryAfterConfirmedEnd: Boolean = true,
+    /**
+     * Read deadline for the generation SSE stream. The existing 30-minute
+     * default remains for ordinary callers; an owned Harness request sets this
+     * to zero and lets request cancellation/slot ownership end the stream.
+     */
+    val streamReadTimeoutMs: Int = 1_800_000
 )
 
 data class LlamaPromptProcessingProgress(
@@ -110,6 +126,8 @@ class LlamaServerChatService {
         private const val INPUT_TOKEN_UNSUPPORTED_TTL_MS = 10L * 60L * 1000L
         private const val HEALTH_CHECK_ATTEMPTS = 3
         private const val HEALTH_CHECK_RETRY_DELAY_MS = 500L
+        /** Optional usage/[DONE] frames get a short drain window after finish. */
+        private const val POST_FINISH_DRAIN_TIMEOUT_MS = 1_000
         private val unsupportedInputTokenEndpoints =
             java.util.concurrent.ConcurrentHashMap<String, Long>()
     }
@@ -124,6 +142,42 @@ class LlamaServerChatService {
         @Volatile var connection: HttpURLConnection? = null
         @Volatile var baseUrl: String? = null
         @Volatile var slotId: Int? = null
+    }
+
+    /**
+     * Bounds the optional tail after a terminal SSE choice even when the
+     * platform socket ignores a read-timeout change made after connect.
+     */
+    private class PostFinishDrainGuard(
+        private val connection: HttpURLConnection,
+        private val timeoutMs: Long
+    ) {
+        private val cancelled = AtomicBoolean(false)
+        private var worker: Thread? = null
+
+        fun arm() {
+            if (worker != null) return
+            val thread = Thread {
+                try {
+                    Thread.sleep(timeoutMs)
+                    if (cancelled.compareAndSet(false, true)) {
+                        runCatching { connection.disconnect() }
+                    }
+                } catch (_: InterruptedException) {
+                    // The optional usage/[DONE] tail arrived before the bound.
+                }
+            }.apply {
+                name = "llama-server-finish-drain"
+                isDaemon = true
+            }
+            worker = thread
+            thread.start()
+        }
+
+        fun cancel() {
+            cancelled.set(true)
+            worker?.interrupt()
+        }
     }
 
     @Volatile
@@ -310,17 +364,32 @@ class LlamaServerChatService {
         slotAffinityMode: LlamaSlotAffinityMode = LlamaSlotAffinityMode.AUTOMATIC,
         onPromptProgress: (LlamaPromptProcessingProgress) -> Unit = {},
         onStreamDiagnostics: (LlamaServerStreamChannelCounts) -> Unit = {},
-        onChunk: (String?, String?) -> Unit = { _, _ -> }
+        onChunk: (String?, String?) -> Unit = { _, _ -> },
+        /** Optional suspending delivery path for consumers that require backpressure. */
+        onPromptProgressSuspending: (suspend (LlamaPromptProcessingProgress) -> Unit)? = null,
+        /** Optional suspending delivery path for consumers that require backpressure. */
+        onChunkSuspending: (suspend (String?, String?) -> Unit)? = null
     ): Result<OllamaService.ChatResponse> = withContext(Dispatchers.IO) {
         val generation = GenerationRequest()
         activeGeneration = generation
         shouldStop = false
         var sawStreamOutput = false
-        val guardedOnChunk: (String?, String?) -> Unit = { chunk, thinkingChunk ->
+        val guardedOnPromptProgress: suspend (LlamaPromptProcessingProgress) -> Unit = { progress ->
+            if (onPromptProgressSuspending != null) {
+                onPromptProgressSuspending.invoke(progress)
+            } else {
+                onPromptProgress(progress)
+            }
+        }
+        val guardedOnChunk: suspend (String?, String?) -> Unit = { chunk, thinkingChunk ->
             if (!chunk.isNullOrBlank() || !thinkingChunk.isNullOrBlank()) {
                 sawStreamOutput = true
             }
-            onChunk(chunk, thinkingChunk)
+            if (onChunkSuspending != null) {
+                onChunkSuspending.invoke(chunk, thinkingChunk)
+            } else {
+                onChunk(chunk, thinkingChunk)
+            }
         }
 
         try {
@@ -338,29 +407,36 @@ class LlamaServerChatService {
             ) { assignedSlot ->
                 suspend fun execute(options: LlamaServerRequestOptions): OllamaService.ChatResponse {
                     return RemoteAgentProtection.withProtection(baseUrl, "Running remote llama-server agent…") {
-                        RemoteBackendResilience.runWithSingleRetry(
-                            onRetry = { firstError ->
-                                DebugLog.log(
-                                    "[$TAG] Recoverable llama-server chat failure, retrying: " +
-                                        RemoteBackendResilience.summarize(firstError)
-                                )
-                            },
-                            shouldRetry = { !sawStreamOutput }
-                        ) {
-                            performChatWithToolsStreaming(
-                                baseUrl,
-                                messages,
-                                tools,
-                                modelLabel,
-                                thinkingEnabled,
-                                maxTokens,
-                                samplingParams,
-                                options,
-                                onPromptProgress,
-                                guardedOnChunk,
-                                onStreamDiagnostics,
-                                generation
-                            )
+                        suspend fun perform(): OllamaService.ChatResponse = performChatWithToolsStreaming(
+                            baseUrl,
+                            messages,
+                            tools,
+                            modelLabel,
+                            thinkingEnabled,
+                            maxTokens,
+                            samplingParams,
+                            options,
+                            guardedOnPromptProgress,
+                            guardedOnChunk,
+                            onStreamDiagnostics,
+                            generation
+                        )
+                        if (options.allowRecoveryAfterConfirmedEnd) {
+                            RemoteBackendResilience.runWithSingleRetry(
+                                onRetry = { firstError ->
+                                    DebugLog.log(
+                                        "[$TAG] Recoverable llama-server chat failure, retrying: " +
+                                            firstError.javaClass.simpleName
+                                    )
+                                },
+                                // A retry is allowed only before any output;
+                                // Harness disables this path because an EOF or
+                                // socket reset does not prove old generation
+                                // termination to a remote server.
+                                shouldRetry = { !sawStreamOutput }
+                            ) { perform() }
+                        } else {
+                            perform()
                         }
                     }
                 }
@@ -397,7 +473,7 @@ class LlamaServerChatService {
         }
     }
 
-    private fun performChatWithToolsStreaming(
+    private suspend fun performChatWithToolsStreaming(
         baseUrl: String,
         messages: List<OllamaService.ChatMessage>,
         tools: List<AgentTool>,
@@ -406,8 +482,8 @@ class LlamaServerChatService {
         maxTokens: Int?,
         samplingParams: LlamaServerSamplingParams,
         requestOptions: LlamaServerRequestOptions,
-        onPromptProgress: (LlamaPromptProcessingProgress) -> Unit,
-        onChunk: (String?, String?) -> Unit,
+        onPromptProgress: suspend (LlamaPromptProcessingProgress) -> Unit,
+        onChunk: suspend (String?, String?) -> Unit,
         onStreamDiagnostics: (LlamaServerStreamChannelCounts) -> Unit,
         generation: GenerationRequest
     ): OllamaService.ChatResponse {
@@ -427,7 +503,8 @@ class LlamaServerChatService {
         conn.setRequestProperty("Content-Type", "application/json")
         conn.doOutput = true
         conn.connectTimeout = 30000
-        conn.readTimeout = 1800000 // 30 minutes for long reasoning
+        conn.readTimeout = requestOptions.streamReadTimeoutMs.coerceAtLeast(0)
+        var postFinishDrain: PostFinishDrainGuard? = null
 
         val requestJson = buildJsonObject(
             buildLlamaServerChatRequestPayload(
@@ -481,7 +558,23 @@ class LlamaServerChatService {
                         throw CancellationException("Stopped by user")
                     }
 
-                    val line = readBoundedLlamaServerSseLine(reader, responseBudget)
+                    if (terminalFinishSeen && postFinishDrain == null) {
+                        // Harness requests intentionally use readTimeout=0 while
+                        // a model is pre-filling or reasoning. Once a terminal
+                        // finish is observed, only an optional usage frame or
+                        // [DONE] is useful; a server that keeps the socket open
+                        // must not hold the turn forever.
+                        postFinishDrain = PostFinishDrainGuard(
+                            connection = conn,
+                            timeoutMs = POST_FINISH_DRAIN_TIMEOUT_MS.toLong()
+                        ).also { it.arm() }
+                    }
+                    val line = try {
+                        readBoundedLlamaServerSseLine(reader, responseBudget)
+                    } catch (io: IOException) {
+                        if (terminalFinishSeen) break
+                        throw io
+                    }
                     val data = line.text
                     if (data.isEmpty() && line.reachedEof) break
                     if (isGenerationCancelled(generation)) {
@@ -519,7 +612,7 @@ class LlamaServerChatService {
                         if (chunk.has("id_slot")) {
                             generation.slotId = chunk.optInt("id_slot")
                         }
-                        parseLlamaPromptProcessingProgress(chunk)?.let(onPromptProgress)
+                        parseLlamaPromptProcessingProgress(chunk)?.let { onPromptProgress(it) }
                         parseLlamaServerUsage(chunk)?.let { usage = it }
                         val choices = chunk.optJSONArray("choices") ?: continue
                         if (choices.length() == 0) continue
@@ -661,10 +754,10 @@ class LlamaServerChatService {
                                 throw e
                             }
                             SseProcessingFailureKind.MALFORMED_JSON -> {
-                                DebugLog.log("[$TAG] SSE parse error: ${e.message} for line: $jsonStr")
+                                DebugLog.log("[$TAG] SSE parse error: ${e.javaClass.simpleName}")
                             }
                             SseProcessingFailureKind.PROCESSING -> {
-                                DebugLog.log("[$TAG] SSE processing error: ${e.javaClass.simpleName}: ${e.message}")
+                                DebugLog.log("[$TAG] SSE processing error: ${e.javaClass.simpleName}")
                                 throw e
                             }
                         }
@@ -716,6 +809,7 @@ class LlamaServerChatService {
                 finishReason = terminalFinishReason
             )
         } finally {
+            postFinishDrain?.cancel()
             if (generation.connection === conn) {
                 generation.connection = null
                 generation.baseUrl = null
@@ -754,7 +848,7 @@ class LlamaServerChatService {
                 // pause and can re-block the next user retry.
                 throw cancelled
             } catch (error: Exception) {
-                DebugLog.log("[$TAG] llama-server health probe failed: ${error.message ?: error.javaClass.simpleName}")
+                DebugLog.log("[$TAG] llama-server health probe failed: ${error.javaClass.simpleName}")
                 false
             }
             if (healthy) return@withContext true
@@ -848,7 +942,12 @@ class LlamaServerChatService {
 
     private fun sendBestEffortLlamaServerCancel(baseUrl: String, slotId: Int?) {
         val normalizedBase = HttpEndpointUrlSupport.normalizeBaseUrl(baseUrl) ?: return
-        val candidateSlotIds = listOfNotNull(slotId, -1).distinct()
+        // A missing slot identity is intentionally not replaced with llama.cpp's
+        // `-1` broadcast sentinel. Disconnecting the owned HTTP connection is
+        // safe in that case; a broadcast cancel could terminate another user's
+        // generation or every active slot on a shared server.
+        val candidateSlotIds = listOfNotNull(slotId).distinct()
+        if (candidateSlotIds.isEmpty()) return
         for (candidate in candidateSlotIds) {
             runCatching {
                 val conn = URL(
@@ -876,7 +975,7 @@ class LlamaServerChatService {
                     conn.disconnect()
                 }
             }.onFailure { error ->
-                DebugLog.log("[$TAG] Best-effort cancel failed for id_slot=$candidate: ${error.message}")
+                DebugLog.log("[$TAG] Best-effort cancel failed for id_slot=$candidate: ${error.javaClass.simpleName}")
             }
         }
     }
@@ -988,8 +1087,13 @@ internal fun buildLlamaServerChatRequestPayload(
                 )
             )
         }
-        payload["tool_choice"] = if (requestOptions.requireToolCall) "required" else "auto"
-        if (requestOptions.requireToolCall) payload["parallel_tool_calls"] = false
+        val toolChoice = requestOptions.toolChoice?.trim()?.lowercase()
+            ?: if (requestOptions.requireToolCall) "required" else "auto"
+        require(toolChoice == "auto" || toolChoice == "required") {
+            "Unsupported llama-server tool choice: $toolChoice"
+        }
+        payload["tool_choice"] = toolChoice
+        if (toolChoice == "required") payload["parallel_tool_calls"] = false
     }
 
     if (!thinkingEnabled) {

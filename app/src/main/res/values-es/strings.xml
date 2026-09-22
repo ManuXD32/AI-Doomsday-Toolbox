@@ -355,8 +355,8 @@
     <string name="imagegen_vae_tiling">VAE Tiling</string>
     <string name="imagegen_tile_overlap">Solapamiento de Mosaico</string>
     <string name="imagegen_tile_overlap_value">Solapamiento de mosaico: %1$s</string>
-    <string name="imagegen_tile_size">Tamaño de Mosaico</string>
-    <string name="imagegen_relative_tile_size">Tamaño de Mosaico Relativo</string>
+    <string name="imagegen_tile_size">Tamaño de mosaico (unidades latentes)</string>
+    <string name="imagegen_relative_tile_size">Tamaño de mosaico relativo (unidades latentes)</string>
     <string name="imagegen_tensor_type_rules">Reglas de Tipo de Tensor</string>
     <string name="imagegen_export_to_folder">Exportar a Carpeta</string>
     <string name="imagegen_export_success">Exportado a %s</string>
@@ -739,7 +739,7 @@
     <string name="models_size">%s</string>
     <string name="models_delete">Eliminar</string>
     <string name="models_delete_confirm">¿Eliminar este modelo?</string>
-    <string name="models_delete_preview">La operación eliminará %1$d archivo(s) gestionado(s) y conservará %2$d archivo(s) protegido(s).</string>
+    <string name="models_delete_preview" tools:ignore="PluralsCandidate">La operación eliminará %1$d archivo(s) gestionado(s) y conservará %2$d archivo(s) protegido(s).</string>
     <string name="models_delete_preview_dependency">Un archivo protegido todavía está siendo usado por otro modelo instalado.</string>
     <string name="models_delete_result_completed">Modelo eliminado. Espacio recuperado: %1$s.</string>
     <string name="models_delete_result_retry">No se pudo eliminar el modelo de forma segura. Sigue disponible para reintentarlo.</string>
@@ -2458,6 +2458,7 @@
     <string name="agent_proot_terminal_no_project">Abre un proyecto Debian local antes de usar su terminal.</string>
     <string name="agent_proot_terminal_start_failed">No se pudo iniciar el terminal Debian: %1$s</string>
     <string name="agent_proot_terminal_input_failed">No se pudo enviar la entrada al terminal: %1$s</string>
+    <string name="agent_proot_terminal_view_failed">No se pudo inicializar la vista del terminal (%1$s). Reintenta el terminal.</string>
     <string name="agent_proot_terminal_connecting_body">Preparando el entorno Debian seleccionado y abriendo una shell interactiva…</string>
     <string name="action_fit">Ajustar</string>
     <string name="agent_workspace_stop_project_shells">Detener sesiones de shell del proyecto</string>
@@ -4984,7 +4985,7 @@
     <string name="video_gen_sampler_label">Método de muestreo</string>
     <string name="video_gen_threads_label">Hilos</string>
     <string name="video_gen_vae_tiling_label">VAE tiling</string>
-    <string name="video_gen_vae_tile_size_label">Tamaño de tesela VAE</string>
+    <string name="video_gen_vae_tile_size_label">Tamaño de tesela VAE (unidades latentes)</string>
     <string name="video_gen_diffusion_fa_label">diffusion-fa</string>
     <string name="video_gen_mmap_label">mmap</string>
     <string name="video_gen_running_title">Generación de video en curso</string>
@@ -7892,8 +7893,8 @@
     <string name="sd_dist_diffusion_fa_desc">Activa diffusion-fa cuando la familia del modelo lo soporte.</string>
     <string name="sd_dist_vae_tiling">Tiling VAE</string>
     <string name="sd_dist_vae_tiling_desc">Divide el trabajo VAE en tiles para reducir el pico de memoria.</string>
-    <string name="sd_dist_vae_tile_size">Tamano de tile VAE</string>
-    <string name="sd_dist_vae_tile_size_hint">Ejemplo: 512x512</string>
+    <string name="sd_dist_vae_tile_size">Tamaño de tesela VAE (unidades latentes)</string>
+    <string name="sd_dist_vae_tile_size_hint">Ejemplo: 32x32 unidades latentes</string>
     <string name="sd_dist_vae_tile_overlap">Solape de tile VAE</string>
     <string name="sd_dist_vae_tile_overlap_hint">Pixeles</string>
     <string name="sd_dist_flow_shift">Flow shift</string>

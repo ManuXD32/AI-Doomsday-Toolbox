@@ -146,7 +146,8 @@ object ExternalRouteResolver {
             onnxModelsTabPattern.matches(canonical) -> canonical
             canonical in setOf("litert_models?tab=installed", "litert_models?tab=downloading", "litert_models?tab=catalog") -> canonical
             canonical.startsWith("agent?conversationId=") &&
-                canonical.removePrefix("agent?conversationId=").toLongOrNull()?.let { it > 0L } == true -> canonical
+                Regex("agent\\?conversationId=[0-9]+(?:&harnessTab=(?:conversation|requests|plan))?").matches(canonical) &&
+                canonical.removePrefix("agent?conversationId=").substringBefore('&').toLongOrNull()?.let { it > 0L } == true -> canonical
             canonical in setOf("image_gen?tab=gallery", "image_gen?tab=create",
                 "video_gen?tab=gallery", "video_gen?tab=create") -> canonical
             hasPositiveLongSuffix(canonical, "dataset_project/") -> canonical

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_legacy_delete">Eliminar conversación guardada</string>
+    <string name="harness_legacy_open_files">Abrir archivos del proyecto</string>
+    <string name="harness_legacy_delete_description">Esto elimina permanentemente esta conversación guardada y su historial.</string>
+    <string name="harness_legacy_delete_files">Eliminar también este proyecto y todos sus archivos</string>
+    <string name="harness_legacy_files_shared">Hilos que usan estos archivos: %1$d. Solo se puede eliminar esta conversación.</string>
+    <string name="harness_legacy_cleanup_pending">Limpieza del proyecto pendiente: %1$s</string>
+    <string name="harness_legacy_retry_description">Completa la eliminación del proyecto solicitada anteriormente. Si es un proyecto SSH, su conexión guardada debe estar disponible.</string>
+    <string name="harness_legacy_delete_failed">La eliminación no ha terminado. Los archivos compartidos están protegidos; podrás reintentar la limpieza pendiente.</string>
+    <string name="harness_builtin_web_search">Harness gestiona la búsqueda web. Configura aquí las herramientas de imágenes y Kiwix sin conexión de la app.</string>
+</resources>

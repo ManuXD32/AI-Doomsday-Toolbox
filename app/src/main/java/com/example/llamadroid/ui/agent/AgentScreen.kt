@@ -145,7 +145,7 @@ private fun formatAgentString(template: String, vararg args: Any?): String =
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AgentScreen(
+private fun RetiredAgentScreen(
     navController: NavController,
     initialConversationId: Long? = null
 ) {

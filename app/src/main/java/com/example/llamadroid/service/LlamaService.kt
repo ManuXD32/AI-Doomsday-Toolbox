@@ -1418,7 +1418,15 @@ class LlamaService : Service() {
                         kvOffloadMode = effectiveKvOffloadModeForBinary(candidateBinary, candidateConfig.kvOffloadMode)
                     )
                     return if (commandTemplate.isNullOrBlank()) {
-                        processController.getCommand(candidateBinary, effectiveConfig)
+                        processController.getCommand(
+                            candidateBinary,
+                            effectiveConfig,
+                            processController.probeBinaryCapabilities(
+                                binaryPath = candidateBinary,
+                                filesDir = filesDir,
+                                workingDirectory = videoRuntime?.root ?: filesDir
+                            )
+                        )
                     } else {
                         DebugLog.log("LlamaService: Rendering command template for ${if (isMasterProfile) "master" else "general"} profile")
                         val rendered = processController.renderCommandTemplate(

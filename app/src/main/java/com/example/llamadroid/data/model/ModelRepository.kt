@@ -16,6 +16,8 @@ import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.db.ModelProvenanceEntity
 import com.example.llamadroid.data.db.PendingModelArtifactEntity
+import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_FAILED
+import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_RESUMABLE
 import com.example.llamadroid.data.db.parseOnnxCapabilities
 import com.example.llamadroid.data.db.ONNX_CAPABILITY_TXT2IMG
 import com.example.llamadroid.sd.defaultCapabilitiesForFamily
@@ -84,6 +86,9 @@ import com.example.llamadroid.data.db.isAudioTtsComponentType
 import com.example.llamadroid.data.db.isStableAudioComponentType
 import java.util.Locale
 
+/** Repository instances are short-lived across model-manager screens. */
+private val catalogDownloadMutex = Mutex()
+
 class ModelRepository(
     private val context: Context,
     private val modelDao: ModelDao
@@ -117,6 +122,15 @@ class ModelRepository(
     private val hfService = retrofit.create(HuggingFaceService::class.java)
     private val reconciliationMutex = Mutex()
 
+    private data class CatalogDownloadHandle(
+        val taskId: String,
+        val progressKey: String,
+        val url: String,
+        val localFilename: String,
+        val destFile: File,
+        val alreadyInstalled: Boolean = false
+    )
+
     init {
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             runCatching {
@@ -146,20 +160,14 @@ class ModelRepository(
     }
 
     fun getModelManagerModels(): Flow<List<ModelEntity>> = modelDao.getModelsByTypes(
-        listOf(
-            ModelType.LLM,
-            ModelType.LLM_DRAFT,
-            ModelType.LORA,
-            ModelType.EMBEDDING,
-            // Keep legacy vision/projector rows visible for UI category normalization.
-            ModelType.VISION,
-            ModelType.VISION_PROJECTOR,
-            ModelType.MMPROJ,
-            ModelType.LLAMA_TTS,
-            ModelType.LLAMA_TTS_COMPANION,
-            ModelType.LITERT_AUDIO_DIT,
-            ModelType.LITERT_AUDIO_COMPONENT
-        )
+        ModelManagerModelTypes.llama
+    ).onStart {
+        pruneLegacyPortableModelRows()
+        reconcileManagedModelCopiesIfNeeded()
+    }
+
+    fun getLiteRtAudioModels(): Flow<List<ModelEntity>> = modelDao.getModelsByTypes(
+        ModelManagerModelTypes.liteRtAudio
     ).onStart {
         pruneLegacyPortableModelRows()
         reconcileManagedModelCopiesIfNeeded()
@@ -222,13 +230,13 @@ class ModelRepository(
     suspend fun getFilesWithVisionSupport(repoId: String): RepoFiles = withContext(Dispatchers.IO) {
         try {
             val treeItems = hfService.getRepoTree(repoId)
-            
+
             // Find model files (GGUF files only for LLM - llama.cpp doesn't support safetensors)
             val modelFiles = treeItems
                 .filter { it.type == "file" && it.path.endsWith(".gguf") && !it.path.contains("mmproj") }
                 .map { FileInfo(it.path, it.size, FileType.MODEL) }
                 .sortedByDescending { it.sizeBytes }
-            
+
             // Find vision projection files (mmproj files)
             val visionFiles = treeItems
                 .filter { it.type == "file" && it.path.contains("mmproj") && it.path.endsWith(".gguf") }
@@ -330,144 +338,198 @@ class ModelRepository(
         artifactFamily: String? = null,
         artifactRole: String? = null
     ) {
-        val modelDir = getModelDir(type)
-        val localFilename = chooseUniqueDownloadFilename(
-            requestedFilename = filename,
-            type = type,
-            modelDir = modelDir
-        )
         val modelUrl = "https://huggingface.co/$repoId/resolve/main/$filename"
-        val destFile = File(modelDir, localFilename)
-        val inferredFamily = inferSdFamily(type, repoId, filename)
-        val resolvedFamily = sdFamily ?: inferredFamily.first?.storedValue
-        val resolvedVariant = sdVariant ?: inferredFamily.second
-        val resolvedFamilyEnum = SdModelFamily.fromStoredValue(resolvedFamily)
-        val resolvedCapabilities = sdCapabilities ?: defaultCapabilitiesForFamily(resolvedFamilyEnum, type)
-        val resolvedCompatProfiles = resolveSdCompatProfiles(
-            type = type,
-            explicitProfiles = sdCompatProfiles,
-            family = resolvedFamilyEnum,
-            variant = resolvedVariant
-        )
-        
-        val progressKey = buildDownloadTaskId(repoId, localFilename, type)
-        
-        // Track progress under unique key for UI display
-        DownloadProgressHolder.updateProgress(progressKey, localFilename, 0f)
-        
-        // Start foreground service for background downloads with notification
-        // Must be called on main thread for foreground service
-        withContext(kotlinx.coroutines.Dispatchers.Main) {
-            com.example.llamadroid.service.DownloadService.startDownload(
-                context = context,
-                url = modelUrl,
-                destPath = destFile.absolutePath,
-                filename = localFilename,
-                downloadId = progressKey
-            )
+        // The short identity -> Room task -> service handoff must finish even
+        // when the picker ViewModel is leaving the screen. The transfer itself
+        // remains owned by DownloadService and is not kept non-cancellable.
+        val handle = handoffModelDownload {
+            val prepared = withContext(Dispatchers.IO) {
+                catalogDownloadMutex.withLock {
+                    // A previous service completion may have left the payload on
+                    // disk before the old picker coroutine was cancelled. Recover
+                    // that canonical file before allocating a timestamped name.
+                    if (type == ModelType.LLM) recoverUnindexedLlmFiles()
+
+                    val modelDir = getModelDir(type)
+                    val requestedFilename = ModelLibraryManager.canonicalFilename(filename)
+                    val installed = modelDao.getAllModels().first().firstOrNull { model ->
+                        matchesCatalogModel(model, repoId, filename, type)
+                    }
+                    if (installed != null) {
+                        return@withLock CatalogDownloadHandle(
+                            taskId = "installed:${installed.filename}",
+                            progressKey = "installed:${installed.filename}",
+                            url = modelUrl,
+                            localFilename = installed.filename,
+                            destFile = File(installed.path),
+                            alreadyInstalled = true
+                        )
+                    }
+
+                    val stableTaskId = buildDownloadTaskId(repoId, requestedFilename, type)
+                    val database = AppDatabase.getDatabase(context)
+                    val activeTask = database.downloadTaskDao().getActiveByUrlAndModelType(
+                        url = modelUrl,
+                        modelType = type.name
+                    )
+                    if (activeTask != null) {
+                        PendingDownloadHolder.addPendingFrom(activeTask)
+                        DownloadProgressHolder.updateProgress(
+                            activeTask.progressKey,
+                            activeTask.filename,
+                            DownloadProgressHolder.progress.value[activeTask.progressKey] ?: 0f
+                        )
+                        return@withLock CatalogDownloadHandle(
+                            taskId = activeTask.id,
+                            progressKey = activeTask.progressKey,
+                            url = activeTask.url,
+                            localFilename = activeTask.filename,
+                            destFile = File(activeTask.destPath)
+                        )
+                    }
+
+                    val pending = PendingDownloadHolder.getPending(stableTaskId)
+                    if (pending != null) {
+                        return@withLock CatalogDownloadHandle(
+                            taskId = stableTaskId,
+                            progressKey = pending.progressKey,
+                            url = modelUrl,
+                            localFilename = pending.filename,
+                            destFile = File(pending.destPath)
+                        )
+                    }
+
+                    // The process-local progress holder covers the small window
+                    // between registering the request and Room/service arming it.
+                    val trackedProgress = DownloadProgressHolder.progress.value[stableTaskId]
+                    if (trackedProgress != null && trackedProgress in 0f..<1f) {
+                        return@withLock CatalogDownloadHandle(
+                            taskId = stableTaskId,
+                            progressKey = stableTaskId,
+                            url = modelUrl,
+                            localFilename = DownloadProgressHolder.getFilename(stableTaskId)
+                                ?: requestedFilename,
+                            destFile = File(modelDir, DownloadProgressHolder.getFilename(stableTaskId)
+                                ?: requestedFilename)
+                        )
+                    }
+
+                    val localFilename = chooseUniqueDownloadFilename(
+                        requestedFilename = filename,
+                        type = type,
+                        modelDir = modelDir
+                    )
+                    val destFile = File(modelDir, localFilename)
+                    val inferredFamily = inferSdFamily(type, repoId, filename)
+                    val resolvedFamily = sdFamily ?: inferredFamily.first?.storedValue
+                    val resolvedVariant = sdVariant ?: inferredFamily.second
+                    val resolvedFamilyEnum = SdModelFamily.fromStoredValue(resolvedFamily)
+                    val resolvedCapabilities = sdCapabilities
+                        ?: defaultCapabilitiesForFamily(resolvedFamilyEnum, type)
+                    val resolvedCompatProfiles = resolveSdCompatProfiles(
+                        type = type,
+                        explicitProfiles = sdCompatProfiles,
+                        family = resolvedFamilyEnum,
+                        variant = resolvedVariant
+                    )
+                    val progressKey = buildDownloadTaskId(repoId, localFilename, type)
+
+                    // Register the complete runtime metadata before launching the
+                    // foreground service. The service owns final model insertion,
+                    // so a cancelled picker cannot orphan a completed payload.
+                    PendingDownloadHolder.addPending(
+                        downloadId = progressKey,
+                        filename = localFilename,
+                        repoId = repoId,
+                        progressKey = progressKey,
+                        type = type,
+                        destPath = destFile.absolutePath,
+                        isVision = isVision,
+                        sdCapabilities = resolvedCapabilities,
+                        sdFamily = resolvedFamily,
+                        sdVariant = resolvedVariant,
+                        sdCompatProfiles = resolvedCompatProfiles,
+                        onnxCapabilities = onnxCapabilities,
+                        onnxAssetKind = onnxAssetKind,
+                        onnxPipelineFamily = onnxPipelineFamily,
+                        onnxReferenceUri = onnxReferenceUri,
+                        onnxReferencePath = onnxReferencePath,
+                        artifactFamily = artifactFamily,
+                        artifactRole = artifactRole,
+                        classificationSource = ModelClassificationSource.CATALOG.storedValue
+                    )
+                    // Room is the ownership boundary across process death. Keep
+                    // the same metadata in the durable task before yielding to
+                    // Main to enqueue the foreground service.
+                    val persistedPending = requireNotNull(PendingDownloadHolder.getPending(progressKey))
+                    database.downloadTaskDao().upsert(
+                        persistedPending.toDownloadTaskEntity(progressKey, modelUrl)
+                    )
+                    DownloadProgressHolder.updateProgress(progressKey, localFilename, 0f)
+                    CatalogDownloadHandle(
+                        taskId = progressKey,
+                        progressKey = progressKey,
+                        url = modelUrl,
+                        localFilename = localFilename,
+                        destFile = destFile
+                    )
+                }
+            }
+            if (!prepared.alreadyInstalled) {
+                try {
+                    withContext(Dispatchers.Main) {
+                        com.example.llamadroid.service.DownloadService.startDownload(
+                            context = context,
+                            url = prepared.url,
+                            destPath = prepared.destFile.absolutePath,
+                            filename = prepared.localFilename,
+                            downloadId = prepared.taskId
+                        )
+                    }
+                } catch (failure: Throwable) {
+                    // Do not leave a Room task ACTIVE when Android rejects the
+                    // foreground-service handoff before a worker exists.
+                    withContext(Dispatchers.IO) {
+                        val status = if (downloadPartFile(prepared.destFile.path).length() > 0L) {
+                            DOWNLOAD_TASK_STATUS_RESUMABLE
+                        } else {
+                            DOWNLOAD_TASK_STATUS_FAILED
+                        }
+                        AppDatabase.getDatabase(context).downloadTaskDao().updateStatus(
+                            id = prepared.taskId,
+                            status = status,
+                            lastError = failure.message
+                        )
+                    }
+                    PendingDownloadHolder.removePending(prepared.taskId)
+                    DownloadProgressHolder.updateProgress(prepared.progressKey, -1f)
+                    throw failure
+                }
+            }
+            prepared
         }
-        
-        // Monitor progress from DownloadProgressHolder (updated by DownloadService)
-        // Wait for completion (progress reaches 1.0 or -1.0 for error)
+
+        if (handle.alreadyInstalled) return
+
+        // Monitor progress from DownloadProgressHolder. Registration and model
+        // insertion are service-owned, so this wait is only a UI compatibility
+        // bridge for the legacy catalog ViewModel.
         var lastProgress = 0f
         while (true) {
-                    kotlinx.coroutines.delay(500) // Check every 500ms
-                    val progressMap = DownloadProgressHolder.progress.value
-                    // Check by progressKey (set by us)
-            val progress = progressMap[progressKey] ?: 0f
-            
+            kotlinx.coroutines.delay(500)
+            val progress = DownloadProgressHolder.progress.value[handle.progressKey] ?: 0f
+
             if (progress != lastProgress && progress >= 0f) {
                 lastProgress = progress
-                DownloadProgressHolder.updateProgress(progressKey, progress)
+                DownloadProgressHolder.updateProgress(handle.progressKey, progress)
             }
-            
+
             if (progress >= 1f) {
-                // Download complete - save to DB
-                if (type.isAudioTtsComponentType()) {
-                    // The service normally verifies curated files before this
-                    // path observes completion. Recheck here as well so a
-                    // direct repository caller cannot persist a digest marker
-                    // for a same-name but corrupted payload.
-                    verifyCuratedModelDownload(
-                        localFilename = localFilename,
-                        downloadedFile = destFile,
-                        repoId = repoId,
-                        sourceUrl = modelUrl,
-                        context = context
-                    )
-                } else if (type.isStableAudioComponentType()) {
-                    // Stable Audio uses an asset-backed manifest rather than
-                    // the static llama.cpp catalog. Bind verification to the
-                    // exact pinned URL so a custom same-name file remains
-                    // importable without inheriting curated metadata.
-                    StableAudioCuratedBundleCatalog.fileForDownload(
-                        context = context,
-                        localFilename = localFilename,
-                        repoId = repoId,
-                        sourceUrl = modelUrl
-                    )?.let { expected ->
-                        verifyCuratedBundleFile(expected, localFilename, destFile)
-                    }
-                }
-                val audioIdentity = if (type.isAudioTtsComponentType() || type.isStableAudioComponentType()) {
-                    AudioModelSupport.payloadArtifactIdentity(destFile)
-                } else {
-                    null
-                }
-                val audioDescriptor = AudioModelSupport.descriptorForPayload(
-                    type = type,
-                    digest = audioIdentity,
-                    repoId = repoId,
-                    filename = localFilename,
-                    familyHint = artifactFamily,
-                    roleHint = artifactRole,
-                    sourceUrl = modelUrl,
-                    context = context
-                )
-                val entity = ModelEntity(
-                    filename = localFilename,
-                    path = destFile.absolutePath,
-                    sizeBytes = destFile.length(),
-                    type = type,
-                    repoId = repoId,
-                    isVision = isVision,
-                    isDownloaded = true,
-                    sdCapabilities = resolvedCapabilities,
-                    sdFamily = resolvedFamily,
-                    sdVariant = resolvedVariant,
-                    sdCompatProfiles = resolvedCompatProfiles,
-                    onnxCapabilities = onnxCapabilities,
-                    onnxAssetKind = onnxAssetKind,
-                    onnxPipelineFamily = onnxPipelineFamily,
-                    onnxReferenceUri = onnxReferenceUri,
-                    onnxReferencePath = onnxReferencePath,
-                    audioFamily = audioDescriptor?.family,
-                    audioLanguage = audioDescriptor?.language,
-                    audioComponentRole = audioDescriptor?.role,
-                    audioArtifactIdentity = audioIdentity,
-                    classificationSource = ModelClassificationSource.CATALOG.storedValue
-                )
-                try {
-                    // insertModel performs the same bounded SD inspection used
-                    // by the foreground service before trusting this row.
-                    insertModel(entity)
-                    DownloadProgressHolder.removeProgress(progressKey)
-                    DebugLog.log("ModelRepository: Saved $localFilename to DB as $type")
-                } catch (error: Exception) {
-                    // Keep the completed file and task metadata recoverable;
-                    // only the trusted model row is withheld.
-                    DownloadProgressHolder.updateProgress(progressKey, -1f)
-                    DownloadProgressHolder.updateStatus(
-                        progressKey,
-                        "Model inspection failed: ${error.message.orEmpty()}"
-                    )
-                    DebugLog.log("ModelRepository: Refused unverified $localFilename: ${error.message}")
-                }
                 break
             } else if (progress < 0f && progress != DownloadProgressHolder.INDETERMINATE) {
                 // Download failed
-                DownloadProgressHolder.removeProgress(progressKey)
-                DebugLog.log("ModelRepository: Download failed for $localFilename")
+                DownloadProgressHolder.removeProgress(handle.progressKey)
+                DebugLog.log("ModelRepository: Download failed for ${handle.localFilename}")
                 break
             }
         }
@@ -1687,11 +1749,8 @@ class ModelRepository(
 
     private suspend fun reconcileManagedModelCopiesIfNeeded() = withContext(Dispatchers.IO) {
         val prefs = context.applicationContext.getSharedPreferences(HF_PREFS_NAME, Context.MODE_PRIVATE)
-        if (prefs.getBoolean(MANAGED_MODEL_STORAGE_RECONCILED_KEY, false)) {
-            return@withContext
-        }
-
         reconciliationMutex.withLock {
+            recoverUnindexedLlmFiles()
             if (prefs.getBoolean(MANAGED_MODEL_STORAGE_RECONCILED_KEY, false)) {
                 return@withLock
             }
@@ -1744,6 +1803,9 @@ class ModelRepository(
             prefs.edit().putBoolean(MANAGED_MODEL_STORAGE_RECONCILED_KEY, true).apply()
         }
     }
+
+    private suspend fun recoverUnindexedLlmFiles() =
+        recoverManagedGgufModels(context, modelDao, getModelDir(ModelType.LLM))
 
     private suspend fun reconcileModelCopy(model: ModelEntity) {
         if (!ModelLibraryManager.usesManagedExternalCanonicalStorage(model.type)) return

@@ -122,9 +122,10 @@ sealed class Screen(val route: String) {
     object FastsdGallery : Screen("fastsd_gallery")           // FastSD CPU generated images gallery
     // AI Agent screens
     object Agent : Screen("agent") {                           // AI coding agent chat
-        fun createRoute(conversationId: Long): String {
+        fun createRoute(conversationId: Long, harnessTab: String? = null): String {
             require(conversationId > 0L) { "Conversation ID must be positive" }
-            return "$route?conversationId=$conversationId"
+            require(harnessTab == null || harnessTab in setOf("conversation", "requests", "plan"))
+            return "$route?conversationId=$conversationId" + (harnessTab?.let { "&harnessTab=$it" } ?: "")
         }
     }
     object AgentWorkspace : Screen("agent_workspace")          // Agent workspace file manager

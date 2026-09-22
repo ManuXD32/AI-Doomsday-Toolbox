@@ -1,5 +1,6 @@
 {
   "architecture": "arm64-v8a",
+  "qaOnly": false,
   "proot": {
     "source": "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.92_aarch64.deb",
     "sha256": "1f1c983509701f6826f568482c70673ee453a9ba38c9f5fa445a472d6b7524e9",
@@ -17,9 +18,19 @@
     "source": "app/src/main/cpp/proot_broker/proot_broker.c",
     "compiler": "aarch64-linux-android26-clang",
     "ndk": "29.0.14206865",
-    "sha256": "8994d080909167a2c11df38537a15569fd3533cef538fbc73732b8fb4bf2aaca",
+    "sha256": "705b7a980c53f18bcfa858cf97cac6c3ada27e9da5f16be1c70a313564daa662",
     "elfLoadAlignment": 16384,
     "ptyBehavior": "Accepts an inherited controlling PTY and transfers its foreground process group to the PRoot child.",
+    "subreaper": true,
+    "forceSignal": "SIGINT",
+    "ownerMonitor": "Kernel parent PID relation, with optional /proc start-time revalidation; three consecutive 100ms ownership misses force cleanup",
+    "parentDeathSignal": "None for the app owner; SIGTERM remains on the broker-to-PRoot child edge",
+    "gracefulSignal": "Kotlin targets the verified Node PID, then broker sends TERM to PRoot child only",
+    "noForceOnTimeout": true,
+    "termChildOnly": true,
+    "childPidFile": true,
+    "processLedgerFile": true,
+    "descendantCleanup": "Subreaper-owned descendants receive TERM/KILL without same-UID name sweeps.",
     "license": "GPL-2.0-or-later"
   }
 }

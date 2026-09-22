@@ -591,13 +591,13 @@ class DownloadService : Service() {
                 ?: filename?.let { taskDao.getByFilename(it) }
             val memoryPending = PendingDownloadHolder.getPending(resolvedTaskId)
                 ?: filename?.let { PendingDownloadHolder.getPending(it) }
-            val pending = memoryPending ?: storedTask?.toPendingDownload()
+            val taskPending = memoryPending ?: storedTask?.toPendingDownload()
             val finalUrl = url ?: storedTask?.url ?: return@launch
-            val finalDestPath = destPath ?: storedTask?.destPath ?: pending?.destPath ?: return@launch
-            val finalFilename = filename ?: storedTask?.filename ?: pending?.filename ?: File(finalDestPath).name
+            val finalDestPath = destPath ?: storedTask?.destPath ?: taskPending?.destPath ?: return@launch
+            val finalFilename = filename ?: storedTask?.filename ?: taskPending?.filename ?: File(finalDestPath).name
             val destFile = File(finalDestPath)
-            val progressKey = pending?.progressKey ?: storedTask?.progressKey ?: resolvedTaskId
-            val candidateTask = pending?.toDownloadTaskEntity(resolvedTaskId, finalUrl)
+            val progressKey = taskPending?.progressKey ?: storedTask?.progressKey ?: resolvedTaskId
+            val candidateTask = taskPending?.toDownloadTaskEntity(resolvedTaskId, finalUrl)
                 ?: storedTask?.copy(status = DOWNLOAD_TASK_STATUS_ACTIVE, updatedAt = System.currentTimeMillis())
                 ?: DownloadTaskEntity(
                     id = resolvedTaskId,
@@ -608,6 +608,13 @@ class DownloadService : Service() {
                     progressKey = progressKey,
                     modelType = ModelType.LLM.name
                 )
+            // A few legacy callers started the service directly and supplied
+            // no in-memory PendingDownload. The durable task still contains
+            // the canonical destination/type metadata, so promote that task
+            // to the same completion path instead of leaving a completed file
+            // unindexed when its picker coroutine goes away.
+            val pending = taskPending ?: candidateTask.toPendingDownload()
+                .takeIf { canInferLegacyLlmPending(destFile, candidateTask) }
             val libraryDao = db.modelLibraryDao()
             val armedTask: DownloadTaskEntity? = db.withTransaction {
                 val artifactId = pending?.pendingArtifactId ?: storedTask?.pendingArtifactId
@@ -1677,6 +1684,28 @@ class DownloadService : Service() {
     private fun initialProgressFor(destFile: File): Float {
         val part = File(destFile.parentFile ?: File("."), "${destFile.name}.part")
         return if (part.length() > 0L) DownloadProgressHolder.INDETERMINATE else 0f
+    }
+
+    /**
+     * Legacy direct starts did not carry a PendingDownload. Infer the runtime
+     * row only for the canonical GGUF LLM directory; generic asset downloads
+     * must retain their existing task-only completion behavior.
+     */
+    private fun canInferLegacyLlmPending(
+        destFile: File,
+        candidateTask: DownloadTaskEntity
+    ): Boolean {
+        if (candidateTask.modelType != ModelType.LLM.name ||
+            !destFile.name.endsWith(".gguf", ignoreCase = true)
+        ) return false
+        val destination = runCatching { destFile.canonicalFile }.getOrNull() ?: return false
+        val roots = buildList {
+            applicationContext.getExternalFilesDir(null)?.let { add(File(it, "models/llm")) }
+            add(File(applicationContext.filesDir, "models"))
+        }
+        return roots.any { root ->
+            runCatching { destination.parentFile == root.canonicalFile }.getOrDefault(false)
+        }
     }
     
     private fun updateNotification(text: String, progress: Int) {

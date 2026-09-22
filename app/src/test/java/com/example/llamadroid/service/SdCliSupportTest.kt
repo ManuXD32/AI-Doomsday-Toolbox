@@ -18,6 +18,19 @@ import java.nio.ByteOrder
 
 class SdCliSupportTest {
 
+    private val baseImageFlags = setOf(
+        "-M",
+        "-m",
+        "-p",
+        "-W",
+        "-H",
+        "--steps",
+        "--cfg-scale",
+        "--sampling-method",
+        "-s",
+        "-o"
+    )
+
     @Test
     fun `checkpoint txt2img builds without required components`() {
         val args = buildSdCommandArgs(
@@ -198,7 +211,7 @@ class SdCliSupportTest {
                 qwenImageZeroCondT = true
             ),
             binaryCapabilities = SdBinaryCapabilities(
-                supportedFlags = setOf("--diffusion-model", "--llm", "--model-args", "-r")
+                supportedFlags = baseImageFlags + setOf("--diffusion-model", "--llm", "--model-args", "-r")
             )
         )
 
@@ -222,7 +235,7 @@ class SdCliSupportTest {
                 qwenImageZeroCondT = true
             ),
             binaryCapabilities = SdBinaryCapabilities(
-                supportedFlags = setOf("--diffusion-model", "--llm", "--qwen-image-zero-cond-t", "-r")
+                supportedFlags = baseImageFlags + setOf("--diffusion-model", "--llm", "--qwen-image-zero-cond-t", "-r")
             )
         )
 
@@ -244,7 +257,7 @@ class SdCliSupportTest {
                 chromaDisableDitMask = true
             ),
             binaryCapabilities = SdBinaryCapabilities(
-                supportedFlags = setOf("--diffusion-model", "--model-args")
+                supportedFlags = baseImageFlags + setOf("--diffusion-model", "--vae", "--t5xxl", "--model-args")
             )
         )
 
@@ -266,7 +279,7 @@ class SdCliSupportTest {
                 chromaDisableDitMask = true
             ),
             binaryCapabilities = SdBinaryCapabilities(
-                supportedFlags = setOf("--diffusion-model", "--chroma-disable-dit-mask")
+                supportedFlags = baseImageFlags + setOf("--diffusion-model", "--vae", "--t5xxl", "--chroma-disable-dit-mask")
             )
         )
 
@@ -378,7 +391,7 @@ class SdCliSupportTest {
                     adetailer = SdADetailerConfig(modelPath = detector.absolutePath)
                 ),
                 SdBinaryCapabilities(
-                    supportedFlags = setOf("-M", "--ad-model", "--ad-prompt", "--ad-negative-prompt", "--extra-ad-args"),
+                    supportedFlags = baseImageFlags + setOf("--ad-model", "--ad-prompt", "--ad-negative-prompt", "--extra-ad-args"),
                     supportedModes = setOf("img_gen")
                 )
             )
@@ -606,7 +619,7 @@ class SdCliSupportTest {
                 maxVramCpuGiB = "3"
             ),
             binaryCapabilities = SdBinaryCapabilities(
-                supportedFlags = setOf("-M", "-m", "-p", "-o", "--max-vram")
+                supportedFlags = baseImageFlags + setOf("--max-vram")
             )
         )
 

@@ -273,8 +273,12 @@
             
         <service 
             android:name=".service.AgentForegroundService" 
-            android:foregroundServiceType="dataSync" 
-            android:exported="false" />
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started local AI agent environment with persistent interactive sessions, terminals and project previews; explicitly stopped through visible runtime controls" />
+        </service>
 
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"

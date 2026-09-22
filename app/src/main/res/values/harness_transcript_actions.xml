@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_transcript_copied">Copied to clipboard.</string>
+    <string name="harness_transcript_copy_too_large">This turn exceeds the clipboard limit. Export the session to keep the complete content.</string>
+    <string name="harness_transcript_action_failed">The transcript action could not finish. Continue to reconnect, then try again.</string>
+</resources>

@@ -1,0 +1,7 @@
+<resources>
+    <string name="harness_history_content">Mensaje</string>
+    <string name="harness_history_thinking">Razonamiento</string>
+    <string name="harness_history_tool_output">Salida de la herramienta</string>
+    <string name="harness_history_terminal_output">Salida de la terminal</string>
+    <string name="harness_history_read_failed">No se ha podido leer esta página del historial. Inténtalo de nuevo.</string>
+</resources>

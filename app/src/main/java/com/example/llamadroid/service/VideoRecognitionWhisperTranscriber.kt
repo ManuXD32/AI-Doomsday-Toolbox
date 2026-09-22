@@ -139,10 +139,14 @@ class VideoRecognitionWhisperTranscriber(
             currentCoroutineContext().ensureActive()
             if (transcription.exitCode != 0) {
                 throw IOException(
-                    appContext.getString(
-                        R.string.video_recognition_whisper_failed,
-                        transcription.exitCode
-                    )
+                    if (whisperExitCodeIndicatesMissingModel(transcription.exitCode)) {
+                        appContext.getString(R.string.whisper_error_no_model)
+                    } else {
+                        appContext.getString(
+                            R.string.video_recognition_whisper_failed,
+                            transcription.exitCode
+                        )
+                    }
                 )
             }
             if (!transcriptFile.isFile) {

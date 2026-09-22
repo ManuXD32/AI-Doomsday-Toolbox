@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_journal_open">Ver, exportar o borrar registros</string>
+    <string name="harness_journal_retention">Hasta 10.000 eventos de metadatos o 10 MiB. El ciclo de vida y los errores tienen espacio reservado; las lecturas correctas repetidas se resumen cada 30 segundos.</string>
+    <string name="harness_journal_export">Exportar todos los registros guardados</string>
+    <string name="harness_journal_clear">Borrar registros</string>
+    <string name="harness_journal_clear_confirm">¿Borrar todos los diagnósticos guardados del entorno? Los eventos nuevos se seguirán registrando.</string>
+    <string name="harness_journal_all">Todos</string>
+    <string name="harness_journal_errors">Errores</string>
+    <string name="harness_journal_lifecycle">Ciclo de vida</string>
+    <string name="harness_journal_connections">Conexiones</string>
+    <string name="harness_journal_page">Página %1$d de %2$d · Eventos: %3$d</string>
+    <string name="harness_journal_failed">La operación del registro ha fallado. Reintenta o elige otra ubicación para exportar.</string>
+</resources>

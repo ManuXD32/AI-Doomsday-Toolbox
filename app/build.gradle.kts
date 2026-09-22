@@ -14,6 +14,18 @@ val isFatApkBuild = providers.gradleProperty("fatApkBuild")
     .map(String::toBoolean)
     .orElse(false)
 
+// Explicit emulator carrier. It never changes production release ABIs or packaged assets.
+val isHarnessQaX86 = providers.gradleProperty("adtHarnessQaX86").map(String::toBoolean).orElse(false)
+val isHarnessQaMinified = providers.gradleProperty("adtHarnessQaMinified").map(String::toBoolean).orElse(false)
+require(!isHarnessQaMinified.get() || isHarnessQaX86.get()) {
+    "Minified Harness QA requires the isolated x86 emulator carrier."
+}
+if (isHarnessQaX86.get()) {
+    require(gradle.startParameter.taskNames.none { it.contains("release", ignoreCase = true) }) {
+        "The x86_64 Harness carrier is debug-only; release artifacts must remain ARM64."
+    }
+}
+
 val parquetVersion = "1.15.2"
 val parquetHadoopAndroid by configurations.creating {
     isCanBeConsumed = false
@@ -122,12 +134,14 @@ android {
             useSupportLibrary = true
         }
         buildConfigField("boolean", "IS_FAT_APK_BUILD", isFatApkBuild.get().toString())
+        buildConfigField("boolean", "HARNESS_QA_X86", isHarnessQaX86.get().toString())
         manifestPlaceholders["gwpAsanMode"] = "never"
         
         // Limit to arm64 only (CPU features detection uses ARM-specific headers)
         ndk {
-            abiFilters += listOf("arm64-v8a")
+            abiFilters += if (isHarnessQaX86.get()) listOf("x86_64") else listOf("arm64-v8a")
         }
+        externalNativeBuild.cmake.arguments += "-DADT_HARNESS_QA_X86=${if (isHarnessQaX86.get()) "ON" else "OFF"}"
     }
 
     signingConfigs {
@@ -146,6 +160,14 @@ android {
     }
 
     buildTypes {
+        getByName("debug") {
+            if (isHarnessQaX86.get()) applicationIdSuffix = ".harnessqa"
+            if (isHarnessQaMinified.get()) {
+                isMinifyEnabled = true
+                isShrinkResources = true
+                proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            }
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -192,9 +214,17 @@ android {
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.10"
     }
+    androidResources {
+        // Debian and Harness payloads are already XZ-compressed. Avoid a second ZIP
+        // compression pass during packaging and decompression while installing them.
+        noCompress += "xz"
+    }
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            // Dependency inventories are build metadata duplicated by Hadoop and Apache SSHD;
+            // they are not runtime service descriptors and do not belong in the Android bundle.
+            excludes += "META-INF/DEPENDENCIES"
             // Exclude version files that conflict between dynamic feature modules
             excludes += "META-INF/*.version"
             excludes += "META-INF/versions/**"
@@ -269,6 +299,10 @@ val generateTamaDialogCatalog by tasks.registering(Exec::class) {
 
 android.sourceSets["main"].assets.srcDir(tamaDialogGeneratedAssets)
 android.sourceSets["androidTest"].assets.srcDir("$projectDir/schemas")
+if (isHarnessQaX86.get()) {
+    android.sourceSets["debug"].assets.srcDir(rootProject.file("generated/harness-qa/assets"))
+    android.sourceSets["debug"].jniLibs.srcDir(rootProject.file("generated/harness-qa/jniLibs"))
+}
 
 val verifyPackagedProotNative by tasks.registering {
     val nativeDirectory = file("src/main/jniLibs/arm64-v8a")
@@ -423,6 +457,22 @@ dependencies {
     
     // SSH client (Termux integration)
     implementation("com.jcraft:jsch:0.1.55")
+
+    // Small authenticated SFTP server used only by the explicit Harness recovery export.
+    // The server exposes the managed Debian rootfs and has no shell, exec, forwarding, or
+    // anonymous mode. OpenSSH scp uses SFTP by default; legacy `scp -O` is intentionally refused.
+    implementation("org.apache.sshd:sshd-core:2.19.0") {
+        // The app already carries commons-logging through its HTTP/PDF stack. SSHD's JCL bridge
+        // exports the same org.apache.commons.logging classes and must not enter the AAB twice.
+        exclude(group = "org.slf4j", module = "jcl-over-slf4j")
+    }
+    implementation("org.apache.sshd:sshd-sftp:2.19.0") {
+        exclude(group = "org.slf4j", module = "jcl-over-slf4j")
+    }
+    // Android's built-in provider is also named BC and does not expose secp384r1 consistently.
+    // HarnessSshdPlatform passes this bundled provider by instance to SSHD, without replacing the
+    // process-wide Android provider registry.
+    implementation("org.bouncycastle:bcprov-jdk15to18:1.72")
     
     // Play Feature Delivery for dynamic modules
     implementation("com.google.android.play:feature-delivery:2.1.0")

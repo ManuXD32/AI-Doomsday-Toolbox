@@ -1,0 +1,5 @@
+<resources>
+    <string name="harness_command_result">Resultado del comando</string>
+    <string name="harness_command_unknown">Este comando es desconocido o está incompleto. Se han conservado el borrador y los archivos adjuntos.</string>
+    <string name="harness_command_rejected">No se ha podido completar el comando. Se han conservado el borrador y los archivos adjuntos.</string>
+</resources>

@@ -203,6 +203,9 @@ class ModelManagerViewModel(
                     _pendingVisionDownload.value = Pair(repoId, visionFile)
                     _showVisionPrompt.value = true
                 }
+            } catch (cancelled: CancellationException) {
+                // The foreground service retains ownership when this screen closes.
+                throw cancelled
             } catch (e: Exception) {
                 DebugLog.log("Download FAILED: ${e.message}")
                 e.printStackTrace()
@@ -223,6 +226,8 @@ class ModelManagerViewModel(
                     DebugLog.log("Starting vision projector download: $repoId/${fileInfo.filename}")
                     repository.downloadModel(repoId, fileInfo.filename, ModelType.VISION_PROJECTOR)
                     DebugLog.log("Vision projector download complete: ${fileInfo.filename}")
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
                 } catch (e: Exception) {
                     DebugLog.log("Vision projector download FAILED: ${e.message}")
                 }

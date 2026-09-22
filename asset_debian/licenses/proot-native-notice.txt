@@ -1,4 +1,4 @@
-The packaged PRoot executable and loader are from the pinned Termux PRoot arm64 package.
+The packaged PRoot executable and loader are from the pinned Termux PRoot arm64-v8a package.
 They are GPL-2.0-or-later. Source and license information:
   https://github.com/termux/proot
   https://www.gnu.org/licenses/old-licenses/gpl-2.0.html

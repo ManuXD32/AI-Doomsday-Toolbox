@@ -1,0 +1,5 @@
+<resources>
+    <string name="harness_command_result">Command result</string>
+    <string name="harness_command_unknown">This command is unknown or incomplete. Your draft and attachments have been kept.</string>
+    <string name="harness_command_rejected">The command could not be completed. Your draft and attachments have been kept.</string>
+</resources>

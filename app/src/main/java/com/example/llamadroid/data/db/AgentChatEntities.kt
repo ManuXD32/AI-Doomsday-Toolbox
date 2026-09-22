@@ -1,6 +1,7 @@
 package com.example.llamadroid.data.db
 
 import androidx.room.Entity
+import androidx.room.ColumnInfo
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -33,7 +34,10 @@ data class AgentConversationEntity(
     val lastRunProfileJson: String = "",
     /** Null follows the active run; otherwise this project uses the saved HTTP(S) preview URL. */
     val previewUrlOverride: String? = null,
-    /** Conversation-scoped execution policy. All conversations use the direct runtime. */
+    /** Legacy content stays readable; new session history is owned by DeepSeek Harness. */
+    @ColumnInfo(defaultValue = "'LEGACY_ARCHIVE'")
+    val runtimeSource: String = AgentRuntimeSource.LEGACY_ARCHIVE,
+    /** Historical execution policy retained for old records; Harness owns new session policy. */
     val executionProfile: String = AgentExecutionProfile.DIRECT,
     /** Direct runtime schema/version that has been durably re-anchored for this conversation. */
     val directRuntimeVersion: Int = 0,

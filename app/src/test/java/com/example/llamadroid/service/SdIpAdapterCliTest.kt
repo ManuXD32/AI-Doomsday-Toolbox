@@ -10,6 +10,19 @@ import kotlin.io.path.createTempDirectory
 
 class SdIpAdapterCliTest {
 
+    private val baseImageFlags = setOf(
+        "-M",
+        "-m",
+        "-p",
+        "-W",
+        "-H",
+        "--steps",
+        "--cfg-scale",
+        "--sampling-method",
+        "-s",
+        "-o"
+    )
+
     @Test
     fun `plain generation command remains unchanged when adapter is absent`() {
         val config = baseConfig()
@@ -27,7 +40,7 @@ class SdIpAdapterCliTest {
         val clip = File(root, "clip vision.safetensors").apply { writeText("clip") }
         val image = File(root, "reference image.png").apply { writeText("image") }
         val capabilities = SdBinaryCapabilities(
-            setOf(
+            baseImageFlags + setOf(
                 "--clip_vision",
                 "--ip-adapter",
                 "--ip-adapter-image",
@@ -98,7 +111,7 @@ class SdIpAdapterCliTest {
                     )
                 ),
                 SdBinaryCapabilities(
-                    setOf("--clip_vision", "--ip-adapter", "--ip-adapter-image")
+                    baseImageFlags + setOf("--clip_vision", "--ip-adapter", "--ip-adapter-image")
                 )
             )
         }

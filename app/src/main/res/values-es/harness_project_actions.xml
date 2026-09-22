@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="harness_project_action_removed">Este proyecto se ha eliminado. Selecciona otro proyecto para continuar.</string>
+    <string name="harness_project_action_remote_identity_ambiguous">Varias conexiones SSH usan este nombre de carpeta. Elimina sus conversaciones antiguas por separado antes de quitar este proyecto.</string>
+    <string name="harness_project_action_rename_title">Renombrar proyecto</string>
+    <string name="harness_project_action_remove_title">Eliminar proyecto</string>
+    <string name="harness_project_action_name_label">Nombre del proyecto</string>
+    <string name="harness_project_action_name_required">Escribe un nombre para el proyecto.</string>
+    <string name="harness_project_action_name_too_long">Usa 120 caracteres o menos.</string>
+    <string name="harness_project_action_name_supporting">Usa un nombre fácil de reconocer.</string>
+    <string name="harness_project_action_name_disclosure">Esto solo cambia el nombre visible. La carpeta del proyecto no cambia.</string>
+    <string name="harness_project_action_remove_description">Elimina este proyecto y sus conversaciones antiguas de la aplicación. El historial de conversaciones de Harness se conserva.</string>
+    <string name="harness_project_action_folder_label">Carpeta del proyecto</string>
+    <string name="harness_project_action_thread_count">Hilos: %1$d</string>
+    <string name="harness_project_action_delete_files">Eliminar también los archivos del proyecto</string>
+    <string name="harness_project_action_delete_files_warning">Esta acción no se puede deshacer.</string>
+    <string name="harness_project_action_remote_files_unavailable">Los archivos de proyectos remotos no se pueden eliminar desde esta acción.</string>
+    <string name="harness_project_action_pending_removal">Una eliminación anterior está incompleta. Reintentar usará la misma opción de eliminación de archivos.</string>
+    <string name="harness_project_action_type_title_prompt">Escribe «%1$s» para eliminar también los archivos del proyecto.</string>
+    <string name="harness_project_action_type_title_label">Título del proyecto</string>
+    <string name="harness_project_action_type_title_mismatch">El título del proyecto debe coincidir exactamente.</string>
+    <string name="harness_project_action_cannot_remove">Detén el entorno antes de eliminar un proyecto. Si la limpieza está pendiente, usa Forzar detención y vuelve a intentarlo.</string>
+    <string name="harness_project_action_runtime_stop_required">Detén el runtime de Harness antes de eliminar este proyecto.</string>
+    <string name="harness_project_action_remote_cleanup_pending">La limpieza remota está pendiente. Vuelve a conectar SSH y reintenta.</string>
+    <string name="harness_project_action_cleanup_pending">La limpieza del proyecto está pendiente. Reintenta cuando termine.</string>
+    <string name="harness_project_action_generic_failure">La acción del proyecto ha fallado. Inténtalo de nuevo.</string>
+    <string name="harness_project_action_cancel">Cancelar</string>
+    <string name="harness_project_action_save">Guardar</string>
+    <string name="harness_project_action_remove">Eliminar</string>
+    <string name="harness_project_action_retry">Reintentar</string>
+    <string name="harness_project_action_retry_removal">Reintentar eliminación</string>
+    <string name="harness_project_batch_select">Seleccionar proyectos</string>
+    <string name="harness_project_batch_cancel_selection">Cancelar selección</string>
+    <string name="harness_project_batch_select_all">Seleccionar todos</string>
+    <string name="harness_project_batch_selected_count" tools:ignore="PluralsCandidate">Seleccionados: %1$d</string>
+    <string name="harness_project_batch_remove">Eliminar seleccionados</string>
+    <string name="harness_project_action_batch_remove_title" tools:ignore="PluralsCandidate">Eliminar %1$d proyectos</string>
+    <string name="harness_project_action_batch_remove_description">Elimina los proyectos seleccionados de la aplicación con una sola confirmación. El historial de sesiones de Harness seguirá disponible.</string>
+    <string name="harness_project_action_batch_data_summary">Registros de proyecto para eliminar: %1$d; conversaciones antiguas para eliminar: %2$d; sesiones de Harness conservadas: %3$d.</string>
+    <string name="harness_project_action_batch_delete_files">Eliminar también los archivos de todos los proyectos locales seleccionados</string>
+    <string name="harness_project_action_batch_delete_files_warning">Se aplica a todos los proyectos seleccionados y no se puede deshacer.</string>
+    <string name="harness_project_action_batch_type_remove_prompt">Escribe REMOVE una vez para confirmar la eliminación de los archivos seleccionados.</string>
+    <string name="harness_project_action_batch_type_remove_label">Confirmación por lote</string>
+    <string name="harness_project_action_batch_type_remove_mismatch">Escribe REMOVE exactamente.</string>
+    <string name="harness_project_action_batch_files_present" tools:ignore="PluralsCandidate">Hay archivos de proyecto en %1$d proyecto(s) seleccionado(s) y se eliminarán.</string>
+    <string name="harness_project_action_batch_files_retained">Los archivos de proyecto se conservarán en este dispositivo.</string>
+    <string name="harness_project_action_batch_pending_conflict">Termina las eliminaciones pendientes por separado antes de seleccionar este lote.</string>
+</resources>

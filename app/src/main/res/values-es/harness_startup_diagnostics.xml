@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_start_broker_failed">El supervisor no pudo iniciar el entorno. Revisa el error y el código de salida que aparecen abajo y vuelve a pulsar Iniciar.</string>
+    <string name="harness_start_readiness_failed">Harness no completó la autenticación a tiempo. Revisa los eventos de inicio y vuelve a pulsar Iniciar.</string>
+    <string name="harness_start_auth_failed">Harness se inició, pero falló la autenticación. Fuerza la detención del entorno y vuelve a pulsar Iniciar.</string>
+    <string name="harness_start_permission_failed">Android denegó una operación del entorno. Copia el diagnóstico para identificar la fase del inicio que falló.</string>
+    <string name="harness_start_architecture_failed">Un ejecutable incluido no pudo ejecutarse en la arquitectura de este dispositivo. Copia el diagnóstico.</string>
+    <string name="harness_start_payload_failed">No está disponible un archivo o una biblioteca nativa necesarios. Vuelve a pulsar Iniciar para verificar la instalación; copia el diagnóstico si vuelve a fallar.</string>
+    <string name="harness_start_proot_failed">PRoot no pudo iniciar el entorno. Copia el diagnóstico, incluida la fase de inicio y el código de error.</string>
+    <string name="harness_start_node_failed">El proceso Node de Harness no pudo inicializarse. Copia el diagnóstico.</string>
+    <string name="harness_start_port_failed">El puerto del servidor local ya está en uso. Fuerza la detención del entorno y vuelve a pulsar Iniciar.</string>
+    <string name="harness_start_memory_failed">El entorno se cerró o indicó que no había memoria suficiente. Cierra los modelos locales que no uses y vuelve a pulsar Iniciar.</string>
+    <string name="harness_start_process_failed">El proceso de Harness terminó antes de estar listo. Revisa el error y el código de salida y vuelve a pulsar Iniciar.</string>
+    <string name="harness_start_failed_detail">Harness no pudo iniciarse o volver a conectarse. Revisa la fase de inicio y el código de error y vuelve a pulsar Iniciar.</string>
+    <string name="harness_event_start_requested">Inicio solicitado</string>
+    <string name="harness_event_environment_preparing">Preparando el entorno Debian</string>
+    <string name="harness_event_environment_ready">Entorno Debian listo</string>
+    <string name="harness_event_payload_preparing">Verificando y preparando los archivos de Harness</string>
+    <string name="harness_event_payload_ready">Archivos de Harness listos</string>
+    <string name="harness_event_bridge_preparing">Preparando los servicios de Android</string>
+    <string name="harness_event_bridge_ready">Servicios de Android listos</string>
+    <string name="harness_event_process_launching">Iniciando PRoot y Node</string>
+    <string name="harness_event_process_launched">Proceso del entorno iniciado</string>
+    <string name="harness_event_readiness_waiting">Esperando al servidor autenticado</string>
+    <string name="harness_event_ready">Harness listo</string>
+    <string name="harness_event_startup_output">Fallo de inicio identificado</string>
+    <string name="harness_event_process_exited">El proceso del entorno ha terminado</string>
+    <string name="harness_event_failed">La operación del entorno ha fallado</string>
+    <string name="harness_event_recovered">Estado del entorno anterior reconciliado</string>
+    <string name="harness_event_stopped">Harness detenido</string>
+    <string name="harness_event_force_stopped">Detención forzada del entorno completada</string>
+    <string name="harness_event_stop_timeout">Se agotó el tiempo de detención</string>
+    <string name="harness_event_cleanup_failed">Limpieza del entorno incompleta</string>
+    <string name="harness_event_journal_unreadable">No se pudieron leer los diagnósticos anteriores</string>
+    <string name="harness_event_journal_write_failed">No se pudo guardar el diagnóstico</string>
+    <string name="harness_event_phase">Progreso del entorno</string>
+    <string name="harness_webui_boot_loading">Cargando Harness</string>
+    <string name="harness_webui_boot_loading_detail">La interfaz autenticada está cargando sus módulos y el espacio de trabajo. Puede tardar un momento.</string>
+    <string name="harness_webui_boot_unavailable">WebUI de Harness no disponible</string>
+    <string name="harness_webui_boot_unavailable_detail">La interfaz autenticada no pudo terminar de cargarse en este dispositivo. Vuelve a intentarlo para crear una sesión WebView nueva.</string>
+    <string name="harness_webui_boot_failure_detail">Diagnóstico de inicio: %1$s</string>
+</resources>

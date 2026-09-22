@@ -96,6 +96,9 @@ class Converters {
         AgentProjectRunEntity::class,
         AgentProotEnvironmentEntity::class,
         AgentProotRunEntity::class,
+        HarnessRuntimeEntity::class,
+        HarnessWorkspaceEntity::class,
+        HarnessSessionEntity::class,
         AgentProjectEventEntity::class,
         AgentMessagePartEntity::class,
         AgentTurnContextEntity::class,
@@ -176,7 +179,7 @@ class Converters {
         com.example.llamadroid.data.model.library.ModelDeletionJournalOperationEntity::class,
         com.example.llamadroid.data.model.library.ModelDeletionJournalPathEntity::class
     ], 
-    version = 122,
+    version = 123,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -196,6 +199,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun agentChatDao(): AgentChatDao
     abstract fun agentProotEnvironmentDao(): AgentProotEnvironmentDao
     abstract fun agentProotRunDao(): AgentProotRunDao
+    abstract fun harnessDao(): HarnessDao
     abstract fun agentWorkflowDao(): AgentWorkflowDao
     abstract fun customToolDao(): CustomToolDao
     abstract fun customAgentDao(): CustomAgentDao

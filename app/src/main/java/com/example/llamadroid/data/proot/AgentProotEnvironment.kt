@@ -2,8 +2,12 @@ package com.example.llamadroid.data.proot
 
 import android.content.Context
 import android.util.Log
+import com.example.llamadroid.BuildConfig
 import com.google.android.play.core.assetpacks.AssetPackManagerFactory
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
@@ -12,9 +16,10 @@ import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
+import java.io.OutputStream
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Paths
-import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -116,6 +121,10 @@ object DebianAssetPack {
      */
     fun open(context: Context, relativePath: String): InputStream? {
         val normalized = normalizeAssetPath(relativePath)
+        if (BuildConfig.HARNESS_QA_X86 && (normalized.startsWith("debian/") || normalized.startsWith("harness/"))) {
+            // Never fall back to an ARM guest inside the x86_64-only QA carrier.
+            return runCatching { context.assets.open("harness-qa/$normalized") }.getOrNull()
+        }
         val fromPack = packAssetsRoot(context)?.let { root ->
             val file = File(root, normalized).canonicalFile
             if (file.isFile && file.path.startsWith(root.canonicalPath + File.separator)) {
@@ -128,6 +137,7 @@ object DebianAssetPack {
     }
 
     fun isAvailable(context: Context): Boolean =
+        if (BuildConfig.HARNESS_QA_X86) open(context, ROOTFS_ASSET)?.use { true } == true else
         packAssetsRoot(context)?.let { File(it, ROOTFS_ASSET).isFile } == true ||
             runCatching { context.assets.open(ROOTFS_ASSET).use { true } }.getOrDefault(false)
 
@@ -158,45 +168,88 @@ object DebianAssetPack {
     }
 }
 
+/** Cooperative cancellation seam for blocking Debian archive preparation. */
+fun interface AgentProotCancellation {
+    fun check()
+
+    companion object {
+        val NONE = AgentProotCancellation { }
+    }
+}
+
+private fun copyProotCancellable(
+    input: InputStream,
+    output: OutputStream,
+    cancellation: AgentProotCancellation
+): Long {
+    val buffer = ByteArray(64 * 1024)
+    var copied = 0L
+    while (true) {
+        cancellation.check()
+        val count = input.read(buffer)
+        if (count < 0) break
+        if (count == 0) continue
+        cancellation.check()
+        output.write(buffer, 0, count)
+        copied += count
+    }
+    return copied
+}
+
 /**
  * Secure, streaming tar extraction for a rootfs supplied by the signed asset pack.
  *
  * Archive paths, symlink targets and hardlink targets are all checked before touching the
  * destination. Device/FIFO entries are rejected because the app cannot safely materialize
- * them from writable app storage. Hardlinks are copied as regular files, which is compatible
- * with PRoot's `--link2symlink` mode and avoids Android filesystem restrictions.
+ * them from writable app storage. Hardlinks are copied as regular files while retaining the
+ * source execute bit, which is compatible with PRoot's `--link2symlink` mode and avoids Android
+ * filesystem restrictions.
  */
 object AgentProotRootfsExtractor {
     private const val MAX_ENTRIES = 1_000_000
     private const val MAX_EXTRACTED_BYTES = 8L * 1024L * 1024L * 1024L
 
-    fun sha256(file: File): String = MessageDigest.getInstance("SHA-256").let { digest ->
+    fun sha256(
+        file: File,
+        cancellation: AgentProotCancellation = AgentProotCancellation.NONE
+    ): String = MessageDigest.getInstance("SHA-256").let { digest ->
         FileInputStream(file).use { input ->
-            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            val buffer = ByteArray(64 * 1024)
             while (true) {
+                cancellation.check()
                 val count = input.read(buffer)
                 if (count < 0) break
-                if (count > 0) digest.update(buffer, 0, count)
+                if (count > 0) {
+                    cancellation.check()
+                    digest.update(buffer, 0, count)
+                }
             }
         }
         digest.digest().joinToString("") { byte -> "%02x".format(byte) }
     }
 
-    fun extract(archive: File, destination: File): Long {
+    fun extract(
+        archive: File,
+        destination: File,
+        cancellation: AgentProotCancellation = AgentProotCancellation.NONE
+    ): Long {
         require(archive.isFile) { "Rootfs archive is missing" }
         require(!destination.exists() || destination.isDirectory) {
             "Rootfs destination must be a directory or not exist"
         }
+        cancellation.check()
         destination.mkdirs()
         val root = destination.canonicalFile
         var entries = 0
         var extractedBytes = 0L
         val hardlinkSources = HashMap<String, File>()
 
+        cancellation.check()
         openArchive(archive).use { compressed ->
             TarArchiveInputStream(BufferedInputStream(compressed)).use { tar ->
                 var entry = tar.nextTarEntry
                 while (entry != null) {
+                    cancellation.check()
                     entries += 1
                     require(entries <= MAX_ENTRIES) { "Rootfs archive contains too many entries" }
                     val relative = safeArchivePath(entry.name)
@@ -225,9 +278,19 @@ object AgentProotRootfsExtractor {
                             require(source.isFile && !Files.isSymbolicLink(source.toPath())) {
                                 "Hardlink source is unavailable or unsafe: ${entry.linkName}"
                             }
+                            require(source != target) {
+                                "Hardlink source and target are identical: ${entry.linkName}"
+                            }
                             target.parentFile?.mkdirs()
-                            Files.copy(source.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-                            extractedBytes += source.length()
+                            FileInputStream(source).use { input ->
+                                FileOutputStreamCompat(target).use { output ->
+                                    extractedBytes += copyProotCancellable(input, output, cancellation)
+                                }
+                            }
+                            require(extractedBytes <= MAX_EXTRACTED_BYTES) {
+                                "Rootfs archive expands beyond the safety limit"
+                            }
+                            target.setExecutable(source.canExecute(), false)
                         }
                         entry.isCharacterDevice || entry.isBlockDevice || entry.isFIFO || entry.isGNUSparse -> {
                             throw IllegalArgumentException("Unsupported special rootfs entry: ${entry.name}")
@@ -235,8 +298,7 @@ object AgentProotRootfsExtractor {
                         entry.isFile -> {
                             target.parentFile?.mkdirs()
                             FileOutputStreamCompat(target).use { output ->
-                                val copied = tar.copyTo(output, DEFAULT_BUFFER_SIZE)
-                                extractedBytes += copied
+                                extractedBytes += copyProotCancellable(tar, output, cancellation)
                             }
                             require(extractedBytes <= MAX_EXTRACTED_BYTES) {
                                 "Rootfs archive expands beyond the safety limit"
@@ -246,10 +308,12 @@ object AgentProotRootfsExtractor {
                         }
                         else -> throw IllegalArgumentException("Unsupported rootfs entry: ${entry.name}")
                     }
+                    cancellation.check()
                     entry = tar.nextTarEntry
                 }
             }
         }
+        cancellation.check()
         require(File(root, "etc/os-release").exists() || File(root, "usr/lib/os-release").exists()) {
             "Rootfs does not contain Debian release metadata"
         }
@@ -335,11 +399,20 @@ class AgentProotEnvironmentManager(private val context: Context) {
 
     suspend fun prepare(spec: AgentProotEnvironmentSpec, forceRefresh: Boolean = false): Result<File> =
         withContext(Dispatchers.IO) {
-            runCatching {
+            val coroutineContext = currentCoroutineContext()
+            val cancellation = AgentProotCancellation { coroutineContext.ensureActive() }
+            try {
+                cancellation.check()
                 val id = AgentProotEnvironmentPaths.requireSafeEnvironmentId(spec.id)
-                synchronized(locks.getOrPut(id) { Any() }) {
-                    prepareBlocking(spec.copy(id = id), forceRefresh)
-                }
+                Result.success(
+                    synchronized(locks.getOrPut(id) { Any() }) {
+                        prepareBlocking(spec.copy(id = id), forceRefresh, cancellation)
+                    }
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                Result.failure(error)
             }
         }
 
@@ -350,7 +423,10 @@ class AgentProotEnvironmentManager(private val context: Context) {
                 val root = AgentProotEnvironmentPaths.environmentRoot(context, id)
                 val storage = AgentProotEnvironmentPaths.storageRoot(context)
                 require(root != storage) { "Cannot delete the PRoot storage root" }
-                if (root.exists()) require(root.deleteRecursively()) { "Unable to delete PRoot environment" }
+                val rootPath = root.toPath()
+                if (Files.exists(rootPath, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(rootPath)) {
+                    require(root.deleteRecursively()) { "Unable to delete PRoot environment" }
+                }
             }
         }
     }
@@ -363,7 +439,12 @@ class AgentProotEnvironmentManager(private val context: Context) {
     fun usageBytes(environmentId: String): Long =
         AgentProotEnvironmentPaths.usageBytes(context, environmentId)
 
-    private fun prepareBlocking(spec: AgentProotEnvironmentSpec, forceRefresh: Boolean): File {
+    private fun prepareBlocking(
+        spec: AgentProotEnvironmentSpec,
+        forceRefresh: Boolean,
+        cancellation: AgentProotCancellation
+    ): File {
+        cancellation.check()
         require(spec.imageId == DebianAssetPack.IMAGE_ID) {
             "Unsupported Debian image: ${spec.imageId}"
         }
@@ -386,19 +467,24 @@ class AgentProotEnvironmentManager(private val context: Context) {
         staging.mkdirs()
         val archive = File(staging, "rootfs.tar.xz")
         try {
+            cancellation.check()
             DebianAssetPack.open(context, DebianAssetPack.ROOTFS_ASSET)?.use { input ->
-                archive.outputStream().use { output -> input.copyTo(output) }
+                archive.outputStream().use { output ->
+                    copyProotCancellable(input, output, cancellation)
+                }
             } ?: error("Debian rootfs archive is missing from the asset pack")
             val expected = spec.imageSha256?.lowercase()
                 ?: DebianAssetPack.readExpectedRootfsSha256(context)
                 ?: error("The signed Debian rootfs checksum declaration is missing")
-            require(AgentProotRootfsExtractor.sha256(archive) == expected) {
+            require(AgentProotRootfsExtractor.sha256(archive, cancellation) == expected) {
                 "Debian rootfs checksum mismatch"
             }
 
             val extracted = File(staging, ROOTFS_STAGE_NAME).canonicalFile
-            AgentProotRootfsExtractor.extract(archive, extracted)
+            AgentProotRootfsExtractor.extract(archive, extracted, cancellation)
+            cancellation.check()
             require(rootfsReady(extracted)) { "Extracted Debian rootfs is incomplete" }
+            cancellation.check()
             File(extracted, ENVIRONMENT_MARKER).writeText(
                 JSONObject()
                     .put("environmentId", spec.id)
@@ -412,10 +498,12 @@ class AgentProotEnvironmentManager(private val context: Context) {
             environment.mkdirs()
             val previous = File(environment, ".rootfs.previous-${UUID.randomUUID()}").canonicalFile
             val hadPrevious = rootfs.exists()
-            if (hadPrevious) {
-                require(rootfs.renameTo(previous)) { "Unable to stage the previous Debian rootfs" }
-            }
             try {
+                cancellation.check()
+                if (hadPrevious) {
+                    require(rootfs.renameTo(previous)) { "Unable to stage the previous Debian rootfs" }
+                }
+                cancellation.check()
                 require(extracted.renameTo(rootfs)) { "Unable to activate Debian rootfs atomically" }
             } catch (error: Throwable) {
                 if (hadPrevious && !rootfs.exists()) previous.renameTo(rootfs)

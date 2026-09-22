@@ -157,6 +157,7 @@ fun buildSdCommandArgs(
     fun requireMode(mode: String) {
         if (binaryCapabilities != null &&
             binaryCapabilities != SdBinaryCapabilities.ALLOW_ALL &&
+            binaryCapabilities.supportedModes.isNotEmpty() &&
             !binaryCapabilities.supportsMode(mode)
         ) {
             requiredModes += mode
@@ -164,21 +165,38 @@ fun buildSdCommandArgs(
     }
 
     when (config.mode) {
-        SDMode.TXT2IMG, SDMode.IMG2IMG -> args.addAll(listOf("-M", "img_gen"))
+        SDMode.TXT2IMG, SDMode.IMG2IMG -> {
+            requireFlag("-M")
+            requireMode("img_gen")
+            args.addAll(listOf("-M", "img_gen"))
+        }
         SDMode.ADETAILER -> {
             requireFlag("-M")
             requireMode("adetailer")
             args.addAll(listOf("-M", "adetailer"))
         }
-        SDMode.UPSCALE -> args.addAll(listOf("-M", "upscale"))
+        SDMode.UPSCALE -> {
+            requireFlag("-M")
+            requireMode("upscale")
+            args.addAll(listOf("-M", "upscale"))
+        }
     }
 
     if (config.mode == SDMode.UPSCALE) {
+        requireFlag("-o")
         args.addAll(listOf("-o", config.outputPath))
-        config.initImage?.let { args.addAll(listOf("-i", it)) }
-        config.upscaleModel?.let { args.addAll(listOf("--upscale-model", it)) }
+        config.initImage?.let {
+            requireFlag("-i")
+            args.addAll(listOf("-i", it))
+        }
+        config.upscaleModel?.let {
+            requireFlag("--upscale-model")
+            args.addAll(listOf("--upscale-model", it))
+        }
+        requireFlag("--upscale-repeats")
         args.addAll(listOf("--upscale-repeats", config.upscaleRepeats.toString()))
         if (config.threads > 0) {
+            requireFlag("-t")
             args.addAll(listOf("-t", config.threads.toString()))
         }
         if (!config.distributedRuntime.enabled) {
@@ -245,7 +263,10 @@ fun buildSdCommandArgs(
     }
 
     when (pipeline.mainLayout) {
-        SdMainLayout.FULL_MODEL -> args.addAll(listOf("-m", pipeline.mainModelPath))
+        SdMainLayout.FULL_MODEL -> {
+            requireFlag("-m")
+            args.addAll(listOf("-m", pipeline.mainModelPath))
+        }
         SdMainLayout.STANDALONE_DIFFUSION -> {
             requireFlag("--diffusion-model")
             args.addAll(listOf("--diffusion-model", pipeline.mainModelPath))
@@ -253,19 +274,28 @@ fun buildSdCommandArgs(
         else -> throw SdPipelineValidationException(pipeline)
     }
 
-    pipeline.pathForRole(SdComponentRole.VAE)?.let { args.addAll(listOf("--vae", it)) }
+    pipeline.pathForRole(SdComponentRole.VAE)?.let {
+        requireFlag("--vae")
+        args.addAll(listOf("--vae", it))
+    }
     pipeline.pathForRole(SdComponentRole.TAE)?.let {
         // TAESD is a decode-only VAE; TAE/TAEHV remain the family component path.
         val decoderFlag = if (File(it).name.contains("taesd", ignoreCase = true)) "--taesd" else "--tae"
         requireFlag(decoderFlag)
         args.addAll(listOf(decoderFlag, it))
     }
-    pipeline.pathForRole(SdComponentRole.CLIP_L)?.let { args.addAll(listOf("--clip_l", it)) }
+    pipeline.pathForRole(SdComponentRole.CLIP_L)?.let {
+        requireFlag("--clip_l")
+        args.addAll(listOf("--clip_l", it))
+    }
     pipeline.pathForRole(SdComponentRole.CLIP_G)?.let {
         requireFlag("--clip_g")
         args.addAll(listOf("--clip_g", it))
     }
-    pipeline.pathForRole(SdComponentRole.T5XXL)?.let { args.addAll(listOf("--t5xxl", it)) }
+    pipeline.pathForRole(SdComponentRole.T5XXL)?.let {
+        requireFlag("--t5xxl")
+        args.addAll(listOf("--t5xxl", it))
+    }
     pipeline.pathForRole(SdComponentRole.LLM)?.let {
         requireFlag("--llm")
         args.addAll(listOf("--llm", it))
@@ -318,8 +348,10 @@ fun buildSdCommandArgs(
     val effectivePrompt = (promptAdapters + config.prompt)
         .filter { it.isNotBlank() }
         .joinToString(" ")
+    requireFlag("-p")
     args.addAll(listOf("-p", effectivePrompt))
     if (config.negativePrompt.isNotBlank()) {
+        requireFlag("-n")
         args.addAll(listOf("-n", config.negativePrompt))
     }
     config.maskImage?.let {
@@ -352,9 +384,14 @@ fun buildSdCommandArgs(
         )
     }
     if (config.mode != SDMode.ADETAILER || config.adetailerResizeInput) {
+        requireFlag("-W")
+        requireFlag("-H")
         args.addAll(listOf("-W", config.width.toString()))
         args.addAll(listOf("-H", config.height.toString()))
     }
+    requireFlag("--steps")
+    requireFlag("--cfg-scale")
+    requireFlag("--sampling-method")
     args.addAll(listOf("--steps", config.steps.toString()))
     args.addAll(listOf("--cfg-scale", config.cfgScale.toString()))
     args.addAll(listOf("--sampling-method", config.samplingMethod.cliName))
@@ -362,18 +399,30 @@ fun buildSdCommandArgs(
         requireFlag("--scheduler")
         args.addAll(listOf("--scheduler", it.cliName))
     }
+    requireFlag("-s")
     args.addAll(listOf("-s", config.seed.toString()))
 
-    config.cacheMode?.let { args.addAll(listOf("--cache-mode", it.cliName)) }
+    config.cacheMode?.let {
+        requireFlag("--cache-mode")
+        args.addAll(listOf("--cache-mode", it.cliName))
+    }
     if (config.cacheOption.isNotBlank()) {
+        requireFlag("--cache-option")
         args.addAll(listOf("--cache-option", config.cacheOption))
     }
     if (config.scmMask.isNotBlank()) {
+        requireFlag("--scm-mask")
         args.addAll(listOf("--scm-mask", config.scmMask))
     }
-    config.scmPolicy?.let { args.addAll(listOf("--scm-policy", it.cliName)) }
+    config.scmPolicy?.let {
+        requireFlag("--scm-policy")
+        args.addAll(listOf("--scm-policy", it.cliName))
+    }
 
     if (config.controlNetPath != null && config.controlImagePath != null) {
+        requireFlag("--control-net")
+        requireFlag("--control-image")
+        requireFlag("--control-strength")
         args.addAll(listOf("--control-net", config.controlNetPath))
         args.addAll(listOf("--control-image", config.controlImagePath))
         args.addAll(listOf("--control-strength", config.controlStrength.toString()))
@@ -405,6 +454,7 @@ fun buildSdCommandArgs(
     }
 
     if (config.quantizationType.isNotBlank()) {
+        requireFlag("--type")
         args.addAll(listOf("--type", config.quantizationType))
     }
 
@@ -457,6 +507,7 @@ fun buildSdCommandArgs(
         }
     }
 
+    requireFlag("-o")
     args.addAll(listOf("-o", config.outputPath))
 
     if (config.mode == SDMode.IMG2IMG ||
@@ -466,6 +517,8 @@ fun buildSdCommandArgs(
             ?: throw IllegalStateException("Missing input image")
         when (spec.img2imgInputMode) {
             SdImageInputMode.INIT_IMAGE -> {
+                requireFlag("-i")
+                requireFlag("--strength")
                 args.addAll(listOf("-i", input))
                 val effectiveStrength = if (config.mode == SDMode.ADETAILER) {
                     adetailerConfig?.denoisingStrength ?: config.strength
@@ -482,21 +535,27 @@ fun buildSdCommandArgs(
     }
 
     if (config.threads > 0) {
+        requireFlag("-t")
         args.addAll(listOf("-t", config.threads.toString()))
     }
 
     if (config.vaeTiling) {
+        requireFlag("--vae-tiling")
+        requireFlag("--vae-tile-overlap")
         args.add("--vae-tiling")
         args.addAll(listOf("--vae-tile-overlap", config.vaeTileOverlap.toString()))
         if (config.vaeTileSize.isNotBlank()) {
+            requireFlag("--vae-tile-size")
             args.addAll(listOf("--vae-tile-size", config.vaeTileSize))
         }
         if (config.vaeRelativeTileSize.isNotBlank()) {
+            requireFlag("--vae-relative-tile-size")
             args.addAll(listOf("--vae-relative-tile-size", config.vaeRelativeTileSize))
         }
     }
 
     if (config.tensorTypeRules.isNotBlank()) {
+        requireFlag("--tensor-type-rules")
         args.addAll(listOf("--tensor-type-rules", config.tensorTypeRules))
     }
 

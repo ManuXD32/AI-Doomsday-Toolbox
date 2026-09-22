@@ -23,3 +23,24 @@ The Debian rootfs source is distributed under its upstream Debian terms. PRoot a
 GPL-2.0-or-later projects; the pinned native package hashes, broker source, and notices are in
 `native-provenance.json`, `native-sha256sums.txt`, and `licenses/proot-native-notice.txt` before
 shipping the corresponding native artifacts.
+
+The broker binds runtime ownership to the kernel parent PID relationship, with optional
+`/proc/<pid>/stat` start-time revalidation when readable. Android may deny the native child
+access to its parent app's proc metadata; that must not prevent launch or kill a live owner.
+It intentionally does not use `PR_SET_PDEATHSIG` on that edge: Linux can deliver
+that signal when a launching pthread retires while the app process remains alive. The broker polls
+the recorded process identity with three bounded 100 ms misses before forcing descendant cleanup.
+The immediate broker-to-PRoot child edge still uses `PR_SET_PDEATHSIG`, so a real broker death does
+not leave the guest process behind. The host regression
+`tests/native/proot_broker_parent_liveness_test.sh` covers both cases with readable and denied
+proc metadata. PRoot, its loader and shared dependencies still use the pinned Termux packages;
+the repair adds no service or additional runtime layer.
+
+The opt-in API 36 x86_64 Harness carrier is separate from the production arm64 payload. Its
+`build_proot_native.sh` path compiles pinned PRoot commit
+`7266fb3e8516535682f5a9c8f3a7e70f6506eddb` with
+`asset_debian/patches/proot-renameat-android.patch`. Android's x86_64 app sandbox can return
+`ENOSYS` for guest `rename(2)` when `PROOT_NO_SECCOMP=1`; the patch translates that operation to
+the equivalent atomic `renameat(2)` after PRoot path handling. The source archive and patch hashes
+are recorded in the generated QA `native-provenance.json`; the production arm64 build continues
+to use the pinned Termux package unchanged.

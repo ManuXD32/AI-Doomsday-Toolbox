@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_journal_open">Browse, export or clear logs</string>
+    <string name="harness_journal_retention">Up to 10,000 metadata events or 10 MiB. Lifecycle and errors have reserved storage; repeated successful reads are summarized every 30 seconds.</string>
+    <string name="harness_journal_export">Export all retained logs</string>
+    <string name="harness_journal_clear">Clear logs</string>
+    <string name="harness_journal_clear_confirm">Delete all retained runtime diagnostics? New events will continue to be recorded.</string>
+    <string name="harness_journal_all">All</string>
+    <string name="harness_journal_errors">Errors</string>
+    <string name="harness_journal_lifecycle">Lifecycle</string>
+    <string name="harness_journal_connections">Connections</string>
+    <string name="harness_journal_page">Page %1$d of %2$d · Events: %3$d</string>
+    <string name="harness_journal_failed">The log operation failed. Retry or choose another export location.</string>
+</resources>

@@ -838,15 +838,20 @@ fun LlamaApp(
             
             // AI Agent
             composable(
-                "${Screen.Agent.route}?conversationId={conversationId}",
+                "${Screen.Agent.route}?conversationId={conversationId}&harnessTab={harnessTab}",
                 arguments = listOf(navArgument("conversationId") {
                     type = NavType.LongType
                     defaultValue = -1L
+                }, navArgument("harnessTab") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
                 })
             ) { backStackEntry ->
                 com.example.llamadroid.ui.agent.AgentScreen(
                     navController,
-                    initialConversationId = backStackEntry.arguments?.getLong("conversationId")?.takeIf { it > 0L }
+                    initialConversationId = backStackEntry.arguments?.getLong("conversationId")?.takeIf { it > 0L },
+                    initialAttentionTab = backStackEntry.arguments?.getString("harnessTab")
                 )
             }
             

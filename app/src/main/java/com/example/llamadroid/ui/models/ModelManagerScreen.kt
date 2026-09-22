@@ -49,6 +49,7 @@ import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.DownloadProgressHolder
 import com.example.llamadroid.data.model.ModelLibraryManager
+import com.example.llamadroid.data.model.ModelManagerModelTypes
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.data.model.library.ModelFamily
 import com.example.llamadroid.data.model.library.ModelSourceDraft
@@ -92,9 +93,7 @@ private val MODEL_MANAGER_CATEGORIES = listOf(
         R.string.models_category_audio,
         setOf(
             ModelType.LLAMA_TTS,
-            ModelType.LLAMA_TTS_COMPANION,
-            ModelType.LITERT_AUDIO_DIT,
-            ModelType.LITERT_AUDIO_COMPONENT
+            ModelType.LLAMA_TTS_COMPANION
         )
     )
 )
@@ -120,19 +119,7 @@ fun ModelManagerScreen(navController: NavController) {
     val progressMap by viewModel.downloadProgress.collectAsStateWithLifecycle()
     val installedModelCount by viewModel.installedModels.collectAsStateWithLifecycle()
     val managerDownloadTypeNames = remember {
-        listOf(
-            ModelType.LLM,
-            ModelType.LLM_DRAFT,
-            ModelType.LORA,
-            ModelType.EMBEDDING,
-            ModelType.VISION,
-            ModelType.VISION_PROJECTOR,
-            ModelType.MMPROJ,
-            ModelType.LLAMA_TTS,
-            ModelType.LLAMA_TTS_COMPANION,
-            ModelType.LITERT_AUDIO_DIT,
-            ModelType.LITERT_AUDIO_COMPONENT
-        ).map { it.name }
+        ModelManagerModelTypes.llama.map { it.name }
     }
     val managerDownloadTasks by db.downloadTaskDao()
         .observeByModelTypes(managerDownloadTypeNames)
@@ -388,9 +375,7 @@ fun InstalledTab(
                         ModelType.EMBEDDING to stringResource(R.string.models_type_embedding),
                         ModelType.VISION_PROJECTOR to stringResource(R.string.models_type_vision_projector),
                         ModelType.LLAMA_TTS to stringResource(R.string.model_promote_audio_tts),
-                        ModelType.LLAMA_TTS_COMPANION to stringResource(R.string.model_promote_audio_tts_companion),
-                        ModelType.LITERT_AUDIO_DIT to stringResource(R.string.model_library_role_stable_audio_dit),
-                        ModelType.LITERT_AUDIO_COMPONENT to stringResource(R.string.model_library_role_stable_audio_component)
+                        ModelType.LLAMA_TTS_COMPANION to stringResource(R.string.model_promote_audio_tts_companion)
                     )
                     
                     modelTypes.forEach { (type, label) ->
@@ -1143,21 +1128,7 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
     val context = LocalContext.current
     val db = remember { AppDatabase.getDatabase(context) }
     val progressMap by viewModel.downloadProgress.collectAsStateWithLifecycle()
-    val modelTypes = remember {
-        listOf(
-            ModelType.LLM,
-            ModelType.LLM_DRAFT,
-            ModelType.LORA,
-            ModelType.EMBEDDING,
-            ModelType.VISION,
-            ModelType.VISION_PROJECTOR,
-            ModelType.MMPROJ,
-            ModelType.LLAMA_TTS,
-            ModelType.LLAMA_TTS_COMPANION,
-            ModelType.LITERT_AUDIO_DIT,
-            ModelType.LITERT_AUDIO_COMPONENT
-        )
-    }
+    val modelTypes = ModelManagerModelTypes.llama
     val managerDownloadTypeNames = remember(modelTypes) { modelTypes.map { it.name } }
     val storedManagerTasks by db.downloadTaskDao()
         .observeByModelTypes(managerDownloadTypeNames)

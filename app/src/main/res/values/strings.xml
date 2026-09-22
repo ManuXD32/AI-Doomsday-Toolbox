@@ -342,8 +342,8 @@
     <string name="imagegen_vae_tiling">VAE Tiling</string>
     <string name="imagegen_tile_overlap">Tile Overlap</string>
     <string name="imagegen_tile_overlap_value">Tile Overlap: %1$s</string>
-    <string name="imagegen_tile_size">Tile Size</string>
-    <string name="imagegen_relative_tile_size">Relative Tile Size</string>
+    <string name="imagegen_tile_size">Tile Size (latent units)</string>
+    <string name="imagegen_relative_tile_size">Relative Tile Size (latent units)</string>
     <string name="imagegen_tensor_type_rules">Tensor Type Rules</string>
     <string name="imagegen_export_to_folder">Export to Folder</string>
     <string name="imagegen_export_success">Exported to %s</string>
@@ -717,7 +717,7 @@
     <string name="models_size">Size: %s</string>
     <string name="models_delete">Delete model</string>
     <string name="models_delete_confirm">Are you sure you want to delete this model?</string>
-    <string name="models_delete_preview">The operation will remove %1$d managed file(s) and keep %2$d protected file(s).</string>
+    <string name="models_delete_preview" tools:ignore="PluralsCandidate">The operation will remove %1$d managed file(s) and keep %2$d protected file(s).</string>
     <string name="models_delete_preview_dependency">A protected file is still referenced by another installed model.</string>
     <string name="models_delete_result_completed">Model removed. Reclaimed %1$s.</string>
     <string name="models_delete_result_retry">The model could not be removed safely. It remains available to retry.</string>
@@ -2321,6 +2321,7 @@
     <string name="agent_proot_terminal_no_project">Open a Local Debian project before using its terminal.</string>
     <string name="agent_proot_terminal_start_failed">Could not start the Debian terminal: %1$s</string>
     <string name="agent_proot_terminal_input_failed">Could not send terminal input: %1$s</string>
+    <string name="agent_proot_terminal_view_failed">The terminal view could not be initialized (%1$s). Retry the terminal.</string>
     <string name="agent_proot_terminal_connecting_body">Preparing the selected Debian environment and opening an interactive shell…</string>
     <string name="action_fit">Fit</string>
     <string name="agent_workspace_stop_project_shells">Stop project shell sessions</string>
@@ -4796,7 +4797,7 @@
     <string name="video_gen_sampler_label">Sampling method</string>
     <string name="video_gen_threads_label">Threads</string>
     <string name="video_gen_vae_tiling_label">VAE tiling</string>
-    <string name="video_gen_vae_tile_size_label">VAE tile size</string>
+    <string name="video_gen_vae_tile_size_label">VAE tile size (latent units)</string>
     <string name="video_gen_diffusion_fa_label">diffusion-fa</string>
     <string name="video_gen_mmap_label">mmap</string>
     <string name="video_gen_running_title">Video generation running</string>
@@ -7894,8 +7895,8 @@
     <string name="sd_dist_diffusion_fa_desc">Enable diffusion-fa when supported by the model family.</string>
     <string name="sd_dist_vae_tiling">VAE tiling</string>
     <string name="sd_dist_vae_tiling_desc">Tile VAE work to reduce peak memory.</string>
-    <string name="sd_dist_vae_tile_size">VAE tile size</string>
-    <string name="sd_dist_vae_tile_size_hint">Example: 512x512</string>
+    <string name="sd_dist_vae_tile_size">VAE tile size (latent units)</string>
+    <string name="sd_dist_vae_tile_size_hint">Example: 32x32 latent units</string>
     <string name="sd_dist_vae_tile_overlap">VAE tile overlap</string>
     <string name="sd_dist_vae_tile_overlap_hint">Pixels</string>
     <string name="sd_dist_flow_shift">Flow shift</string>

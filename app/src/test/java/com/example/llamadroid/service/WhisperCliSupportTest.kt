@@ -152,6 +152,13 @@ class WhisperCliSupportTest {
     }
 
     @Test
+    fun `upstream missing model exit code is classified separately`() {
+        assertTrue(whisperExitCodeIndicatesMissingModel(WHISPER_MISSING_MODEL_EXIT_CODE))
+        assertFalse(whisperExitCodeIndicatesMissingModel(1))
+        assertFalse(whisperExitCodeIndicatesMissingModel(0))
+    }
+
+    @Test
     fun `CLI numbers remain locale independent`() {
         val original = Locale.getDefault()
         try {

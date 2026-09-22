@@ -88,6 +88,25 @@ class ProcessControllerTest {
     }
 
     @Test
+    fun `generated command selects long aliases advertised by llama help`() {
+        val config = LlamaConfig(modelPath = "/models/model.gguf")
+        val args = ProcessController().getCommand(
+            "/bin/llama-server",
+            config,
+            LlamaBinaryCapabilities(
+                supportedFlags = setOf("--model", "--ctx-size", "--threads", "--batch-size")
+            )
+        )
+
+        assertArgValue(args, "--model", "/models/model.gguf")
+        assertArgValue(args, "--ctx-size", config.contextSize.toString())
+        assertArgValue(args, "--threads", config.threads.toString())
+        assertArgValue(args, "--batch-size", config.batchSize.toString())
+        assertFalse(args.contains("-m"))
+        assertFalse(args.contains("-c"))
+    }
+
+    @Test
     fun `command template exposes batch thread placeholder`() {
         val args = ProcessController().renderCommandTemplate(
             template = "{binary} --threads-batch {threads_batch}",

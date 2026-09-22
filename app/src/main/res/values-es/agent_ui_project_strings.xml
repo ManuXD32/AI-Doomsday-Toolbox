@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="agent_details_title">Detalles del agente</string>
     <string name="agent_details_project_section">Proyecto</string>
     <string name="agent_details_runtime_section">Runtime</string>
@@ -39,9 +39,8 @@
     <string name="agent_project_create_error">No se pudo crear el proyecto.%1$s</string>
     <string name="agent_skill_scope_global">Valores globales de habilidades</string>
     <string name="agent_skill_scope_project">Proyecto %1$d · agente %2$s</string>
-    <string name="agent_skill_scope_summary">%1$d instaladas · %2$d autorizadas para cargar</string>
+    <string name="agent_skill_scope_summary" tools:ignore="PluralsCandidate">%1$d instaladas · %2$d autorizadas para cargar</string>
     <string name="agent_skill_status_activated">Activada para este proyecto</string>
     <string name="agent_skill_status_approval">Se necesita aprobación antes de cargarla</string>
     <string name="agent_skill_status_disabled">Desactivada para este proyecto</string>
-    <string name="agent_skill_status_installed">Instalada y disponible bajo petición</string>
 </resources>

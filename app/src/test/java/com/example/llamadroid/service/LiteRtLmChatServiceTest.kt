@@ -813,6 +813,31 @@ class LiteRtLmChatServiceTest {
     }
 
     @Test
+    fun `LiteRtToolDefinition preserves a complete function parameter schema`() {
+        val tool = LiteRtToolDefinition(
+            name = "structured_tool",
+            description = "Accept structured input.",
+            parameters = mapOf("query" to "Query"),
+            requiredParams = listOf("query"),
+            parameterSchemaJson = """
+                {"type":"object","properties":{
+                  "query":{"type":"string","enum":["one","two"]},
+                  "options":{"type":"object","properties":{"limit":{"type":"integer"}}}
+                },"required":["query"]}
+            """.trimIndent()
+        )
+
+        val parameters = org.json.JSONObject(tool.toLiteRtOpenApiToolJson()).getJSONObject("parameters")
+        assertEquals("string", parameters.getJSONObject("properties").getJSONObject("query").getString("type"))
+        assertEquals("two", parameters.getJSONObject("properties").getJSONObject("query").getJSONArray("enum").getString(1))
+        assertEquals(
+            "integer",
+            parameters.getJSONObject("properties").getJSONObject("options")
+                .getJSONObject("properties").getJSONObject("limit").getString("type")
+        )
+    }
+
+    @Test
     fun `liteRtMessageSnapshot extracts structured tool calls`() {
         val message = FakeLiteRtMessage(
             contents = FakeLiteRtContents(emptyList()),

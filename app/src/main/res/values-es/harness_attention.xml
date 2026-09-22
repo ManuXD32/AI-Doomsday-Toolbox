@@ -1,0 +1,7 @@
+<resources>
+    <string name="harness_attention_completed">El trabajo de Harness ha terminado</string>
+    <string name="harness_attention_stopped">El trabajo de Harness se ha detenido</string>
+    <string name="harness_attention_interrupted">El trabajo de Harness se ha interrumpido</string>
+    <string name="harness_attention_open_conversation">Abre la conversación para revisar su estado.</string>
+    <string name="harness_session_delete_pending">Eliminación pendiente: se cerrarán los terminales activos y terminará el trabajo. Si el entorno está detenido, inícialo para continuar.</string>
+</resources>

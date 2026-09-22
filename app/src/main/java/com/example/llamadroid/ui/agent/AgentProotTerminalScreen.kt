@@ -6,11 +6,14 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -49,6 +52,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -76,6 +82,7 @@ private val ProotTerminalMuted = Color(0xFF9AA99E)
 @Composable
 fun AgentProotTerminalScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val agentService = remember { AgentForegroundService.getAgentService(context) }
     val currentProjectFolder by AgentService.currentProjectFolder.collectAsState()
@@ -93,6 +100,7 @@ fun AgentProotTerminalScreen(navController: NavController) {
     var screenError by rememberSaveable(conversationId) { mutableStateOf<String?>(null) }
     var controlEnabled by rememberSaveable(selectedSessionId) { mutableStateOf(false) }
     var altEnabled by rememberSaveable(selectedSessionId) { mutableStateOf(false) }
+    val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val selectedSession = sessions.firstOrNull { it.sessionId == selectedSessionId }
         ?: sessions.lastOrNull()
     val terminalSession = selectedSession?.takeIf { it.isConnected }?.sessionId
@@ -100,15 +108,22 @@ fun AgentProotTerminalScreen(navController: NavController) {
     val terminalHost = remember(selectedSession?.sessionId, terminalSession) {
         val sessionId = selectedSession?.sessionId
         terminalSession?.let { terminal ->
-            AgentProotTerminalHost(
-                context = context,
-                terminalSession = terminal,
-                onInputActivity = { sessionId?.let(agentService::touchProotTerminalSession) },
-                onModifierStateChanged = { control, alt ->
-                    controlEnabled = control
-                    altEnabled = alt
-                }
-            )
+            runCatching {
+                AgentProotTerminalHost(
+                    context = context,
+                    terminalSession = terminal,
+                    onInputActivity = { sessionId?.let(agentService::touchProotTerminalSession) },
+                    onModifierStateChanged = { control, alt ->
+                        controlEnabled = control
+                        altEnabled = alt
+                    }
+                )
+            }.onFailure { error ->
+                screenError = resources.getString(
+                    R.string.agent_proot_terminal_view_failed,
+                    error.javaClass.simpleName
+                )
+            }.getOrNull()
         }
     }
 
@@ -121,10 +136,10 @@ fun AgentProotTerminalScreen(navController: NavController) {
         scope.launch {
             agentService.openProotWorkspaceTerminal(anchor, folder)
                 .onSuccess { selectedSessionId = it.sessionId }
-                .onFailure { error ->
-                    screenError = context.getString(
+                .onFailure { _ ->
+                    screenError = resources.getString(
                         R.string.agent_proot_terminal_start_failed,
-                        error.message.orEmpty()
+                        "TERMINAL_START_FAILED"
                     )
                 }
             isOpening = false
@@ -135,10 +150,10 @@ fun AgentProotTerminalScreen(navController: NavController) {
         val sessionId = selectedSession?.sessionId ?: return
         scope.launch {
             agentService.sendProotWorkspaceTerminalInput(sessionId, sequence, appendNewline = false)
-                .onFailure { error ->
-                    screenError = context.getString(
+                .onFailure { _ ->
+                    screenError = resources.getString(
                         R.string.agent_proot_terminal_input_failed,
-                        error.message.orEmpty()
+                        "TERMINAL_INPUT_FAILED"
                     )
                 }
         }
@@ -266,19 +281,59 @@ fun AgentProotTerminalScreen(navController: NavController) {
             return@Scaffold
         }
 
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .imePadding()
-                .background(ProotTerminalBackground)
-        ) {
+        AgentProotTerminalViewport(
+            innerPadding = innerPadding,
+            keyboardVisible = keyboardVisible,
+            sessions = sessions,
+            selectedSession = selectedSession,
+            isOpening = isOpening,
+            terminalHost = terminalHost,
+            screenError = screenError,
+            controlEnabled = controlEnabled,
+            altEnabled = altEnabled,
+            onSelectSession = { selectedSessionId = it },
+            onNewSession = ::openNewSession,
+            onControl = { controlEnabled = terminalHost?.toggleControl() == true },
+            onAlt = { altEnabled = terminalHost?.toggleAlt() == true },
+            onSequence = ::sendSequence
+        )
+    }
+}
+
+/** Production terminal viewport shared with bounded IME/layout regression coverage. */
+@Composable
+fun AgentProotTerminalViewport(
+    innerPadding: PaddingValues,
+    keyboardVisible: Boolean,
+    sessions: List<com.example.llamadroid.service.WorkspaceTerminalUiState>,
+    selectedSession: com.example.llamadroid.service.WorkspaceTerminalUiState?,
+    isOpening: Boolean,
+    terminalHost: AgentProotTerminalHost?,
+    screenError: String?,
+    controlEnabled: Boolean,
+    altEnabled: Boolean,
+    onSelectSession: (String) -> Unit,
+    onNewSession: () -> Unit,
+    onControl: () -> Unit,
+    onAlt: () -> Unit,
+    onSequence: (String) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(innerPadding)
+            .imePadding()
+            .background(ProotTerminalBackground)
+    ) {
+        // The IME owns the bottom inset here. Secondary chrome collapses while it is open so the
+        // weighted PTY viewport remains usable above the keyboard on small displays.
+        if (!keyboardVisible) {
             SessionStrip(
                 sessions = sessions,
                 selectedSessionId = selectedSession?.sessionId,
                 isOpening = isOpening,
-                onSelect = { selectedSessionId = it },
-                onNew = ::openNewSession
+                onSelect = onSelectSession,
+                onNew = onNewSession
             )
             Text(
                 text = selectedSession?.let {
@@ -295,28 +350,36 @@ fun AgentProotTerminalScreen(navController: NavController) {
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 3.dp)
             )
             HorizontalDivider(color = ProotTerminalOutline)
+        }
 
-            Box(modifier = Modifier.weight(1f).fillMaxWidth().background(Color.Black)) {
-                if (terminalHost != null) {
-                    AndroidView(
-                        factory = { terminalHost.view },
-                        update = { it.onScreenUpdated() },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    Text(
-                        text = when {
-                            isOpening -> stringResource(R.string.agent_proot_terminal_connecting_body)
-                            selectedSession?.errorMessage != null -> selectedSession.errorMessage.orEmpty()
-                            else -> stringResource(R.string.agent_workspace_terminal_empty)
-                        },
-                        color = ProotTerminalMuted,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.align(Alignment.Center).padding(20.dp)
-                    )
-                }
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .background(Color.Black)
+                .testTag("agent_proot_terminal_viewport")
+        ) {
+            if (terminalHost != null) {
+                AndroidView(
+                    factory = { terminalHost.view },
+                    update = { it.onScreenUpdated() },
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Text(
+                    text = when {
+                        isOpening -> stringResource(R.string.agent_proot_terminal_connecting_body)
+                        selectedSession?.errorMessage != null -> selectedSession.errorMessage.orEmpty()
+                        else -> stringResource(R.string.agent_workspace_terminal_empty)
+                    },
+                    color = ProotTerminalMuted,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.align(Alignment.Center).padding(20.dp)
+                )
             }
+        }
 
+        if (!keyboardVisible) {
             screenError?.let { message ->
                 Text(
                     text = message,
@@ -328,16 +391,16 @@ fun AgentProotTerminalScreen(navController: NavController) {
                     modifier = Modifier.fillMaxWidth().background(ProotTerminalPanel).padding(8.dp)
                 )
             }
-
-            TerminalExtraKeysRow(
-                enabled = terminalHost != null && selectedSession?.isConnected == true,
-                controlEnabled = controlEnabled,
-                altEnabled = altEnabled,
-                onControl = { controlEnabled = terminalHost?.toggleControl() == true },
-                onAlt = { altEnabled = terminalHost?.toggleAlt() == true },
-                onSequence = ::sendSequence
-            )
         }
+
+        TerminalExtraKeysRow(
+            enabled = terminalHost != null && selectedSession?.isConnected == true,
+            controlEnabled = controlEnabled,
+            altEnabled = altEnabled,
+            onControl = onControl,
+            onAlt = onAlt,
+            onSequence = onSequence
+        )
     }
 }
 
@@ -416,7 +479,8 @@ private fun TerminalExtraKeysRow(
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-            .background(ProotTerminalPanel).padding(horizontal = 6.dp, vertical = 5.dp),
+            .background(ProotTerminalPanel).padding(horizontal = 6.dp, vertical = 5.dp)
+            .testTag("agent_proot_terminal_extra_keys"),
         horizontalArrangement = Arrangement.spacedBy(5.dp)
     ) {
         TerminalKey("CTRL", enabled, controlEnabled, onControl)

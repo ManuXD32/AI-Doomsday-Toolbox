@@ -1,0 +1,7 @@
+<resources>
+    <string name="harness_history_content">Message</string>
+    <string name="harness_history_thinking">Reasoning</string>
+    <string name="harness_history_tool_output">Tool output</string>
+    <string name="harness_history_terminal_output">Terminal output</string>
+    <string name="harness_history_read_failed">This history page could not be read. Try again.</string>
+</resources>

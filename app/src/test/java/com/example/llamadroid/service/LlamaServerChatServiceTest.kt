@@ -40,6 +40,33 @@ class LlamaServerChatServiceTest {
     }
 
     @Test
+    fun `explicit tool choice is preserved and unsupported none is rejected when tools remain`() {
+        val tools = listOf(AgentTool("question", "Ask a blocker", emptyMap(), emptyList()))
+        val automatic = buildLlamaServerChatRequestPayload(
+            messages = emptyList(),
+            tools = tools,
+            thinkingEnabled = false,
+            requestOptions = LlamaServerRequestOptions(toolChoice = "auto")
+        )
+        val required = buildLlamaServerChatRequestPayload(
+            messages = emptyList(),
+            tools = tools,
+            thinkingEnabled = false,
+            requestOptions = LlamaServerRequestOptions(toolChoice = "required")
+        )
+        assertEquals("auto", automatic["tool_choice"])
+        assertEquals("required", required["tool_choice"])
+        assertThrows(IllegalArgumentException::class.java) {
+            buildLlamaServerChatRequestPayload(
+                messages = emptyList(),
+                tools = tools,
+                thinkingEnabled = false,
+                requestOptions = LlamaServerRequestOptions(toolChoice = "none")
+            )
+        }
+    }
+
+    @Test
     fun `SSE failure classification never labels cancellation as malformed JSON`() {
         assertEquals(
             SseProcessingFailureKind.CANCELLATION,

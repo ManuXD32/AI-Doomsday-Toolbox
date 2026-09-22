@@ -89,6 +89,16 @@ interface DownloadTaskDao {
     @Query("SELECT * FROM download_tasks WHERE filename = :filename LIMIT 1")
     suspend fun getByFilename(filename: String): DownloadTaskEntity?
 
+    /** Reuses an in-flight source request instead of allocating a second file name. */
+    @Query(
+        "SELECT * FROM download_tasks WHERE url = :url AND modelType = :modelType " +
+            "AND status IN ('ACTIVE', 'RESUMABLE') ORDER BY updatedAt DESC LIMIT 1"
+    )
+    suspend fun getActiveByUrlAndModelType(
+        url: String,
+        modelType: String
+    ): DownloadTaskEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(task: DownloadTaskEntity)
 

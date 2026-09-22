@@ -69,7 +69,9 @@ data class LiteRtToolDefinition(
     val name: String,
     val description: String,
     val parameters: Map<String, String>,
-    val requiredParams: List<String> = emptyList()
+    val requiredParams: List<String> = emptyList(),
+    /** Original function.parameters JSON, retained when the caller supplies a full schema. */
+    val parameterSchemaJson: String? = null
 )
 
 data class LiteRtToolCallSpec(
@@ -88,6 +90,7 @@ data class LiteRtLmChatStats(
 
 const val LITERT_PARAM_MTP_ENABLED = "litert_mtp_enabled"
 const val LITERT_PARAM_MAX_OUTPUT_TOKENS = "litert_max_output_tokens"
+const val LITERT_PARAM_ENGINE_OWNER = "litert_engine_owner"
 
 private const val LITERT_EXTRA_CONTEXT_ENABLE_THINKING = "enable_thinking"
 private const val LITERT_DEFAULT_CONTEXT_TOKENS = 4000
@@ -161,6 +164,9 @@ class LiteRtLmChatService(
     private val allowGpuBackend: Boolean = false,
     private val onDiagnostic: ((String) -> Unit)? = null
 ) {
+    suspend fun releaseOwnedEngines(owner: String): Int =
+        if (owner.isBlank()) 0 else LiteRtLmReflectionBridge(context).releaseOwnedEngines(owner)
+
     fun isEngineLoaded(
         model: LiteRtModelEntity,
         backendMode: String,
@@ -478,6 +484,7 @@ class LiteRtLmChatService(
                 temperature = (request.params["temperature"] as? Number)?.toDouble() ?: 0.7,
                 seed = (request.params["seed"] as? Number)?.toInt() ?: 0,
                 holdGpuEglContext = false,
+                engineOwner = request.params[LITERT_PARAM_ENGINE_OWNER] as? String,
                 onDiagnostic = ::diagnostic,
                 onChunk = onChunk,
                 onThinkingChunk = onThinkingChunk
@@ -677,27 +684,28 @@ internal fun LiteRtToolDefinition.toLiteRtOpenApiToolJson(): String =
         put("description", description)
         put(
             "parameters",
-            JSONObject().apply {
-                put("type", "object")
-                put(
-                    "properties",
-                    JSONObject().apply {
-                        parameters.forEach { (parameterName, parameterDescription) ->
-                            put(
-                                parameterName,
-                                JSONObject().apply {
-                                    put("type", "string")
-                                    put("description", parameterDescription)
-                                }
-                            )
+            parameterSchemaJson?.let { raw -> runCatching { JSONObject(raw) }.getOrNull() }
+                ?: JSONObject().apply {
+                    put("type", "object")
+                    put(
+                        "properties",
+                        JSONObject().apply {
+                            parameters.forEach { (parameterName, parameterDescription) ->
+                                put(
+                                    parameterName,
+                                    JSONObject().apply {
+                                        put("type", "string")
+                                        put("description", parameterDescription)
+                                    }
+                                )
+                            }
                         }
-                    }
-                )
-                put(
-                    "required",
-                    JSONArray().apply { requiredParams.forEach { put(it) } }
-                )
-            }
+                    )
+                    put(
+                        "required",
+                        JSONArray().apply { requiredParams.forEach { put(it) } }
+                    )
+                }
         )
     }.toString()
 
@@ -947,6 +955,29 @@ private class LiteRtLmReflectionBridge(private val context: Context) {
         return cached.size
     }
 
+    /** Wait for the owner's conversations to close before releasing only that owner's engines. */
+    suspend fun releaseOwnedEngines(owner: String): Int {
+        val owned = synchronized(engineCacheLock) { engineCache.values.filter { it.key.owner == owner } }
+        var released = 0
+        owned.forEach { cached -> cached.mutex.withLock {
+            val shouldClose = synchronized(engineCacheLock) {
+                if (engineCache[cached.key] === cached) {
+                    cached.closeJob?.cancel()
+                    true
+                } else false
+            }
+            if (shouldClose) {
+                cached.engineClass.getMethod("close").invoke(cached.engine)
+                // Retain a failed close for the owner's explicit cleanup retry.
+                synchronized(engineCacheLock) {
+                    if (engineCache[cached.key] === cached) engineCache.remove(cached.key)
+                }
+                released++
+            }
+        } }
+        return released
+    }
+
     fun runtimeDiagnosticLines(backend: Any): List<String> = buildList {
         add(
             "LiteRT runtime classloaders app=${context.classLoader} " +
@@ -1091,6 +1122,7 @@ private class LiteRtLmReflectionBridge(private val context: Context) {
         temperature: Double,
         seed: Int,
         holdGpuEglContext: Boolean,
+        engineOwner: String?,
         onDiagnostic: (String) -> Unit,
         onChunk: suspend (String) -> Unit,
         onThinkingChunk: suspend (String) -> Unit
@@ -1116,6 +1148,7 @@ private class LiteRtLmReflectionBridge(private val context: Context) {
             cacheDir = cacheDir,
             holdGpuEglContext = holdGpuEglContext,
             speculativeDecodingEnabled = speculativeDecodingEnabled,
+            engineOwner = engineOwner,
             onDiagnostic = onDiagnostic
         )
         try {
@@ -1208,6 +1241,7 @@ private class LiteRtLmReflectionBridge(private val context: Context) {
         cacheDir: File?,
         holdGpuEglContext: Boolean,
         speculativeDecodingEnabled: Boolean,
+        engineOwner: String?,
         onDiagnostic: (String) -> Unit
     ): CachedEngine {
         val key = EngineCacheKey(
@@ -1217,7 +1251,8 @@ private class LiteRtLmReflectionBridge(private val context: Context) {
             maxImages = maxImages,
             audioEnabled = audioEnabled,
             cacheDir = cacheDir?.absolutePath,
-            speculativeDecodingEnabled = speculativeDecodingEnabled
+            speculativeDecodingEnabled = speculativeDecodingEnabled,
+            owner = engineOwner
         )
         synchronized(engineCacheLock) {
             engineCache[key]?.let { cached ->
@@ -1780,7 +1815,8 @@ private class LiteRtLmReflectionBridge(private val context: Context) {
         val maxImages: Int?,
         val audioEnabled: Boolean,
         val cacheDir: String?,
-        val speculativeDecodingEnabled: Boolean
+        val speculativeDecodingEnabled: Boolean,
+        val owner: String?
     )
 
     private class CachedEngine(
@@ -1806,6 +1842,7 @@ private class LiteRtLmReflectionBridge(private val context: Context) {
             contextSize: Int,
             mtpEnabled: Boolean
         ): Boolean {
+            if (owner != null) return false
             val requestedFile = File(model.path)
             val cachedFile = File(modelPath)
             val modelMatches = modelPath == requestedFile.absolutePath ||

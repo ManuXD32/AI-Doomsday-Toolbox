@@ -129,10 +129,7 @@ private const val LITERT_CONTEXT_USER_MIN = 512
 private const val LITERT_CONTEXT_USER_MAX = 131_072
 private val LiteRtEmbeddingBlue = Color(0xFF2F80ED)
 
-private val STABLE_AUDIO_MODEL_TYPES = setOf(
-    ModelType.LITERT_AUDIO_DIT,
-    ModelType.LITERT_AUDIO_COMPONENT
-)
+private val STABLE_AUDIO_MODEL_TYPES = com.example.llamadroid.data.model.ModelManagerModelTypes.liteRtAudio.toSet()
 
 private fun isLiteRtProgressKey(key: String): Boolean {
     if (key.startsWith(LITERT_PROGRESS_PREFIX)) return true
@@ -176,7 +173,7 @@ fun LiteRtModelsScreen(navController: NavController, initialTab: String? = null)
         )
     }
     val modelRepository = remember { ModelRepository(context, db.modelDao()) }
-    val managedModelsFlow = remember(modelRepository) { modelRepository.getModelManagerModels() }
+    val managedModelsFlow = remember(modelRepository) { modelRepository.getLiteRtAudioModels() }
     val managedModels by managedModelsFlow.collectAsState(initial = emptyList())
     val stableAudioModels = remember(managedModels) {
         managedModels.filter { model ->
