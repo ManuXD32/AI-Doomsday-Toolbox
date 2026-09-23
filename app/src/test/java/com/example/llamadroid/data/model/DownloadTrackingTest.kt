@@ -1,5 +1,7 @@
 package com.example.llamadroid.data.model
 
+import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_ACTIVE
+import com.example.llamadroid.data.db.DownloadTaskEntity
 import com.example.llamadroid.data.db.ModelType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -8,6 +10,34 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DownloadTrackingTest {
+
+    @Test
+    fun `concurrent task rows keep immutable identity and order while progress timestamps change`() {
+        val tasks = listOf(
+            downloadTask("repo-a-one", "repo-a", "one.gguf", createdAt = 100L),
+            downloadTask("repo-a-two", "repo-a", "two.gguf", createdAt = 200L),
+            downloadTask("repo-a-three", "repo-a", "three.gguf", createdAt = 300L),
+            downloadTask("repo-a-shared", "repo-a", "shared.gguf", createdAt = 400L),
+            downloadTask("repo-b-shared", "repo-b", "shared.gguf", createdAt = 500L)
+        )
+        val initialRows = tasks.stableDownloadTaskOrder().map { Triple(it.id, it.filename, it.repoId) }
+        val progressed = tasks.mapIndexed { index, task ->
+            task.copy(
+                bytesDownloaded = (index + 1L) * 100L,
+                updatedAt = 10_000L - index
+            )
+        }
+
+        assertEquals(initialRows, progressed.stableDownloadTaskOrder().map {
+            Triple(it.id, it.filename, it.repoId)
+        })
+        assertEquals(
+            listOf("repo-b-shared", "repo-a-shared", "repo-a-three", "repo-a-two", "repo-a-one"),
+            initialRows.map { it.first }
+        )
+        assertEquals(0.25f, mapOf("repo-a-shared" to 0.25f).progressForDownloadTask(tasks[3]) ?: -1f)
+        assertEquals(0.75f, mapOf("repo-b-shared" to 0.75f).progressForDownloadTask(tasks[4]) ?: -1f)
+    }
 
     @Test
     fun `progress holder tracks exact task filenames independently`() {
@@ -138,4 +168,22 @@ class DownloadTrackingTest {
 
         PendingDownloadHolder.removePending(progressKey)
     }
+
+    private fun downloadTask(
+        id: String,
+        repoId: String,
+        filename: String,
+        createdAt: Long,
+    ) = DownloadTaskEntity(
+        id = id,
+        url = "https://example.invalid/$filename",
+        destPath = "/tmp/$id/$filename",
+        filename = filename,
+        repoId = repoId,
+        progressKey = id,
+        modelType = ModelType.LLM.name,
+        status = DOWNLOAD_TASK_STATUS_ACTIVE,
+        createdAt = createdAt,
+        updatedAt = createdAt
+    )
 }

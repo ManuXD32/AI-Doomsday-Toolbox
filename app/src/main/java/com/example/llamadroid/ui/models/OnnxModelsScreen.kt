@@ -80,9 +80,13 @@ import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_ACTIVE
+import com.example.llamadroid.data.db.DownloadTaskEntity
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.DownloadProgressHolder
+import com.example.llamadroid.data.model.progressForDownloadTask
+import com.example.llamadroid.data.model.stableDownloadTaskOrder
 import com.example.llamadroid.data.model.ModelLibraryManager
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.data.model.library.ModelFamily
@@ -120,6 +124,17 @@ import kotlin.math.roundToInt
 
 private const val ONNX_IMPORT_SOURCE_MEMBER_LIMIT = 512
 
+private val ONNX_DOWNLOAD_MODEL_TYPES = listOf(
+    ModelType.ONNX_IMAGE_GEN,
+    ModelType.ONNX_TTS,
+    ModelType.ONNX_BACKGROUND_REMOVAL,
+    ModelType.ONNX_IMAGE_UPSCALER
+)
+
+private fun isOnnxDownloadTask(task: DownloadTaskEntity): Boolean =
+    task.modelType in ONNX_DOWNLOAD_MODEL_TYPES.map { it.name } ||
+        task.artifactFamily == ModelFamily.ONNX.storedValue
+
 private data class OnnxImportSourceMember(
     val relativePath: String
 )
@@ -154,6 +169,15 @@ fun OnnxModelsScreen(navController: NavController, initialTab: String? = null) {
     }
     val downloadProgress by DownloadProgressHolder.progress.collectAsState()
     val downloadStatus by DownloadProgressHolder.status.collectAsState()
+    val onnxDownloadTypeNames = remember { ONNX_DOWNLOAD_MODEL_TYPES.map { it.name } }
+    val persistedOnnxTasks by db.downloadTaskDao()
+        .observeByModelTypes(onnxDownloadTypeNames)
+        .collectAsState(initial = emptyList())
+    val activeOnnxTasks = remember(persistedOnnxTasks) {
+        persistedOnnxTasks
+            .filter { it.status == DOWNLOAD_TASK_STATUS_ACTIVE && isOnnxDownloadTask(it) }
+            .stableDownloadTaskOrder()
+    }
     val onnxDownloads = remember(downloadProgress) { downloadProgress.filterKeys { it.startsWith("onnx:") } }
     val activeOnnxDownloads = remember(onnxDownloads) {
         onnxDownloads.filterValues { it == DownloadProgressHolder.INDETERMINATE || it in 0f..0.999f }
@@ -534,9 +558,9 @@ fun OnnxModelsScreen(navController: NavController, initialTab: String? = null) {
                     text = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(stringResource(R.string.onnx_models_tab_downloading))
-                            if (activeOnnxDownloads.isNotEmpty()) {
+                            if (activeOnnxTasks.isNotEmpty()) {
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Badge { Text("${activeOnnxDownloads.size}") }
+                                Badge { Text("${activeOnnxTasks.size}") }
                             }
                         }
                     }
@@ -556,13 +580,9 @@ fun OnnxModelsScreen(navController: NavController, initialTab: String? = null) {
                     onSourceRequest = { sourceAsset = installedAssetForModel(it) }
                 )
                 1 -> DownloadingOnnxModelsTab(
-                    downloadProgress = activeOnnxDownloads,
+                    downloadTasks = activeOnnxTasks,
+                    downloadProgress = downloadProgress,
                     downloadStatus = downloadStatus,
-                    onCancel = { key ->
-                        val filename = DownloadProgressHolder.getFilename(key) ?: key.removePrefix("onnx:")
-                        com.example.llamadroid.service.DownloadService.cancelDownload(context, filename)
-                        DownloadProgressHolder.removeProgress(key)
-                    }
                 )
                 else -> CatalogOnnxModelsTab(
                     selectedProvider = selectedProvider,
@@ -807,11 +827,11 @@ private fun InstalledOnnxModelsTab(
 
 @Composable
 private fun DownloadingOnnxModelsTab(
+    downloadTasks: List<DownloadTaskEntity>,
     downloadProgress: Map<String, Float>,
-    downloadStatus: Map<String, String>,
-    onCancel: (String) -> Unit
+    downloadStatus: Map<String, String>
 ) {
-    val items = downloadProgress.entries.sortedBy { it.key }
+    val context = androidx.compose.ui.platform.LocalContext.current
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -819,17 +839,12 @@ private fun DownloadingOnnxModelsTab(
     ) {
         item {
             DownloadTaskSection(
-                modelTypes = listOf(
-                    ModelType.ONNX_IMAGE_GEN,
-                    ModelType.ONNX_TTS,
-                    ModelType.ONNX_BACKGROUND_REMOVAL,
-                    ModelType.ONNX_IMAGE_UPSCALER
-                ),
-                includeTask = { it.id.startsWith("onnx:") },
+                modelTypes = ONNX_DOWNLOAD_MODEL_TYPES,
+                includeTask = { task -> task.status != DOWNLOAD_TASK_STATUS_ACTIVE && isOnnxDownloadTask(task) },
                 artifactFamily = com.example.llamadroid.data.model.library.ModelFamily.ONNX
             )
         }
-        if (items.isEmpty()) {
+        if (downloadTasks.isEmpty()) {
             item {
                 Box(
                     modifier = Modifier
@@ -844,10 +859,14 @@ private fun DownloadingOnnxModelsTab(
                 }
             }
         }
-        items(items, key = { it.key }) { (key, progress) ->
-            val modelId = DownloadProgressHolder.getFilename(key) ?: key.removePrefix("onnx:")
-            val catalogEntry = OnnxCatalog.findByLegacyOrStableId(modelId)
-            val status = downloadStatus[key]
+        items(downloadTasks, key = { it.id }) { task ->
+            val catalogEntry = OnnxCatalog.findByLegacyOrStableId(task.filename)
+            val progress = downloadProgress.progressForDownloadTask(task)
+                ?: task.totalBytes?.takeIf { it > 0L }?.let {
+                    (task.bytesDownloaded.toFloat() / it.toFloat()).coerceIn(0f, 0.999f)
+                }
+                ?: DownloadProgressHolder.INDETERMINATE
+            val status = downloadStatus[task.progressKey]
             OnnxManagerCard(accentColor = MaterialTheme.colorScheme.primary) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
@@ -857,12 +876,21 @@ private fun DownloadingOnnxModelsTab(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                catalogEntry?.title ?: modelId,
+                                catalogEntry?.title ?: task.filename,
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
+                            if (task.repoId.isNotBlank()) {
+                                Text(
+                                    task.repoId,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                             Spacer(modifier = Modifier.height(6.dp))
                             catalogEntry?.let {
                                 Text(
@@ -875,7 +903,15 @@ private fun DownloadingOnnxModelsTab(
                                 )
                             }
                         }
-                        OutlinedButton(onClick = { onCancel(key) }) {
+                        OutlinedButton(
+                            onClick = {
+                                com.example.llamadroid.service.DownloadService.cancelDownload(
+                                    context,
+                                    task.filename,
+                                    task.id
+                                )
+                            }
+                        ) {
                             Text(stringResource(R.string.action_cancel))
                         }
                     }
@@ -914,16 +950,24 @@ private fun DownloadingOnnxModelsTab(
                         }
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    LinearProgressIndicator(
-                        progress = { progress.coerceIn(0f, 1f) },
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    if (progress == DownloadProgressHolder.INDETERMINATE) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    } else {
+                        LinearProgressIndicator(
+                            progress = { progress.coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        stringResource(
-                            R.string.onnx_models_download_progress,
-                            (progress.coerceIn(0f, 1f) * 100f).roundToInt()
-                        ),
+                        if (progress == DownloadProgressHolder.INDETERMINATE) {
+                            stringResource(R.string.models_downloading)
+                        } else {
+                            stringResource(
+                                R.string.onnx_models_download_progress,
+                                (progress.coerceIn(0f, 1f) * 100f).roundToInt()
+                            )
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

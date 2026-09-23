@@ -96,6 +96,118 @@ class SdModelSupportTest {
     }
 
     @Test
+    fun `qwen image 21 exposes image editing capability and vision requirement`() {
+        val expectedCapabilities = buildSdCapabilities(
+            SD_CAPABILITY_TXT2IMG,
+            SD_CAPABILITY_IMG2IMG
+        )
+        val spec = resolveSdFamilySpec(SdModelFamily.QWEN_IMAGE, "2.1")
+
+        assertEquals(expectedCapabilities, defaultCapabilitiesForFamily(
+            SdModelFamily.QWEN_IMAGE,
+            ModelType.SD_DIFFUSION,
+            "2.1"
+        ))
+        assertEquals(expectedCapabilities, spec.defaultCapabilities)
+        assertTrue(SdComponentRole.LLM in spec.requiredRoles)
+        assertTrue(SdComponentRole.VAE in spec.requiredRoles)
+        assertTrue(SdComponentRole.LLM_VISION in spec.optionalRoles)
+        assertTrue(spec.requiresVisionForImg2Img)
+    }
+
+    @Test
+    fun `qwen image support rows match normalized and legacy 21 profiles`() {
+        val normalized = ModelEntity(
+            filename = "Qwen3VL-8B-Instruct-Q4_K_M.gguf",
+            path = "/models/Qwen3VL-8B-Instruct-Q4_K_M.gguf",
+            sizeBytes = 1024L,
+            type = ModelType.SD_LLM,
+            repoId = "Qwen/Qwen3-VL-8B-Instruct-GGUF",
+            sdFamily = SdModelFamily.QWEN_IMAGE.storedValue,
+            sdVariant = "2.1",
+            sdCompatProfiles = "qwen_image:2.1"
+        )
+        val legacy = normalized.copy(sdCompatProfiles = "qwen_image:qwen_image_2.1")
+        val legacyMain = normalized.copy(
+            type = ModelType.SD_DIFFUSION,
+            sdVariant = "qwen_image_2.1"
+        )
+        val unrelated = ModelEntity(
+            filename = "llama-3.1.gguf",
+            path = "/models/llama-3.1.gguf",
+            sizeBytes = 1024L,
+            type = ModelType.LLM,
+            repoId = "local/llama"
+        )
+        val explicitlyScoped = unrelated.copy(
+            sdFamily = SdModelFamily.QWEN_IMAGE.storedValue,
+            sdVariant = "2.1"
+        )
+
+        assertTrue(normalized.matchesSdFamily(SdModelFamily.QWEN_IMAGE, "2.1"))
+        assertTrue(legacy.matchesSdFamily(SdModelFamily.QWEN_IMAGE, "2.1"))
+        assertEquals("2.1", legacyMain.resolvedSdFamily().second)
+        assertTrue(resolveSdFamilySpec(SdModelFamily.QWEN_IMAGE, legacyMain.sdVariant).requiresVisionForImg2Img)
+        assertFalse(unrelated.matchesSdFamily(SdModelFamily.QWEN_IMAGE, "2.1"))
+        assertTrue(explicitlyScoped.matchesSdFamily(SdModelFamily.QWEN_IMAGE, "2.1"))
+    }
+
+    @Test
+    fun `qwen image 21 excludes older generic VAE and vision components`() {
+        val olderVae = ModelEntity(
+            filename = "qwen_image_vae.safetensors",
+            path = "/models/qwen_image_vae.safetensors",
+            sizeBytes = 1024L,
+            type = ModelType.SD_VAE,
+            repoId = "legacy/qwen-image",
+            sdFamily = SdModelFamily.QWEN_IMAGE.storedValue,
+            sdCompatProfiles = SdModelFamily.QWEN_IMAGE.storedValue
+        )
+        val versionedVae = olderVae.copy(
+            filename = "qwen_image_2.1_vae_bf16.safetensors",
+            sdVariant = "2.1",
+            sdCompatProfiles = "qwen_image:2.1"
+        )
+        val genericProjector = olderVae.copy(
+            filename = "mmproj-qwen2.5-vl.gguf",
+            type = ModelType.MMPROJ
+        )
+
+        assertFalse(olderVae.matchesSdFamily(SdModelFamily.QWEN_IMAGE, "2.1"))
+        assertFalse(genericProjector.matchesSdFamily(SdModelFamily.QWEN_IMAGE, "2.1"))
+        assertTrue(versionedVae.matchesSdFamily(SdModelFamily.QWEN_IMAGE, "2.1"))
+        assertTrue(olderVae.matchesSdFamily(SdModelFamily.QWEN_IMAGE, null))
+        val manuallyDownloadedVae = olderVae.copy(
+            filename = "qwen_image_2.1_vae_bf16.safetensors",
+            repoId = "Comfy-Org/Qwen-Image-2.1",
+            sdFamily = null,
+            sdCompatProfiles = null
+        )
+        assertTrue(manuallyDownloadedVae.matchesSdFamily(SdModelFamily.QWEN_IMAGE, "2.1"))
+    }
+
+    @Test
+    fun `qwen image variant is inferred for support artifacts`() {
+        val inferred = inferSdFamily(
+            type = ModelType.MMPROJ,
+            repoId = "Qwen/Qwen3-VL-8B-Instruct-GGUF",
+            filename = "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"
+        )
+
+        // The projector's repository name alone is not an image-generation
+        // family marker. A curated row supplies explicit Qwen metadata.
+        assertEquals(null, inferred.first)
+        assertEquals(null, inferred.second)
+        val qwen = inferSdFamily(
+            type = ModelType.MMPROJ,
+            repoId = "leejet/Qwen-Image-2.1-GGUF",
+            filename = "mmproj-qwen_image_2.1.gguf"
+        )
+        assertEquals(SdModelFamily.QWEN_IMAGE, qwen.first)
+        assertEquals("2.1", qwen.second)
+    }
+
+    @Test
     fun `compat matching honors explicit compat profiles`() {
         val model = ModelEntity(
             filename = "qwen-llm.gguf",

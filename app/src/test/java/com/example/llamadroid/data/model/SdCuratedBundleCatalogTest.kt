@@ -23,6 +23,31 @@ class SdCuratedBundleCatalogTest {
         assertTrue("photo-upscale-2x" in ids)
         assertTrue("photo-upscale-4x" in ids)
         assertTrue("anime-upscale-4x" in ids)
+        assertTrue("qwen-image-21-q4-vision" in ids)
+    }
+
+    @Test
+    fun qwenImage21BundleHasPinnedFullVisionContract() {
+        val bundle = requireNotNull(SdCuratedBundleCatalog.byId("qwen-image-21-q4-vision"))
+        assertEquals(4, bundle.files.size)
+        assertEquals(
+            "29f9c83c249ff0292fb2943fceddfa2319b446601866c82a4f8be062abea72c2",
+            bundle.files.single { it.componentRole == "diffusion" }.sha256
+        )
+        val text = bundle.files.single { it.componentRole == "llm" }
+        assertEquals(ModelType.SD_LLM, text.modelType)
+        assertTrue(text.sizeIsApproximate)
+        val vision = bundle.files.single { it.componentRole == "llm_vision" }
+        assertEquals(ModelType.MMPROJ, vision.modelType)
+        assertEquals("c6ba85508d82f42590e6eb77d5340369ab6fecf107a7561d809523d8aa5f3bfd", vision.sha256)
+        assertEquals(ModelType.SD_VAE, bundle.files.single { it.componentRole == "vae" }.modelType)
+        assertTrue(bundle.files.all { it.sdCompatProfiles == "qwen_image:2.1" })
+        assertTrue(bundle.files.all { it.sdFamily == "qwen_image" && it.sdVariant == "2.1" })
+        assertEquals(
+            setOf("--diffusion-model", "--llm", "--llm_vision", "--vae"),
+            bundle.commandContract?.requiredFlags,
+        )
+        assertTrue(bundle.commandContract?.supportsCpuOffload == true)
     }
 
 

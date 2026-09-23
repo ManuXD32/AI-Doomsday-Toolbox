@@ -113,8 +113,10 @@ enum class SdComponentRole(val compatToken: String) {
             ModelType.SD_CLIP_VISION -> CLIP_VISION
             ModelType.SD_IP_ADAPTER -> IP_ADAPTER
             ModelType.SD_UPSCALER -> UPSCALER
-            ModelType.LLM -> LLM
-            ModelType.VISION_PROJECTOR -> LLM_VISION
+            ModelType.LLM,
+            ModelType.SD_LLM -> LLM
+            ModelType.VISION_PROJECTOR,
+            ModelType.MMPROJ -> LLM_VISION
             else -> null
         }
     }
@@ -152,7 +154,14 @@ data class SdModelFamilySpec(
     val supportsChromaDisableDitMask: Boolean = false,
     val supportsIpAdapter: Boolean = false,
     /** Three-conditioning image CFG is an editing-model capability, not generic img2img. */
-    val supportsImgCfgScale: Boolean = false
+    val supportsImgCfgScale: Boolean = false,
+    /**
+     * Some reference-image pipelines need a vision projector only when an
+     * input image is supplied. Qwen Image 2.1 is such a pipeline: text-only
+     * generation uses the text encoder, while image editing also needs the
+     * matching Qwen3-VL mmproj.
+     */
+    val requiresVisionForImg2Img: Boolean = false
 )
 
 fun String?.parseSdCompatProfiles(): Set<String> =
@@ -258,7 +267,11 @@ fun ModelEntity.resolveSdFamilySpec(): SdModelFamilySpec? {
 
 fun ModelEntity.sdCompatProfileTokens(): Set<String> = sdCompatProfiles.parseSdCompatProfiles()
 
+private fun isQwenImage21Variant(value: String?): Boolean =
+    value?.trim()?.lowercase() in setOf("2.1", "qwen_image_2.1", "qwen-image-2.1")
+
 fun ModelEntity.sdVariantToken(): String? = sdVariant?.trim()?.ifBlank { null }?.lowercase()
+    ?.let { if (isQwenImage21Variant(it)) "2.1" else it }
 
 fun ModelEntity.effectiveSdCompatProfiles(): Set<String> {
     val inferred = inferSdFamily(type, repoId, filename)
@@ -272,11 +285,30 @@ fun ModelEntity.effectiveSdCompatProfiles(): Set<String> {
         family = family,
         variant = variant
     )
-    return resolved.parseSdCompatProfiles()
+    val profiles = resolved.parseSdCompatProfiles()
+    // Support rows are intentionally not globally Qwen-compatible. Curated
+    // rows carry an explicit family, while a custom row may opt into the same
+    // family through its persisted metadata or an unambiguous Qwen Image
+    // repository/filename inference.
+    val qwenFamilyFallback = family
+        ?.takeIf {
+            sdCompatProfiles.isNullOrBlank() &&
+                type in setOf(
+                    ModelType.SD_VAE, ModelType.LLM, ModelType.SD_LLM,
+                    ModelType.VISION_PROJECTOR, ModelType.MMPROJ
+                ) &&
+                it in setOf(SdModelFamily.QWEN_IMAGE, SdModelFamily.QWEN_IMAGE_EDIT)
+        }
+        ?.let {
+            setOf(if (variant.isNullOrBlank()) it.storedValue else "${it.storedValue}:$variant")
+        }
+        ?: emptySet()
+    return profiles + qwenFamilyFallback
 }
 
 fun ModelEntity.isSdImageSupportModel(): Boolean =
-    type == ModelType.LLM || type == ModelType.VISION_PROJECTOR
+    type == ModelType.LLM || type == ModelType.SD_LLM ||
+        type == ModelType.VISION_PROJECTOR || type == ModelType.MMPROJ
 
 fun ModelEntity.isSdImageMainModel(): Boolean {
     if (type != ModelType.SD_CHECKPOINT && type != ModelType.SD_DIFFUSION) {
@@ -327,7 +359,39 @@ fun ModelEntity.matchesSdVideoFamily(
 
 fun ModelEntity.matchesSdFamily(family: SdModelFamily, variant: String? = null): Boolean {
     val familyTokens = family.compatTokens(variant)
-    return effectiveSdCompatProfiles().any { it in familyTokens }
+    val profiles = effectiveSdCompatProfiles()
+    val requestedVariant = variant?.trim()?.takeIf { it.isNotBlank() }
+    val legacyQwenVariantAlias = if (
+        family == SdModelFamily.QWEN_IMAGE &&
+        isQwenImage21Variant(requestedVariant)
+    ) {
+        // Early 0.981 catalog rows used the model name in the variant token.
+        // Keep those already-installed rows usable after the token was
+        // normalized to the stable `qwen_image:2.1` spelling.
+        "${family.storedValue}:qwen_image_2.1"
+    } else {
+        null
+    }
+    if (family == SdModelFamily.QWEN_IMAGE &&
+        isQwenImage21Variant(requestedVariant) &&
+        type in setOf(
+            ModelType.SD_VAE, ModelType.LLM, ModelType.SD_LLM,
+            ModelType.VISION_PROJECTOR, ModelType.MMPROJ
+        )
+    ) {
+        // The 2.1 VAE is not interchangeable with older Qwen Image weights;
+        // its Qwen3-VL encoder and mmproj are likewise a versioned bundle.
+        return "${family.storedValue}:2.1" in profiles ||
+            (legacyQwenVariantAlias != null && legacyQwenVariantAlias in profiles)
+    }
+    return profiles.any { profile ->
+        profile in familyTokens ||
+            profile == legacyQwenVariantAlias ||
+            // An unknown requested variant may safely use a family-level
+            // component profile. Variant-qualified components remain exact
+            // when the selected main model has a known variant.
+            (requestedVariant == null && profile.substringBefore(':') == family.storedValue)
+    }
 }
 
 fun defaultCompatProfilesFor(type: ModelType): Set<String> = when (type) {
@@ -374,6 +438,7 @@ fun defaultCompatProfilesFor(type: ModelType): Set<String> = when (type) {
         SdModelFamily.HUNYUAN_VIDEO.storedValue
     )
     ModelType.LLM,
+    ModelType.SD_LLM,
     ModelType.VISION_PROJECTOR,
     ModelType.MMPROJ -> setOf(
         SdModelFamily.LTX_VIDEO.storedValue,
@@ -470,6 +535,11 @@ fun inferSdFamily(
                 SdModelFamily.CHECKPOINT to "sd1"
             else -> null to null
         }
+        ModelType.SD_VAE -> when {
+            normalizedHaystack.contains("qwen image 2 1") ->
+                SdModelFamily.QWEN_IMAGE to "2.1"
+            else -> null to null
+        }
         ModelType.SD_DIFFUSION -> when {
             haystack.contains("sd3.5") || haystack.contains("sd3_5") ||
                 haystack.contains("sd3-medium") || haystack.contains("sd3_medium") ||
@@ -497,6 +567,18 @@ fun inferSdFamily(
                 SdModelFamily.ANIMA to inferSdVariant(type, haystack)
             else -> null to null
         }
+        ModelType.LLM,
+        ModelType.SD_LLM,
+        ModelType.VISION_PROJECTOR,
+        ModelType.MMPROJ -> when {
+            haystack.contains("qwen image edit") || haystack.contains("qwen-image-edit") ||
+                haystack.contains("qwen_image_edit") ->
+                SdModelFamily.QWEN_IMAGE_EDIT to inferSdVariant(type, haystack)
+            haystack.contains("qwen image") || haystack.contains("qwen-image") ||
+                haystack.contains("qwen_image") ->
+                SdModelFamily.QWEN_IMAGE to inferSdVariant(type, haystack)
+            else -> null to null
+        }
         else -> null to null
     }
 }
@@ -509,7 +591,12 @@ private fun inferSdVariant(type: ModelType, haystack: String): String? = when (t
         haystack.contains("sd3") -> "sd3"
         else -> null
     }
-    ModelType.SD_DIFFUSION -> when {
+    ModelType.SD_DIFFUSION,
+    ModelType.LLM,
+    ModelType.SD_LLM,
+    ModelType.VISION_PROJECTOR,
+    ModelType.MMPROJ -> when {
+        haystack.contains("qwen") && haystack.contains("image") && haystack.contains("2.1") -> "2.1"
         haystack.contains("sd3.5-large") || haystack.contains("sd3.5_large") -> "sd3_5_large"
         haystack.contains("sd3.5") || haystack.contains("sd3_5") -> "sd3_5"
         haystack.contains("sd3-medium") || haystack.contains("sd3_medium") -> "sd3_medium"
@@ -535,7 +622,8 @@ private fun inferSdVariant(type: ModelType, haystack: String): String? = when (t
 
 fun defaultCapabilitiesForFamily(
     family: SdModelFamily?,
-    type: ModelType
+    type: ModelType,
+    variant: String? = null
 ): String? {
     if (type == ModelType.SD_UPSCALER ||
         type == ModelType.SD_CLIP_VISION ||
@@ -547,10 +635,14 @@ fun defaultCapabilitiesForFamily(
         SdModelFamily.FLUX_1,
         SdModelFamily.CHROMA,
         SdModelFamily.CHROMA_RADIANCE,
-        SdModelFamily.QWEN_IMAGE,
         SdModelFamily.Z_IMAGE,
         SdModelFamily.OVIS_IMAGE,
         SdModelFamily.ANIMA -> buildSdCapabilities(SD_CAPABILITY_TXT2IMG)
+        SdModelFamily.QWEN_IMAGE -> if (isQwenImage21Variant(variant)) {
+            buildSdCapabilities(SD_CAPABILITY_TXT2IMG, SD_CAPABILITY_IMG2IMG)
+        } else {
+            buildSdCapabilities(SD_CAPABILITY_TXT2IMG)
+        }
         SdModelFamily.FLUX_KONTEXT,
         SdModelFamily.FLUX_2,
         SdModelFamily.QWEN_IMAGE_EDIT -> buildSdCapabilities(SD_CAPABILITY_TXT2IMG, SD_CAPABILITY_IMG2IMG)
@@ -693,16 +785,28 @@ fun resolveSdFamilySpec(
         variant = variant,
         cacheArchitecture = SdCacheArchitecture.DIT,
         img2imgInputMode = SdImageInputMode.REFERENCE_IMAGE,
-        defaultCapabilities = buildSdCapabilities(SD_CAPABILITY_TXT2IMG),
-        requiredRoles = setOf(SdComponentRole.LLM),
-        optionalRoles = setOf(
-            SdComponentRole.VAE,
-            SdComponentRole.TAE
-        ),
+        defaultCapabilities = if (isQwenImage21Variant(variant)) {
+            buildSdCapabilities(SD_CAPABILITY_TXT2IMG, SD_CAPABILITY_IMG2IMG)
+        } else {
+            buildSdCapabilities(SD_CAPABILITY_TXT2IMG)
+        },
+        requiredRoles = setOf(SdComponentRole.LLM) +
+            if (isQwenImage21Variant(variant)) {
+                setOf(SdComponentRole.VAE)
+            } else {
+                emptySet()
+            },
+        optionalRoles = setOf(SdComponentRole.TAE) +
+            if (isQwenImage21Variant(variant)) {
+                setOf(SdComponentRole.LLM_VISION)
+            } else {
+                setOf(SdComponentRole.VAE)
+            },
         supportsMmap = true,
         supportsDiffusionFa = true,
         supportsVaeConvDirect = true,
-        supportsFlowShift = true
+        supportsFlowShift = true,
+        requiresVisionForImg2Img = isQwenImage21Variant(variant)
     )
     SdModelFamily.QWEN_IMAGE_EDIT -> SdModelFamilySpec(
         family = family,

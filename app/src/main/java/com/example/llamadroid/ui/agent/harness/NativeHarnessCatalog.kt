@@ -1,7 +1,11 @@
 package com.example.llamadroid.ui.agent.harness
 
+import com.example.llamadroid.harness.harnessFriendlyModelLabel
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
+
+/** Android's legacy global llama-swap setting is not a Harness provider. */
+private const val ANDROID_SYNTHETIC_LLAMA_SWAP_OWNER = "adt-llama-swap"
 
 /** Parsed model catalog data retained by the native settings surface. */
 internal data class HarnessModelCatalogUiResult(
@@ -102,6 +106,97 @@ internal fun parseHarnessModelCatalog(value: JsonObject): HarnessModelCatalogUiR
         defaultModel = default?.string("model"),
         defaultReasoningEffort = default?.string("reasoningEffort")
     )
+}
+
+/**
+ * Project the Android bridge's OpenAI-compatible local model list into the
+ * same provider/model shape used by the Harness catalog. The bridge returns
+ * exact wire IDs (for example `litert:42`); labels are reduced only for UI.
+ */
+internal fun parseHarnessLocalModelCatalog(value: JsonObject): List<HarnessProviderOption> {
+    val rows = value.objectArray("data")
+    return rows
+        .mapNotNull { row ->
+            val id = row.string("id")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val owner = row.string("owned_by")?.takeIf { it.isNotBlank() } ?: "adt-local"
+            Triple(owner, id, row)
+        }
+        // The global Android llama-swap endpoint is an app-level legacy route,
+        // not a provider configured in Harness. User-created llama-swap
+        // providers arrive through `groups` and are intentionally unaffected.
+        .filterNot { (owner, _, _) -> owner == ANDROID_SYNTHETIC_LLAMA_SWAP_OWNER }
+        .groupBy { it.first }
+        .map { (owner, values) ->
+            val providerId = when (owner) {
+                "adt-litert" -> "adt-managed"
+                else -> owner
+            }
+            val providerName = when (owner) {
+                "adt-litert" -> "ADT LiteRT"
+                "adt-llama-server" -> "ADT llama.cpp"
+                "adt-ollama" -> "ADT Ollama"
+                else -> owner
+            }
+            val models = values.map { (_, id, _) -> id }
+            val names = values.associate { (_, id, row) ->
+                id to harnessFriendlyModelLabel(id, row.string("name"))
+            }
+            val contexts = values.associate { (_, id, row) ->
+                id to row.positiveLong(
+                    "contextWindow", "context_window", "context_length", "contextTokens", "context_tokens"
+                )
+            }
+            val outputs = values.associate { (_, id, row) ->
+                id to row.positiveLong(
+                    "maxOutputTokens", "max_output_tokens", "maxTokens", "max_tokens", "n_predict"
+                )
+            }
+            val sources = values.associate { (_, id, row) ->
+                id to (row.string("capabilitySource") ?: if (contexts[id] != null) "detected" else "unknown")
+            }
+            HarnessProviderOption(
+                id = providerId,
+                name = providerName,
+                models = models,
+                modelNames = names,
+                modelContextWindows = contexts,
+                modelMaxOutputTokens = outputs,
+                modelCapabilitySources = sources,
+                configured = true,
+                detail = "Android-managed provider",
+                // Android-owned rows use the native capability editor. DSH
+                // settings remain untouched; the editor writes through the
+                // Android bridge's per-wire-id override store.
+                canEdit = true,
+                canDelete = false,
+            )
+        }
+}
+
+/** Merge bridge-owned providers without flattening them into DSH providers. */
+internal fun mergeHarnessLocalModelProviders(
+    providers: List<HarnessProviderOption>,
+    localProviders: List<HarnessProviderOption>
+): List<HarnessProviderOption> {
+    if (localProviders.isEmpty()) return providers
+    val result = providers.toMutableList()
+    localProviders.forEach { local ->
+        val index = result.indexOfFirst { it.id == local.id }
+        if (index < 0) result += local
+        else {
+            val existing = result[index]
+            val mergedIds = (existing.models + local.models).distinct()
+            result[index] = existing.copy(
+                models = mergedIds,
+                modelNames = existing.modelNames + local.modelNames,
+                modelContextWindows = existing.modelContextWindows + local.modelContextWindows,
+                modelMaxOutputTokens = existing.modelMaxOutputTokens + local.modelMaxOutputTokens,
+                modelCapabilitySources = existing.modelCapabilitySources + local.modelCapabilitySources,
+                detail = existing.detail ?: local.detail,
+            )
+        }
+    }
+    return result
 }
 
 /**

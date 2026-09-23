@@ -81,10 +81,14 @@ import com.example.llamadroid.R
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_ACTIVE
+import com.example.llamadroid.data.db.DownloadTaskEntity
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.db.isStableAudioComponentType
 import com.example.llamadroid.data.model.DownloadProgressHolder
+import com.example.llamadroid.data.model.progressForDownloadTask
+import com.example.llamadroid.data.model.stableDownloadTaskOrder
 import com.example.llamadroid.data.model.LiteRtModelEntity
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.data.model.PendingDownload
@@ -122,7 +126,6 @@ import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.util.Locale
 
 private const val LITERT_PROGRESS_PREFIX = "litert:"
 private const val LITERT_CONTEXT_USER_MIN = 512
@@ -130,13 +133,6 @@ private const val LITERT_CONTEXT_USER_MAX = 131_072
 private val LiteRtEmbeddingBlue = Color(0xFF2F80ED)
 
 private val STABLE_AUDIO_MODEL_TYPES = com.example.llamadroid.data.model.ModelManagerModelTypes.liteRtAudio.toSet()
-
-private fun isLiteRtProgressKey(key: String): Boolean {
-    if (key.startsWith(LITERT_PROGRESS_PREFIX)) return true
-    return STABLE_AUDIO_MODEL_TYPES.any { type ->
-        key.startsWith("${type.name.lowercase(Locale.US)}|")
-    }
-}
 
 private fun isLiteRtDownloadTask(task: com.example.llamadroid.data.db.DownloadTaskEntity): Boolean {
     if (task.id.startsWith(LITERT_PROGRESS_PREFIX) || task.progressKey.startsWith(LITERT_PROGRESS_PREFIX)) return true
@@ -277,10 +273,12 @@ fun LiteRtModelsScreen(navController: NavController, initialTab: String? = null)
         }
     }
 
-    val activeDownloads = progress.count { (key, value) ->
-        isLiteRtProgressKey(key) &&
-            (value == DownloadProgressHolder.INDETERMINATE || value in 0f..0.999f)
+    val activeDownloadTasks = remember(downloadTasks) {
+        downloadTasks
+            .filter { it.status == DOWNLOAD_TASK_STATUS_ACTIVE && isLiteRtDownloadTask(it) }
+            .stableDownloadTaskOrder()
     }
+    val activeDownloads = activeDownloadTasks.size
     val tabs = listOf(
         stringResource(R.string.models_tab_installed),
         stringResource(R.string.models_tab_downloading),
@@ -419,11 +417,7 @@ fun LiteRtModelsScreen(navController: NavController, initialTab: String? = null)
                     1 -> LiteRtDownloadingTab(
                         progress = progress,
                         statuses = statuses,
-                        downloadTasks = downloadTasks,
-                        onCancel = { key ->
-                            val filename = DownloadProgressHolder.getFilename(key) ?: return@LiteRtDownloadingTab
-                            DownloadService.cancelDownload(context, filename, key)
-                        },
+                        downloadTasks = activeDownloadTasks,
                         onOpenAudio = { kind ->
                             navController.navigate(Screen.AudioWorkspace.createRoute(kind))
                         }
@@ -1196,23 +1190,10 @@ private fun stableDoctorRoleName(role: String?): String = when (role) {
 private fun LiteRtDownloadingTab(
     progress: Map<String, Float>,
     statuses: Map<String, String>,
-    downloadTasks: List<com.example.llamadroid.data.db.DownloadTaskEntity>,
-    onCancel: (String) -> Unit,
+    downloadTasks: List<DownloadTaskEntity>,
     onOpenAudio: (String) -> Unit
 ) {
     val context = LocalContext.current
-    val active = progress
-        .filter { (key, value) ->
-            isLiteRtProgressKey(key) &&
-                (value == DownloadProgressHolder.INDETERMINATE || value in 0f..0.999f)
-        }
-        .toSortedMap()
-    val taskByProgressKey = remember(downloadTasks) {
-        downloadTasks
-            .asSequence()
-            .flatMap { task -> sequenceOf(task.progressKey to task, task.id to task) }
-            .toMap()
-    }
 
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
@@ -1229,7 +1210,7 @@ private fun LiteRtDownloadingTab(
         item {
             DownloadTaskSection(
                 modelTypes = listOf(ModelType.LLM) + STABLE_AUDIO_MODEL_TYPES,
-                includeTask = ::isLiteRtDownloadTask,
+                includeTask = { task -> task.status != DOWNLOAD_TASK_STATUS_ACTIVE && isLiteRtDownloadTask(task) },
                 staleRoots = listOf(
                     File(context.noBackupFilesDir, "litert_models"),
                     File(context.filesDir, "models/audio/stable")
@@ -1238,7 +1219,7 @@ private fun LiteRtDownloadingTab(
             )
         }
 
-        if (active.isEmpty()) {
+        if (downloadTasks.isEmpty()) {
             item {
                 EmptyModelState(
                     title = stringResource(R.string.litert_models_downloading_empty),
@@ -1246,20 +1227,23 @@ private fun LiteRtDownloadingTab(
                 )
             }
         } else {
-            items(active.entries.toList(), key = { it.key }) { entry ->
-                val task = taskByProgressKey[entry.key]
-                val pending = PendingDownloadHolder.getPending(entry.key)
+            items(downloadTasks, key = { it.id }) { task ->
+                val pending = PendingDownloadHolder.getPending(task.id)
                 val kind = stableAudioKind(task, pending)
+                val taskProgress = progress.progressForDownloadTask(task)
+                val value = taskProgress
+                    ?: task.totalBytes?.takeIf { it > 0L }?.let {
+                        (task.bytesDownloaded.toFloat() / it.toFloat()).coerceIn(0f, 0.999f)
+                    }
+                    ?: DownloadProgressHolder.INDETERMINATE
                 LiteRtDownloadProgressCard(
-                    repoId = task?.repoId
-                        ?: pending?.repoId
-                        ?: entry.key.removePrefix(LITERT_PROGRESS_PREFIX),
-                    filename = task?.filename
-                        ?: pending?.filename
-                        ?: DownloadProgressHolder.getFilename(entry.key),
-                    progress = entry.value,
-                    status = statuses[entry.key] ?: task?.liteRtDisplayName ?: pending?.liteRtDisplayName,
-                    onCancel = { onCancel(entry.key) },
+                    repoId = task.repoId,
+                    filename = task.filename,
+                    progress = value,
+                    status = statuses[task.progressKey] ?: task.liteRtDisplayName ?: pending?.liteRtDisplayName,
+                    onCancel = {
+                        DownloadService.cancelDownload(context, task.filename, task.id)
+                    },
                     onOpenAudio = kind?.let { { onOpenAudio(it) } }
                 )
             }

@@ -450,14 +450,11 @@ fun NativeHarnessScreen(
                         onAction = onAction,
                         references = referenceCatalog,
                         onReferenceQuery = onReferenceQuery,
-                        onClientCommand = { command ->
-                            when (command) {
-                                "plan", "goal" -> navigateTo(
-                                    HarnessNavigationLocation(selectedProjectId, HarnessSurfaceTab.PLAN),
-                                )
-                                else -> onClientCommand(command)
-                            }
-                        },
+                        // Client commands are executed by the selected Harness session.  In
+                        // particular, `/plan` is a session command that produces a plan-review
+                        // event in Conversation; the Plan tab is only a browser for persisted
+                        // plan artifacts and must not steal the command route.
+                        onClientCommand = onClientCommand,
                     )
                 }
             }

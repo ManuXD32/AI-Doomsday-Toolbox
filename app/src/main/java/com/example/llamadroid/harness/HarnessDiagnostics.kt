@@ -78,7 +78,7 @@ class HarnessDiagnostics(
 
     fun event(sessionId: String?, event: String, status: String, durationMs: Long? = null, errorCode: String? = null) {
         writeSafely {
-            if (event in setOf("connection", "parser", "render", "action", "transcript_action", "workspace_open") &&
+            if (event in setOf("connection", "parser", "render", "action", "transcript_action", "workspace_open", "workspace_registration") &&
                 (status == "failure" || (event != "action" && status == "recovered"))) {
                 runtimeJournal?.recordConnection(
                     event = if (status == "failure") "native_failure" else "native_recovered",

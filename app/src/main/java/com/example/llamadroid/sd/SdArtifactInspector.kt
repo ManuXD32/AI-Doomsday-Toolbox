@@ -1123,8 +1123,10 @@ class SdArtifactInspector {
             ModelType.SD_AUDIO_VAE -> SdArtifactRole.AUDIO_VAE
             ModelType.SD_EMBEDDINGS_CONNECTORS -> SdArtifactRole.EMBEDDINGS_CONNECTORS
             ModelType.SD_MOTION_MODULE -> SdArtifactRole.MOTION_MODULE
-            ModelType.LLM -> SdArtifactRole.LLM
-            ModelType.VISION_PROJECTOR -> SdArtifactRole.LLM_VISION
+            ModelType.LLM,
+            ModelType.SD_LLM -> SdArtifactRole.LLM
+            ModelType.VISION_PROJECTOR,
+            ModelType.MMPROJ -> SdArtifactRole.LLM_VISION
             else -> null
         }
 

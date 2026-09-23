@@ -204,7 +204,9 @@ fun ImageGenScreen(
     }
     val backgroundRemovalModels by db.modelDao().getModelsByType(ModelType.ONNX_BACKGROUND_REMOVAL)
         .collectAsState(initial = emptyList())
-    val imageSupportModels by db.modelDao().getModelsByTypes(listOf(ModelType.LLM, ModelType.VISION_PROJECTOR))
+    val imageSupportModels by db.modelDao().getModelsByTypes(
+        listOf(ModelType.LLM, ModelType.SD_LLM, ModelType.VISION_PROJECTOR, ModelType.MMPROJ)
+    )
         .collectAsState(initial = emptyList())
 
     // Available upscaler models
@@ -506,6 +508,11 @@ fun ImageGenScreen(
                 modelVariant = model.sdVariant,
                 modelLayout = model.sdArtifactLayout
                     ?.let(SdMainLayout::fromStoredValue),
+                mode = when (selectedMode) {
+                    IMAGE_GEN_MODE_IMG2IMG,
+                    IMAGE_GEN_MODE_INPAINT -> SDMode.IMG2IMG
+                    else -> SDMode.TXT2IMG
+                },
                 vaePath = selectedVaePath,
                 taePath = selectedTaePath,
                 clipLPath = selectedClipLPath,
@@ -546,18 +553,25 @@ fun ImageGenScreen(
             SdComponentRole.PHOTOMAKER
         ).filter { it in spec.requiredRoles || it in spec.optionalRoles }
     } ?: emptyList()
+    val requiredComponentRoles = selectedPipeline?.requiredExternalRoles
+        ?: selectedFamilySpec?.requiredRoles.orEmpty()
     val compatibleVaeModels = filterSdComponents(vaeModels, selectedFamily, selectedVariant)
     val compatibleTaeModels = filterSdComponents(taeModels, selectedFamily, selectedVariant)
     val compatibleClipLModels = filterSdComponents(clipLModels, selectedFamily, selectedVariant)
     val compatibleClipGModels = filterSdComponents(clipGModels, selectedFamily, selectedVariant)
     val compatibleT5xxlModels = filterSdComponents(t5xxlModels, selectedFamily, selectedVariant)
     val compatibleLlmModels = filterSdComponents(
-        imageSupportModels.filter { it.type == ModelType.LLM && it.effectiveSdCompatProfiles().isNotEmpty() },
+        imageSupportModels.filter {
+            (it.type == ModelType.LLM || it.type == ModelType.SD_LLM) &&
+                it.effectiveSdCompatProfiles().isNotEmpty()
+        },
         selectedFamily,
         selectedVariant
     )
     val compatibleLlmVisionModels = filterSdComponents(
-        imageSupportModels.filter { it.type == ModelType.VISION_PROJECTOR && it.effectiveSdCompatProfiles().isNotEmpty() },
+        imageSupportModels.filter {
+            it.type == ModelType.VISION_PROJECTOR || it.type == ModelType.MMPROJ
+        }.filter { it.effectiveSdCompatProfiles().isNotEmpty() },
         selectedFamily,
         selectedVariant
     )
@@ -2623,7 +2637,7 @@ fun ImageGenScreen(
                                 models = compatibleVaeModels,
                                 selectedPath = selectedVaePath,
                                 onSelectionChange = { selectedVaePath = it },
-                                allowNone = role !in selectedFamilySpec?.requiredRoles.orEmpty(),
+                                allowNone = role !in requiredComponentRoles,
                                 emptyMessage = stringResource(R.string.imagegen_no_vae_installed)
                             )
                             SdComponentRole.TAE -> SdComponentPickerField(
@@ -2631,7 +2645,7 @@ fun ImageGenScreen(
                                 models = compatibleTaeModels,
                                 selectedPath = selectedTaePath,
                                 onSelectionChange = { selectedTaePath = it },
-                                allowNone = role !in selectedFamilySpec?.requiredRoles.orEmpty(),
+                                allowNone = role !in requiredComponentRoles,
                                 emptyMessage = stringResource(R.string.imagegen_no_tae_installed)
                             )
                             SdComponentRole.CLIP_L -> SdComponentPickerField(
@@ -2639,7 +2653,7 @@ fun ImageGenScreen(
                                 models = compatibleClipLModels,
                                 selectedPath = selectedClipLPath,
                                 onSelectionChange = { selectedClipLPath = it },
-                                allowNone = role !in selectedFamilySpec?.requiredRoles.orEmpty(),
+                                allowNone = role !in requiredComponentRoles,
                                 emptyMessage = stringResource(R.string.imagegen_no_clip_l)
                             )
                             SdComponentRole.CLIP_G -> SdComponentPickerField(
@@ -2647,7 +2661,7 @@ fun ImageGenScreen(
                                 models = compatibleClipGModels,
                                 selectedPath = selectedClipGPath,
                                 onSelectionChange = { selectedClipGPath = it },
-                                allowNone = role !in selectedFamilySpec?.requiredRoles.orEmpty(),
+                                allowNone = role !in requiredComponentRoles,
                                 emptyMessage = stringResource(R.string.imagegen_no_clip_g)
                             )
                             SdComponentRole.T5XXL -> SdComponentPickerField(
@@ -2655,7 +2669,7 @@ fun ImageGenScreen(
                                 models = compatibleT5xxlModels,
                                 selectedPath = selectedT5xxlPath,
                                 onSelectionChange = { selectedT5xxlPath = it },
-                                allowNone = role !in selectedFamilySpec?.requiredRoles.orEmpty(),
+                                allowNone = role !in requiredComponentRoles,
                                 emptyMessage = stringResource(R.string.imagegen_no_t5xxl)
                             )
                             SdComponentRole.LLM -> SdComponentPickerField(
@@ -2663,7 +2677,7 @@ fun ImageGenScreen(
                                 models = compatibleLlmModels,
                                 selectedPath = selectedLlmPath,
                                 onSelectionChange = { selectedLlmPath = it },
-                                allowNone = role !in selectedFamilySpec?.requiredRoles.orEmpty(),
+                                allowNone = role !in requiredComponentRoles,
                                 emptyMessage = stringResource(R.string.imagegen_no_llm)
                             )
                             SdComponentRole.LLM_VISION -> SdComponentPickerField(
@@ -2671,7 +2685,7 @@ fun ImageGenScreen(
                                 models = compatibleLlmVisionModels,
                                 selectedPath = selectedLlmVisionPath,
                                 onSelectionChange = { selectedLlmVisionPath = it },
-                                allowNone = role !in selectedFamilySpec?.requiredRoles.orEmpty(),
+                                allowNone = role !in requiredComponentRoles,
                                 emptyMessage = stringResource(R.string.imagegen_no_llm_vision)
                             )
                             SdComponentRole.PHOTOMAKER -> SdComponentPickerField(
@@ -2679,7 +2693,7 @@ fun ImageGenScreen(
                                 models = compatiblePhotoMakerModels,
                                 selectedPath = selectedPhotoMakerPath,
                                 onSelectionChange = { selectedPhotoMakerPath = it },
-                                allowNone = role !in selectedFamilySpec?.requiredRoles.orEmpty(),
+                                allowNone = role !in requiredComponentRoles,
                                 emptyMessage = stringResource(R.string.imagegen_no_photomaker)
                             )
                             else -> Unit

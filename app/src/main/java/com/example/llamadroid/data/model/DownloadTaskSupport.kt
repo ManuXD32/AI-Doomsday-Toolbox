@@ -10,6 +10,23 @@ import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.onnx.OnnxStorage
 import java.io.File
 
+/**
+ * Returns task rows in an order owned by immutable task metadata.
+ *
+ * Download progress updates [DownloadTaskEntity.updatedAt], so that field is
+ * deliberately excluded from the presentation order. The ID tie-breaker
+ * keeps rows deterministic when several tasks are created in one millisecond.
+ */
+fun Iterable<DownloadTaskEntity>.stableDownloadTaskOrder(): List<DownloadTaskEntity> =
+    sortedWith(
+        compareByDescending<DownloadTaskEntity> { it.createdAt }
+            .thenBy { it.id }
+    )
+
+/** Joins a live progress value to the persisted task's exact progress key. */
+fun Map<String, Float>.progressForDownloadTask(task: DownloadTaskEntity): Float? =
+    this[task.progressKey]
+
 fun PendingDownload.toDownloadTaskEntity(
     downloadId: String,
     url: String,

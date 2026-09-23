@@ -76,6 +76,74 @@ class SdPipelineResolverTest {
     }
 
     @Test
+    fun `qwen image 21 text generation requires its VAE and text encoder`() {
+        val pipeline = resolveValidatedSdPipeline(
+            SDConfig(
+                modelPath = "/models/qwen_image_2.1-Q4_K.gguf",
+                modelFamily = SdModelFamily.QWEN_IMAGE.storedValue,
+                modelVariant = "2.1",
+                modelLayout = SdMainLayout.STANDALONE_DIFFUSION,
+                prompt = "a lighthouse",
+                outputPath = "/tmp/out.png",
+                vaePath = "/models/qwen-image-vae.safetensors",
+                llmPath = "/models/Qwen3VL-8B-Instruct-Q4_K_M.gguf"
+            )
+        )
+
+        assertEquals(
+            setOf(SdComponentRole.LLM, SdComponentRole.VAE),
+            pipeline.requiredExternalRoles
+        )
+        val args = buildSdCommandArgs(
+            SDConfig(
+                modelPath = "/models/qwen_image_2.1-Q4_K.gguf",
+                modelFamily = SdModelFamily.QWEN_IMAGE.storedValue,
+                modelVariant = "2.1",
+                modelLayout = SdMainLayout.STANDALONE_DIFFUSION,
+                prompt = "a lighthouse",
+                outputPath = "/tmp/out.png",
+                vaePath = "/models/qwen-image-vae.safetensors",
+                llmPath = "/models/Qwen3VL-8B-Instruct-Q4_K_M.gguf"
+            ),
+            pipeline,
+            SdBinaryCapabilities.ALLOW_ALL
+        )
+        assertTrue(args.containsAll(listOf("--diffusion-model", "--llm", "--vae")))
+        assertFalse(args.contains("--llm_vision"))
+    }
+
+    @Test
+    fun `qwen image 21 image editing requires and emits the matching mmproj`() {
+        val base = SDConfig(
+            mode = com.example.llamadroid.service.SDMode.IMG2IMG,
+            modelPath = "/models/qwen_image_2.1-Q4_K.gguf",
+            modelFamily = SdModelFamily.QWEN_IMAGE.storedValue,
+            modelVariant = "2.1",
+            modelLayout = SdMainLayout.STANDALONE_DIFFUSION,
+            prompt = "edit this image",
+            outputPath = "/tmp/out.png",
+            initImage = "/tmp/input.png",
+            vaePath = "/models/qwen-image-vae.safetensors",
+            llmPath = "/models/Qwen3VL-8B-Instruct-Q4_K_M.gguf"
+        )
+        val missingVision = resolveSdPipeline(base)
+        assertFalse(missingVision.isValid)
+        assertTrue(
+            missingVision.blockingIssues.any {
+                it.role == SdComponentRole.LLM_VISION
+            }
+        )
+
+        val withVision = base.copy(
+            llmVisionPath = "/models/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"
+        )
+        val pipeline = resolveValidatedSdPipeline(withVision)
+        assertTrue(SdComponentRole.LLM_VISION in pipeline.requiredExternalRoles)
+        val args = buildSdCommandArgs(withVision, pipeline, SdBinaryCapabilities.ALLOW_ALL)
+        assertTrue(args.containsAll(listOf("--llm_vision", "-r", "/tmp/input.png")))
+    }
+
+    @Test
     fun `full SD3 only requires encoders absent from the inspected artifact`() {
         val config = SDConfig(
             modelPath = "/models/sd3-full.safetensors",

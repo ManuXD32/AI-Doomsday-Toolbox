@@ -45,9 +45,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_ACTIVE
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.DownloadProgressHolder
+import com.example.llamadroid.data.model.progressForDownloadTask
+import com.example.llamadroid.data.model.stableDownloadTaskOrder
 import com.example.llamadroid.data.model.ModelLibraryManager
 import com.example.llamadroid.data.model.ModelManagerModelTypes
 import com.example.llamadroid.data.model.ModelRepository
@@ -116,7 +119,6 @@ fun ModelManagerScreen(navController: NavController) {
         stringResource(R.string.models_tab_discover)
     )
     
-    val progressMap by viewModel.downloadProgress.collectAsStateWithLifecycle()
     val installedModelCount by viewModel.installedModels.collectAsStateWithLifecycle()
     val managerDownloadTypeNames = remember {
         ModelManagerModelTypes.llama.map { it.name }
@@ -124,12 +126,11 @@ fun ModelManagerScreen(navController: NavController) {
     val managerDownloadTasks by db.downloadTaskDao()
         .observeByModelTypes(managerDownloadTypeNames)
         .collectAsStateWithLifecycle(initialValue = emptyList())
-    val managerProgressKeys = remember(managerDownloadTasks) {
-        managerDownloadTasks.map { it.progressKey }.toSet()
-    }
-    val activeDownloads = progressMap.count {
-        it.key in managerProgressKeys &&
-            (it.value == DownloadProgressHolder.INDETERMINATE || it.value in 0f..0.999f)
+    val activeDownloads = managerDownloadTasks.count {
+        it.status == DOWNLOAD_TASK_STATUS_ACTIVE &&
+            it.liteRtDisplayName == null &&
+            it.artifactFamily != ModelFamily.LITERT.storedValue &&
+            !it.progressKey.startsWith("litert:")
     }
 
     AppScreenScaffold(
@@ -1133,12 +1134,18 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
     val storedManagerTasks by db.downloadTaskDao()
         .observeByModelTypes(managerDownloadTypeNames)
         .collectAsStateWithLifecycle(initialValue = emptyList())
-    val managerProgressKeys = remember(storedManagerTasks) {
-        storedManagerTasks.map { it.progressKey }.toSet()
-    }
-    val activeDownloads = progressMap.filter {
-        it.key in managerProgressKeys &&
-            (it.value == DownloadProgressHolder.INDETERMINATE || it.value in 0f..0.999f)
+    // Room is the source of row identity. The in-memory holder is only a live
+    // progress overlay; using its map key as the Compose identity lets rows
+    // exchange labels when several files share a repository or filename.
+    val activeDownloads = remember(storedManagerTasks) {
+        storedManagerTasks
+            .filter {
+                it.status == DOWNLOAD_TASK_STATUS_ACTIVE &&
+                    it.liteRtDisplayName == null &&
+                    it.artifactFamily != ModelFamily.LITERT.storedValue &&
+                    !it.progressKey.startsWith("litert:")
+            }
+            .stableDownloadTaskOrder()
     }
 
     LazyColumn(
@@ -1150,7 +1157,13 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
                 // The exact model-type query keeps Whisper and its separate VAD
                 // assets out without relying on task-id naming conventions.
                 modelTypes = modelTypes,
-                includeTask = { task -> task.modelType in modelTypes.map { it.name } }
+                includeTask = { task ->
+                    task.status != DOWNLOAD_TASK_STATUS_ACTIVE &&
+                        task.modelType in modelTypes.map { it.name } &&
+                        task.liteRtDisplayName == null &&
+                        task.artifactFamily != ModelFamily.LITERT.storedValue &&
+                        !task.progressKey.startsWith("litert:")
+                }
             )
         }
 
@@ -1184,7 +1197,12 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
                 }
             }
         } else {
-            items(activeDownloads.toList()) { (repoId, progress) ->
+            items(activeDownloads, key = { it.id }) { task ->
+                val progress = progressMap.progressForDownloadTask(task)
+                    ?: task.totalBytes?.takeIf { it > 0L }?.let {
+                        (task.bytesDownloaded.toFloat() / it.toFloat()).coerceIn(0f, 0.999f)
+                    }
+                    ?: DownloadProgressHolder.INDETERMINATE
                 val isIndeterminate = progress == DownloadProgressHolder.INDETERMINATE
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -1200,13 +1218,13 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    repoId.substringAfterLast("/"),
+                                    task.filename,
                                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    repoId.substringBeforeLast("/", ""),
+                                    task.repoId.ifBlank { task.url.substringBeforeLast("/", "") },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 2,
@@ -1234,11 +1252,7 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
                             // long repository name never squeezes the cancel affordance.
                             IconButton(
                                 onClick = {
-                                    val filename = DownloadProgressHolder.getFilename(repoId)
-                                    if (filename != null) {
-                                        DownloadService.cancelDownload(context, filename, repoId)
-                                    }
-                                    DownloadProgressHolder.removeProgress(repoId)
+                                    DownloadService.cancelDownload(context, task.filename, task.id)
                                 }
                             ) {
                                 Icon(

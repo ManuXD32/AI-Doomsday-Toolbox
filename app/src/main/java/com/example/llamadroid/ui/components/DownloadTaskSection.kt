@@ -58,6 +58,8 @@ import com.example.llamadroid.data.model.DownloadProgressHolder
 import com.example.llamadroid.data.model.DownloadTaskArtifacts
 import com.example.llamadroid.data.model.PendingDownloadHolder
 import com.example.llamadroid.data.model.partFile
+import com.example.llamadroid.data.model.progressForDownloadTask
+import com.example.llamadroid.data.model.stableDownloadTaskOrder
 import com.example.llamadroid.service.DownloadService
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.Dispatchers
@@ -110,7 +112,9 @@ fun DownloadTaskSection(
         .filterNot { it.status in setOf(DOWNLOAD_TASK_STATUS_COMPLETED, DOWNLOAD_TASK_STATUS_DISCARDED) ||
             (!it.stageOnly && it.status == DOWNLOAD_TASK_STATUS_CANCELLED) }
         .filterNot { !it.stageOnly && it.status == DOWNLOAD_TASK_STATUS_ACTIVE && progressMap.containsKey(it.progressKey) }
-    val visibleTasks = (visibleStored + staleTasks).distinctBy { it.id }
+    val visibleTasks = (visibleStored + staleTasks)
+        .distinctBy { it.id }
+        .stableDownloadTaskOrder()
 
     if (visibleTasks.isEmpty()) return
 
@@ -142,7 +146,7 @@ fun DownloadTaskSection(
         visibleTasks.forEach { task ->
             DownloadTaskCard(
                 task = task,
-                progress = progressMap[task.progressKey],
+                progress = progressMap.progressForDownloadTask(task),
                 onResume = {
                     if (task.url.isNotBlank()) {
                         if (!task.stageOnly) {

@@ -266,6 +266,7 @@ class ModelRepository(
         val subfolder = when (type) {
             ModelType.LLM, ModelType.LORA, ModelType.EMBEDDING, ModelType.VISION -> "llm"
             ModelType.LLM_DRAFT -> "llm/drafts"
+            ModelType.SD_LLM -> "sd/llm"
             ModelType.VISION_PROJECTOR, ModelType.MMPROJ -> "mmproj"
             ModelType.QUADTRIX -> "quadtrix"
             ModelType.SD_CHECKPOINT, ModelType.SD_UPSCALER -> "sd/checkpoints"
@@ -425,7 +426,7 @@ class ModelRepository(
                     val resolvedVariant = sdVariant ?: inferredFamily.second
                     val resolvedFamilyEnum = SdModelFamily.fromStoredValue(resolvedFamily)
                     val resolvedCapabilities = sdCapabilities
-                        ?: defaultCapabilitiesForFamily(resolvedFamilyEnum, type)
+                        ?: defaultCapabilitiesForFamily(resolvedFamilyEnum, type, resolvedVariant)
                     val resolvedCompatProfiles = resolveSdCompatProfiles(
                         type = type,
                         explicitProfiles = sdCompatProfiles,
@@ -577,7 +578,8 @@ class ModelRepository(
         val resolvedFamily = sdFamily ?: inferredFamily.first?.storedValue
         val resolvedVariant = sdVariant ?: inferredFamily.second
         val resolvedFamilyEnum = SdModelFamily.fromStoredValue(resolvedFamily)
-        val resolvedCapabilities = sdCapabilities ?: defaultCapabilitiesForFamily(resolvedFamilyEnum, type)
+        val resolvedCapabilities = sdCapabilities
+            ?: defaultCapabilitiesForFamily(resolvedFamilyEnum, type, resolvedVariant)
         val resolvedCompatProfiles = resolveSdCompatProfiles(
             type = type,
             explicitProfiles = sdCompatProfiles,
@@ -1504,7 +1506,8 @@ class ModelRepository(
                 path = if (isManagedSource) finalFile.absolutePath else original.path,
                 sizeBytes = if (finalFile.exists()) finalFile.length() else original.sizeBytes,
                 type = newType,
-                sdCapabilities = sdCapabilities ?: defaultCapabilitiesForFamily(resolvedFamilyEnum, newType),
+                sdCapabilities = sdCapabilities
+                    ?: defaultCapabilitiesForFamily(resolvedFamilyEnum, newType, resolvedVariant),
                 sdFamily = resolvedFamily,
                 sdVariant = resolvedVariant,
                 sdCompatProfiles = resolveSdCompatProfiles(
@@ -1784,7 +1787,8 @@ class ModelRepository(
                 ModelType.SD_ADETAILER,
                 ModelType.SD_AUDIO_VAE,
                 ModelType.SD_EMBEDDINGS_CONNECTORS,
-                ModelType.SD_MOTION_MODULE
+                ModelType.SD_MOTION_MODULE,
+                ModelType.SD_LLM
             )
             modelDao.getModelsByTypesSync(relevantTypes).forEach { model ->
                 runCatching {

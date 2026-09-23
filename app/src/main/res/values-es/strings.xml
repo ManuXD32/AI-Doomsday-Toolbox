@@ -8749,6 +8749,8 @@
     <string name="sd_bundle_distributed_desc">FLUX.1 Schnell Q6 con todos sus codificadores y VAE para inferencia distribuida.</string>
     <string name="sd_bundle_video_title">Vídeo local con Wan 2.2</string>
     <string name="sd_bundle_video_desc">Wan 2.2 TI2V 5B Q4 con UMT5 Q4 y el VAE de Wan 2.2 para generar vídeo localmente.</string>
+    <string name="sd_bundle_qwen_image_21_title">Qwen Image 2.1 · visión completa Q4</string>
+    <string name="sd_bundle_qwen_image_21_desc">Modelo de difusión Q4 de Qwen Image 2.1 con el codificador de texto Qwen3-VL 8B Q4, proyector de visión Q8 y VAE BF16. Usa --diffusion-model, --llm, --llm_vision y --vae con soporte de descarga a CPU. Los recursos de Qwen Image usan la licencia Qwen Research; los componentes Qwen3-VL usan Apache-2.0.</string>
     <string name="sd_bundle_upscale_photo_2x_title">Escalado fotográfico 2×</string>
     <string name="sd_bundle_upscale_photo_2x_desc">RealESRGAN x2plus para ampliar fotografías de forma moderada.</string>
     <string name="sd_bundle_upscale_photo_4x_title">Escalado fotográfico 4×</string>

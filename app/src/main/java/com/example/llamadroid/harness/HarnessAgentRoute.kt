@@ -84,6 +84,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
@@ -300,6 +301,16 @@ fun HarnessAgentRoute(navController: NavController, initialConversationId: Long?
                 },
                 openLegacyHistory = { withContext(Dispatchers.Main) { showLegacy = true } }
             ),
+            localModelCatalog = {
+                runCatching {
+                    runtime.localModelCapabilities.apply(
+                        Json.parseToJsonElement(runtime.models.models().toString()).jsonObject
+                    )
+                }.getOrNull()
+            },
+            updateLocalModelCapability = { wireId, contextTokens, maxOutputTokens ->
+                runtime.updateLocalModelCapability(wireId, contextTokens, maxOutputTokens)
+            },
             navigation = NativeHarnessNavigationHooks(
                 openOriginalWebUi = { withContext(Dispatchers.Main) { showOriginal = true } },
                 // `models` is a legacy alias and is not registered in the
@@ -521,7 +532,15 @@ fun HarnessAgentRoute(navController: NavController, initialConversationId: Long?
                     popUpTo(navController.graph.id) { inclusive = false }; launchSingleTop = true
                 }
             }, initialAttentionTab = initialAttentionTab,
-                referenceCatalog = composerReferences, onReferenceQuery = { referenceQuery = it }, originalWebUiContent = {
+                referenceCatalog = composerReferences, onReferenceQuery = { referenceQuery = it },
+                // Slash client commands selected from the composer are still executed through
+                // the same serialized controller path as a manually submitted command.  Keep
+                // `/plan` in the current session so its review event is rendered in
+                // Conversation rather than navigating away to the Plan artifact tab.
+                onClientCommand = { command ->
+                    controller.dispatch(NativeHarnessUiAction.UpdateCommandLine("/$command"))
+                    controller.dispatch(NativeHarnessUiAction.ExecuteCommand)
+                }, originalWebUiContent = {
                 endpoint?.let { HarnessOriginalWebView(it, onDownload = receiveDownload, onDiagnostic = runtime.diagnostics::webView,
                     onBootDiagnostic = runtime.diagnostics::webBoot) }
             }, onLeavingOriginalWebUi = { scope.launch { controller.refreshAfterWebView() } },
@@ -885,7 +904,8 @@ internal suspend fun uploadHarnessAttachment(runtime: HarnessAppRuntime, uri: Ur
 
 /** Capture the project identity before an asynchronous session create. */
 private suspend fun prepareHarnessProject(runtime: HarnessAppRuntime, selected: HarnessWorkspaceEntity): JsonObject {
-    val result = requireNotNull(runtime.client).call("adt", "prepareWorkspace", buildJsonObject {
+    val client = requireNotNull(runtime.client)
+    val result = client.prepareWorkspace(buildJsonObject {
         put("workspaceId", selected.id); put("guestPath", selected.guestPath); put("backend", selected.backend)
     })
     when (result) {
@@ -898,5 +918,31 @@ private suspend fun prepareHarnessProject(runtime: HarnessAppRuntime, selected: 
             }
         }
     }
-    return buildJsonObject { put("cwd", selected.guestPath) }
+
+    // adt.prepareWorkspace validates the Android-owned path and creates its guest directory;
+    // its workspaceId is the local Room ID, not necessarily a DSH registry ID. Register that
+    // path with DSH before session.create so the WebUI and native client share one group.
+    val registered = client.call("workspace", "create", buildJsonObject {
+        putJsonObject("request") { put("path", selected.guestPath) }
+    })
+    val prepared = (registered as? HarnessRpcResult.Success)
+        ?.let { parseHarnessPreparedWorkspace(it.value) }
+        ?.takeIf { it.guestPath == normalizeHarnessGuestPath(selected.guestPath) }
+    if (prepared != null) {
+        try {
+            runtime.workspaces.persistPreparedWorkspace(selected.id, prepared)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            // A stale Room alias must not prevent DSH from creating a session in the
+            // successfully registered, path-verified workspace.
+            runtime.diagnostics.event(null, "workspace_registration", "failure",
+                errorCode = failure.javaClass.simpleName)
+        }
+    } else runtime.diagnostics.event(null, "workspace_registration", "failure",
+        errorCode = (registered as? HarnessRpcResult.Failure)?.error?.code ?: "WORKSPACE_IDENTITY_INVALID")
+
+    // DSH alpha2 rejects requests containing both workspaceId and cwd. If registry creation
+    // fails, cwd still permits a session; the next workspace refresh can reconcile its path.
+    return harnessSessionCreateLocation(selected.guestPath, prepared)
 }

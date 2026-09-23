@@ -80,6 +80,58 @@ class HarnessRootfsFileStoreTest {
     }
 
     @Test
+    fun resolvesMountedProjectsWhilePreservingGuestPaths() = runBlocking {
+        val root = Files.createTempDirectory("rootfs-store")
+        val projects = Files.createTempDirectory("rootfs-projects")
+        try {
+            Files.createDirectories(projects.resolve("prueba2"))
+            Files.write(projects.resolve("prueba2/main.c"), "int main() {}".toByteArray())
+            val store = HarnessRootfsFileStore(
+                listOf(
+                    GuestMount("/", root),
+                    GuestMount("/workspace/projects", projects),
+                )
+            )
+
+            assertEquals("workspace", store.listDirectory("/").getOrThrow().single().name)
+            assertEquals("projects", store.listDirectory("/workspace").getOrThrow().single().name)
+            val entries = store.listDirectory("/workspace/projects").getOrThrow()
+            assertEquals("/workspace/projects/prueba2", entries.single().path)
+            assertEquals(
+                "int main() {}",
+                store.readText("/workspace/projects/prueba2/main.c").getOrThrow()
+            )
+            store.createFile("/workspace/projects/prueba2/README.md").getOrThrow()
+            store.writeText("/workspace/projects/prueba2/README.md", "mounted").getOrThrow()
+            assertTrue(Files.isRegularFile(projects.resolve("prueba2/README.md")))
+        } finally {
+            root.toFile().deleteRecursively()
+            projects.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun rejectsExternalSymlinkFromMountedProject() = runBlocking {
+        val root = Files.createTempDirectory("rootfs-store")
+        val projects = Files.createTempDirectory("rootfs-projects")
+        val outside = Files.createTempDirectory("rootfs-outside")
+        try {
+            Files.write(outside.resolve("secret.txt"), "outside".toByteArray())
+            Files.createSymbolicLink(projects.resolve("escape"), outside)
+            val store = HarnessRootfsFileStore(
+                listOf(GuestMount("/", root), GuestMount("/workspace/projects", projects))
+            )
+            assertTrue(store.readText("/workspace/projects/escape/secret.txt").isFailure)
+            assertTrue(store.writeText("/workspace/projects/escape/new.txt", "blocked").isFailure)
+            assertFalse(Files.exists(outside.resolve("new.txt")))
+        } finally {
+            root.toFile().deleteRecursively()
+            projects.toFile().deleteRecursively()
+            outside.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun compressesAndExtractsTarGzipWithAtomicDestinationCommit() = withRootfs { root, store ->
         Files.createDirectories(root.resolve("payload/nested"))
         Files.write(root.resolve("payload/nested/value.txt"), "payload".toByteArray())

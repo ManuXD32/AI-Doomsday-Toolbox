@@ -8,6 +8,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.JsonObject
 
 /** One settings/provider snapshot shared by the categorized native editors. */
 internal class NativeHarnessSettingsReader(
@@ -17,6 +18,8 @@ internal class NativeHarnessSettingsReader(
     private val describeAuth: suspend (List<String>) -> Map<String, HarnessProviderAuthUi>,
     private val isCurrent: (HarnessClient) -> Boolean,
     private val reportFailure: suspend (String, String) -> Unit,
+    /** Optional Android bridge projection (LiteRT/managed servers). */
+    private val localModelCatalog: suspend () -> JsonObject? = { null },
 ) {
     private val settingsLock = Mutex()
     private val catalogLock = Mutex()
@@ -149,7 +152,13 @@ internal class NativeHarnessSettingsReader(
                 }
                 val parsed = parseHarnessModelCatalog(catalog)
                 val savedConfigs = state.value.provider.configs
-                val providers = mergeHarnessSavedModelCapabilities(parsed.providers, savedConfigs)
+                val localProviders = runCatching {
+                    localModelCatalog()?.let(::parseHarnessLocalModelCatalog).orEmpty()
+                }.getOrDefault(emptyList())
+                val providers = mergeHarnessSavedModelCapabilities(
+                    mergeHarnessLocalModelProviders(parsed.providers, localProviders),
+                    savedConfigs
+                )
                 val selectedProvider = state.value.provider.selectedProviderId
                     ?.takeIf { id -> providers.any { it.id == id } }
                     ?: parsed.defaultProvider

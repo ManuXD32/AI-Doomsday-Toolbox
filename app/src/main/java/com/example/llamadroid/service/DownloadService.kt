@@ -587,27 +587,47 @@ class DownloadService : Service() {
             val taskDao = db.downloadTaskDao()
             val taskMutex = taskMutexFor(resolvedTaskId)
             taskMutex.withLock {
+            // A modern intent carries the immutable task ID. A filename is only
+            // an alias for older intents that did not carry a distinct ID; using
+            // it here could adopt another repository's same-named task.
+            val legacyFilenameAlias = downloadId == null || downloadId == filename
             val storedTask = taskDao.getById(resolvedTaskId)
-                ?: filename?.let { taskDao.getByFilename(it) }
+                ?: filename?.takeIf { legacyFilenameAlias }?.let { taskDao.getByFilename(it) }
             val memoryPending = PendingDownloadHolder.getPending(resolvedTaskId)
-                ?: filename?.let { PendingDownloadHolder.getPending(it) }
+                ?: filename?.takeIf { legacyFilenameAlias }?.let { PendingDownloadHolder.getPending(it) }
             val taskPending = memoryPending ?: storedTask?.toPendingDownload()
             val finalUrl = url ?: storedTask?.url ?: return@launch
-            val finalDestPath = destPath ?: storedTask?.destPath ?: taskPending?.destPath ?: return@launch
-            val finalFilename = filename ?: storedTask?.filename ?: taskPending?.filename ?: File(finalDestPath).name
+            // Once Room has issued a task, its destination and display
+            // identity belong to that row. Service intents may carry legacy
+            // filename/path aliases, but they must not silently retarget a
+            // concurrent task that happens to share a filename.
+            val finalDestPath = storedTask?.destPath ?: destPath ?: taskPending?.destPath ?: return@launch
+            val finalFilename = storedTask?.filename ?: filename ?: taskPending?.filename ?: File(finalDestPath).name
             val destFile = File(finalDestPath)
-            val progressKey = taskPending?.progressKey ?: storedTask?.progressKey ?: resolvedTaskId
-            val candidateTask = taskPending?.toDownloadTaskEntity(resolvedTaskId, finalUrl)
-                ?: storedTask?.copy(status = DOWNLOAD_TASK_STATUS_ACTIVE, updatedAt = System.currentTimeMillis())
-                ?: DownloadTaskEntity(
-                    id = resolvedTaskId,
+            val progressKey = storedTask?.progressKey ?: taskPending?.progressKey ?: resolvedTaskId
+            val candidateTask = if (storedTask != null) {
+                // The persisted row is authoritative once it exists. Keeping
+                // its identity and classification fields intact prevents a
+                // stale in-memory pending entry from replacing the filename,
+                // repository, task key, or stage policy during a retry.
+                storedTask.copy(
+                    createdAt = storedTask.createdAt,
                     url = finalUrl,
-                    destPath = finalDestPath,
-                    filename = finalFilename,
-                    repoId = finalUrl,
-                    progressKey = progressKey,
-                    modelType = ModelType.LLM.name
+                    status = DOWNLOAD_TASK_STATUS_ACTIVE,
+                    updatedAt = System.currentTimeMillis()
                 )
+            } else {
+                taskPending?.toDownloadTaskEntity(resolvedTaskId, finalUrl)
+                    ?: DownloadTaskEntity(
+                        id = resolvedTaskId,
+                        url = finalUrl,
+                        destPath = finalDestPath,
+                        filename = finalFilename,
+                        repoId = finalUrl,
+                        progressKey = progressKey,
+                        modelType = ModelType.LLM.name
+                    )
+            }
             // A few legacy callers started the service directly and supplied
             // no in-memory PendingDownload. The durable task still contains
             // the canonical destination/type metadata, so promote that task
@@ -1145,8 +1165,9 @@ class DownloadService : Service() {
     private fun cancelDownloadInternal(filename: String, downloadId: String) {
         val cleanup = beginTaskCleanup(downloadId, discard = false)
         if (!cleanup.owner) return
+        val legacyFilenameAlias = downloadId == filename
         val memoryPending = PendingDownloadHolder.getPending(downloadId)
-            ?: PendingDownloadHolder.getPending(filename)
+            ?: filename.takeIf { legacyFilenameAlias }?.let(PendingDownloadHolder::getPending)
         serviceScope.launch(NonCancellable) {
             try {
                 // If a start was already constructing its lazy worker, wait
@@ -1375,7 +1396,7 @@ class DownloadService : Service() {
         val taskDao = db.downloadTaskDao()
         val libraryDao = db.modelLibraryDao()
         val task = taskDao.getById(requestedTaskId)
-            ?: filename?.let { taskDao.getByFilename(it) }
+            ?: filename?.takeIf { it == requestedTaskId }?.let { taskDao.getByFilename(it) }
         val taskId = task?.id ?: requestedTaskId
         val pending = requestedPendingArtifactId?.let { libraryDao.getPendingArtifactById(it) }
             ?: task?.pendingArtifactId?.let { libraryDao.getPendingArtifactById(it) }

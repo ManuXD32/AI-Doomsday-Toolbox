@@ -125,6 +125,76 @@ class NativeHarnessCatalogTest {
     }
 
     @Test
+    fun androidManagedCatalogKeepsLiteRtProviderBoundaryAndWireIds() {
+        val value = Json.parseToJsonElement(
+            """{"data":[
+                {"id":"litert:43","owned_by":"adt-litert","name":"Gemma 4 E2B","context_length":32768},
+                {"id":"llama:7","owned_by":"adt-llama-server","name":"/models/llama/Q4.gguf"}
+            ]}"""
+        ).jsonObject
+        val providers = parseHarnessLocalModelCatalog(value)
+        assertEquals(2, providers.size)
+        val litert = providers.single { it.id == "adt-managed" }
+        assertEquals("litert:43", litert.models.single())
+        assertEquals("Gemma 4 E2B", litert.modelNames["litert:43"])
+        assertEquals(32768L, litert.modelContextWindows["litert:43"])
+        val llama = providers.single { it.id == "adt-llama-server" }
+        assertEquals("Q4.gguf", llama.modelNames["llama:7"])
+        assertEquals("unknown", llama.modelCapabilitySources["llama:7"])
+    }
+
+    @Test
+    fun androidManagedCatalogOmitsSyntheticLlamaSwapWithoutDroppingNativeProviders() {
+        val value = Json.parseToJsonElement(
+            """{"data":[
+                {"id":"llama-swap:/models/Qwen.gguf","owned_by":"adt-llama-swap","name":"Qwen.gguf","context_length":32768},
+                {"id":"litert:43","owned_by":"adt-litert","name":"Gemma 4 E2B","context_length":32768},
+                {"id":"llama:7","owned_by":"adt-llama-server","name":"/models/llama/Q4.gguf"}
+            ]}"""
+        ).jsonObject
+
+        val providers = parseHarnessLocalModelCatalog(value)
+
+        assertTrue(providers.none { it.id == "adt-llama-swap" })
+        assertEquals(setOf("adt-managed", "adt-llama-server"), providers.map { it.id }.toSet())
+        assertEquals(listOf("litert:43"), providers.single { it.id == "adt-managed" }.models)
+        assertEquals(listOf("llama:7"), providers.single { it.id == "adt-llama-server" }.models)
+    }
+
+    @Test
+    fun userConfiguredLlamaSwapProviderKeepsExactWireIdAlongsideNativeRows() {
+        val dsh = parseHarnessModelCatalog(Json.parseToJsonElement(
+            """{"groups":[{"id":"llama-swap","name":"My llama-swap","models":[
+                {"id":"/models/Qwen.gguf","name":"Qwen.gguf","context_length":65536}
+            ]}]}"""
+        ).jsonObject).providers
+        val local = parseHarnessLocalModelCatalog(Json.parseToJsonElement(
+            """{"data":[
+                {"id":"llama-swap:/models/Qwen.gguf","owned_by":"adt-llama-swap","name":"Qwen.gguf"},
+                {"id":"litert:43","owned_by":"adt-litert","name":"Gemma 4 E2B","context_length":32768}
+            ]}"""
+        ).jsonObject)
+
+        val merged = mergeHarnessLocalModelProviders(dsh, local)
+        val configured = merged.single { it.id == "llama-swap" }
+
+        assertEquals(listOf("/models/Qwen.gguf"), configured.models)
+        assertEquals("Qwen.gguf", configured.modelNames["/models/Qwen.gguf"])
+        assertTrue(merged.none { it.id == "adt-llama-swap" })
+        assertTrue(merged.any { it.id == "adt-managed" && it.models == listOf("litert:43") })
+    }
+
+    @Test
+    fun localProviderMergeDoesNotFlattenModelsIntoUnrelatedProviders() {
+        val dsh = HarnessProviderOption(id = "deepseek", name = "DeepSeek", models = listOf("reasoner"))
+        val local = HarnessProviderOption(id = "adt-managed", name = "ADT LiteRT", models = listOf("litert:1"))
+        val merged = mergeHarnessLocalModelProviders(listOf(dsh), listOf(local))
+        assertEquals(listOf("deepseek", "adt-managed"), merged.map { it.id })
+        assertEquals(listOf("reasoner"), merged.first().models)
+        assertEquals(listOf("litert:1"), merged.last().models)
+    }
+
+    @Test
     fun pluginInstallMapsBuildApprovalEnvelopeAndInventoryEntries() {
         val value = Json.parseToJsonElement(
             """

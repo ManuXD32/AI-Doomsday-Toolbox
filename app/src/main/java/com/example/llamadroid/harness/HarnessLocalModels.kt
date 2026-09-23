@@ -94,10 +94,11 @@ class HarnessLocalModels(private val context: Context, private val database: App
     suspend fun models(): JSONObject {
         val settings = this.settings
         val data = JSONArray()
-        database.liteRtModelDao().getAllOnce().filter { File(it.path).exists() }.forEach {
-            data.put(JSONObject().put("id", "litert:${it.id}").put("object", "model")
-                .put("owned_by", "adt-litert").put("name", it.displayName).put("context_length", it.maxContextTokens ?: 4096)
-                .put("input_modalities", JSONArray().put("text").apply { if (it.supportsVision) put("image"); if (it.supportsAudio) put("audio") }))
+        database.liteRtModelDao().getAllOnce().filter { File(it.path).exists() }.forEach { model ->
+            data.put(JSONObject().put("id", "litert:${model.id}").put("object", "model")
+                .put("owned_by", "adt-litert").put("name", model.displayName)
+                .apply { model.maxContextTokens?.takeIf { value -> value > 0 }?.let { value -> put("context_length", value) } }
+                .put("input_modalities", JSONArray().put("text").apply { if (model.supportsVision) put("image"); if (model.supportsAudio) put("audio") }))
         }
         AgentRuntimeProfileRuntime.repositoryState.value?.managedServerCatalog?.observeServers()?.first()
             ?.filter { it.state == ManagedLlamaServerState.RUNNING }?.forEach {
@@ -121,22 +122,6 @@ class HarnessLocalModels(private val context: Context, private val database: App
             }.getOrDefault(emptyList())
         } }.awaitAll().flatten() }
         discovered.forEach { data.put(it) }
-        val llamaSwapUrl = settings.agentLlamaSwapUrl.value.trim()
-        if (llamaSwapUrl.isNotEmpty()) {
-            runCatching {
-                discoverLlamaSwapModels(llamaSwapUrl)
-            }.getOrDefault(emptyList()).forEach { model ->
-                data.put(
-                        JSONObject().put("id", "llama-swap:${model.wireId}")
-                            .put("object", "model").put("owned_by", "adt-llama-swap")
-                            .put("name", model.displayName)
-                        .apply {
-                            model.contextLength?.let { put("context_length", it) }
-                            if (model.running) put("running", true)
-                        }
-                )
-            }
-        }
         return JSONObject().put("object", "list").put("data", data)
     }
 
@@ -576,31 +561,6 @@ class HarnessLocalModels(private val context: Context, private val database: App
         )
 
     private fun Double.toFloatOrNull(): Float? = takeIf { isFinite() }?.toFloat()
-
-    private suspend fun discoverLlamaSwapModels(
-        baseUrl: String
-    ): List<HarnessDiscoveredModel> = withContext(Dispatchers.IO) {
-        val endpoint = normalizeHarnessProviderEndpoint(baseUrl) ?: return@withContext emptyList()
-        val discoveryClient = client.newBuilder()
-            .connectTimeout(3, TimeUnit.SECONDS)
-            .readTimeout(3, TimeUnit.SECONDS)
-            .build()
-        val models = fetchDiscoveryJson(
-            discoveryClient,
-            HttpEndpointUrlSupport.appendPath(endpoint.v1BaseUrl, "/models") ?: return@withContext emptyList()
-        ) ?: return@withContext emptyList()
-        val running = HttpEndpointUrlSupport.appendPath(endpoint.rootUrl, "/running")
-            ?.let { fetchDiscoveryJson(discoveryClient, it) }
-        parseHarnessLlamaSwapModels(models, running)
-    }
-
-    private fun fetchDiscoveryJson(client: OkHttpClient, url: String): JSONObject? = runCatching {
-        client.newCall(Request.Builder().url(url).get().build()).execute().use { response ->
-            if (!response.isSuccessful) return@use null
-            val body = response.body ?: return@use null
-            JSONObject(body.byteStream().use { it.readBounded(1024 * 1024) }.toString(Charsets.UTF_8))
-        }
-    }.getOrNull()
 
     private suspend fun proxy(request: JSONObject, url: String, model: String, emit: suspend (JSONObject) -> Unit) = coroutineScope {
         val body = JSONObject(request.toString()).put("model", model).put("stream", true)

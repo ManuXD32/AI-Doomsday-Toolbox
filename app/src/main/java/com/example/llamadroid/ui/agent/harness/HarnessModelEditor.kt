@@ -80,10 +80,11 @@ private data class EditableHarnessModel(
     val displayName: String,
     val contextWindow: Long?,
     val maxTokens: Long?,
+    val isAndroidManaged: Boolean = false,
 )
 
-private fun editableHarnessModels(provider: HarnessProviderUiState): List<EditableHarnessModel> =
-    provider.configs.flatMap { config ->
+private fun editableHarnessModels(provider: HarnessProviderUiState): List<EditableHarnessModel> {
+    val settingsModels = provider.configs.flatMap { config ->
         config.fields.firstOrNull(::isNativeHarnessProviderModelsField)?.let { field ->
             val rows = runCatching { parseHarnessJsonValue(field.value)?.jsonArrayOrNull() }.getOrNull()
                 .orEmpty()
@@ -107,6 +108,29 @@ private fun editableHarnessModels(provider: HarnessProviderUiState): List<Editab
             }
         }.orEmpty()
     }
+    val configuredWireIds = settingsModels.mapTo(mutableSetOf()) { it.wireId }
+    val androidModels = provider.providers
+        .filter { it.canEdit && it.detail == "Android-managed provider" }
+        .flatMap { option ->
+            option.models.mapNotNull { wireId ->
+                if (!configuredWireIds.add(wireId)) return@mapNotNull null
+                EditableHarnessModel(
+                    providerId = option.id,
+                    providerName = option.name,
+                    fieldKey = "",
+                    fieldValue = "",
+                    wireId = wireId,
+                    displayName = option.modelNames[wireId]
+                        ?.takeIf(String::isNotBlank)
+                        ?: harnessFriendlyModelLabel(wireId),
+                    contextWindow = option.modelContextWindows[wireId]?.takeIf { it > 0L },
+                    maxTokens = option.modelMaxOutputTokens[wireId]?.takeIf { it > 0L },
+                    isAndroidManaged = true,
+                )
+            }
+        }
+    return settingsModels + androidModels
+}
 
 @Composable
 internal fun HarnessModelEditor(
@@ -115,6 +139,9 @@ internal fun HarnessModelEditor(
     modifier: Modifier = Modifier,
 ) {
     val models = remember(provider.configs, provider.providers) { editableHarnessModels(provider) }
+    val groupedModels = remember(models) {
+        models.groupBy { it.providerId to it.providerName }
+    }
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -140,8 +167,18 @@ internal fun HarnessModelEditor(
                 style = MaterialTheme.typography.bodyMedium,
             )
         } else {
-            models.forEach { model ->
-                HarnessEditableModelRow(model = model, onAction = onAction)
+            groupedModels.forEach { (providerKey, providerModels) ->
+                AppSectionCard(shape = com.example.llamadroid.ui.components.AppChromeDefaults.InnerCardShape) {
+                    Text(providerKey.second, style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        providerKey.first,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    providerModels.forEach { model ->
+                        HarnessEditableModelRow(model = model, onAction = onAction)
+                    }
+                }
             }
         }
     }
@@ -159,7 +196,6 @@ private fun HarnessEditableModelRow(
         mutableStateOf(model.maxTokens?.toString().orEmpty())
     }
     AppSectionCard(shape = com.example.llamadroid.ui.components.AppChromeDefaults.CompactShape) {
-        Text(model.providerName, style = MaterialTheme.typography.labelLarge)
         Text(
             model.displayName,
             style = MaterialTheme.typography.titleSmall,
@@ -194,13 +230,23 @@ private fun HarnessEditableModelRow(
         }
         OutlinedButton(
             onClick = {
-                updateNativeHarnessModelRows(
-                    model.fieldValue,
-                    model.wireId,
-                    contextText,
-                    outputText,
-                )?.let { updated ->
-                    onAction(NativeHarnessUiAction.UpdateProviderField(model.providerId, model.fieldKey, updated))
+                if (model.isAndroidManaged) {
+                    onAction(
+                        NativeHarnessUiAction.UpdateLocalModelCapability(
+                            wireId = model.wireId,
+                            contextTokens = contextText.trim().toLongOrNull()?.takeIf { it > 0L },
+                            maxOutputTokens = outputText.trim().toLongOrNull()?.takeIf { it > 0L },
+                        )
+                    )
+                } else {
+                    updateNativeHarnessModelRows(
+                        model.fieldValue,
+                        model.wireId,
+                        contextText,
+                        outputText,
+                    )?.let { updated ->
+                        onAction(NativeHarnessUiAction.UpdateProviderField(model.providerId, model.fieldKey, updated))
+                    }
                 }
             },
             modifier = Modifier.fillMaxWidth(),

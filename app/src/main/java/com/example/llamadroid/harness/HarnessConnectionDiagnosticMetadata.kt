@@ -5,7 +5,7 @@ internal fun harnessDiagnosticOperation(value: String): String =
     value.takeIf { it in HARNESS_DIAGNOSTIC_OPERATIONS } ?: "extension"
 
 private val HARNESS_DIAGNOSTIC_OPERATIONS = setOf(
-    "action", "connection", "parser", "render", "transcript_action", "workspace_open", "interface",
+    "action", "connection", "parser", "render", "transcript_action", "workspace_open", "workspace_registration", "interface",
     "session/list", "session/search", "session/create", "session/get", "session/follow", "session/control",
     "session/page", "session/read", "session/rename", "session/archive", "session/fork", "session/prompt",
     "session/cancel", "session/selectModel", "session/attachment", "session/append", "session/steer",
@@ -13,7 +13,7 @@ private val HARNESS_DIAGNOSTIC_OPERATIONS = setOf(
     "modelSelection/getCatalog", "modelSelection/select", "llm/listModels", "llm/listProviders",
     "llm/listConfigurableProviders", "llm/discoverModels", "settings/describe", "settings/mutate",
     "credentials/describe", "credentials/set", "credentials/unset", "adt/providerAuth", "adt/invoke",
-    "adt/shutdown", "workspace/follow", "workspace/rename", "workspace/remove", "workspace/move",
+    "adt/shutdown", "workspace/create", "workspace/follow", "workspace/rename", "workspace/remove", "workspace/move",
     "agentPresets/list", "agentPresets/read", "agentPresets/duplicate", "agentPresets/delete",
     "pluginInventory/list", "plugin-manager/list", "plugin-manager/install", "plugin-manager/inspect",
     "plugin-manager/cancel", "plugin-manager/uninstall", "plugin-manager/update", "plugin-manager/setEnabled",

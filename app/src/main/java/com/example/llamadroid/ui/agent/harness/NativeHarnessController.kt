@@ -5,6 +5,7 @@ import com.example.llamadroid.harness.client.HarnessCallPolicy
 import com.example.llamadroid.harness.client.HarnessClient
 import com.example.llamadroid.harness.client.HarnessRpcResult
 import com.example.llamadroid.harness.client.HarnessStreamPolicy
+import com.example.llamadroid.harness.HarnessSessionEventSequencer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -53,9 +54,14 @@ class NativeHarnessController(
     private val navigation: NativeHarnessNavigationHooks = NativeHarnessNavigationHooks(),
     private val invokeCapability: suspend (String, JsonObject) -> HarnessRpcResult =
         { _, _ -> capabilityUnavailableResult("CAPABILITY_UNAVAILABLE", "Capability is not connected") },
+    /** Android-owned model rows (LiteRT and managed endpoints) for the native catalog. */
+    private val localModelCatalog: suspend () -> JsonObject? = { null },
     private val interactions: NativeHarnessInteractionHooks? = null,
     private val jobs: NativeHarnessJobHooks = NativeHarnessJobHooks(),
     private val providerAuth: NativeHarnessProviderAuthHooks = NativeHarnessProviderAuthHooks(),
+    /** Persists context/output overrides for Android-managed provider rows. */
+    private val updateLocalModelCapability: suspend (wireId: String, contextTokens: Long?, maxOutputTokens: Long?) -> Unit =
+        { _, _, _ -> },
     /** Host-only UI operations, such as opening Android's attachment picker. */
     private val handleExternalAction: suspend (NativeHarnessUiAction) -> Unit = {
         throw IllegalStateException("Host UI callback is not connected")
@@ -87,6 +93,8 @@ class NativeHarnessController(
     private var followJob: Job? = null
     private var controlJob: Job? = null
     private var activeClient: HarnessClient? = null
+    /** Session-scoped cursor shared by reconnects and native/WebUI follow frames. */
+    private val eventSequencer = HarnessSessionEventSequencer()
     private var lastConnectionAvailable: Boolean? = null
     private var currentActionFailed = false
     private val settingsRevisions get() = settingsReader.settingsRevisions
@@ -98,6 +106,7 @@ class NativeHarnessController(
             describeAuth = { providerAuthActions.describe(it) },
             isCurrent = { clientProvider() === it },
             reportFailure = { code, message -> reportFailure(code, message) },
+            localModelCatalog = localModelCatalog,
         )
     }
     private val goalStore = NativeHarnessGoalStore()
@@ -590,6 +599,10 @@ class NativeHarnessController(
             is NativeHarnessUiAction.DismissDiscoveredProviderModels ->
                 providerDiscoveryActions.dismiss(action.providerId)
             is NativeHarnessUiAction.UpdateProviderField -> updateProviderField(action)
+            is NativeHarnessUiAction.UpdateLocalModelCapability -> {
+                updateLocalModelCapability(action.wireId, action.contextTokens, action.maxOutputTokens)
+                refreshModelCatalog(reportFailure = false)
+            }
             is NativeHarnessUiAction.SetProviderCredential -> setProviderCredential(action)
             is NativeHarnessUiAction.UnsetProviderCredential -> unsetProviderCredential(action.providerId)
             is NativeHarnessUiAction.StartProviderLogin -> providerAuthActions.login(action.providerId, action.method)
@@ -733,6 +746,7 @@ class NativeHarnessController(
             controlJob?.cancel()
             queueStore.resetClient()
             sessionAddresses.reset()
+            eventSequencer.reset()
             activeClient = client
             if (sharedAttention == null) attention.attach(client)
             mutate { current -> current.copy(queue = emptyList(), commands = emptyList(),
@@ -929,6 +943,7 @@ class NativeHarnessController(
         }
         sessionPageStates.remove(sessionId)
         assistantStreamTrackers.remove(sessionId)
+        eventSequencer.reset(sessionId)
         val current = state.value.sessions.firstOrNull { it.id == sessionId }
         val projection = readHarnessSessionProjection(workspace, sessionId)
         val title = projection?.title?.takeIf { it.isNotBlank() }
@@ -1789,6 +1804,7 @@ class NativeHarnessController(
         if (state.value.selectedSessionId != sessionId) return
         when (frame.string("type")) {
             "snapshot" -> {
+                eventSequencer.advance(sessionId, frame.long("cursor"))
                 structuredTranscriptActions.invalidate()
                 val rawRecords = frame.objectArray("records")
                 val records = rawRecords.flatMap { harnessParseRecord(it) }
@@ -1844,6 +1860,10 @@ class NativeHarnessController(
             }
             "event" -> {
                 val event = frame.objectValue("event") ?: return
+                // A WebUI reconnect can replay the same session event after the native follow has
+                // already applied it.  Sequence numbers are authoritative within a session;
+                // payloads without a sequence remain compatible with older Harness builds.
+                if (!eventSequencer.accept(sessionId, event.long("seq"))) return
                 structuredTranscriptActions.invalidate()
                 val parsed = harnessParseEvent(event)
                 val runningChange = when (event.string("type")) {

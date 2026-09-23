@@ -66,6 +66,8 @@ class HarnessAppRuntime private constructor(private val context: Context) {
     val workspaces = HarnessWorkspaceRepository(context, database, credentials)
     val files = HarnessWorkspaceAccess(context, credentials)
     val models = HarnessLocalModels(context, database)
+    /** Android-owned context/output overrides used by the Harness model editor. */
+    val localModelCapabilities = HarnessLocalModelCapabilityStore(context)
     val diagnostics = HarnessDiagnostics(database, scope, HarnessRuntimeJournal(
         File(context.filesDir, "agent_harness/runtime-diagnostics.json")
     ))
@@ -97,6 +99,23 @@ class HarnessAppRuntime private constructor(private val context: Context) {
     @Volatile var client: HarnessClient? = null
         private set
     @Volatile private var bridge: HarnessAndroidBridge? = null
+
+    suspend fun updateLocalModelCapability(
+        wireId: String,
+        contextTokens: Long?,
+        maxOutputTokens: Long?,
+    ) {
+        localModelCapabilities.set(wireId, contextTokens, maxOutputTokens)
+        if (wireId.startsWith("litert:")) {
+            val id = wireId.removePrefix("litert:").toLongOrNull()
+            if (id != null) {
+                database.liteRtModelDao().updateMaxContextTokens(
+                    id,
+                    contextTokens?.takeIf { it in 1L..Int.MAX_VALUE }?.toInt(),
+                )
+            }
+        }
+    }
     private var healthMonitor: Job? = null
     private val lifecycle = HarnessLifecycleGate()
     private val stopIntent = java.util.concurrent.atomic.AtomicLong()

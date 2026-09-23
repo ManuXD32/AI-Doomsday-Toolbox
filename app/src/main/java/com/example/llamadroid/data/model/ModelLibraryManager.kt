@@ -49,7 +49,8 @@ object ModelLibraryManager {
         ModelType.LLAMA_TTS,
         ModelType.LLAMA_TTS_COMPANION,
         ModelType.LITERT_AUDIO_DIT,
-        ModelType.LITERT_AUDIO_COMPONENT
+        ModelType.LITERT_AUDIO_COMPONENT,
+        ModelType.SD_LLM
     )
 
     fun relativeDirFor(type: ModelType): String = when (type) {
@@ -58,6 +59,7 @@ object ModelLibraryManager {
         ModelType.EMBEDDING,
         ModelType.VISION -> "llm"
         ModelType.LLM_DRAFT -> "llm/drafts"
+        ModelType.SD_LLM -> "sd/llm"
         ModelType.VISION_PROJECTOR,
         ModelType.MMPROJ -> "mmproj"
         ModelType.QUADTRIX -> QUADTRIX_RELATIVE_DIR

@@ -155,7 +155,10 @@ enum class ModelType {
     // is persisted as an ordinal in legacy databases, so inserting a value above
     // an existing entry would reinterpret installed model rows.
     LITERT_AUDIO_DIT,
-    LITERT_AUDIO_COMPONENT
+    LITERT_AUDIO_COMPONENT,
+    // Stable-diffusion.cpp text encoder role. This value is deliberately
+    // appended because Room persists ModelType as an ordinal.
+    SD_LLM
 }
 
 /** True for native llama.cpp speech-generation model rows. */

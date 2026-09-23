@@ -40,6 +40,8 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.llamadroid.data.api.HfModelDto
 import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_ACTIVE
+import com.example.llamadroid.data.db.DownloadTaskEntity
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.db.SD_CAPABILITY_IMG2IMG
@@ -49,6 +51,8 @@ import com.example.llamadroid.data.db.buildSdCapabilities
 import com.example.llamadroid.data.db.hasSdCapability
 import com.example.llamadroid.data.db.parseSdCapabilities
 import com.example.llamadroid.data.model.DownloadProgressHolder
+import com.example.llamadroid.data.model.progressForDownloadTask
+import com.example.llamadroid.data.model.stableDownloadTaskOrder
 import com.example.llamadroid.data.model.FileInfo
 import com.example.llamadroid.data.model.ModelLibraryManager
 import com.example.llamadroid.data.model.ModelRepository
@@ -79,6 +83,7 @@ import com.example.llamadroid.sd.sdArtifactInspection
 import com.example.llamadroid.sd.withSdArtifactInspection
 import com.example.llamadroid.data.model.SdArtifactValidationException
 import com.example.llamadroid.service.smokeCheckSdADetailerDetector
+import com.example.llamadroid.service.DownloadService
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.Dispatchers
@@ -146,6 +151,30 @@ enum class SDModelSelectionType(
 // Video and image pipelines can share LLM encoders with native chat. These are the
 // same model records; selecting them here does not create a second installed copy.
 private val SD_MANAGER_SELECTION_TYPES = SDModelSelectionType.entries
+
+/** Durable download rows shown by the SD screen, including Qwen companion roles. */
+private val SD_DOWNLOAD_MODEL_TYPES = listOf(
+    ModelType.SD_CHECKPOINT,
+    ModelType.SD_UPSCALER,
+    ModelType.SD_DIFFUSION,
+    ModelType.SD_CLIP_L,
+    ModelType.SD_CLIP_G,
+    ModelType.SD_T5XXL,
+    ModelType.SD_TAE,
+    ModelType.SD_VAE,
+    ModelType.SD_LORA,
+    ModelType.SD_TEXTUAL_INVERSION,
+    ModelType.SD_CONTROLNET,
+    ModelType.SD_PHOTOMAKER,
+    ModelType.SD_CLIP_VISION,
+    ModelType.SD_IP_ADAPTER,
+    ModelType.SD_ADETAILER,
+    ModelType.SD_AUDIO_VAE,
+    ModelType.SD_EMBEDDINGS_CONNECTORS,
+    ModelType.SD_MOTION_MODULE,
+    ModelType.SD_LLM,
+    ModelType.MMPROJ,
+)
 
 private enum class SdInspectionRowStatus {
     IDLE,
@@ -221,8 +250,16 @@ fun SDModelsScreen(navController: NavController) {
     // Download progress
     val downloadProgress by DownloadProgressHolder.progress.collectAsState()
     
-    // Active downloads count
-    val activeDownloads = downloadProgress.filter { it.value > 0f && it.value < 1f }
+    val sdDownloadTypeNames = remember { SD_DOWNLOAD_MODEL_TYPES.map { it.name } }
+    val persistedDownloadTasks by db.downloadTaskDao()
+        .observeByLibraryFamily(sdDownloadTypeNames, ModelFamily.SD.storedValue)
+        .collectAsState(initial = emptyList())
+    // Room owns row identity; the progress holder is only a live overlay.
+    val activeDownloads = remember(persistedDownloadTasks) {
+        persistedDownloadTasks
+            .filter { it.status == DOWNLOAD_TASK_STATUS_ACTIVE }
+            .stableDownloadTaskOrder()
+    }
     
     // Search state
     var searchQuery by remember { mutableStateOf("") }
@@ -776,11 +813,8 @@ fun SDModelsScreen(navController: NavController) {
                 onSourceRequest = { sourceAsset = com.example.llamadroid.ui.models.installedAssetForModel(it) }
             )
             1 -> DownloadingTab(
+                downloadTasks = activeDownloads,
                 downloadProgress = downloadProgress,
-                onCancel = { filename ->
-                    com.example.llamadroid.util.Downloader.cancelDownload(filename)
-                    DownloadProgressHolder.removeProgress(filename)
-                }
             )
             2 -> DiscoverTab(
                 searchQuery = searchQuery,
@@ -2650,7 +2684,7 @@ private fun selectionTypeForModel(model: ModelEntity): SDModelSelectionType = wh
     ModelType.SD_AUDIO_VAE -> SDModelSelectionType.AUDIO_VAE
     ModelType.SD_EMBEDDINGS_CONNECTORS -> SDModelSelectionType.CONNECTORS
     ModelType.SD_MOTION_MODULE -> SDModelSelectionType.MOTION_MODULE
-    ModelType.LLM -> SDModelSelectionType.IMAGE_LLM
+    ModelType.LLM, ModelType.SD_LLM -> SDModelSelectionType.IMAGE_LLM
     ModelType.VISION_PROJECTOR, ModelType.MMPROJ -> SDModelSelectionType.IMAGE_LLM_VISION
     ModelType.SD_UPSCALER -> SDModelSelectionType.UPSCALER
     else -> SDModelSelectionType.CHECKPOINT
@@ -2759,7 +2793,11 @@ private fun installedCapabilitiesFor(model: ModelEntity): List<SDCapability> = w
         if (model.hasSdCapability(SD_CAPABILITY_VID_GEN)) {
             add(SDCapability.VID_GEN)
         } else {
-            val fallback = defaultCapabilitiesForFamily(model.sdFamilyEnum(), model.type).parseSdCapabilities()
+            val fallback = defaultCapabilitiesForFamily(
+                model.sdFamilyEnum(),
+                model.type,
+                model.sdVariant
+            ).parseSdCapabilities()
             val capabilities = if (model.sdCapabilities.isNullOrBlank()) fallback else model.sdCapabilities.parseSdCapabilities()
             if (SD_CAPABILITY_TXT2IMG in capabilities) add(SDCapability.TXT2IMG)
             if (SD_CAPABILITY_IMG2IMG in capabilities) add(SDCapability.IMG2IMG)
@@ -3615,30 +3653,10 @@ private fun inspectionComponentSummary(inspection: SdArtifactInspection): String
 
 @Composable
 private fun DownloadingTab(
+    downloadTasks: List<DownloadTaskEntity>,
     downloadProgress: Map<String, Float>,
-    onCancel: (String) -> Unit
 ) {
-    val sdProgressPrefixes = setOf(
-        "sd_checkpoint|",
-        "sd_upscaler|",
-        "sd_diffusion|",
-        "sd_clip_l|",
-        "sd_clip_g|",
-        "sd_t5xxl|",
-        "sd_tae|",
-        "sd_vae|",
-        "sd_lora|",
-        "sd_controlnet|",
-        "sd_photomaker|",
-        "sd_clip_vision|",
-        "sd_ip_adapter|",
-        "sd_adetailer|"
-    )
-    val activeDownloads = downloadProgress.filter { (key, value) ->
-        sdProgressPrefixes.any { key.startsWith(it) } &&
-            (value == DownloadProgressHolder.INDETERMINATE || value in 0f..0.999f)
-    }
-    
+    val context = LocalContext.current
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -3648,29 +3666,14 @@ private fun DownloadingTab(
             DownloadTaskSection(
                 artifactFamily = com.example.llamadroid.data.model.library.ModelFamily.SD,
                 modelTypes = listOf(
-                    ModelType.SD_CHECKPOINT,
-                    ModelType.SD_UPSCALER,
-                    ModelType.SD_DIFFUSION,
-                    ModelType.SD_CLIP_L,
-                    ModelType.SD_CLIP_G,
-                    ModelType.SD_T5XXL,
-                    ModelType.SD_TAE,
-                    ModelType.SD_VAE,
-                    ModelType.SD_LORA,
-                    ModelType.SD_TEXTUAL_INVERSION,
-                    ModelType.SD_CONTROLNET,
-                    ModelType.SD_PHOTOMAKER,
-                    ModelType.SD_CLIP_VISION,
-                    ModelType.SD_IP_ADAPTER,
-                    ModelType.SD_ADETAILER,
-                    ModelType.SD_AUDIO_VAE,
-                    ModelType.SD_EMBEDDINGS_CONNECTORS,
-                    ModelType.SD_MOTION_MODULE
-                )
+                    *SD_DOWNLOAD_MODEL_TYPES.toTypedArray()
+                ),
+                // The durable active rows below own the live-progress cards.
+                includeTask = { it.status != DOWNLOAD_TASK_STATUS_ACTIVE }
             )
         }
 
-        if (activeDownloads.isEmpty()) {
+        if (downloadTasks.isEmpty()) {
             item {
                 Box(
                     modifier = Modifier
@@ -3695,12 +3698,19 @@ private fun DownloadingTab(
                 }
             }
         } else {
-            items(activeDownloads.toList()) { (key, progress) ->
-                val filename = DownloadProgressHolder.getFilename(key) ?: key
+            items(downloadTasks, key = { it.id }) { task ->
+                val progress = downloadProgress.progressForDownloadTask(task)
+                    ?: task.totalBytes?.takeIf { it > 0L }?.let {
+                        (task.bytesDownloaded.toFloat() / it.toFloat()).coerceIn(0f, 0.999f)
+                    }
+                    ?: DownloadProgressHolder.INDETERMINATE
                 DownloadingCard(
-                    filename = filename,
+                    filename = task.filename,
+                    repository = task.repoId,
                     progress = progress,
-                    onCancel = { onCancel(filename) }
+                    onCancel = {
+                        DownloadService.cancelDownload(context, task.filename, task.id)
+                    }
                 )
             }
         }
@@ -3710,6 +3720,7 @@ private fun DownloadingTab(
 @Composable
 private fun DownloadingCard(
     filename: String,
+    repository: String,
     progress: Float,
     onCancel: () -> Unit
 ) {
@@ -3732,8 +3743,21 @@ private fun DownloadingCard(
                         filename,
                         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
                     )
+                    if (repository.isNotBlank()) {
+                        Text(
+                            repository,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                     Text(
-                        "${(progress * 100).toInt()}%",
+                        if (progress == DownloadProgressHolder.INDETERMINATE) {
+                            stringResource(R.string.models_downloading)
+                        } else {
+                            "${(progress * 100).toInt()}%"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -3748,12 +3772,14 @@ private fun DownloadingCard(
             }
             
             Spacer(modifier = Modifier.height(8.dp))
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(4.dp),
-            )
+            if (progress == DownloadProgressHolder.INDETERMINATE) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(4.dp))
+            } else {
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.fillMaxWidth().height(4.dp),
+                )
+            }
         }
     }
 }

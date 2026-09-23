@@ -788,6 +788,12 @@ sealed interface NativeHarnessUiAction {
     data class AdoptDiscoveredProviderModels(val providerId: String) : NativeHarnessUiAction
     data class DismissDiscoveredProviderModels(val providerId: String) : NativeHarnessUiAction
     data class UpdateProviderField(val providerId: String, val key: String, val value: String) : NativeHarnessUiAction
+    /** Saves capability overrides for an Android-managed model without mutating DSH settings. */
+    data class UpdateLocalModelCapability(
+        val wireId: String,
+        val contextTokens: Long?,
+        val maxOutputTokens: Long?,
+    ) : NativeHarnessUiAction
     /** Secret value is transient and is never retained in [NativeHarnessUiState]. */
     data class SetProviderCredential(val providerId: String, val value: String) : NativeHarnessUiAction
     data class UnsetProviderCredential(val providerId: String) : NativeHarnessUiAction

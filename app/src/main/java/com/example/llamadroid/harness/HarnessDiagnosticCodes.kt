@@ -7,6 +7,7 @@ internal fun harnessDiagnosticErrorClass(value: String): String =
 // These identifiers originate in the app's reviewed error vocabulary. Unknown future
 // backend codes retain the failure event and status, without persisting their payload.
 private val KNOWN_DIAGNOSTIC_CODES = setOf(
+    "gateway/bad-request", "workspace/not-found", "workspace/invalid-path",
     "transport/ws-failure", "transport/ws-closed", "transport/io", "transport/not-authenticated",
     "transport/empty-response", "transport/invalid-response", "transport/timeout",
     "HarnessTransportException", "HarnessRemoteException", "ConnectException", "UnknownHostException",

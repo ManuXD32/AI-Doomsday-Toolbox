@@ -173,6 +173,31 @@ class HarnessWorkspaceRepository(
     }
 
     /**
+     * Stores the canonical DSH identity returned by `adt.prepareWorkspace` before a session is
+     * created.  The guest path is checked against the local workspace so a response for a stale
+     * or different project cannot attach a new session to the wrong group.
+     */
+    internal suspend fun persistPreparedWorkspace(
+        localWorkspaceId: String,
+        prepared: HarnessPreparedWorkspace,
+    ): HarnessWorkspaceEntity? = database.withTransaction {
+        val workspace = dao.workspace(localWorkspaceId) ?: return@withTransaction null
+        require(normalizeHarnessGuestPath(workspace.guestPath) == prepared.guestPath) {
+            "WORKSPACE_IDENTITY_MISMATCH"
+        }
+        val conflict = dao.workspaces().firstOrNull {
+            it.id != workspace.id && it.harnessWorkspaceId == prepared.workspaceId
+        }
+        require(conflict == null) { "HARNESS_WORKSPACE_ID_CONFLICT" }
+        val updated = workspace.copy(
+            harnessWorkspaceId = prepared.workspaceId,
+            updatedAt = System.currentTimeMillis(),
+        )
+        if (updated != workspace) dao.saveWorkspace(updated)
+        updated
+    }
+
+    /**
      * Persists the DSH workspace identity against the app workspace that owns the same guest
      * path.  The DSH workspace id is the canonical grouping key used by the WebUI; retaining it
      * here lets native and WebUI sessions resolve to the same project after a cold start.
@@ -194,6 +219,9 @@ class HarnessWorkspaceRepository(
         // A stale DSH row must never steal an identity that is already bound to a different
         // managed path. The stream can retry once the authoritative group is emitted again.
         if (existing != null && existing.id != candidate.id) return@withTransaction null
+        if (candidate.harnessWorkspaceId != null && candidate.harnessWorkspaceId != harnessWorkspaceId) {
+            return@withTransaction null
+        }
         val updated = candidate.copy(
             harnessWorkspaceId = harnessWorkspaceId,
             updatedAt = System.currentTimeMillis(),
@@ -306,5 +334,3 @@ class HarnessWorkspaceRepository(
         ).also { dao.saveWorkspace(it) }
     }
 }
-
-private fun normalizeHarnessGuestPath(path: String): String = path.trim().trimEnd('/').ifBlank { "/" }

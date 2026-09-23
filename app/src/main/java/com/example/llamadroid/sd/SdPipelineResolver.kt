@@ -221,7 +221,8 @@ object SdPipelineResolver {
             family = family,
             layout = layout,
             spec = spec,
-            inspection = inspection
+            inspection = inspection,
+            mode = config.mode
         )
         val optional = optionalExternalRoles(
             family = family,
@@ -285,7 +286,8 @@ object SdPipelineResolver {
         family: SdModelFamily?,
         layout: SdMainLayout,
         spec: SdModelFamilySpec?,
-        inspection: SdArtifactInspection?
+        inspection: SdArtifactInspection?,
+        mode: com.example.llamadroid.service.SDMode
     ): Set<SdComponentRole> {
         if (family == null || layout == SdMainLayout.UNKNOWN || layout == SdMainLayout.COMPONENT) {
             return emptySet()
@@ -310,7 +312,13 @@ object SdPipelineResolver {
             }
         }
         return if (layout == SdMainLayout.STANDALONE_DIFFUSION) {
-            spec?.requiredRoles.orEmpty()
+            spec?.requiredRoles.orEmpty().toMutableSet().apply {
+                if (mode == com.example.llamadroid.service.SDMode.IMG2IMG &&
+                    spec?.requiresVisionForImg2Img == true
+                ) {
+                    add(SdComponentRole.LLM_VISION)
+                }
+            }
         } else {
             emptySet()
         }
