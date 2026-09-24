@@ -422,6 +422,7 @@
     <string name="harness_reasoning_effort_label">Reasoning effort</string>
     <string name="harness_reasoning_provider_default">Provider default</string>
     <string name="harness_model_catalog_failure">%1$s: %2$s</string>
+    <string name="harness_model_refresh_failed">Could not refresh models. Try again.</string>
     <string name="harness_permission_title">Permission preset</string>
     <string name="harness_permission_description">Choose the Harness sandbox and approval policy for this session.</string>
     <string name="harness_permission_label">Preset</string>

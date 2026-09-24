@@ -32,6 +32,9 @@ fun PendingDownload.toDownloadTaskEntity(
     url: String,
     status: String = DOWNLOAD_TASK_STATUS_ACTIVE
 ): DownloadTaskEntity {
+    require(this.downloadId == null || this.downloadId == downloadId) {
+        "Pending download identity does not match the Room task id"
+    }
     val now = System.currentTimeMillis()
     val partFile = downloadPartFile(destPath)
     return DownloadTaskEntity(
@@ -82,6 +85,7 @@ fun PendingDownload.toDownloadTaskEntity(
 fun DownloadTaskEntity.toPendingDownload(): PendingDownload {
     val type = runCatching { ModelType.valueOf(modelType) }.getOrDefault(ModelType.LLM)
     return PendingDownload(
+        downloadId = id,
         filename = filename,
         repoId = repoId,
         progressKey = progressKey,

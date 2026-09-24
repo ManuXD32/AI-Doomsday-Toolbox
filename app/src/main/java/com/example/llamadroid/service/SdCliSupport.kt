@@ -59,6 +59,10 @@ class SdDisallowedDistributedFlagException(
     override val message: String = "Disallowed distributed stable-diffusion.cpp flag: $flag"
 ) : IllegalStateException(message)
 
+enum class SdReferenceImageIssue { LIMIT_EXCEEDED, BLANK_PATH }
+
+class SdReferenceImageException(val issue: SdReferenceImageIssue) : IllegalArgumentException(issue.name)
+
 fun parseSdBinaryCapabilities(helpText: String): SdBinaryCapabilities {
     val flagRegex = Regex("""(?<![A-Za-z0-9_-])(--[A-Za-z0-9][A-Za-z0-9_-]*|-[A-Za-z])(?![A-Za-z0-9_-])""")
     val nativeModeRegex = Regex("""(?i)\b(?:txt2img|img2img|img_gen|upscale|adetailer|txt2vid|img2vid|vid_gen)\b""")
@@ -241,6 +245,12 @@ fun buildSdCommandArgs(
     val family = pipeline.family
         ?: throw SdPipelineValidationException(pipeline)
     val variant = pipeline.variant
+    val dimensionMultiple = requiredSdImageDimensionMultiple(family.storedValue, variant)
+    if (dimensionMultiple > 8 &&
+        !isValidSdImageDimensions(config.width, config.height, dimensionMultiple)
+    ) {
+        throw SdImageDimensionException(config.width, config.height, dimensionMultiple)
+    }
     val spec = pipeline.spec ?: resolveSdFamilySpec(family, variant)
     val adetailerConfig = config.adetailer?.let { raw ->
         val configured = if (config.mode == SDMode.ADETAILER) {
@@ -528,8 +538,18 @@ fun buildSdCommandArgs(
                 args.addAll(listOf("--strength", effectiveStrength.toString()))
             }
             SdImageInputMode.REFERENCE_IMAGE -> {
-                requireFlag("-r")
-                args.addAll(listOf("-r", input))
+                val references = config.referenceImages
+                    .ifEmpty { listOf(input) }
+                if (references.size > 10) {
+                    throw SdReferenceImageException(SdReferenceImageIssue.LIMIT_EXCEEDED)
+                }
+                if (references.any(String::isBlank)) {
+                    throw SdReferenceImageException(SdReferenceImageIssue.BLANK_PATH)
+                }
+                references.forEach { reference ->
+                    requireFlag("-r")
+                    args.addAll(listOf("-r", reference))
+                }
             }
         }
     }

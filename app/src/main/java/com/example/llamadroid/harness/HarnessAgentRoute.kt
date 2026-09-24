@@ -130,6 +130,7 @@ fun HarnessAgentRoute(navController: NavController, initialConversationId: Long?
     val deletingSessions by runtime.sessionDeletion.pending.collectAsState()
     val generationActivities by runtime.models.generationActivity.collectAsState()
     val deletionStore = remember(context) { HarnessSessionDeletionStore(context) }
+    val titleSync = remember(context) { HarnessWorkspaceTitleSyncStore(context) }
     var projectRevision by remember { mutableStateOf(0) }
     val visibleWorkspaceRows by produceState(emptyList<HarnessWorkspaceEntity>(), workspaceRows, projectRevision) {
         value = withContext(Dispatchers.IO) {
@@ -141,8 +142,10 @@ fun HarnessAgentRoute(navController: NavController, initialConversationId: Long?
     // soon as Room confirms that the workspace was removed so a recreated same-name project
     // cannot inherit the previous controller selection.
     var activeProjectId by rememberSaveable { mutableStateOf<String?>(null) }
-    // Prevent an unchanged DSH group snapshot from issuing the same title repair repeatedly.
-    val repairedDshGroups = remember { ConcurrentHashMap.newKeySet<String>() }
+    // Only explicit Android renames create a pending receipt. A runtime restart
+    // resets the in-memory retry guard while the receipt survives process death.
+    val repairedDshGroups = remember(runtimeState) { ConcurrentHashMap.newKeySet<String>() }
+    val groupRevisions = remember(runtimeState) { HarnessWorkspaceGroupRevisionGuard() }
     var showProjectCreator by remember { mutableStateOf(false) }
     var projectAction by remember { mutableStateOf<Pair<HarnessProjectUi, Boolean>?>(null) }
     var projectRemovalPreview by remember { mutableStateOf<HarnessProjectRemovalPreview?>(null) }
@@ -202,6 +205,7 @@ fun HarnessAgentRoute(navController: NavController, initialConversationId: Long?
     var showRecoveryFileServer by rememberSaveable { mutableStateOf(false) }
     var showRuntimeReinstall by rememberSaveable { mutableStateOf(false) }
     var integrationSession by remember { mutableStateOf<HarnessSessionScope?>(null) }
+    var showAppToolsSettings by rememberSaveable { mutableStateOf(false) }
     var referenceSession by remember { mutableStateOf<HarnessSessionScope?>(null) }
     var referenceQuery by remember { mutableStateOf<String?>(null) }
     var composerReferences by remember { mutableStateOf<List<HarnessComposerReferenceUi>>(emptyList()) }
@@ -234,6 +238,7 @@ fun HarnessAgentRoute(navController: NavController, initialConversationId: Long?
             parentScope = runtime.scope,
             clientProvider = { runtime.client },
             sharedAttention = runtime.attention,
+            liveCommandOutput = runtime.liveCommandOutput,
             runtime = NativeHarnessRuntimeCallbacks(
                 current = { runtime.database.harnessDao().runtime().toRuntimePresentation(context, runtime.errorCode.value, runtime.diagnostics.runtimeEntries.value, runtime.startupInProgress.value) },
                 start = { runtime.start(); runtime.database.harnessDao().runtime().toRuntimePresentation(context, runtime.errorCode.value, runtime.diagnostics.runtimeEntries.value, runtime.startupInProgress.value) },
@@ -243,25 +248,60 @@ fun HarnessAgentRoute(navController: NavController, initialConversationId: Long?
             workspace = NativeHarnessWorkspaceHooks(
                 isSessionRemoved = { id, cwd -> deletionStore.read(id)?.removed == true || projectManager.isSessionRemoved(id, cwd) },
                 reconcileWorkspaceGroup = reconcile@{ group ->
-                    val mapped = withContext(Dispatchers.IO) {
-                        runtime.workspaces.reconcileHarnessWorkspace(group.workspaceId, group.path)
+                    if (!groupRevisions.accept(group.workspaceId, group.updatedAt)) return@reconcile
+                    val pendingTitle = withContext(Dispatchers.IO) {
+                        titleSync.pending(group.workspaceId, group.path)?.title
                     }
-                    val localTitle = mapped?.title?.trim().orEmpty()
+                    val mapped = withContext(Dispatchers.IO) {
+                        runtime.workspaces.reconcileHarnessWorkspace(
+                            group.workspaceId, group.path,
+                            if (pendingTitle == null) group.title else null,
+                        )
+                    }
+                    if (mapped?.harnessWorkspaceId != group.workspaceId || pendingTitle == null) {
+                        return@reconcile
+                    }
+                    if (pendingTitle == group.title.trim()) {
+                        withContext(Dispatchers.IO) {
+                            runtime.workspaces.reconcileHarnessWorkspace(
+                                group.workspaceId, group.path, group.title,
+                            )
+                            titleSync.clear(group.workspaceId)
+                        }
+                        repairedDshGroups.remove(group.workspaceId)
+                        return@reconcile
+                    }
                     val client = runtime.client
-                    if (mapped?.harnessWorkspaceId == null || localTitle.isBlank() || client == null ||
-                        localTitle == group.title.trim() || !repairedDshGroups.add(group.workspaceId)
-                    ) return@reconcile
+                    if (client == null || !repairedDshGroups.add(group.workspaceId)) return@reconcile
                     val result = client.call("workspace", "rename", buildJsonObject {
                         putJsonObject("request") {
                             put("workspaceId", group.workspaceId)
-                            put("title", localTitle)
+                            put("title", pendingTitle)
                         }
                     })
                     if (result is HarnessRpcResult.Failure) repairedDshGroups.remove(group.workspaceId)
                 },
                 resolveSession = resolveSession@{ id, title, cwd, archived ->
                     if (deletionStore.read(id)?.removed == true || projectManager.isSessionRemoved(id, cwd)) return@resolveSession null
-                    if (cwd != null) runtime.workspaces.importSession(id, title, cwd, archived = archived)
+                    if (cwd != null) {
+                        val dao = runtime.database.harnessDao()
+                        val sessionAlreadyIndexed = dao.session(id) != null
+                        val isNewManagedProject = isManagedProjectGuestPath(cwd.trim())
+                        val cwdMatchesRegisteredWorkspace = !sessionAlreadyIndexed &&
+                            !isNewManagedProject && cwd.trim().startsWith('/') &&
+                            dao.workspaces().any { workspace ->
+                                harnessSessionPathMatchesProject(cwd, workspace.guestPath, exact = false)
+                            }
+                        if (!shouldImportHarnessSessionWorkspace(
+                                sessionAlreadyIndexed = sessionAlreadyIndexed,
+                                cwdMatchesRegisteredWorkspace = cwdMatchesRegisteredWorkspace,
+                                cwd = cwd,
+                            )
+                        ) {
+                            return@resolveSession null
+                        }
+                        runtime.workspaces.importSession(id, title, cwd, archived = archived)
+                    }
                     if (runtime.database.harnessDao().session(id) != null) {
                         val mapped = runtime.workspaces.scope(id)
                         HarnessWorkspaceUiState(mapped.workspace.projectFolder,
@@ -308,8 +348,14 @@ fun HarnessAgentRoute(navController: NavController, initialConversationId: Long?
                     )
                 }.getOrNull()
             },
-            updateLocalModelCapability = { wireId, contextTokens, maxOutputTokens ->
-                runtime.updateLocalModelCapability(wireId, contextTokens, maxOutputTokens)
+            updateLocalModelCapability = { wireId, contextTokens, maxOutputTokens, mtpEnabled, thinkingEnabled ->
+                runtime.updateLocalModelCapability(
+                    wireId,
+                    contextTokens,
+                    maxOutputTokens,
+                    mtpEnabled,
+                    thinkingEnabled,
+                )
             },
             navigation = NativeHarnessNavigationHooks(
                 openOriginalWebUi = { withContext(Dispatchers.Main) { showOriginal = true } },
@@ -552,6 +598,7 @@ fun HarnessAgentRoute(navController: NavController, initialConversationId: Long?
                 projectsLoaded = workspaceRowsSnapshot != null && !reinstallInProgress,
                 initialProjectId = activeProjectId,
                 onOpenProject = { activeProjectId = it },
+                onOpenAppToolsSettings = { showAppToolsSettings = true },
                 onCloseProject = { activeProjectId = null },
                 onCreateProject = { showProjectCreator = true },
                 onRenameProject = { project ->
@@ -599,19 +646,35 @@ fun HarnessAgentRoute(navController: NavController, initialConversationId: Long?
             canDeleteFiles = projectRemovalPreview?.fileDeletionSupported != false,
             pendingDeleteFiles = projectRemovalPreview?.takeIf { it.pendingRemoval }?.pendingDeleteFiles,
             onRename = { title ->
-                projectManager.rename(project.id, title)
+                val groupIds = withContext(Dispatchers.IO) {
+                    runtime.workspaces.harnessWorkspaceIdsForProject(project.id)
+                }
+                val guestPath = withContext(Dispatchers.IO) {
+                    requireNotNull(runtime.database.harnessDao().workspace(project.id)).guestPath
+                }
+                withContext(Dispatchers.IO) {
+                    groupIds.forEach { titleSync.mark(it, guestPath, title) }
+                }
+                try {
+                    projectManager.rename(project.id, title)
+                } catch (failure: Throwable) {
+                    withContext(Dispatchers.IO) { groupIds.forEach(titleSync::clear) }
+                    throw failure
+                }
                 val client = runtime.client
                 if (client != null) {
-                    withContext(Dispatchers.IO) {
-                        runtime.workspaces.harnessWorkspaceIdsForProject(project.id)
-                    }.forEach { harnessWorkspaceId ->
+                    groupIds.forEach { harnessWorkspaceId ->
+                        repairedDshGroups.add(harnessWorkspaceId)
                         val result = client.call("workspace", "rename", buildJsonObject {
                             putJsonObject("request") {
                                 put("workspaceId", harnessWorkspaceId)
                                 put("title", title.trim())
                             }
                         })
-                        if (result is HarnessRpcResult.Failure) repairedDshGroups.remove(harnessWorkspaceId)
+                        if (result is HarnessRpcResult.Failure) {
+                            repairedDshGroups.remove(harnessWorkspaceId)
+                            showError = true
+                        }
                     }
                 }
                 projectRevision++
@@ -747,6 +810,7 @@ fun HarnessAgentRoute(navController: NavController, initialConversationId: Long?
     integrationSession?.let { captured -> HarnessProjectIntegrationDialog(runtime, captured,
         onManageKnowledge = { integrationSession = null; navController.navigate(Screen.KnowledgeBase.route) },
         onDismiss = { integrationSession = null }) }
+    if (showAppToolsSettings) HarnessAppToolsSettingsDialog(runtime) { showAppToolsSettings = false }
     if (showJournal) HarnessRuntimeJournalDialog(runtime.diagnostics) { showJournal = false }
     if (showLegacy) HarnessLegacyHistory(
         runtime.database, initialConversationId?.takeIf { id -> legacy.any { it.id == id } },
@@ -908,41 +972,19 @@ private suspend fun prepareHarnessProject(runtime: HarnessAppRuntime, selected: 
     val result = client.prepareWorkspace(buildJsonObject {
         put("workspaceId", selected.id); put("guestPath", selected.guestPath); put("backend", selected.backend)
     })
-    when (result) {
+    val prepared = when (result) {
         is HarnessRpcResult.Failure -> error(result.error.code)
-        is HarnessRpcResult.Success -> {
-            val value = result.value as? JsonObject
-            if (value?.get("ok") == kotlinx.serialization.json.JsonPrimitive(false)) {
-                val failure = value["error"] as? JsonObject
-                error((failure?.get("code") as? kotlinx.serialization.json.JsonPrimitive)?.content ?: "WORKSPACE_PREPARE_FAILED")
-            }
-        }
+        is HarnessRpcResult.Success -> parseHarnessPreparedWorkspace(result.value)
+            ?: error("WORKSPACE_IDENTITY_INVALID")
     }
-
-    // adt.prepareWorkspace validates the Android-owned path and creates its guest directory;
-    // its workspaceId is the local Room ID, not necessarily a DSH registry ID. Register that
-    // path with DSH before session.create so the WebUI and native client share one group.
-    val registered = client.call("workspace", "create", buildJsonObject {
-        putJsonObject("request") { put("path", selected.guestPath) }
-    })
-    val prepared = (registered as? HarnessRpcResult.Success)
-        ?.let { parseHarnessPreparedWorkspace(it.value) }
-        ?.takeIf { it.guestPath == normalizeHarnessGuestPath(selected.guestPath) }
-    if (prepared != null) {
-        try {
-            runtime.workspaces.persistPreparedWorkspace(selected.id, prepared)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (failure: Exception) {
-            // A stale Room alias must not prevent DSH from creating a session in the
-            // successfully registered, path-verified workspace.
-            runtime.diagnostics.event(null, "workspace_registration", "failure",
-                errorCode = failure.javaClass.simpleName)
-        }
-    } else runtime.diagnostics.event(null, "workspace_registration", "failure",
-        errorCode = (registered as? HarnessRpcResult.Failure)?.error?.code ?: "WORKSPACE_IDENTITY_INVALID")
-
-    // DSH alpha2 rejects requests containing both workspaceId and cwd. If registry creation
-    // fails, cwd still permits a session; the next workspace refresh can reconcile its path.
+    require(prepared.guestPath == normalizeHarnessGuestPath(selected.guestPath)) {
+        "WORKSPACE_IDENTITY_MISMATCH"
+    }
+    // The single authenticated prepare route now validates Android's project,
+    // registers its DSH group and persists their mapping before session/create.
+    // A failed registration must surface here rather than create an ungrouped chat.
+    requireNotNull(runtime.workspaces.persistPreparedWorkspace(selected.id, prepared)) {
+        "WORKSPACE_NOT_FOUND"
+    }
     return harnessSessionCreateLocation(selected.guestPath, prepared)
 }

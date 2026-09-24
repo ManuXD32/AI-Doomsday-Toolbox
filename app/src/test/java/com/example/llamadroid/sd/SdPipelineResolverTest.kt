@@ -3,6 +3,7 @@ package com.example.llamadroid.sd
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.service.SDConfig
 import com.example.llamadroid.service.SdBinaryCapabilities
+import com.example.llamadroid.service.SdImageDimensionException
 import com.example.llamadroid.service.buildSdCommandArgs
 import com.example.llamadroid.service.inferSdFamilyForConfig
 import org.junit.Assert.assertEquals
@@ -114,6 +115,7 @@ class SdPipelineResolverTest {
 
     @Test
     fun `qwen image 21 image editing requires and emits the matching mmproj`() {
+        val references = listOf("/tmp/input.png", "/tmp/ref-2.png", "/tmp/ref-3.png")
         val base = SDConfig(
             mode = com.example.llamadroid.service.SDMode.IMG2IMG,
             modelPath = "/models/qwen_image_2.1-Q4_K.gguf",
@@ -122,7 +124,8 @@ class SdPipelineResolverTest {
             modelLayout = SdMainLayout.STANDALONE_DIFFUSION,
             prompt = "edit this image",
             outputPath = "/tmp/out.png",
-            initImage = "/tmp/input.png",
+            initImage = references.first(),
+            referenceImages = references,
             vaePath = "/models/qwen-image-vae.safetensors",
             llmPath = "/models/Qwen3VL-8B-Instruct-Q4_K_M.gguf"
         )
@@ -140,7 +143,34 @@ class SdPipelineResolverTest {
         val pipeline = resolveValidatedSdPipeline(withVision)
         assertTrue(SdComponentRole.LLM_VISION in pipeline.requiredExternalRoles)
         val args = buildSdCommandArgs(withVision, pipeline, SdBinaryCapabilities.ALLOW_ALL)
-        assertTrue(args.containsAll(listOf("--llm_vision", "-r", "/tmp/input.png")))
+        assertTrue(args.contains("--llm_vision"))
+        assertEquals(
+            references,
+            args.windowed(2).filter { it.first() == "-r" }.map { it.last() }
+        )
+    }
+
+    @Test
+    fun `qwen image 21 command rejects dimensions that are not multiples of 32`() {
+        val error = runCatching {
+            buildSdCommandArgs(
+                SDConfig(
+                    modelPath = "/models/qwen_image_2.1-Q4_K.gguf",
+                    modelFamily = SdModelFamily.QWEN_IMAGE.storedValue,
+                    modelVariant = "2.1",
+                    modelLayout = SdMainLayout.STANDALONE_DIFFUSION,
+                    prompt = "a lighthouse",
+                    outputPath = "/tmp/out.png",
+                    width = 520,
+                    height = 512,
+                    vaePath = "/models/qwen-image-vae.safetensors",
+                    llmPath = "/models/Qwen3VL-8B-Instruct-Q4_K_M.gguf"
+                ),
+                SdBinaryCapabilities.ALLOW_ALL
+            )
+        }.exceptionOrNull()
+
+        assertTrue(error is SdImageDimensionException)
     }
 
     @Test

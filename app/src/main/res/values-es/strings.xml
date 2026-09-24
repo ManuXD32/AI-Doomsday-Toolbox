@@ -6051,6 +6051,7 @@
     <string name="tama_training_title_ring">Ring de título</string>
     <string name="engine_sdcpp">Stable Diffusion.cpp</string>
     <string name="imagegen_width_height_multiple_8">El ancho y la altura deben ser divisibles entre 8.</string>
+    <string name="imagegen_qwen_dimensions_multiple">El ancho y la altura de Qwen Image 2.1 deben ser divisibles entre %1$d.</string>
     <string name="agent_approval_tool_summary">La herramienta requiere aprobación: %1$s</string>
     <string name="agent_approval_risk_summary">Nivel de riesgo: %1$s</string>
     <string name="agent_approval_execution_mode_summary">Modo de ejecución: %1$s</string>
@@ -7457,7 +7458,8 @@
     <string name="litert_error_worker_bad_request">El trabajador acelerador LiteRT recibió una solicitud incompleta.</string>
     <string name="litert_error_worker_bind">No se pudo iniciar el proceso trabajador acelerador LiteRT.</string>
     <string name="litert_error_gpu_worker_crashed">El trabajador GPU LiteRT se cerró por un fallo. La app principal siguió abierta; Auto probará CPU, o selecciona CPU para este modelo.</string>
-    <string name="litert_error_cpu_worker_crashed">El trabajador CPU LiteRT se cerró por un fallo. La app principal siguió abierta; prueba un contexto menor, un límite de salida más bajo o un modelo más pequeño.</string>
+    <string name="litert_error_cpu_worker_crashed">El trabajador CPU LiteRT se cerró por un fallo. La app principal siguió abierta; prueba un contexto o límite de salida menor, desactiva MTP o usa un modelo más pequeño.</string>
+    <string name="litert_error_tools_unavailable">LiteRT no pudo exponer todas las herramientas activadas a este modelo, así que se detuvo la generación antes de usar una lista parcial. Comprueba la compatibilidad de herramientas de LiteRT e inténtalo de nuevo.</string>
     <string name="litert_error_gpu_runtime_missing">No se pudo cargar el acelerador nativo LiteRT GPU: %1$s</string>
     <string name="litert_error_gpu_probe_failed">El sondeo GPU de LiteRT falló antes de inicializar el motor: %1$s</string>
     <string name="litert_tools_unavailable_desc">LiteRT puede usar el bucle de herramientas de la app para web, bases de conocimiento, notas, calendario, alarmas e imágenes. Los modelos LiteRT ajustados para funciones siguen mejor las llamadas; los modelos de chat normales pueden necesitar un reintento.</string>
@@ -8750,7 +8752,7 @@
     <string name="sd_bundle_video_title">Vídeo local con Wan 2.2</string>
     <string name="sd_bundle_video_desc">Wan 2.2 TI2V 5B Q4 con UMT5 Q4 y el VAE de Wan 2.2 para generar vídeo localmente.</string>
     <string name="sd_bundle_qwen_image_21_title">Qwen Image 2.1 · visión completa Q4</string>
-    <string name="sd_bundle_qwen_image_21_desc">Modelo de difusión Q4 de Qwen Image 2.1 con el codificador de texto Qwen3-VL 8B Q4, proyector de visión Q8 y VAE BF16. Usa --diffusion-model, --llm, --llm_vision y --vae con soporte de descarga a CPU. Los recursos de Qwen Image usan la licencia Qwen Research; los componentes Qwen3-VL usan Apache-2.0.</string>
+    <string name="sd_bundle_qwen_image_21_desc" tools:ignore="Typos,TypographyDashes">Modelo de difusión Q4 de Qwen Image 2.1 con el codificador de texto Qwen3-VL 8B Q4, proyector de visión F16 oficial y fijado, y VAE BF16. El proyector F16 se recomienda para instalaciones nuevas; los proyectores Q8 compatibles que ya estén en el dispositivo siguen disponibles. Usa --diffusion-model, --llm, --llm_vision y --vae con descarga a CPU. Los recursos de Qwen Image usan la licencia Qwen Research; los componentes Qwen3-VL usan Apache-2.0.</string>
     <string name="sd_bundle_upscale_photo_2x_title">Escalado fotográfico 2×</string>
     <string name="sd_bundle_upscale_photo_2x_desc">RealESRGAN x2plus para ampliar fotografías de forma moderada.</string>
     <string name="sd_bundle_upscale_photo_4x_title">Escalado fotográfico 4×</string>
@@ -8889,9 +8891,10 @@
     <string name="imagegen_show_expert">Mostrar controles avanzados</string>
     <string name="imagegen_hide_expert">Ocultar controles avanzados</string>
     <string name="imagegen_inpaint_editor_title">Dibujar máscara de regeneración</string>
-    <string name="imagegen_inpaint_editor_tutorial">Pinta de rojo el área que quieras regenerar. Usa dos dedos para ampliar o mover la imagen.</string>
+    <string name="imagegen_inpaint_editor_tutorial">Pinta o arrastra un círculo sobre el área que quieras regenerar. Usa dos dedos para ampliar o mover la imagen.</string>
     <string name="imagegen_inpaint_editor_add">Añadir máscara</string>
     <string name="imagegen_inpaint_editor_erase">Borrar máscara</string>
+    <string name="imagegen_inpaint_editor_circle">Máscara circular</string>
     <string name="imagegen_inpaint_editor_invert">Invertir máscara</string>
     <string name="action_undo">Deshacer</string>
     <string name="action_redo">Rehacer</string>
@@ -8899,6 +8902,26 @@
     <string name="imagegen_inpaint_editor_brush_size">Tamaño del pincel</string>
     <string name="imagegen_inpaint_editor_softness">Suavidad del borde</string>
     <string name="imagegen_inpaint_editor_load_error">No se ha podido abrir la imagen de origen o la máscara.</string>
+    <string name="imagegen_error_inpaint_composite">No se ha podido combinar la reparación con la imagen original. Prueba con una imagen más pequeña o vuelve a ejecutar la reparación.</string>
+    <string name="imagegen_reference_images_title">Referencias de Qwen</string>
+    <plurals name="imagegen_reference_images_count">
+        <item quantity="one">%1$d / %2$d imagen</item>
+        <item quantity="many">%1$d / %2$d imágenes</item>
+        <item quantity="other">%1$d / %2$d imágenes</item>
+    </plurals>
+    <string name="imagegen_reference_images_order_help">La imagen de origen se envía primero. Las referencias añadidas siguen este orden.</string>
+    <string name="imagegen_qwen_inpaint_mask_note">Qwen Image 2.1 edita a partir de imágenes de referencia. La máscara sigue separada y restaura los píxeles de origen fuera de su área después de generar; la edición guiada por máscara depende del runtime seleccionado.</string>
+    <string name="imagegen_reference_images_add">Añadir imágenes de referencia</string>
+    <string name="imagegen_reference_image_description">Imagen de referencia %1$d</string>
+    <string name="imagegen_reference_image_move_up">Mover referencia antes</string>
+    <string name="imagegen_reference_image_move_down">Mover referencia después</string>
+    <string name="imagegen_reference_image_remove">Quitar referencia</string>
+    <string name="imagegen_source_image_remove">Quitar imagen de origen</string>
+    <string name="imagegen_reference_import_failed">No se pudieron importar una o varias imágenes de referencia. Elige imágenes PNG, JPEG, WebP o BMP legibles.</string>
+    <string name="imagegen_reference_image_too_large">Cada imagen de referencia debe ocupar 128 MiB o menos.</string>
+    <string name="imagegen_reference_image_size_limit">Cada imagen de referencia puede ocupar hasta 128 MiB.</string>
+    <string name="imagegen_reference_images_limit_error">Selecciona un máximo de 10 imágenes, incluida la imagen de origen.</string>
+    <string name="imagegen_reference_image_path_error">Una imagen de referencia ya no está disponible. Quítala y vuelve a elegirla.</string>
     <string name="imagegen_readiness_title">Antes de poder generar</string>
     <string name="imagegen_readiness_model">Selecciona un modelo de difusión instalado.</string>
     <string name="imagegen_readiness_prompt">Completa arriba el prompt obligatorio.</string>

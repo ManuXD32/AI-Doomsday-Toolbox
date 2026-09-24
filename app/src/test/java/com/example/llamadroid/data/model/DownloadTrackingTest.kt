@@ -40,6 +40,83 @@ class DownloadTrackingTest {
     }
 
     @Test
+    fun `three same repository downloads keep their ids through room recovery`() {
+        val filenames = listOf("alpha.gguf", "beta.gguf", "gamma.gguf")
+        val tasks = filenames.mapIndexed { index, filename ->
+            val id = buildDownloadTaskId("owner/shared-repo", filename, ModelType.LLM)
+            PendingDownloadHolder.addPending(
+                downloadId = id,
+                filename = filename,
+                repoId = "owner/shared-repo",
+                progressKey = id,
+                type = ModelType.LLM,
+                destPath = "/tmp/$index/$filename"
+            )
+            DownloadProgressHolder.updateProgress(id, filename, (index + 1) / 4f)
+            requireNotNull(PendingDownloadHolder.getPending(id)).toDownloadTaskEntity(
+                downloadId = id,
+                url = "https://example.invalid/$filename"
+            )
+        }
+
+        assertEquals(3, tasks.map { it.id }.distinct().size)
+        tasks.forEach { task ->
+            PendingDownloadHolder.addPendingFrom(task.copy(updatedAt = task.updatedAt + 10_000L))
+            val recovered = requireNotNull(PendingDownloadHolder.getPending(task.id))
+            assertEquals(task.id, recovered.downloadId)
+            assertEquals(task.id, recovered.progressKey)
+            assertEquals(task.filename, recovered.filename)
+            assertEquals(task.destPath, recovered.destPath)
+            assertEquals(task.filename, DownloadProgressHolder.getFilename(task.progressKey))
+        }
+
+        tasks.forEach { task ->
+            PendingDownloadHolder.removePending(task.id)
+            DownloadProgressHolder.removeProgress(task.progressKey)
+        }
+    }
+
+    @Test
+    fun `duplicate filename aliases never redirect a task identity`() {
+        val firstId = buildDownloadTaskId("owner/one", "projector.gguf", ModelType.MMPROJ)
+        val secondId = buildDownloadTaskId("owner/two", "projector.gguf", ModelType.MMPROJ)
+        PendingDownloadHolder.addPending(
+            downloadId = firstId,
+            filename = "projector.gguf",
+            repoId = "owner/one",
+            progressKey = firstId,
+            type = ModelType.MMPROJ,
+            destPath = "/tmp/one/projector.gguf"
+        )
+        PendingDownloadHolder.addPending(
+            downloadId = secondId,
+            filename = "projector.gguf",
+            repoId = "owner/two",
+            progressKey = secondId,
+            type = ModelType.MMPROJ,
+            destPath = "/tmp/two/projector.gguf"
+        )
+
+        assertNull(PendingDownloadHolder.getPending("projector.gguf"))
+        assertEquals("/tmp/one/projector.gguf", PendingDownloadHolder.getPending(firstId)?.destPath)
+        assertEquals("/tmp/two/projector.gguf", PendingDownloadHolder.getPending(secondId)?.destPath)
+
+        PendingDownloadHolder.removePending(firstId)
+        assertEquals(secondId, PendingDownloadHolder.getPending("projector.gguf")?.downloadId)
+        PendingDownloadHolder.removePending(secondId)
+        assertNull(PendingDownloadHolder.getPending("projector.gguf"))
+    }
+
+    @Test
+    fun `legacy filename fallback is unavailable when multiple room rows share the name`() {
+        val first = downloadTask("repo-one", "owner/one", "same.gguf", createdAt = 1L)
+        val second = downloadTask("repo-two", "owner/two", "same.gguf", createdAt = 2L)
+
+        assertNull(listOf(first, second).filter { it.filename == "same.gguf" }.singleOrNull())
+        assertEquals(first, listOf(first).filter { it.filename == "same.gguf" }.singleOrNull())
+    }
+
+    @Test
     fun `progress holder tracks exact task filenames independently`() {
         val firstKey = buildDownloadTaskId("repo/one", "mmproj.gguf", ModelType.VISION_PROJECTOR)
         val secondKey = buildDownloadTaskId("repo/two", "mmproj.gguf", ModelType.VISION_PROJECTOR)

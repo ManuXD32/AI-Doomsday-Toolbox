@@ -319,6 +319,27 @@ private val QWEN_IMAGE_21_VISION_Q8 = SdCuratedBundleFile(
     componentRole = "llm_vision"
 )
 
+/** Official Qwen projector variant preferred for new Qwen Image 2.1 installs. */
+private val QWEN_IMAGE_21_VISION_F16 = SdCuratedBundleFile(
+    id = "qwen-image-21-vision-f16",
+    repoId = "Qwen/Qwen3-VL-8B-Instruct-GGUF",
+    revision = "00e7d63528e65d7b64e80e1293a8360b4af6a594",
+    remotePath = "mmproj-Qwen3VL-8B-Instruct-F16.gguf",
+    modelType = ModelType.MMPROJ,
+    sizeBytes = 1_160_000_000L,
+    sha256 = "ca524100ebf825c9a870db1c580d03879e0da0ab2541697e2458e64891cf9d38",
+    licenseLabel = "Apache-2.0",
+    sizeIsApproximate = true,
+    isVision = true,
+    sdFamily = "qwen_image",
+    sdVariant = "2.1",
+    sdCompatProfiles = "qwen_image:2.1",
+    componentRole = "llm_vision"
+)
+
+/** The former curated Q8 filename remains verifiable and usable by installed rows. */
+private val SD_CURATED_COMPATIBILITY_FILES = listOf(QWEN_IMAGE_21_VISION_Q8)
+
 private val QWEN_IMAGE_21_VAE = SdCuratedBundleFile(
     id = "qwen-image-21-vae",
     repoId = "Comfy-Org/Qwen-Image-2.1",
@@ -425,7 +446,7 @@ object SdCuratedBundleCatalog {
             files = listOf(
                 QWEN_IMAGE_21_DIFFUSION_Q4,
                 QWEN_IMAGE_21_TEXT_Q4,
-                QWEN_IMAGE_21_VISION_Q8,
+                QWEN_IMAGE_21_VISION_F16,
                 QWEN_IMAGE_21_VAE
             ),
             commandContract = SdCommandContract(
@@ -464,6 +485,9 @@ object SdCuratedBundleCatalog {
             bundle.files.firstOrNull { file ->
                 file.localFilename(bundle.installPrefix) == filename
             }
+        } ?: SD_CURATED_COMPATIBILITY_FILES.firstOrNull { file ->
+            val qwenBundle = byId("qwen-image-21-q4-vision") ?: return@firstOrNull false
+            file.localFilename(qwenBundle.installPrefix) == filename
         }
 }
 

@@ -7,7 +7,9 @@ import com.example.llamadroid.data.HttpEndpointUrlSupport
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.model.LITERT_BACKEND_GPU
+import com.example.llamadroid.data.model.LiteRtModelEntity
 import com.example.llamadroid.data.model.LlamaChatEntity
+import com.example.llamadroid.data.model.defaultLiteRtEngineMaxTokens
 import com.example.llamadroid.data.runtime.AgentRuntimeProfileRuntime
 import com.example.llamadroid.data.runtime.ManagedLlamaServerState
 import com.example.llamadroid.harness.HarnessWorkspaceAccess.Companion.readBounded
@@ -30,6 +32,9 @@ import com.example.llamadroid.service.LiteRtToolCallSpec
 import com.example.llamadroid.service.LiteRtToolDefinition
 import com.example.llamadroid.service.resolveAgentLiteRtContextTokens
 import com.example.llamadroid.service.resolveAgentLiteRtMaxOutputTokens
+import com.example.llamadroid.service.resolveLiteRtBackend
+import com.example.llamadroid.service.resolveLiteRtRequestedOutputTokens
+import com.example.llamadroid.service.compactLiteRtToolParameterSchemaJson
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -60,13 +65,67 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 
+internal fun resolveHarnessLiteRtContextTokens(
+    model: LiteRtModelEntity,
+    perModelOverride: Int?,
+    globalOverride: Int,
+): Int {
+    val harnessDefault = minOf(
+        HARNESS_LITERT_DEFAULT_CONTEXT_TOKENS,
+        model.defaultLiteRtEngineMaxTokens()?.takeIf { it > 0 } ?: HARNESS_LITERT_DEFAULT_CONTEXT_TOKENS,
+    )
+    val selectedOverride = perModelOverride?.takeIf { it > 0 }
+        ?: globalOverride.takeIf { it > 0 }
+        ?: harnessDefault
+    return resolveAgentLiteRtContextTokens(
+        savedContextTokens = selectedOverride,
+        model = model,
+        fallbackContextTokens = HARNESS_LITERT_DEFAULT_CONTEXT_TOKENS,
+    )
+}
+
+internal const val HARNESS_LITERT_DEFAULT_CONTEXT_TOKENS = 16_384
+internal const val HARNESS_LITERT_DEFAULT_OUTPUT_TOKENS = 2_048
+
+internal fun resolveHarnessLiteRtOutputTokens(
+    model: LiteRtModelEntity,
+    requestedOutputTokens: Int?,
+    perModelMaximum: Long?,
+    globalMaximum: Int,
+    contextTokens: Int,
+): Int {
+    val requestedOrConfiguredOutput = resolveLiteRtRequestedOutputTokens(
+        requestedOutputTokens = requestedOutputTokens,
+        perModelMaximum = perModelMaximum,
+        globalMaximum = globalMaximum,
+    )
+    val hasSavedOutputOverride = perModelMaximum?.let { it in 1L..Int.MAX_VALUE.toLong() } == true || globalMaximum > 0
+    // The upstream OpenAI-compatible route can supply the generic 8,096-token
+    // default even when the app has no saved LiteRT output override. Treat that
+    // as a request ceiling and apply Harness's safer automatic default. Smaller
+    // request budgets and saved per-model/global values remain effective.
+    val configuredOutput = when {
+        requestedOrConfiguredOutput == null -> HARNESS_LITERT_DEFAULT_OUTPUT_TOKENS
+        !hasSavedOutputOverride -> minOf(requestedOrConfiguredOutput, HARNESS_LITERT_DEFAULT_OUTPUT_TOKENS)
+        else -> requestedOrConfiguredOutput
+    }
+    return resolveAgentLiteRtMaxOutputTokens(
+        savedMaxOutputTokens = configuredOutput,
+        resolvedContextTokens = contextTokens,
+        model = model,
+    )
+}
+
 /** Provider adapter uses existing catalogs and workers; Harness remains the only agent loop. */
 class HarnessLocalModels(private val context: Context, private val database: AppDatabase) {
     private val settings: SettingsRepository get() = SettingsRepository(context)
+    private val modelCapabilities = HarnessLocalModelCapabilityStore(context)
     /** Streaming inference has no wall-clock read deadline; cancellation owns the call. */
     private val client = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(0, TimeUnit.MILLISECONDS).build()
     private val inference = Mutex()
     private val activeRequests = java.util.concurrent.ConcurrentHashMap.newKeySet<Job>()
+    /** Runtime-only safety latch; saved per-model choices remain unchanged. */
+    private val degradedLiteRtModels = HarnessLiteRtDegradedModeLatch()
     private val mutableGenerationActivity = MutableStateFlow<Map<String, HarnessGenerationActivity>>(emptyMap())
     /** Active request metadata for native waiting/prefill presentation. */
     val generationActivity: StateFlow<Map<String, HarnessGenerationActivity>> =
@@ -75,7 +134,12 @@ class HarnessLocalModels(private val context: Context, private val database: App
     private val ownershipLock = Any()
     @Volatile private var owner = "harness-${UUID.randomUUID()}"
 
-    fun beginRuntime(generation: String) { owner = "harness-$generation" }
+    fun beginRuntime(generation: String) {
+        owner = "harness-$generation"
+        // A worker death is evidence for this runtime/session only. Do not carry
+        // a degraded profile into a later Harness launch or model replacement.
+        degradedLiteRtModels.clear()
+    }
 
     suspend fun releaseOwnedResources(retainActiveRuntime: Boolean = false) {
         val retainedOwner = owner.takeIf { retainActiveRuntime }
@@ -95,9 +159,54 @@ class HarnessLocalModels(private val context: Context, private val database: App
         val settings = this.settings
         val data = JSONArray()
         database.liteRtModelDao().getAllOnce().filter { File(it.path).exists() }.forEach { model ->
+            val wireId = "litert:${model.id}"
+            val capabilityOverride = modelCapabilities.get(wireId)
+            val advertisedContext = model.defaultLiteRtEngineMaxTokens()
+            val modelContextOverride = capabilityOverride?.contextTokens
+                ?.takeIf { it in 1L..Int.MAX_VALUE.toLong() }
+                ?.toInt()
+            val requestedContext = resolveHarnessLiteRtContextTokens(
+                model = model,
+                perModelOverride = modelContextOverride,
+                globalOverride = settings.agentLiteRtContextTokens.value,
+            )
+            val effectiveOutput = resolveHarnessLiteRtOutputTokens(
+                model = model,
+                requestedOutputTokens = null,
+                perModelMaximum = capabilityOverride?.maxOutputTokens,
+                globalMaximum = settings.agentLiteRtMaxOutputTokens.value,
+                contextTokens = requestedContext,
+            )
+            val effectiveBackendLimits = resolveLiteRtBackend(
+                model = model,
+                requestedBackend = settings.agentLiteRtBackend.value,
+                requestedContextTokens = requestedContext,
+                requestedOutputTokens = effectiveOutput,
+            )
+            val effectiveCatalogContext = effectiveBackendLimits.contextTokens
             data.put(JSONObject().put("id", "litert:${model.id}").put("object", "model")
                 .put("owned_by", "adt-litert").put("name", model.displayName)
-                .apply { model.maxContextTokens?.takeIf { value -> value > 0 }?.let { value -> put("context_length", value) } }
+                .apply {
+                    effectiveCatalogContext.takeIf { modelContextOverride != null || advertisedContext != null }
+                        ?.takeIf { it > 0 }
+                        ?.let { put("context_length", it) }
+                    put("effective_backend_context_length", effectiveCatalogContext)
+                    put("effective_backend_max_output_tokens", effectiveBackendLimits.outputTokens)
+                    put("effective_backend", effectiveBackendLimits.effectiveBackend)
+                    put("requested_backend", effectiveBackendLimits.requestedBackend)
+                    put(
+                        "gpu_safety_limit_applied",
+                        effectiveBackendLimits.effectiveBackend == LITERT_BACKEND_GPU &&
+                            effectiveBackendLimits.gpuWouldReduceRequest,
+                    )
+                    put("auto_chose_cpu_for_capacity", effectiveBackendLimits.autoChoseCpuForCapacity)
+                    advertisedContext?.takeIf { it > 0 }?.let { put("advertised_context_length", it) }
+                    when {
+                        modelContextOverride != null -> put("capabilitySource", "explicit")
+                        advertisedContext != null -> put("capabilitySource", "detected")
+                    }
+                    put("max_output_tokens", effectiveBackendLimits.outputTokens)
+                }
                 .put("input_modalities", JSONArray().put("text").apply { if (model.supportsVision) put("image"); if (model.supportsAudio) put("audio") }))
         }
         AgentRuntimeProfileRuntime.repositoryState.value?.managedServerCatalog?.observeServers()?.first()
@@ -220,6 +329,21 @@ class HarnessLocalModels(private val context: Context, private val database: App
         }
     }
 
+    private fun updateGenerationActivityPhase(requestId: String, phase: String) {
+        mutableGenerationActivity.update { current ->
+            val previous = current[requestId] ?: return@update current
+            current + (requestId to previous.copy(
+                phase = phase,
+                known = false,
+                total = null,
+                cached = null,
+                processed = null,
+                timeMs = null,
+                updatedAtMs = System.currentTimeMillis(),
+            ))
+        }
+    }
+
     /**
      * Promote waiting/prefill to generating only when a real model delta is
      * emitted. Role-only, finish, usage, and prompt-progress frames must not
@@ -275,12 +399,14 @@ class HarnessLocalModels(private val context: Context, private val database: App
             val function = item.optJSONObject("function") ?: return@mapNotNull null
             val schema = function.optJSONObject("parameters") ?: JSONObject()
             val properties = schema.optJSONObject("properties") ?: JSONObject()
+            val rawParameterSchema = schema.toString()
+            val compactParameterSchema = compactLiteRtToolParameterSchemaJson(rawParameterSchema) ?: rawParameterSchema
             LiteRtToolDefinition(function.getString("name"), function.optString("description"),
                 properties.keys().asSequence().mapNotNull { key ->
                     properties.optJSONObject(key)?.let { key to it.optString("description", key) }
                 }.toMap(),
                 schema.optJSONArray("required")?.let { array -> (0 until array.length()).map { array.getString(it) } }.orEmpty(),
-                parameterSchemaJson = schema.toString())
+                parameterSchemaJson = compactParameterSchema)
         }
         val toolNames = messages.flatMap { it.optJSONArray("tool_calls")?.objects().orEmpty() }
             .associate { it.optString("id") to it.getJSONObject("function").getString("name") }
@@ -296,25 +422,66 @@ class HarnessLocalModels(private val context: Context, private val database: App
                 }
             )
         }
-        val contextTokens = resolveAgentLiteRtContextTokens(settings.agentLiteRtContextTokens.value, model)
-        val outputTokens = resolveAgentLiteRtMaxOutputTokens(
-            request.optInt("max_completion_tokens", request.optInt("max_tokens", settings.agentLiteRtMaxOutputTokens.value)),
-            contextTokens, model)
+        val wireId = "litert:" + modelId
+        val modelOverride = modelCapabilities.get(wireId)
+        val modelContextOverride = modelOverride?.contextTokens
+            ?.takeIf { it in 1L..Int.MAX_VALUE.toLong() }
+            ?.toInt()
+        val requestedContextTokens = resolveHarnessLiteRtContextTokens(
+            model = model,
+            perModelOverride = modelContextOverride,
+            globalOverride = settings.agentLiteRtContextTokens.value,
+        )
+        val outputTokens = resolveHarnessLiteRtOutputTokens(
+            model = model,
+            requestedOutputTokens = request.optInt("max_completion_tokens", request.optInt("max_tokens", 0)),
+            perModelMaximum = modelOverride?.maxOutputTokens,
+            globalMaximum = settings.agentLiteRtMaxOutputTokens.value,
+            contextTokens = requestedContextTokens,
+        )
+        val backendResolution = resolveLiteRtBackend(
+            model = model,
+            requestedBackend = settings.agentLiteRtBackend.value,
+            requestedContextTokens = requestedContextTokens,
+            requestedOutputTokens = outputTokens,
+        )
+        val effectiveContextTokens = backendResolution.contextTokens
+        val effectiveOutputTokens = backendResolution.outputTokens
         val params = mapOf(
             "temperature" to request.optDouble("temperature", 0.7),
-            "enable_thinking" to settings.agentLiteRtThinkingEnabled.value,
-            LITERT_PARAM_MTP_ENABLED to settings.agentLiteRtMtpEnabled.value,
+            "enable_thinking" to (modelOverride?.thinkingEnabled ?: settings.agentLiteRtThinkingEnabled.value),
+            LITERT_PARAM_MTP_ENABLED to (modelOverride?.mtpEnabled ?: settings.agentLiteRtMtpEnabled.value),
             LITERT_PARAM_ENGINE_OWNER to owner,
-            LITERT_PARAM_MAX_OUTPUT_TOKENS to outputTokens
+            LITERT_PARAM_MAX_OUTPUT_TOKENS to effectiveOutputTokens
         )
-        val workerRequest = LiteRtLmChatRequest(
+        val configuredWorkerRequest = LiteRtLmChatRequest(
             model = model,
             chat = LlamaChatEntity(id = HARNESS_CHAT_OWNER, title = "DeepSeek Harness", systemPrompt = system,
-                contextSize = contextTokens),
-            history = emptyList(), backendMode = settings.agentLiteRtBackend.value, params = params,
+                contextSize = effectiveContextTokens),
+            history = emptyList(), backendMode = backendResolution.effectiveBackend, params = params,
             conversationOverride = LiteRtConversationOverride(system, history, lastUser?.let(::content) ?: "Continue using the tool results.",
                 userImagePath = lastUser?.let(media::image), userAudioPath = lastUser?.let(media::audio), tools = definitions)
         )
+        // Keep request-specific max_completion_tokens out of the degraded-mode
+        // identity. Probes may use a small cap while the next real turn uses a
+        // larger one under the same saved/model configuration.
+        val stableOutputTokens = modelOverride?.maxOutputTokens
+            ?.takeIf { it in 1L..Int.MAX_VALUE.toLong() }
+            ?.toInt()
+            ?: settings.agentLiteRtMaxOutputTokens.value.takeIf { it > 0 }
+        val configuredProfile = harnessLiteRtRequestConfiguration(
+            configuredWorkerRequest,
+            stableOutputTokens = stableOutputTokens,
+        )
+        val workerRequest = degradedLiteRtModels.requestFor(
+            modelId = modelId,
+            configuredRequest = configuredWorkerRequest,
+            stableOutputTokens = stableOutputTokens,
+        )
+        // Reject an impossible prompt before sending a start message to the
+        // worker. This retains the complete tool list and keeps the provider
+        // error distinguishable from a native process death.
+        preflightLiteRtHarnessRequest(workerRequest)
         val completionId = "chatcmpl-${UUID.randomUUID()}"
         // CPU/GPU caches live in the same canonical worker. Persist only their owner token
         // so app-process recreation can clean them without saving prompts or model inputs.
@@ -330,11 +497,37 @@ class HarnessLocalModels(private val context: Context, private val database: App
                 .put("delta", value).put("finish_reason", finish ?: JSONObject.NULL))))
         delta(JSONObject().put("role", "assistant"))
         val worker = LiteRtLmWorkerClient(context)
-        val onChunk: suspend (String) -> Unit = { delta(JSONObject().put("content", it)) }
-        val onThinking: suspend (String) -> Unit = { delta(JSONObject().put("reasoning_content", it)) }
-        val stats = if (workerRequest.backendMode == LITERT_BACKEND_GPU) {
-            worker.streamGpuChat(workerRequest, {}, onChunk, onThinking)
-        } else worker.streamCpuChat(workerRequest, {}, onChunk, onThinking)
+        var hasVisibleOutput = false
+        val stats = runLiteRtWorkerWithOneBoundedRecovery(
+            request = workerRequest,
+            hasVisibleOutput = { hasVisibleOutput },
+            onRetry = {
+                updateGenerationActivityPhase(request.optString("requestId"), "retrying")
+            },
+            onWorkerCrash = {
+                // Keep only metadata needed to identify the model/configuration;
+                // prompts, tool arguments, and worker output never enter this map.
+                degradedLiteRtModels.recordWorkerCrash(modelId, configuredProfile)
+            },
+            execute = { attempt ->
+                preflightLiteRtHarnessRequest(attempt)
+                val onChunk: suspend (String) -> Unit = { chunk ->
+                    if (chunk.isNotEmpty()) {
+                        hasVisibleOutput = true
+                        delta(JSONObject().put("content", chunk))
+                    }
+                }
+                val onThinking: suspend (String) -> Unit = { chunk ->
+                    if (chunk.isNotEmpty()) {
+                        hasVisibleOutput = true
+                        delta(JSONObject().put("reasoning_content", chunk))
+                    }
+                }
+                if (attempt.backendMode == LITERT_BACKEND_GPU) {
+                    worker.streamGpuChat(attempt, {}, onChunk, onThinking)
+                } else worker.streamCpuChat(attempt, {}, onChunk, onThinking)
+            },
+        )
         stats.toolCalls.forEachIndexed { index, call ->
             delta(JSONObject().put("tool_calls", JSONArray().put(JSONObject().put("index", index)
                 .put("id", call.id ?: "call-${UUID.randomUUID()}").put("type", "function")

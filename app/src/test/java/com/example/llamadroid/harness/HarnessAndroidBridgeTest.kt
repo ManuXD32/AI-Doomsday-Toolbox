@@ -1,5 +1,6 @@
 package com.example.llamadroid.harness
 
+import com.example.llamadroid.service.LiteRtLmWorkerCrashedException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -89,6 +90,29 @@ class HarnessAndroidBridgeTest {
             val result = JSONObject(requireNotNull(it.body).string())
             assertEquals("chat.completion", result.getString("object"))
             assertEquals("Hi", result.getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content"))
+        }
+    }
+
+    @Test fun wrappedLiteRtWorkerDisconnectHasARecoverableErrorCode() {
+        val failing = HarnessAndroidBridge("worker-test", scope, { _, _, _ -> null }, { _, _ ->
+            throw IllegalStateException("wrapped", LiteRtLmWorkerCrashedException(
+                message = "worker stopped", requestId = "worker-test-request", workerLabel = "CPU",
+                backendMode = "cpu", contextSize = 32768, mtpEnabled = true,
+                lastPhase = "async message accepted", recentExit = null, elapsedMs = 4455,
+            ))
+        })
+        val failingAddress = failing.startBridge()
+        try {
+            client.newCall(Request.Builder().url(failingAddress.origin + "/v1/chat/completions")
+                .header("Authorization", "Bearer ${failingAddress.token}")
+                .post(JSONObject().put("model", "test").put("stream", false).toString()
+                    .toRequestBody("application/json".toMediaType())).build()).execute().use { response ->
+                assertEquals(500, response.code)
+                val error = JSONObject(requireNotNull(response.body).string()).getJSONObject("error")
+                assertEquals("LITERT_WORKER_CRASHED", error.getString("code"))
+            }
+        } finally {
+            failing.stopBridge()
         }
     }
 

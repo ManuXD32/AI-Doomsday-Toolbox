@@ -946,6 +946,13 @@ fun ModelEntity.isOnnxTxt2ImgBundle(): Boolean {
         hasOnnxCapability(ONNX_CAPABILITY_TXT2IMG)
 }
 
+/** True only when catalog metadata and the on-disk txt2img bundle both pass validation. */
+fun ModelEntity.isInstalledOnnxTxt2ImgBundle(): Boolean {
+    if (!isOnnxTxt2ImgBundle()) return false
+    val validation = OnnxBundleValidator.validateDirectory(File(path))
+    return validation.isValid && ONNX_CAPABILITY_TXT2IMG in validation.supportedCapabilities
+}
+
 fun ModelEntity.isOnnxImg2ImgBundle(): Boolean {
     return isOnnxTxt2ImgBundle() && hasOnnxCapability(ONNX_CAPABILITY_IMG2IMG)
 }

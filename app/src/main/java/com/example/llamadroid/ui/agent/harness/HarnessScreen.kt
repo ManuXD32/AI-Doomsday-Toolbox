@@ -133,6 +133,7 @@ fun NativeHarnessScreen(
     onOpenRecoveryTerminal: (() -> Unit)? = null,
     onOpenRecoveryFileServer: (() -> Unit)? = null,
     onReinstallRuntime: (() -> Unit)? = null,
+    onOpenAppToolsSettings: (() -> Unit)? = null,
 ) {
     // The navigation stack belongs to this Harness entry, not to a mutable
     // workspace label that changes as projects and sessions are selected.
@@ -425,6 +426,17 @@ fun NativeHarnessScreen(
                         contentDescription = stringResource(R.string.harness_open_web_ui)
                     )
                 }
+                onOpenAppToolsSettings?.let { openAppTools ->
+                    IconButton(
+                        onClick = openAppTools,
+                        modifier = Modifier.testTag(HarnessAppToolsNavigationContract.testTag),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Tune,
+                            contentDescription = stringResource(R.string.harness_app_tools_open),
+                        )
+                    }
+                }
                 if (projectNavigationEnabled && selectedProject != null) {
                     IconButton(
                         onClick = ::navigateToProjects,
@@ -502,6 +514,7 @@ fun NativeHarnessScreen(
                         HarnessSurfaceTab.CHANGES,
                         HarnessSurfaceTab.TOOLS,
                         HarnessSurfaceTab.FILES,
+                        HarnessSurfaceTab.COMMANDS,
                         HarnessSurfaceTab.TERMINAL,
                     )
                 ) {
@@ -549,6 +562,12 @@ fun NativeHarnessScreen(
                     onOpenProjectFiles = onOpenProjectFiles,
                     onAction = onAction,
                     modifier = Modifier.weight(1f).fillMaxWidth()
+                )
+                HarnessSurfaceTab.COMMANDS -> HarnessCommandsTab(
+                    history = projectState.commandHistory,
+                    hasSession = projectState.selectedSessionId != null,
+                    onAction = onAction,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
                 )
                 HarnessSurfaceTab.TERMINAL -> Box(
                     modifier = Modifier.weight(1f).fillMaxWidth()
@@ -1393,6 +1412,19 @@ internal fun HarnessProviderCard(
     val modelOptions = selectedProvider?.let { provider ->
         modelIds.map { modelId -> harnessModelOptionLabel(provider, modelId) }
     }.orEmpty()
+    val selectedCatalogFailure = selectedProvider?.let { selected ->
+        provider.catalogFailures.firstOrNull { it.providerId == selected.id }
+    }
+    val modelCatalogStatus = when {
+        provider.isCatalogLoading -> stringResource(R.string.harness_refreshing_models)
+        provider.catalogRefreshFailed -> stringResource(R.string.harness_model_refresh_failed)
+        selectedCatalogFailure != null -> stringResource(
+            R.string.harness_model_catalog_failure,
+            selectedCatalogFailure.providerName,
+            selectedCatalogFailure.message,
+        )
+        else -> null
+    }
     var effortMenuOpen by remember { mutableStateOf(false) }
     val effortOptions = selectedProvider
         ?.let { selected -> provider.selectedModel?.let(selected.reasoningEfforts::get) }
@@ -1431,7 +1463,13 @@ internal fun HarnessProviderCard(
                 modelIds.getOrNull(index)?.let { onAction(NativeHarnessUiAction.SelectModel(it)) }
                 modelMenuOpen = false
             },
-            enabled = modelOptions.isNotEmpty()
+            enabled = true,
+            actionText = stringResource(R.string.harness_refresh_models),
+            actionEnabled = !provider.isCatalogLoading,
+            onAction = { onAction(NativeHarnessUiAction.RefreshModelCatalog) },
+            statusText = modelCatalogStatus,
+            statusIsError = !provider.isCatalogLoading &&
+                (provider.catalogRefreshFailed || selectedCatalogFailure != null),
         )
         if (unknownModelCount > 0) {
             Text(
@@ -1915,12 +1953,17 @@ internal fun HarnessChoiceField(
     onExpandedChange: (Boolean) -> Unit,
     options: List<String>,
     onOptionSelected: (String) -> Unit,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    actionText: String? = null,
+    actionEnabled: Boolean = true,
+    onAction: (() -> Unit)? = null,
+    statusText: String? = null,
+    statusIsError: Boolean = false,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         OutlinedButton(
             onClick = { onExpandedChange(true) },
-            enabled = enabled && options.isNotEmpty(),
+            enabled = enabled && (options.isNotEmpty() || onAction != null),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
@@ -1933,6 +1976,28 @@ internal fun HarnessChoiceField(
             expanded = expanded,
             onDismissRequest = { onExpandedChange(false) }
         ) {
+            if (onAction != null && actionText != null) {
+                DropdownMenuItem(
+                    text = { Text(actionText, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+                    onClick = onAction,
+                    enabled = actionEnabled,
+                )
+            }
+            statusText?.takeIf(String::isNotBlank)?.let { status ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            status,
+                            color = if (statusIsError) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    onClick = {},
+                    enabled = false,
+                )
+            }
             options.forEach { option ->
                 DropdownMenuItem(
                     text = { Text(option, maxLines = 2, overflow = TextOverflow.Ellipsis) },

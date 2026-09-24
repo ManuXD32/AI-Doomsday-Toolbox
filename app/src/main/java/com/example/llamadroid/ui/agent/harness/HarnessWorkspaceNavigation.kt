@@ -84,6 +84,12 @@ internal data class HarnessNavigationBackResult(
     val destination: HarnessNavigationLocation?,
 )
 
+/** Header entry contract: available in every Harness location and independent of a chat session. */
+internal object HarnessAppToolsNavigationContract {
+    const val testTag = "harness_app_tools_settings"
+    const val requiresSelectedSession = false
+}
+
 /** Back follows the workspace hierarchy, regardless of how many panels were visited. */
 internal fun harnessNavigationParent(
     current: HarnessNavigationLocation,
@@ -164,6 +170,7 @@ internal enum class HarnessSurfaceTab {
     CHANGES,
     TOOLS,
     FILES,
+    COMMANDS,
     TERMINAL,
     RUNTIME,
     SESSIONS,
@@ -218,6 +225,7 @@ internal fun projectScopedHarnessState(
             approvals = emptyList(),
             plans = emptyList(),
             queue = emptyList(),
+            commandHistory = HarnessCommandHistoryUiState(),
             goal = null,
         )
     }
@@ -531,6 +539,7 @@ internal fun HarnessWorkTabs(
         HarnessSurfaceTab.CHANGES to stringResource(R.string.harness_tab_changes),
         HarnessSurfaceTab.TOOLS to stringResource(R.string.harness_tab_tools),
         HarnessSurfaceTab.FILES to stringResource(R.string.harness_tab_files),
+        HarnessSurfaceTab.COMMANDS to stringResource(R.string.harness_tab_commands),
         HarnessSurfaceTab.TERMINAL to stringResource(R.string.harness_tab_terminal),
     )
     AppScrollableTabRow(

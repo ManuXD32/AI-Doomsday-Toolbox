@@ -5778,6 +5778,7 @@
     <string name="tama_training_title_ring">Title ring</string>
     <string name="engine_sdcpp">Stable Diffusion.cpp</string>
     <string name="imagegen_width_height_multiple_8">Width and height must be divisible by 8.</string>
+    <string name="imagegen_qwen_dimensions_multiple">Qwen Image 2.1 width and height must be divisible by %1$d.</string>
     <string name="agent_approval_tool_summary">Approval required for tool: %1$s</string>
     <string name="agent_approval_risk_summary">Risk level: %1$s</string>
     <string name="agent_approval_execution_mode_summary">Execution mode: %1$s</string>
@@ -7459,7 +7460,8 @@
     <string name="litert_error_worker_bad_request">The LiteRT accelerator worker received an incomplete request.</string>
     <string name="litert_error_worker_bind">Could not start the LiteRT accelerator worker process.</string>
     <string name="litert_error_gpu_worker_crashed">The LiteRT GPU worker crashed. The main app stayed open; Auto will try CPU, or select CPU for this model.</string>
-    <string name="litert_error_cpu_worker_crashed">The LiteRT CPU worker crashed. The main app stayed open; try a smaller context, lower output limit, or a smaller model.</string>
+    <string name="litert_error_cpu_worker_crashed">The LiteRT CPU worker crashed. The main app stayed open; try a smaller context or output limit, disable MTP, or use a smaller model.</string>
+    <string name="litert_error_tools_unavailable">LiteRT could not expose every enabled tool to this model, so generation stopped before using a partial tool list. Check LiteRT tool compatibility and retry.</string>
     <string name="litert_error_gpu_runtime_missing">LiteRT GPU native accelerator could not be loaded: %1$s</string>
     <string name="litert_error_gpu_probe_failed">LiteRT GPU probe failed before engine initialization: %1$s</string>
     <string name="litert_tools_unavailable_desc">LiteRT can use the app tool loop for web, knowledge-base, note, calendar, alarm, and image tools. Function-tuned LiteRT models follow tool calls best; ordinary chat models may need a retry.</string>
@@ -8752,7 +8754,7 @@
     <string name="sd_bundle_video_title">Local Wan 2.2 video</string>
     <string name="sd_bundle_video_desc">Wan 2.2 TI2V 5B Q4 with UMT5 Q4 and the Wan 2.2 VAE for local video generation.</string>
     <string name="sd_bundle_qwen_image_21_title">Qwen Image 2.1 · Q4 full vision</string>
-    <string name="sd_bundle_qwen_image_21_desc">Qwen Image 2.1 Q4 diffusion model with the Qwen3-VL 8B Q4 text encoder, Q8 vision projector, and BF16 VAE. Uses --diffusion-model, --llm, --llm_vision, and --vae with CPU offload support. Qwen Image assets use the Qwen Research License; the Qwen3-VL components use Apache-2.0.</string>
+    <string name="sd_bundle_qwen_image_21_desc" tools:ignore="TypographyDashes">Qwen Image 2.1 Q4 diffusion model with the Qwen3-VL 8B Q4 text encoder, official pinned F16 vision projector, and BF16 VAE. The F16 projector is recommended for new installs; compatible Q8 projectors already on your device remain selectable. Uses --diffusion-model, --llm, --llm_vision, and --vae with CPU offload support. Qwen Image assets use the Qwen Research License; the Qwen3-VL components use Apache-2.0.</string>
     <string name="sd_bundle_upscale_photo_2x_title">Photo upscaling 2×</string>
     <string name="sd_bundle_upscale_photo_2x_desc">RealESRGAN x2plus for moderate photo enlargement with lower output size.</string>
     <string name="sd_bundle_upscale_photo_4x_title">Photo upscaling 4×</string>
@@ -8922,9 +8924,10 @@
     <string name="imagegen_show_expert">Show expert controls</string>
     <string name="imagegen_hide_expert">Hide expert controls</string>
     <string name="imagegen_inpaint_editor_title">Draw regeneration mask</string>
-    <string name="imagegen_inpaint_editor_tutorial">Paint red over the area to regenerate. Use two fingers to zoom or move the image.</string>
+    <string name="imagegen_inpaint_editor_tutorial">Paint or drag a circle over the area to regenerate. Use two fingers to zoom or move the image.</string>
     <string name="imagegen_inpaint_editor_add">Add mask</string>
     <string name="imagegen_inpaint_editor_erase">Erase mask</string>
+    <string name="imagegen_inpaint_editor_circle">Circle mask</string>
     <string name="imagegen_inpaint_editor_invert">Invert mask</string>
     <string name="action_undo">Undo</string>
     <string name="action_redo">Redo</string>
@@ -8932,6 +8935,25 @@
     <string name="imagegen_inpaint_editor_brush_size">Brush size</string>
     <string name="imagegen_inpaint_editor_softness">Edge softness</string>
     <string name="imagegen_inpaint_editor_load_error">The source image or mask could not be opened.</string>
+    <string name="imagegen_error_inpaint_composite">The repaired image could not be combined with the source. Try a smaller image or run the repair again.</string>
+    <string name="imagegen_reference_images_title">Qwen references</string>
+    <plurals name="imagegen_reference_images_count">
+        <item quantity="one">%1$d / %2$d image</item>
+        <item quantity="other">%1$d / %2$d images</item>
+    </plurals>
+    <string name="imagegen_reference_images_order_help">The source image is sent first. Added references follow in this order.</string>
+    <string name="imagegen_qwen_inpaint_mask_note">Qwen Image 2.1 edits from reference images. The mask stays separate and restores source pixels outside its area after generation; native mask-guided Qwen editing depends on the selected runtime.</string>
+    <string name="imagegen_reference_images_add">Add reference images</string>
+    <string name="imagegen_reference_image_description">Reference image %1$d</string>
+    <string name="imagegen_reference_image_move_up">Move reference earlier</string>
+    <string name="imagegen_reference_image_move_down">Move reference later</string>
+    <string name="imagegen_reference_image_remove">Remove reference</string>
+    <string name="imagegen_source_image_remove">Remove source image</string>
+    <string name="imagegen_reference_import_failed">One or more reference images could not be imported. Choose readable PNG, JPEG, WebP, or BMP images.</string>
+    <string name="imagegen_reference_image_too_large">Each reference image must be 128 MiB or smaller.</string>
+    <string name="imagegen_reference_image_size_limit">Each reference image can be up to 128 MiB.</string>
+    <string name="imagegen_reference_images_limit_error">Select no more than 10 images, including the source image.</string>
+    <string name="imagegen_reference_image_path_error">A reference image is no longer available. Remove it and choose the image again.</string>
     <string name="imagegen_readiness_title">Before you can generate</string>
     <string name="imagegen_readiness_model">Select an installed diffusion model.</string>
     <string name="imagegen_readiness_prompt">Fill in the required prompt above.</string>

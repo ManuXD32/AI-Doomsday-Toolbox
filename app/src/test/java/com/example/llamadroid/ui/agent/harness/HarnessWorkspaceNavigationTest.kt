@@ -7,6 +7,24 @@ import org.junit.Test
 
 class HarnessWorkspaceNavigationTest {
     @Test
+    fun appToolsHeaderEntryDoesNotDependOnAnActiveChatSession() {
+        assertEquals("harness_app_tools_settings", HarnessAppToolsNavigationContract.testTag)
+        assertFalse(HarnessAppToolsNavigationContract.requiresSelectedSession)
+    }
+
+    @Test
+    fun commandsDestinationIsSaveableAndReturnsToItsConversation() {
+        val commands = HarnessNavigationLocation("project-a", HarnessSurfaceTab.COMMANDS)
+        val restored = harnessNavigationLocationFromKey(harnessNavigationLocationKey(commands))
+
+        assertEquals(commands, restored)
+        assertEquals(
+            HarnessNavigationLocation("project-a", HarnessSurfaceTab.CONVERSATION),
+            harnessNavigationParent(commands, projectNavigationEnabled = true),
+        )
+    }
+
+    @Test
     fun everyPanelHasABoundedExitThroughItsSessionAndProjects() {
         for (tab in HarnessSurfaceTab.entries) {
             var current = HarnessNavigationLocation("project-a", tab)

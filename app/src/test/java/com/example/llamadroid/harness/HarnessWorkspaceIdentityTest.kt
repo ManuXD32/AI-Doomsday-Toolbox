@@ -1,5 +1,6 @@
 package com.example.llamadroid.harness
 
+import com.example.llamadroid.data.db.HarnessWorkspaceEntity
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -10,22 +11,66 @@ import org.junit.Test
 
 class HarnessWorkspaceIdentityTest {
     @Test
-    fun sessionCreateUsesOnlyTheRegisteredWorkspaceOrCwdFallback() {
-        val registered = parseHarnessPreparedWorkspace(Json.parseToJsonElement(
-            """{"workspace":{"workspaceId":"dsh-group-1","path":"/workspace/projects/prueba2","title":"prueba2","sessionIds":[]},"created":true}"""
+    fun canonicalGroupCanBeSharedOnlyByAliasesOfTheExactGuestProject() {
+        val owner = HarnessWorkspaceEntity("owner", "LOCAL_PROOT", "prueba2", title = "Prueba",
+            guestPath = "/workspace/projects/prueba2")
+        val alias = owner.copy(id = "alias", backend = "LOCAL_SANDBOX")
+        assertTrue(harnessAliasesMayShareGroup(owner, alias))
+        assertFalse(harnessAliasesMayShareGroup(owner, alias.copy(guestPath = "/workspace/projects/other")))
+        assertFalse(harnessAliasesMayShareGroup(owner, alias.copy(projectFolder = "other")))
+    }
+
+    @Test
+    fun legacySubfolderSessionsStayInProjectButCannotClaimItsCanonicalGroup() {
+        assertTrue(harnessSessionPathMatchesProject(
+            "/workspace/projects/prueba2/src", "/workspace/projects/prueba2", exact = false))
+        assertFalse(harnessSessionPathMatchesProject(
+            "/workspace/projects/prueba2/src", "/workspace/projects/prueba2", exact = true))
+        assertFalse(harnessSessionPathMatchesProject(
+            "/workspace/projects/prueba20", "/workspace/projects/prueba2", exact = false))
+    }
+
+    @Test
+    fun workspaceImportPolicySkipsUnmanagedRootButPreservesManagedPathChecks() {
+        assertTrue(isManagedProjectGuestPath("/workspace/projects/prueba2"))
+        assertTrue(isManagedProjectGuestPath("/workspace/projects/prueba2/src"))
+        // Structural candidates still reach the repository's path validation.
+        assertTrue(isManagedProjectGuestPath("/workspace/projects/../outside"))
+        assertTrue(isManagedProjectGuestPath("/workspace/projects//outside"))
+        assertFalse(isManagedProjectGuestPath("/workspace"))
+        assertFalse(isManagedProjectGuestPath("/workspace/projects"))
+
+        assertFalse(shouldImportHarnessSessionWorkspace(
+            sessionAlreadyIndexed = false,
+            cwdMatchesRegisteredWorkspace = false,
+            cwd = "/workspace",
         ))
+        assertTrue(shouldImportHarnessSessionWorkspace(
+            sessionAlreadyIndexed = true,
+            cwdMatchesRegisteredWorkspace = false,
+            cwd = "/workspace",
+        ))
+        assertTrue(shouldImportHarnessSessionWorkspace(
+            sessionAlreadyIndexed = false,
+            cwdMatchesRegisteredWorkspace = true,
+            cwd = "/workspace/remote/known-workspace",
+        ))
+    }
+
+    @Test
+    fun sessionCreateRequiresTheExactRegisteredWorkspace() {
+        val registered = requireNotNull(parseHarnessPreparedWorkspace(Json.parseToJsonElement(
+            """{"workspace":{"workspaceId":"dsh-group-1","path":"/workspace/projects/prueba2","title":"prueba2","sessionIds":[]},"created":true}"""
+        )))
         val request = harnessSessionCreateLocation("/workspace/projects/prueba2", registered)
         assertEquals(setOf("workspaceId"), request.keys)
         assertEquals("dsh-group-1", request["workspaceId"]?.jsonPrimitive?.content)
 
-        val fallback = harnessSessionCreateLocation("/workspace/projects/prueba2", null)
-        assertEquals(setOf("cwd"), fallback.keys)
-        assertEquals("/workspace/projects/prueba2", fallback["cwd"]?.jsonPrimitive?.content)
-
-        val stale = harnessSessionCreateLocation("/workspace/projects/prueba2", registered?.copy(
-            guestPath = "/workspace/projects/other"
-        ))
-        assertEquals(setOf("cwd"), stale.keys)
+        assertFalse(runCatching {
+            harnessSessionCreateLocation("/workspace/projects/prueba2", registered.copy(
+                guestPath = "/workspace/projects/other"
+            ))
+        }.isSuccess)
     }
 
     @Test
@@ -87,5 +132,15 @@ class HarnessWorkspaceIdentityTest {
         sequencer.reset("session-a")
         assertTrue(sequencer.accept("session-a", 1))
         assertEquals(1L, sequencer.cursor("session-a"))
+    }
+
+    @Test
+    fun rejectsAnOlderWorkspaceGroupSnapshotAfterANewerRename() {
+        val guard = HarnessWorkspaceGroupRevisionGuard()
+        assertTrue(guard.accept("group", "2026-09-24T02:00:01Z"))
+        assertTrue(guard.accept("group", "2026-09-24T02:00:02Z"))
+        assertFalse(guard.accept("group", "2026-09-24T02:00:01Z"))
+        assertTrue(guard.accept("other", "2026-09-24T02:00:01Z"))
+        assertTrue(guard.accept("group", "2026-09-24T02:00:02Z"))
     }
 }

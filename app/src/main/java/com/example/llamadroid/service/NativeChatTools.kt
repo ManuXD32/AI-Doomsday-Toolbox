@@ -40,7 +40,6 @@ import java.io.Reader
 import java.net.InetAddress
 import java.net.URI
 import java.net.URL
-import java.net.URLDecoder
 import java.net.URLEncoder
 import java.time.Instant
 import java.time.LocalDate
@@ -1997,16 +1996,9 @@ class NativeChatToolRuntime(
             }.orEmpty()
         }
 
-        val links = DUCKDUCKGO_RESULT_PATTERN.findAll(html)
-            .map { match ->
-                SearchLink(
-                    url = decodeDuckDuckGoUrl(match.groupValues[1]),
-                    title = decodeHtmlEntities(AgentRuntimeSupport.stripHtmlTags(match.groupValues[2])).ifBlank { "Untitled result" }
-                )
-            }
-            .distinctBy { it.url }
+        val links = parseDuckDuckGoSearchResults(html, maxPages)
+            .map { SearchLink(url = it.url, title = it.title) }
             .take(maxPages.coerceIn(NativeChatToolConfig.MIN_SEARCH_PAGES, NativeChatToolConfig.MAX_SEARCH_PAGES))
-            .toList()
 
         if (links.isEmpty()) {
             return "tool: web_search\nquery: $trimmedQuery\nresults_returned: 0\n\nNo web results found."
@@ -3443,8 +3435,7 @@ class NativeChatToolRuntime(
         const val TOOL_APPLY_WORKSPACE_PATCH = "apply_workspace_patch"
 
         private const val USER_AGENT_HEADER = "User-Agent"
-        private const val DEFAULT_USER_AGENT =
-            "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36"
+        private const val DEFAULT_USER_AGENT = APP_WEB_SEARCH_USER_AGENT
         private const val MAX_REDIRECTS = 5
         private const val MAX_RAW_FETCH_CHARS = 100_000
         private const val MAX_CALCULATOR_EXPRESSION_CHARS = 512
@@ -3459,8 +3450,6 @@ class NativeChatToolRuntime(
         private const val DEFAULT_ORGANIZER_LIST_LIMIT = 20
         private const val MAX_ORGANIZER_LIST_LIMIT = 50
         private const val NOTE_SOURCE_NATIVE_CHAT = "Native chat"
-        private val DUCKDUCKGO_RESULT_PATTERN =
-            Regex("""<a[^>]*class=["'][^"']*result__a[^"']*["'][^>]*href=["']([^"']+)["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
         private val KIWIX_RESULT_PATTERN =
             Regex("""<a[^>]*href=["'](/content/[^"']+)["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
 
@@ -3811,7 +3800,6 @@ private val HREF_ATTRIBUTE_PATTERN =
 private val LINK_LABEL_ATTRIBUTE_PATTERN =
     Regex("""\b(?:aria-label|title)\s*=\s*(['"])(.*?)\1""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
 
-private const val MAX_SEARCH_HTML_CHARS = 300_000
 private const val MAX_NATIVE_PDF_FETCH_BYTES = 3 * 1024 * 1024
 private const val MAX_NATIVE_PDF_TEXT_PAGES = 24
 
@@ -3859,16 +3847,6 @@ private fun defaultNativeChatToolClient(): OkHttpClient = OkHttpClient.Builder()
     .readTimeout(30, TimeUnit.SECONDS)
     .followRedirects(false)
     .build()
-
-private fun decodeDuckDuckGoUrl(url: String): String {
-    if (!url.contains("uddg=")) return decodeHtmlEntities(url)
-    return try {
-        val encoded = url.substringAfter("uddg=").substringBefore("&")
-        URLDecoder.decode(encoded, "UTF-8")
-    } catch (_: Exception) {
-        decodeHtmlEntities(url)
-    }
-}
 
 private fun decodeHtmlEntities(text: String): String {
     var decoded = text

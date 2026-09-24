@@ -64,6 +64,8 @@ internal fun HarnessGenerationStatus(
             stringResource(R.string.harness_generation_prefill)
         activity.phase.equals("generating", ignoreCase = true) ->
             stringResource(R.string.harness_generation_generating)
+        activity.phase.equals("retrying", ignoreCase = true) ->
+            stringResource(R.string.harness_litert_0985_retrying)
         else -> stringResource(R.string.harness_generation_working)
     }
     val elapsed = startedAtMs

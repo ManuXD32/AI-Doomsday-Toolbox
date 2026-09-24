@@ -9,6 +9,7 @@ import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.service.AgentLocalWorkspaceSupport
 import java.io.File
 import java.nio.file.Files
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.*
@@ -44,6 +45,142 @@ class HarnessProjectManagementPersistenceTest {
 
     @After fun tearDown() { database.close() }
 
+    @Test fun pendingAndroidRenameIsDurableAndScopedToTheExactGroupPath() {
+        val store = HarnessWorkspaceTitleSyncStore(context)
+        val groupId = "dsh-pending-rename-test"
+        store.mark(groupId, "/workspace/projects/one", "Offline Android title")
+        assertEquals("Offline Android title",
+            HarnessWorkspaceTitleSyncStore(context).pending(groupId, "/workspace/projects/one")?.title)
+        assertNull(store.pending(groupId, "/workspace/projects/two"))
+        assertNull(store.pending("different-group", "/workspace/projects/one"))
+        store.clear(groupId)
+        assertNull(store.pending(groupId, "/workspace/projects/one"))
+    }
+
+    @Test fun observedWebUiRenameUpdatesEveryAliasOfAnAlreadyBoundGroup() = runBlocking {
+        val project = workspaces.createWorkspace("Original")
+        val alias = project.copy(id = "webui-rename-alias", backend = "LOCAL_SANDBOX")
+        database.harnessDao().saveWorkspace(alias)
+        assertTrue(workspaces.associateHarnessWorkspace(
+            project.id, "dsh-webui-rename", project.guestPath, "Original"
+        ))
+        management.rename(project.id, "Earlier Android title")
+
+        val reconciled = workspaces.reconcileHarnessWorkspace(
+            "dsh-webui-rename", project.guestPath, "Newest WebUI title"
+        )
+
+        assertEquals("Newest WebUI title", reconciled?.title)
+        assertEquals("Newest WebUI title", database.harnessDao().workspace(alias.id)?.title)
+        assertEquals("dsh-webui-rename", database.harnessDao().workspace(project.id)?.harnessWorkspaceId)
+
+        val pending = HarnessWorkspaceTitleSyncStore(context)
+        pending.mark("dsh-webui-rename", project.guestPath, "Offline Android title")
+        assertTrue(workspaces.renameCanonicalHarnessWorkspace("dsh-webui-rename", "Final WebUI title"))
+        assertNull(pending.pending("dsh-webui-rename", project.guestPath))
+        assertEquals("Final WebUI title", database.harnessDao().workspace(alias.id)?.title)
+    }
+
+    @Test fun firstDshAssociationAdoptsGroupTitleButRefreshCannotUndoLaterRename() = runBlocking {
+        val project = workspaces.createWorkspace("Android title")
+        val alias = project.copy(id = "title-alias", backend = "LOCAL_SANDBOX")
+        database.harnessDao().saveWorkspace(alias)
+
+        assertTrue(workspaces.associateHarnessWorkspace(
+            project.id, "dsh-title-group", project.guestPath, "WebUI title"
+        ))
+        assertEquals("WebUI title", database.harnessDao().workspace(project.id)?.title)
+        assertEquals("WebUI title", database.harnessDao().workspace(alias.id)?.title)
+
+        management.rename(project.id, "New app title")
+        workspaces.importSession(
+            "title-thread", "Keep thread title", project.guestPath,
+            preferredWorkspaceId = project.id,
+            harnessWorkspaceId = "dsh-title-group",
+            workspaceTitle = "Stale WebUI title",
+        )
+        assertEquals("New app title", database.harnessDao().workspace(project.id)?.title)
+        assertEquals("New app title", database.harnessDao().workspace(alias.id)?.title)
+    }
+
+    @Test fun webUiManagedProjectRegistrationCreatesItsRoomIdentityBeforeAnySession() = runBlocking {
+        val registered = workspaces.registerManagedHarnessWorkspace(
+            "/workspace/projects/webui-created",
+            "Created in WebUI",
+        )
+
+        assertEquals("/workspace/projects/webui-created", registered.guestPath)
+        assertEquals("Created in WebUI", registered.title)
+        assertEquals(registered.id, database.harnessDao().workspaceForRoot("LOCAL_PROOT", "webui-created")?.id)
+        assertTrue(database.harnessDao().observeSessions().first().isEmpty())
+
+        val canonical = workspaces.reconcileHarnessWorkspace(
+            harnessWorkspaceId = "dsh-webui-created",
+            guestPath = registered.guestPath,
+            title = registered.title,
+        )
+        assertEquals(registered.id, canonical?.id)
+        assertEquals("dsh-webui-created", canonical?.harnessWorkspaceId)
+    }
+
+    @Test fun unindexedWorkspaceRootDoesNotCreateAWorkspaceOrSession() = runBlocking {
+        assertFalse(shouldImportHarnessSessionWorkspace(
+            sessionAlreadyIndexed = false,
+            cwdMatchesRegisteredWorkspace = false,
+            cwd = "/workspace",
+        ))
+
+        val failure = runCatching {
+            workspaces.importSession("workspace-root-session", "Root session", "/workspace")
+        }.exceptionOrNull()
+
+        assertEquals("WORKSPACE_NOT_MANAGED", failure?.message)
+        assertNull(database.harnessDao().session("workspace-root-session"))
+        assertTrue(database.harnessDao().workspaces().isEmpty())
+    }
+
+    @Test fun malformedManagedProjectPathStillReturnsTheRepositoryValidationError() = runBlocking {
+        val cwd = "/workspace/projects//outside"
+        assertTrue(isManagedProjectGuestPath(cwd))
+
+        val failure = runCatching {
+            workspaces.importSession("malformed-project-session", "Malformed", cwd)
+        }.exceptionOrNull()
+
+        assertEquals("WORKSPACE_NOT_MANAGED", failure?.message)
+        assertNull(database.harnessDao().session("malformed-project-session"))
+        assertTrue(database.harnessDao().workspaces().isEmpty())
+    }
+
+    @Test fun indexedSessionPathDriftStillUsesTheRepositoryIdentityError() = runBlocking {
+        val project = workspaces.createWorkspace("Mapped project")
+        val session = workspaces.importSession("mapped-session", "Mapped session", project.guestPath)
+        assertTrue(shouldImportHarnessSessionWorkspace(
+            sessionAlreadyIndexed = true,
+            cwdMatchesRegisteredWorkspace = false,
+            cwd = "/workspace",
+        ))
+
+        val failure = runCatching {
+            workspaces.importSession(session.harnessSessionId, "Mapped session", "/workspace")
+        }.exceptionOrNull()
+
+        assertEquals("WORKSPACE_IDENTITY_MISMATCH", failure?.message)
+        assertEquals(project.id, database.harnessDao().session("mapped-session")?.workspaceId)
+    }
+
+    @Test fun webUiCannotRecreateAProjectPathWhileItsRemovalTombstoneIsActive() = runBlocking {
+        val deleted = workspaces.createWorkspace("Removed in app")
+        management.remove(deleted.id, deleteFiles = false)
+
+        val retry = runCatching {
+            workspaces.registerManagedHarnessWorkspace(deleted.guestPath, "Removed in app")
+        }
+
+        assertEquals("PROJECT_REMOVED", retry.exceptionOrNull()?.message)
+        assertTrue(deleted.id !in management.visibleWorkspaceIds(database.harnessDao().workspaces()))
+    }
+
     @Test fun renamePreservesSessionTitlesAnchorIdsAndFiles() = runBlocking {
         val project = workspaces.createWorkspace("Demo")
         val alias = project.copy(id = "old-alias", backend = "LOCAL_SANDBOX")
@@ -71,7 +208,7 @@ class HarnessProjectManagementPersistenceTest {
         val other = workspaces.createWorkspace("Keep")
         val keep = AgentLocalWorkspaceSupport.rootForProject(context, other.projectFolder)
             .resolve("keep.txt").also { it.writeText("preserved") }
-        Files.createSymbolicLink(root.resolve("linked-other").toPath(), keep.parentFile.toPath())
+        Files.createSymbolicLink(root.resolve("linked-other").toPath(), requireNotNull(keep.parentFile).toPath())
 
         management.remove(project.id, deleteFiles = true)
 

@@ -1,0 +1,16 @@
+<resources>
+    <string name="harness_app_tools_open">Herramientas de la app</string>
+    <string name="harness_app_tools_description">Elige qué capacidades de la app pueden usar los modelos de Harness. Los cambios también se aplican al chat nativo y a la WebUI.</string>
+    <string name="harness_app_tool_image_title">Generación de imágenes</string>
+    <string name="harness_app_tool_image_description">Permite que el modelo cree una imagen con el motor configurado y la guarde en el espacio de trabajo actual.</string>
+    <string name="harness_app_tool_web_search_title">Búsqueda web de la app</string>
+    <string name="harness_app_tool_web_search_description">Ofrece resultados web limitados con enlaces a fuentes, incluso si el proveedor del modelo personalizado no ofrece una API de búsqueda. La búsqueda puede no estar disponible en algunas conexiones.</string>
+    <string name="harness_app_tool_status_off">Desactivada</string>
+    <string name="harness_app_tool_status_ready">Lista</string>
+    <string name="harness_app_tool_status_enabled">Activada</string>
+    <string name="harness_app_tool_status_needs_model">Elige un modelo de imagen instalado para activar esta herramienta.</string>
+    <string name="harness_app_tool_status_needs_components">Faltan componentes de imagen obligatorios: %1$s. Elígelos en los ajustes de imagen.</string>
+    <string name="harness_app_tool_configure_image">Configurar motor y modelo de imagen</string>
+    <string name="harness_app_tools_litert_output_hint">Déjalo vacío para usar el límite de tokens de salida de Harness: %1$d.</string>
+    <string name="harness_app_tools_litert_context_hint">Valor predeterminado de tokens de contexto de Harness: %1$d. Este modelo admite hasta %2$d. La configuración global de contexto tiene prioridad.</string>
+</resources>

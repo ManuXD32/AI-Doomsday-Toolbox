@@ -64,6 +64,7 @@ import com.example.llamadroid.service.friendlyBackendModelLabel
 import com.example.llamadroid.service.isCriticalAgentProtocolTool
 import com.example.llamadroid.service.resolveAgentLiteRtContextTokens
 import com.example.llamadroid.service.resolveAgentLiteRtMaxOutputTokens
+import com.example.llamadroid.service.resolveLiteRtBackend
 import com.example.llamadroid.ui.components.DraftFloatTextField
 import com.example.llamadroid.ui.components.DraftIntTextField
 import kotlinx.coroutines.launch
@@ -3838,24 +3839,24 @@ private fun agentSdComponentOptions(
     role: SdComponentRole
 ): List<String> {
     val (family, variant) = selectedModel?.resolvedSdFamily() ?: return emptyList()
-    val modelType = role.toAgentModelType() ?: return emptyList()
+    val modelTypes = role.toAgentModelTypes()
     val resolvedFamily = family ?: return emptyList()
     return models
-        .filter { model -> model.type == modelType && model.matchesSdFamily(resolvedFamily, variant) }
+        .filter { model -> model.type in modelTypes && model.matchesSdFamily(resolvedFamily, variant) }
         .map { it.filename }
         .distinct()
 }
 
-private fun SdComponentRole.toAgentModelType(): ModelType? = when (this) {
-    SdComponentRole.VAE -> ModelType.SD_VAE
-    SdComponentRole.TAE -> ModelType.SD_TAE
-    SdComponentRole.CLIP_L -> ModelType.SD_CLIP_L
-    SdComponentRole.CLIP_G -> ModelType.SD_CLIP_G
-    SdComponentRole.T5XXL -> ModelType.SD_T5XXL
-    SdComponentRole.LLM -> ModelType.LLM
-    SdComponentRole.LLM_VISION -> ModelType.VISION_PROJECTOR
-    SdComponentRole.PHOTOMAKER -> ModelType.SD_PHOTOMAKER
-    else -> null
+private fun SdComponentRole.toAgentModelTypes(): Set<ModelType> = when (this) {
+    SdComponentRole.VAE -> setOf(ModelType.SD_VAE)
+    SdComponentRole.TAE -> setOf(ModelType.SD_TAE)
+    SdComponentRole.CLIP_L -> setOf(ModelType.SD_CLIP_L)
+    SdComponentRole.CLIP_G -> setOf(ModelType.SD_CLIP_G)
+    SdComponentRole.T5XXL -> setOf(ModelType.SD_T5XXL)
+    SdComponentRole.LLM -> setOf(ModelType.LLM, ModelType.SD_LLM)
+    SdComponentRole.LLM_VISION -> setOf(ModelType.VISION_PROJECTOR, ModelType.MMPROJ)
+    SdComponentRole.PHOTOMAKER -> setOf(ModelType.SD_PHOTOMAKER)
+    else -> emptySet()
 }
 
 private fun agentSdComponentLabelRes(role: SdComponentRole): Int = when (role) {
@@ -3907,6 +3908,14 @@ fun AgentLiteRtBackendCard(
         resolvedContextTokens = resolvedContext,
         model = selectedModel
     )
+    val backendResolution = selectedModel?.let {
+        resolveLiteRtBackend(
+            model = it,
+            requestedBackend = selectedBackend,
+            requestedContextTokens = resolvedContext,
+            requestedOutputTokens = resolvedMaxOutput,
+        )
+    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -4030,6 +4039,42 @@ fun AgentLiteRtBackendCard(
                 fontSize = 10.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            backendResolution?.let { resolution ->
+                val backendLabel = when (resolution.effectiveBackend) {
+                    LITERT_BACKEND_GPU -> stringResource(R.string.litert_backend_gpu)
+                    else -> stringResource(R.string.general_acceleration_mode_cpu)
+                }
+                Text(
+                    text = stringResource(
+                        R.string.harness_litert_0984_effective_limit,
+                        backendLabel,
+                        resolution.contextTokens,
+                        resolution.outputTokens,
+                    ),
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (
+                    normalizeLiteRtBackend(selectedBackend) == LITERT_BACKEND_GPU &&
+                    resolution.gpuWouldReduceRequest
+                ) {
+                    Text(
+                        text = stringResource(
+                            R.string.harness_litert_0984_forced_gpu_warning,
+                            resolution.contextTokens,
+                            resolution.outputTokens,
+                        ),
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                } else if (resolution.autoChoseCpuForCapacity) {
+                    Text(
+                        text = stringResource(R.string.harness_litert_0984_auto_cpu_capacity),
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
 
             Row(
                 modifier = Modifier

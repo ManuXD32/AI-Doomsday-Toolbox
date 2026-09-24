@@ -3,8 +3,10 @@ package com.example.llamadroid.ui.agent.harness
 import com.example.llamadroid.harness.client.HarnessClient
 import com.example.llamadroid.harness.client.HarnessRpcResult
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -135,18 +137,22 @@ internal class NativeHarnessSettingsReader(
     suspend fun refreshModelCatalog(reportFailure: Boolean) = catalogLock.withLock { readModelCatalog(reportFailure) }
 
     private suspend fun readModelCatalog(reportFailure: Boolean) {
-        val client = clientOrNull() ?: return
-        mutate { it.copy(provider = it.provider.copy(isCatalogLoading = true)) }
+        val client = clientOrNull() ?: run {
+            mutate { it.copy(provider = it.provider.copy(isCatalogLoading = false, catalogRefreshFailed = true)) }
+            return
+        }
+        mutate { it.copy(provider = it.provider.copy(isCatalogLoading = true, catalogRefreshFailed = false)) }
+        try {
         when (val result = client.modelCatalog()) {
             is HarnessRpcResult.Failure -> {
-                mutate { it.copy(provider = it.provider.copy(isCatalogLoading = false)) }
+                mutate { it.copy(provider = it.provider.copy(isCatalogLoading = false, catalogRefreshFailed = true)) }
                 if (reportFailure) reportFailure(result.error.code, result.error.message)
             }
             is HarnessRpcResult.Success -> {
                 if (!isCurrent(client)) return
                 val catalog = result.value.jsonObjectOrNull()
                 if (catalog == null) {
-                    mutate { it.copy(provider = it.provider.copy(isCatalogLoading = false)) }
+                    mutate { it.copy(provider = it.provider.copy(isCatalogLoading = false, catalogRefreshFailed = true)) }
                     reportFailure("MODEL_CATALOG_INVALID", "Harness returned an invalid model catalog")
                     return
                 }
@@ -179,6 +185,7 @@ internal class NativeHarnessSettingsReader(
                         provider?.reasoningDefaults?.get(selectedModel)
                             ?: parsed.defaultReasoningEffort?.takeIf { selectedModel == parsed.defaultModel }
                     } else null
+                if (!isCurrent(client)) return
                 mutate { current ->
                     current.copy(provider = current.provider.copy(
                         selectedProviderId = selectedProvider,
@@ -187,9 +194,22 @@ internal class NativeHarnessSettingsReader(
                         providers = providers,
                         catalogFailures = parsed.failures,
                         supportsThinking = selectedModel != null && provider?.reasoningModels?.contains(selectedModel) == true,
-                        isCatalogLoading = false
+                        isCatalogLoading = false,
+                        catalogRefreshFailed = false,
                     ))
                 }
+            }
+        }
+        } catch (error: Throwable) {
+            if (error !is CancellationException) {
+                mutate { it.copy(provider = it.provider.copy(catalogRefreshFailed = true)) }
+            }
+            throw error
+        } finally {
+            // A replaced client or cancelled refresh must not leave the picker spinning.
+            // The catalog mutex prevents this cleanup from racing a newer refresh.
+            withContext(NonCancellable) {
+                mutate { it.copy(provider = it.provider.copy(isCatalogLoading = false)) }
             }
         }
     }

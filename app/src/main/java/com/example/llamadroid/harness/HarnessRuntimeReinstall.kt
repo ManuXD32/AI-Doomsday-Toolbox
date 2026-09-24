@@ -299,6 +299,7 @@ internal class HarnessRuntimeReinstaller(
             journal("deleting_project_quarantine", 35)
             deleteManagedTree(quarantineRoot)
             credentials.clearAll()
+            HarnessWorkspaceTitleSyncStore(context).clearAll()
             journal("removing_environment", 42)
             deleteManagedTree(File(context.filesDir, HarnessRuntimePaths.HARNESS_HOME_DIRECTORY))
             deleteManagedTree(File(context.cacheDir, "${HarnessRuntimePaths.RUNTIME_DIRECTORY}/$environmentId"))

@@ -109,10 +109,10 @@ fun HarnessProjectIntegrationDialog(
 }
 
 @Composable
-private fun HarnessSharedToolSettings(settings: SettingsRepository, runtime: HarnessAppRuntime, onDismiss: () -> Unit) {
+internal fun HarnessSharedToolSettings(settings: SettingsRepository, runtime: HarnessAppRuntime, onDismiss: () -> Unit) {
     val models by runtime.database.modelDao().getModelsByTypes(listOf(ModelType.ONNX_IMAGE_GEN, ModelType.ONNX_BACKGROUND_REMOVAL,
         ModelType.SD_CHECKPOINT, ModelType.SD_DIFFUSION, ModelType.SD_VAE, ModelType.SD_TAE, ModelType.SD_CLIP_L, ModelType.SD_CLIP_G,
-        ModelType.SD_T5XXL, ModelType.LLM, ModelType.VISION_PROJECTOR, ModelType.SD_PHOTOMAKER)).collectAsState(initial = emptyList())
+        ModelType.SD_T5XXL, ModelType.LLM, ModelType.SD_LLM, ModelType.VISION_PROJECTOR, ModelType.MMPROJ, ModelType.SD_PHOTOMAKER)).collectAsState(initial = emptyList())
     AgentSettingsDialog(
         settingsRepository = settings, availableModels = emptyList(), knowledgeBases = emptyList(), selectedKnowledgeBaseIds = emptyList(),
         availableImageGenerationModels = models.filter { it.isOnnxTxt2ImgBundle() }.map { it.filename },

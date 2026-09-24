@@ -2051,9 +2051,12 @@ object DownloadProgressHolder {
 
     fun getStatus(repoId: String): String? = _status.value[repoId]
     
-    /** Find repoId by filename (for service callback) */
+    /** Resolve the task key from a filename only when the legacy alias is unambiguous. */
     fun findRepoIdByFilename(filename: String): String? {
-        return filenameMap.entries.find { it.value == filename }?.key
+        return filenameMap.entries
+            .filter { it.value == filename }
+            .singleOrNull()
+            ?.key
     }
     
     fun removeProgress(repoId: String) {
@@ -2150,17 +2153,27 @@ data class PendingDownload(
     val classificationSource: String = "LEGACY",
     /** Immutable bounded inspector evidence, if already available. */
     val detectedClassificationJson: String? = null,
-    val stageOnly: Boolean = false
+    val stageOnly: Boolean = false,
+    /** Immutable Room/service identity; nullable only for legacy in-memory callers. */
+    val downloadId: String? = null
 )
 
 object PendingDownloadHolder {
     private val pendingDownloads = java.util.concurrent.ConcurrentHashMap<String, PendingDownload>()
+    private val pendingIdsByFilename = mutableMapOf<String, MutableMap<String, PendingDownload>>()
+    private val pendingLock = Any()
 
-    /** Re-registers a recovered task after a catalog has refreshed its metadata. */
+    /** Registers a task by its immutable ID while retaining an unambiguous legacy filename lookup. */
     internal fun putPending(downloadId: String, pending: PendingDownload) {
-        pendingDownloads[downloadId] = pending
-        if (downloadId != pending.filename) {
-            pendingDownloads[pending.filename] = pending
+        require(pending.downloadId == null || pending.downloadId == downloadId) {
+            "Pending download identity does not match its registration key"
+        }
+        val exact = pending.copy(downloadId = downloadId)
+        synchronized(pendingLock) {
+            pendingDownloads.put(downloadId, exact)?.let { previous ->
+                removeFilenameAliasLocked(downloadId, previous.filename)
+            }
+            pendingIdsByFilename.getOrPut(exact.filename) { linkedMapOf() }[downloadId] = exact
         }
     }
     
@@ -2203,6 +2216,7 @@ object PendingDownloadHolder {
     ) {
         val taskId = downloadId ?: progressKey
         val pending = PendingDownload(
+            downloadId = taskId,
             filename = filename,
             repoId = repoId,
             progressKey = progressKey,
@@ -2241,29 +2255,41 @@ object PendingDownloadHolder {
         putPending(taskId, pending)
     }
     
-    fun getPending(downloadId: String): PendingDownload? = pendingDownloads[downloadId]
+    fun getPending(downloadId: String): PendingDownload? {
+        pendingDownloads[downloadId]?.let { return it }
+        return synchronized(pendingLock) {
+            pendingIdsByFilename[downloadId]?.values?.distinctBy { it.downloadId }?.singleOrNull()
+        }
+    }
 
     /** Snapshot process-local registrations before their Room task is visible. */
-    fun allPending(): List<PendingDownload> = synchronized(pendingDownloads) {
-        pendingDownloads.values.distinctBy { it.progressKey to it.destPath }
-    }
+    fun allPending(): List<PendingDownload> = pendingDownloads.values.toList()
 
     fun getAllPending(): List<PendingDownload> = allPending()
 
     fun addPendingFrom(task: com.example.llamadroid.data.db.DownloadTaskEntity) {
-        val pending = task.toPendingDownload()
-        pendingDownloads[task.id] = pending
-        if (task.id != task.filename) {
-            pendingDownloads[task.filename] = pending
-        }
+        putPending(task.id, task.toPendingDownload())
     }
     
     fun removePending(downloadId: String) {
-        val removed = pendingDownloads.remove(downloadId)
-        if (removed != null) {
-            pendingDownloads.entries.removeAll { (_, value) ->
-                value.progressKey == removed.progressKey && value.filename == removed.filename
+        synchronized(pendingLock) {
+            val exact = pendingDownloads.remove(downloadId)
+            if (exact != null) {
+                removeFilenameAliasLocked(downloadId, exact.filename)
+            } else {
+                val candidates = pendingIdsByFilename[downloadId]
+                val unambiguous = candidates?.entries?.singleOrNull()
+                if (unambiguous != null) {
+                    pendingDownloads.remove(unambiguous.key)
+                    removeFilenameAliasLocked(unambiguous.key, downloadId)
+                }
             }
         }
+    }
+
+    private fun removeFilenameAliasLocked(downloadId: String, filename: String) {
+        val ids = pendingIdsByFilename[filename] ?: return
+        ids.remove(downloadId)
+        if (ids.isEmpty()) pendingIdsByFilename.remove(filename)
     }
 }

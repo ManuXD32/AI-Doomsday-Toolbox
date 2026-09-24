@@ -422,6 +422,7 @@
     <string name="harness_reasoning_effort_label">Nivel de razonamiento</string>
     <string name="harness_reasoning_provider_default">Predeterminado del proveedor</string>
     <string name="harness_model_catalog_failure">%1$s: %2$s</string>
+    <string name="harness_model_refresh_failed">No se pudieron actualizar los modelos. Inténtalo de nuevo.</string>
     <string name="harness_permission_title">Preajuste de permisos</string>
     <string name="harness_permission_description">Elige el entorno aislado y la política de aprobación de esta sesión de Harness.</string>
     <string name="harness_permission_label">Preajuste</string>

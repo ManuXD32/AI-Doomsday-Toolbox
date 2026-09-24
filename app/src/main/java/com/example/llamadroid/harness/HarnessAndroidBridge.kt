@@ -1,6 +1,9 @@
 package com.example.llamadroid.harness
 
 import fi.iki.elonen.NanoHTTPD
+import com.example.llamadroid.service.LiteRtLmWorkerCrashedException
+import com.example.llamadroid.service.LiteRtPromptOverLimitException
+import com.example.llamadroid.service.containsLiteRtPromptOverLimit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -167,8 +170,9 @@ class HarnessAndroidBridge(
             modelCalls[id] = operation
         }
         return try { json(Response.Status.OK, runBlocking { operation.await() }) }
-        catch (_: Exception) {
-            json(Response.Status.INTERNAL_ERROR, JSONObject().put("error", JSONObject().put("code", "PROVIDER_INTERRUPTED").put("message", "PROVIDER_INTERRUPTED")))
+        catch (error: Exception) {
+            val code = providerModelErrorCode(error)
+            json(Response.Status.INTERNAL_ERROR, JSONObject().put("error", JSONObject().put("code", code).put("message", code)))
         } finally { modelCalls.remove(id); operation.cancel(); modelSlots.release() }
     }
 
@@ -184,8 +188,10 @@ class HarnessAndroidBridge(
                 output.write("data: [DONE]\n\n".toByteArray(Charsets.UTF_8)); output.flush()
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
-                runCatching { output.write("data: {\"error\":{\"code\":\"PROVIDER_INTERRUPTED\"}}\n\n".toByteArray(Charsets.UTF_8)) }
+            } catch (error: Exception) {
+                val code = providerModelErrorCode(error)
+                val event = JSONObject().put("error", JSONObject().put("code", code).put("message", code))
+                runCatching { output.write("data: $event\n\n".toByteArray(Charsets.UTF_8)) }
             } finally {
                 runCatching { output.close() }
             }
@@ -279,6 +285,19 @@ class HarnessAndroidBridge(
 
     private fun failure(code: String) = JSONObject().put("version", 1).put("ok", false)
         .put("error", JSONObject().put("code", code).put("message", code).put("details", JSONObject()))
+
+    private fun providerModelErrorCode(error: Throwable): String {
+        if (error.containsLiteRtPromptOverLimit()) return LiteRtPromptOverLimitException.CODE
+        val seen = java.util.Collections.newSetFromMap(
+            java.util.IdentityHashMap<Throwable, Boolean>()
+        )
+        var cause: Throwable? = error
+        while (cause != null && seen.add(cause)) {
+            if (cause is LiteRtLmWorkerCrashedException) return "LITERT_WORKER_CRASHED"
+            cause = cause.cause
+        }
+        return "PROVIDER_INTERRUPTED"
+    }
     private data class Pending(val digest: List<Byte>, val result: Deferred<Any?>)
     private companion object {
         const val MAX_REQUEST_BYTES = 1024L * 1024L

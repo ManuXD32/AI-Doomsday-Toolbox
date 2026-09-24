@@ -11,12 +11,16 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 class SdCliSupportTest {
+
+    @get:Rule val temporaryFolder = TemporaryFolder()
 
     private val baseImageFlags = setOf(
         "-M",
@@ -127,6 +131,10 @@ class SdCliSupportTest {
 
     @Test
     fun `sd tool components resolve by family and selected component id`() {
+        val vae = temporaryFolder.newFile("ae.safetensors")
+        val wrongVae = temporaryFolder.newFile("wrong-vae.safetensors")
+        val clipL = temporaryFolder.newFile("clip_l.safetensors")
+        val t5xxl = temporaryFolder.newFile("t5xxl.gguf")
         val model = sdModel(
             filename = "flux1.gguf",
             path = "/models/flux1.gguf",
@@ -137,25 +145,25 @@ class SdCliSupportTest {
             supportModels = listOf(
                 sdModel(
                     filename = "ae.safetensors",
-                    path = "/models/ae.safetensors",
+                    path = vae.absolutePath,
                     type = ModelType.SD_VAE,
                     compatProfiles = "flux_1"
                 ),
                 sdModel(
                     filename = "wrong-vae.safetensors",
-                    path = "/models/wrong-vae.safetensors",
+                    path = wrongVae.absolutePath,
                     type = ModelType.SD_VAE,
                     compatProfiles = "checkpoint"
                 ),
                 sdModel(
                     filename = "clip_l.safetensors",
-                    path = "/models/clip_l.safetensors",
+                    path = clipL.absolutePath,
                     type = ModelType.SD_CLIP_L,
                     compatProfiles = "flux_1"
                 ),
                 sdModel(
                     filename = "t5xxl.gguf",
-                    path = "/models/t5xxl.gguf",
+                    path = t5xxl.absolutePath,
                     type = ModelType.SD_T5XXL,
                     compatProfiles = "flux_1"
                 )
@@ -168,9 +176,9 @@ class SdCliSupportTest {
             model = model
         )
 
-        assertEquals("/models/ae.safetensors", components.pathForRole(SdComponentRole.VAE))
-        assertEquals("/models/clip_l.safetensors", components.pathForRole(SdComponentRole.CLIP_L))
-        assertEquals("/models/t5xxl.gguf", components.pathForRole(SdComponentRole.T5XXL))
+        assertEquals(vae.absolutePath, components.pathForRole(SdComponentRole.VAE))
+        assertEquals(clipL.absolutePath, components.pathForRole(SdComponentRole.CLIP_L))
+        assertEquals(t5xxl.absolutePath, components.pathForRole(SdComponentRole.T5XXL))
         assertEquals(null, components.taePath)
     }
 
@@ -194,6 +202,69 @@ class SdCliSupportTest {
         assertTrue(args.contains("--llm"))
         assertTrue(args.contains("-r"))
         assertFalse(args.contains("--strength"))
+    }
+
+    @Test
+    fun `reference image arguments preserve order and repeat the flag`() {
+        val references = listOf("/tmp/source.png", "/tmp/ref-2.png", "/tmp/ref-3.png")
+        val args = buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.IMG2IMG,
+                modelPath = "/models/flux2.gguf",
+                modelFamily = "flux_2",
+                modelVariant = "dev",
+                prompt = "a lighthouse",
+                outputPath = "/tmp/out.png",
+                initImage = references.first(),
+                referenceImages = references,
+                vaePath = "/models/ae.safetensors",
+                llmPath = "/models/flux2-llm.gguf"
+            ),
+            binaryCapabilities = SdBinaryCapabilities.ALLOW_ALL
+        )
+
+        assertEquals(references, args.windowed(2).filter { it.first() == "-r" }.map { it.last() })
+    }
+
+    @Test
+    fun `reference image arguments are limited to ten paths`() {
+        val references = (1..11).map { "/tmp/ref-$it.png" }
+        val failure = runCatching { buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.IMG2IMG,
+                modelPath = "/models/flux2.gguf",
+                modelFamily = "flux_2",
+                modelVariant = "dev",
+                prompt = "a lighthouse",
+                outputPath = "/tmp/out.png",
+                initImage = references.first(),
+                referenceImages = references,
+                vaePath = "/models/ae.safetensors",
+                llmPath = "/models/flux2-llm.gguf"
+            ),
+            binaryCapabilities = SdBinaryCapabilities.ALLOW_ALL
+        ) }.exceptionOrNull()
+        assertEquals(SdReferenceImageIssue.LIMIT_EXCEEDED, (failure as SdReferenceImageException).issue)
+    }
+
+    @Test
+    fun `blank reference image path has a typed error`() {
+        val failure = runCatching { buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.IMG2IMG,
+                modelPath = "/models/flux2.gguf",
+                modelFamily = "flux_2",
+                modelVariant = "dev",
+                prompt = "a lighthouse",
+                outputPath = "/tmp/out.png",
+                initImage = "/tmp/source.png",
+                referenceImages = listOf("/tmp/source.png", ""),
+                vaePath = "/models/ae.safetensors",
+                llmPath = "/models/flux2-llm.gguf"
+            ),
+            binaryCapabilities = SdBinaryCapabilities.ALLOW_ALL
+        ) }.exceptionOrNull()
+        assertEquals(SdReferenceImageIssue.BLANK_PATH, (failure as SdReferenceImageException).issue)
     }
 
     @Test

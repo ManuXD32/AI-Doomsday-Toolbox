@@ -74,6 +74,8 @@ internal fun localizedHarnessNoticeMessage(code: String): Int? = when (code) {
     "MODEL_CATALOG_INVALID" -> R.string.harness_notice_model_catalog_invalid
     "MODEL_REASONING_EFFORT_INVALID" -> R.string.harness_notice_model_reasoning_invalid
     "MODEL_CONTEXT_UNKNOWN" -> R.string.harness_notice_model_context_unknown
+    "LITERT_PROMPT_OVER_LIMIT" -> R.string.harness_litert_0984_prompt_over_limit_generic
+    "LITERT_WORKER_CRASHED" -> R.string.harness_litert_0985_worker_interrupted
     "PERMISSION_SESSION_MISSING" -> R.string.harness_notice_permission_session_missing
     "PERMISSION_COMMAND_FAILED" -> R.string.harness_notice_permission_command_failed
     "HARNESS_UNAVAILABLE" -> R.string.harness_notice_unavailable

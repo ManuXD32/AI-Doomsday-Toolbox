@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -16,6 +17,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -28,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -37,6 +40,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.llamadroid.R
 import com.example.llamadroid.harness.harnessFriendlyModelLabel
+import com.example.llamadroid.harness.HarnessLocalModelCapabilityStore
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -79,9 +83,14 @@ private data class EditableHarnessModel(
     val wireId: String,
     val displayName: String,
     val contextWindow: Long?,
+    val advertisedContextWindow: Long? = null,
     val maxTokens: Long?,
+    val backendLimits: HarnessModelBackendLimitsUi? = null,
     val isAndroidManaged: Boolean = false,
-)
+) {
+    val isLiteRt: Boolean
+        get() = isAndroidManaged && wireId.startsWith("litert:")
+}
 
 private fun editableHarnessModels(provider: HarnessProviderUiState): List<EditableHarnessModel> {
     val settingsModels = provider.configs.flatMap { config ->
@@ -123,8 +132,16 @@ private fun editableHarnessModels(provider: HarnessProviderUiState): List<Editab
                     displayName = option.modelNames[wireId]
                         ?.takeIf(String::isNotBlank)
                         ?: harnessFriendlyModelLabel(wireId),
-                    contextWindow = option.modelContextWindows[wireId]?.takeIf { it > 0L },
+                    contextWindow = option.modelContextWindows[wireId]
+                        ?.takeIf { it > 0L }
+                        ?.takeIf {
+                            !wireId.startsWith("litert:") ||
+                                option.modelCapabilitySources[wireId] == "explicit"
+                        },
+                    advertisedContextWindow = option.modelAdvertisedContextWindows[wireId]?.takeIf { it > 0L }
+                        ?: option.modelContextWindows[wireId]?.takeIf { it > 0L },
                     maxTokens = option.modelMaxOutputTokens[wireId]?.takeIf { it > 0L },
+                    backendLimits = option.modelBackendLimits[wireId],
                     isAndroidManaged = true,
                 )
             }
@@ -189,12 +206,23 @@ private fun HarnessEditableModelRow(
     model: EditableHarnessModel,
     onAction: (NativeHarnessUiAction) -> Unit,
 ) {
+    val context = LocalContext.current
+    val capabilityStore = remember(context) { HarnessLocalModelCapabilityStore(context) }
+    val savedOverrides = remember(model.wireId) { capabilityStore.get(model.wireId) }
     var contextText by remember(model.providerId, model.wireId, model.contextWindow) {
-        mutableStateOf(model.contextWindow?.toString().orEmpty())
+        mutableStateOf(
+            if (model.isLiteRt) savedOverrides?.contextTokens?.toString().orEmpty()
+            else model.contextWindow?.toString().orEmpty()
+        )
     }
     var outputText by remember(model.providerId, model.wireId, model.maxTokens) {
-        mutableStateOf(model.maxTokens?.toString().orEmpty())
+        mutableStateOf(
+            if (model.isLiteRt) savedOverrides?.maxOutputTokens?.toString().orEmpty()
+            else model.maxTokens?.toString().orEmpty()
+        )
     }
+    var mtpOverride by remember(model.wireId) { mutableStateOf(savedOverrides?.mtpEnabled) }
+    var thinkingOverride by remember(model.wireId) { mutableStateOf(savedOverrides?.thinkingEnabled) }
     AppSectionCard(shape = com.example.llamadroid.ui.components.AppChromeDefaults.CompactShape) {
         Text(
             model.displayName,
@@ -209,24 +237,91 @@ private fun HarnessEditableModelRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
                 value = contextText,
                 onValueChange = { contextText = it.filter(Char::isDigit).take(12) },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxWidth(),
                 label = { Text(stringResource(R.string.harness_model_editor_context)) },
                 supportingText = {
-                    if (model.contextWindow == null) Text(stringResource(R.string.harness_model_editor_unknown))
+                    if (model.isLiteRt) {
+                        Text(
+                            stringResource(
+                                R.string.harness_app_tools_litert_context_hint,
+                                minOf(model.advertisedContextWindow ?: 16_384L, 16_384L).toInt(),
+                                model.advertisedContextWindow?.toInt() ?: 16_384,
+                            )
+                        )
+                    } else if (model.contextWindow == null) {
+                        Text(stringResource(R.string.harness_model_editor_unknown))
+                    }
                 },
                 singleLine = true,
             )
             OutlinedTextField(
                 value = outputText,
                 onValueChange = { outputText = it.filter(Char::isDigit).take(12) },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxWidth(),
                 label = { Text(stringResource(R.string.harness_model_editor_output)) },
+                supportingText = {
+                    if (model.isLiteRt) {
+                        Text(stringResource(
+                            R.string.harness_app_tools_litert_output_hint,
+                            model.maxTokens ?: 2_048L,
+                        ))
+                    }
+                },
                 singleLine = true,
             )
+        }
+        if (model.isLiteRt) {
+            model.backendLimits?.let { limits ->
+                val effectiveContext = limits.contextTokens ?: model.contextWindow
+                val effectiveOutput = limits.outputTokens ?: model.maxTokens
+                if (effectiveContext != null && effectiveOutput != null) {
+                    Text(
+                        stringResource(
+                            R.string.harness_litert_0984_effective_limit,
+                            limits.backend?.uppercase().orEmpty(),
+                            effectiveContext.toInt(),
+                            effectiveOutput.toInt(),
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (limits.backend == "cpu" && limits.autoChoseCpuForCapacity) {
+                    Text(
+                        stringResource(R.string.harness_litert_0984_auto_cpu_capacity),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (
+                    limits.backend == "gpu" && limits.requestedBackend == "gpu" &&
+                    limits.gpuSafetyLimitApplied && effectiveContext != null && effectiveOutput != null
+                ) {
+                    Text(
+                        stringResource(
+                            R.string.harness_litert_0984_forced_gpu_warning,
+                            effectiveContext.toInt(),
+                            effectiveOutput.toInt(),
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+            Text(
+                stringResource(R.string.harness_litert_0984_model_mtp_setting),
+                style = MaterialTheme.typography.labelMedium,
+            )
+            HarnessLiteRtOverrideChoices(value = mtpOverride, onChange = { mtpOverride = it })
+            Text(
+                stringResource(R.string.harness_litert_0984_model_thinking_setting),
+                style = MaterialTheme.typography.labelMedium,
+            )
+            HarnessLiteRtOverrideChoices(value = thinkingOverride, onChange = { thinkingOverride = it })
         }
         OutlinedButton(
             onClick = {
@@ -236,6 +331,8 @@ private fun HarnessEditableModelRow(
                             wireId = model.wireId,
                             contextTokens = contextText.trim().toLongOrNull()?.takeIf { it > 0L },
                             maxOutputTokens = outputText.trim().toLongOrNull()?.takeIf { it > 0L },
+                            mtpEnabled = mtpOverride.takeIf { model.isLiteRt },
+                            thinkingEnabled = thinkingOverride.takeIf { model.isLiteRt },
                         )
                     )
                 } else {
@@ -253,6 +350,29 @@ private fun HarnessEditableModelRow(
         ) {
             Icon(Icons.Default.Save, contentDescription = null)
             Text(stringResource(R.string.harness_model_editor_save))
+        }
+    }
+}
+
+@Composable
+private fun HarnessLiteRtOverrideChoices(
+    value: Boolean?,
+    onChange: (Boolean?) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        listOf(
+            null to R.string.harness_litert_0984_use_global,
+            true to R.string.harness_litert_0984_enabled,
+            false to R.string.harness_litert_0984_disabled,
+        ).forEach { (option, label) ->
+            FilterChip(
+                selected = value == option,
+                onClick = { onChange(option) },
+                label = { Text(stringResource(label), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            )
         }
     }
 }

@@ -7,9 +7,12 @@ import android.content.ServiceConnection
 import android.os.IBinder
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.ZimRepository
 import com.example.llamadroid.data.repository.KnowledgeBaseRepository
+import com.example.llamadroid.onnx.isInstalledOnnxTxt2ImgBundle
 import com.example.llamadroid.service.AgentImageOperations
+import com.example.llamadroid.service.AGENT_SD_IMAGE_SUPPORT_TYPES
 import com.example.llamadroid.service.AgentPreviewBridge
 import com.example.llamadroid.service.AgentRuntimeSupport
 import com.example.llamadroid.service.AgentSkillRepository
@@ -17,6 +20,8 @@ import com.example.llamadroid.service.CustomToolExecutionMode
 import com.example.llamadroid.service.CustomToolHttpExecutor
 import com.example.llamadroid.service.KiwixService
 import com.example.llamadroid.service.SkillPermission
+import com.example.llamadroid.service.agentSdImageToolParams
+import com.example.llamadroid.service.resolveAgentSdImageReadiness
 import com.example.llamadroid.ui.agent.harness.HarnessDiscoveredModelUi
 import com.example.llamadroid.ui.agent.harness.NativeHarnessCustomProviderRequest
 import com.example.llamadroid.ui.agent.harness.NativeHarnessDraftDiscoveryException
@@ -82,6 +87,7 @@ class HarnessBridgeOperations(
     private val models: HarnessLocalModels,
     private val diagnostics: HarnessDiagnostics,
     private val workspaceActions: HarnessWorkspaceActions? = null,
+    private val emitCommandOutput: suspend (HarnessLiveCommandOutput) -> Unit = {},
     private val executeLocal: suspend (HarnessSessionScope, String, String) -> Any
 ) {
     // Capture the canonical preferences on access; other app managers may edit them while Harness runs.
@@ -91,8 +97,25 @@ class HarnessBridgeOperations(
     private val zims = ZimRepository(context, database.zimDao())
     private val sshProcesses = HarnessSshProcesses(files, diagnostics)
     private val client = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
+    private val appWebSearch = HarnessAppWebSearch()
 
     suspend fun invoke(method: String, sessionId: String?, args: JSONObject): Any? = withContext(Dispatchers.IO) {
+        if (method == "appTools.status") return@withContext appToolsStatus(SettingsRepository(context))
+        if (method == "appTools.setEnabled") return@withContext setAppToolEnabled(args, SettingsRepository(context))
+        when (method) {
+            "research.webSearch" -> requireHarnessToolEnabled(
+                SettingsRepository(context).agentWebSearchEnabled.value,
+                "WEB_SEARCH_DISABLED",
+            )
+            "images.generate" -> requireHarnessToolEnabled(
+                SettingsRepository(context).agentImageGenerationToolEnabled.value,
+                "IMAGE_GENERATION_TOOL_DISABLED",
+            )
+            "images.removeBackground" -> requireHarnessToolEnabled(
+                SettingsRepository(context).agentBackgroundRemovalToolEnabled.value,
+                "BACKGROUND_REMOVAL_TOOL_DISABLED",
+            )
+        }
         if (method.startsWith("credentials.")) {
             require(!args.optString("key").startsWith("adt-ssh/") && !args.optString("key").startsWith("adt-ssh-cleanup/")) { "CREDENTIAL_SCOPE_PRIVATE" }
             return@withContext credential(method, args)
@@ -115,13 +138,50 @@ class HarnessBridgeOperations(
             require(workspace.guestPath == args.getString("guestPath") && workspace.backend == args.getString("backend")) { "WORKSPACE_IDENTITY_MISMATCH" }
             if (workspace.backend == "REMOTE_SSH") {
                 check(workspaces.sshSummary(workspace.id).getBoolean("configured")) { "SSH_CONFIGURATION_REQUIRED" }
-            } else com.example.llamadroid.service.AgentLocalWorkspaceSupport.rootForProject(context, workspace.projectFolder)
+            } else {
+                workspaces.verifyManagedLocalProjectRoot(workspace.projectFolder)
+                com.example.llamadroid.service.AgentLocalWorkspaceSupport.rootForProject(context, workspace.projectFolder)
+            }
             return@withContext JSONObject().put("cwd", workspace.guestPath).put("workspaceId", workspace.id)
+                .put("title", workspace.title)
+        }
+        if (method == "workspace.registerManaged") {
+            val workspace = workspaces.registerManagedHarnessWorkspace(
+                args.getString("guestPath"), args.optString("title")
+            )
+            return@withContext JSONObject().put("workspaceId", workspace.id)
+                .put("guestPath", workspace.guestPath).put("title", workspace.title)
+        }
+        if (method == "workspace.associate") {
+            require(workspaces.associateHarnessWorkspace(
+                args.getString("workspaceId"), args.getString("harnessWorkspaceId"),
+                args.getString("guestPath"), args.optString("title").takeIf(String::isNotBlank)
+            )) { "WORKSPACE_IDENTITY_MISMATCH" }
+            return@withContext JSONObject().put("associated", true)
+        }
+        if (method == "workspace.renameCanonical") {
+            val renamed = workspaces.renameCanonicalHarnessWorkspace(
+                args.getString("harnessWorkspaceId"), args.getString("title")
+            )
+            return@withContext JSONObject().put("renamed", renamed)
         }
         if (method == "session.index") {
             val id = requireNotNull(sessionId) { "SESSION_REQUIRED" }
-            workspaces.importSession(id, args.optString("title", id), args.getString("cwd"), archived = args.optBoolean("archived"))
+            workspaces.importSession(
+                id, args.optString("title", id), args.getString("cwd"),
+                archived = args.optBoolean("archived"),
+                harnessWorkspaceId = args.optString("harnessWorkspaceId").takeIf(String::isNotBlank),
+                workspaceTitle = args.optString("workspaceTitle").takeIf(String::isNotBlank),
+            )
             return@withContext JSONObject().put("indexed", true)
+        }
+        if (method == "command.liveOutput") {
+            val output = parseHarnessLiveCommandOutput(sessionId, args)
+            // The bridge is authenticated and origin-checked by HarnessAndroidBridge.
+            // Require an indexed session, then forward only through transient UI state.
+            workspaces.scope(output.sessionId)
+            emitCommandOutput(output)
+            return@withContext JSONObject().put("accepted", true)
         }
         val scope = workspaces.scope(requireNotNull(sessionId) { "SESSION_REQUIRED" })
         val settings by lazy { this@HarnessBridgeOperations.settings }
@@ -184,6 +244,12 @@ class HarnessBridgeOperations(
                     "knowledge.read" -> knowledge.readChunk(args.getLong("chunkId"), args.optBoolean("neighbors"), scope.knowledgeBaseIds)
                     "knowledge.listSources" -> knowledge.listSources(scope.knowledgeBaseIds)
                     "research.kiwix" -> searchKiwix(args.getString("query"))
+                    "research.webSearch" -> executeHarnessAppWebSearch(
+                        enabled = settings.agentWebSearchEnabled.value,
+                        query = args.optString("query"),
+                        maxResults = settings.agentWebSearchMaxResults.value,
+                        search = appWebSearch::search,
+                    )
                     "research.kiwixRead" -> readKiwixArticle(
                         args.getString("url"),
                         args.optInt("maxChars", settings.agentKiwixMaxChars.value).coerceIn(100, 120_000)
@@ -249,9 +315,69 @@ class HarnessBridgeOperations(
     }
 
     fun cancelOwnedRequests() {
-        sshProcesses.cancelAll(); client.dispatcher.cancelAll()
+        sshProcesses.cancelAll(); client.dispatcher.cancelAll(); appWebSearch.cancelOwnedRequests()
         models.cancelOwnedRequests(); files.cancelOwnedRequests()
         workspaceActions?.cancelPending()
+    }
+
+    private suspend fun setAppToolEnabled(args: JSONObject, settings: SettingsRepository): JSONObject {
+        require(args.has("enabled") && args.opt("enabled") is Boolean) { "APP_TOOL_ENABLED_INVALID" }
+        val enabled = args.getBoolean("enabled")
+        when (args.optString("tool")) {
+            "images_generate" -> settings.setAgentImageGenerationToolEnabled(enabled)
+            "app_web_search" -> settings.setAgentWebSearchEnabled(enabled)
+            else -> error("APP_TOOL_UNKNOWN")
+        }
+        return appToolsStatus(settings)
+    }
+
+    private suspend fun appToolsStatus(settings: SettingsRepository): JSONObject {
+        val engine = if (settings.agentImageGenerationEngine.value.equals("SD", ignoreCase = true)) "SD" else "ONNX"
+        val selectedModel = if (engine == "SD") settings.agentSdImageGenerationModel.value else settings.agentImageGenerationModel.value
+        val (imageModelReady, imageReadinessStatus, missingComponents) = if (engine == "SD") {
+            val mainModels = database.modelDao().getModelsByTypesSync(
+                listOf(ModelType.SD_CHECKPOINT, ModelType.SD_DIFFUSION),
+            )
+            val supportModels = database.modelDao().getModelsByTypesSync(AGENT_SD_IMAGE_SUPPORT_TYPES)
+            val readiness = resolveAgentSdImageReadiness(
+                mainModels = mainModels,
+                supportModels = supportModels,
+                sdParams = settings.agentSdImageToolParams(selectedModel),
+            )
+            Triple(
+                readiness.ready,
+                when {
+                    readiness.ready -> "ready"
+                    !readiness.modelSelected -> "needs_model"
+                    else -> "needs_components"
+                },
+                readiness.missingRequiredRoles.map { it.name },
+            )
+        } else {
+            val imageModels = if (selectedModel?.isNotBlank() == true) {
+                database.modelDao().getModelsByTypesSync(listOf(ModelType.ONNX_IMAGE_GEN))
+            } else emptyList()
+            val ready = selectedModel?.isNotBlank() == true && imageModels.any { model ->
+                (model.filename == selectedModel || model.path == selectedModel) && model.isInstalledOnnxTxt2ImgBundle()
+            }
+            Triple(ready, if (ready) "ready" else "needs_model", emptyList())
+        }
+        val imageEnabled = settings.agentImageGenerationToolEnabled.value
+        val searchEnabled = settings.agentWebSearchEnabled.value
+        return JSONObject().put("tools", JSONObject()
+            .put("images_generate", JSONObject()
+                .put("enabled", imageEnabled)
+                .put("ready", imageEnabled && imageModelReady)
+                .put("status", when {
+                    !imageEnabled -> "off"
+                    else -> imageReadinessStatus
+                })
+                .put("missingComponents", JSONArray(missingComponents))
+                .put("engine", engine))
+            .put("app_web_search", JSONObject()
+                .put("enabled", searchEnabled)
+                .put("ready", searchEnabled)
+                .put("status", if (searchEnabled) "enabled" else "off")))
     }
 
     private fun credential(method: String, args: JSONObject): Any? = when (method) {

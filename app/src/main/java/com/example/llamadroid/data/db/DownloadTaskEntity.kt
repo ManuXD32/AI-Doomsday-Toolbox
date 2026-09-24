@@ -86,8 +86,8 @@ interface DownloadTaskDao {
     @Query("SELECT * FROM download_tasks WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): DownloadTaskEntity?
 
-    @Query("SELECT * FROM download_tasks WHERE filename = :filename LIMIT 1")
-    suspend fun getByFilename(filename: String): DownloadTaskEntity?
+    @Query("SELECT * FROM download_tasks WHERE filename = :filename ORDER BY createdAt DESC")
+    suspend fun getByFilename(filename: String): List<DownloadTaskEntity>
 
     /** Reuses an in-flight source request instead of allocating a second file name. */
     @Query(

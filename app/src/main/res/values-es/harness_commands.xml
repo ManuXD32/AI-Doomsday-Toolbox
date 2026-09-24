@@ -2,4 +2,26 @@
     <string name="harness_command_result">Resultado del comando</string>
     <string name="harness_command_unknown">Este comando es desconocido o está incompleto. Se han conservado el borrador y los archivos adjuntos.</string>
     <string name="harness_command_rejected">No se ha podido completar el comando. Se han conservado el borrador y los archivos adjuntos.</string>
+    <string name="harness_command_history_description">Comandos Bash ejecutados por el modelo y su resultado para este hilo.</string>
+    <string name="harness_commands_no_session">Selecciona un hilo para ver sus comandos.</string>
+    <string name="harness_commands_empty">Aún no hay comandos Bash ejecutados por el modelo.</string>
+    <string name="harness_commands_loading">Cargando el historial de comandos…</string>
+    <string name="harness_commands_load_failed">No se ha podido actualizar el historial de comandos.</string>
+    <string name="harness_commands_refresh">Actualizar</string>
+    <string name="harness_commands_load_older">Cargar comandos anteriores</string>
+    <string name="harness_commands_loading_older">Cargando comandos anteriores…</string>
+    <string name="harness_command_label">Comando</string>
+    <string name="harness_command_output_label">Resultado</string>
+    <string name="harness_command_status_running">En ejecución</string>
+    <string name="harness_command_status_background">En segundo plano</string>
+    <string name="harness_command_status_completed">Completado</string>
+    <string name="harness_command_status_failed">Error</string>
+    <string name="harness_command_duration_label">Duración: %1$s</string>
+    <string name="harness_command_duration_milliseconds">%1$d ms</string>
+    <string name="harness_command_duration_seconds">%1$d s</string>
+    <string name="harness_command_duration_minutes">%1$d min %2$d s</string>
+    <string name="harness_command_duration_hours">%1$d h %2$d min</string>
+    <string name="harness_command_output_truncated">Vista previa del resultado acortada.</string>
+    <string name="harness_commands_waiting_output">Esperando el resultado…</string>
+    <string name="harness_commands_background_status_unobserved">El estado y el resultado se actualizan cuando la sesión devuelve un resultado de job_output.</string>
 </resources>

@@ -8,8 +8,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -33,6 +36,7 @@ internal class NativeHarnessParityController(
     private val reconcileWorkspaceGroup: suspend (HarnessWorkspaceGroupUi) -> Unit = {}
 ) : AutoCloseable {
     private var workspaceJob: Job? = null
+    private val workspaceStreamLock = Mutex()
 
     suspend fun initialize() {
         refreshAgentPresets(report = false)
@@ -43,6 +47,11 @@ internal class NativeHarnessParityController(
     suspend fun refreshAfterWebView() {
         refreshAgentPresets(report = false)
         refreshCordis(report = false)
+        startWorkspaceStream()
+    }
+
+    /** Reattach the one workspace subscription after an explicit runtime Continue. */
+    suspend fun refreshWorkspaceStreamOnly() {
         startWorkspaceStream()
     }
 
@@ -234,22 +243,29 @@ internal class NativeHarnessParityController(
     }
 
     private suspend fun startWorkspaceStream() {
-        val client = clientProvider() ?: return
-        workspaceJob?.cancel()
-        mutateState { it.copy(workspaceManager = it.workspaceManager.copy(isLoading = true)) }
-        workspaceJob = scope.launch(Dispatchers.IO) {
-            try {
-                client.stream(
-                    "workspace",
-                    "follow",
-                    policy = HarnessStreamPolicy.Default
-                ).collect { frame -> applyWorkspaceFrame(frame) }
-            } catch (error: Throwable) {
-                if (error !is CancellationException) {
-                    reportFailure(
-                        "WORKSPACE_STREAM_FAILED",
-                        "Workspace groups could not be refreshed"
-                    )
+        workspaceStreamLock.withLock {
+            val client = clientProvider()
+            workspaceJob?.cancelAndJoin()
+            workspaceJob = null
+            if (client == null) {
+                mutateState { current -> current.copy(workspaceManager = current.workspaceManager.copy(isLoading = false)) }
+                return@withLock
+            }
+            mutateState { it.copy(workspaceManager = it.workspaceManager.copy(isLoading = true)) }
+            workspaceJob = scope.launch(Dispatchers.IO) {
+                try {
+                    client.stream(
+                        "workspace",
+                        "follow",
+                        policy = HarnessStreamPolicy.Default
+                    ).collect { frame -> applyWorkspaceFrame(frame) }
+                } catch (error: Throwable) {
+                    if (error !is CancellationException) {
+                        reportFailure(
+                            "WORKSPACE_STREAM_FAILED",
+                            "Workspace groups could not be refreshed"
+                        )
+                    }
                 }
             }
         }

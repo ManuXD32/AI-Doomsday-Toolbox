@@ -15,6 +15,7 @@
     <string name="harness_tab_changes">Cambios</string>
     <string name="harness_tab_tools">Herramientas</string>
     <string name="harness_tab_files">Archivos</string>
+    <string name="harness_tab_commands">Comandos</string>
     <string name="harness_tab_terminal">Terminal</string>
     <string name="harness_more_destinations">Más destinos</string>
     <string name="harness_back_to_projects">Volver a proyectos</string>

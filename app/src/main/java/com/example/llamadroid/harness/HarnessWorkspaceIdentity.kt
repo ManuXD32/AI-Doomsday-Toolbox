@@ -1,5 +1,6 @@
 package com.example.llamadroid.harness
 
+import com.example.llamadroid.data.db.HarnessWorkspaceEntity
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -7,6 +8,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * The identity returned by `adt.prepareWorkspace` before a Harness session is created.
@@ -22,17 +25,55 @@ internal data class HarnessPreparedWorkspace(
     val associationStatus: String,
 )
 
-/** The alpha2 session/create contract accepts exactly one location selector. */
+/** A unique DSH group may be referenced by Room aliases only for one exact project path. */
+internal fun harnessAliasesMayShareGroup(
+    first: HarnessWorkspaceEntity,
+    second: HarnessWorkspaceEntity,
+): Boolean = HarnessProjectManagementRules.sameWorkspace(first, second) &&
+    normalizeHarnessGuestPath(first.guestPath) == normalizeHarnessGuestPath(second.guestPath)
+
+/** Unregistered legacy Sessions may start in a project subfolder; canonical groups require equality. */
+internal fun harnessSessionPathMatchesProject(
+    sessionPath: String,
+    projectPath: String,
+    exact: Boolean,
+): Boolean {
+    val session = normalizeHarnessGuestPath(sessionPath)
+    val project = normalizeHarnessGuestPath(projectPath)
+    return session == project || (!exact && session.startsWith("$project/"))
+}
+
+/**
+ * True when a new session cwd is a candidate for app-managed local project import.
+ * This is a routing hint only: the repository still validates the folder and full path.
+ * Malformed descendants such as `/workspace/projects/../other` remain candidates so the
+ * repository can report its existing integrity error instead of hiding it.
+ */
+internal fun isManagedProjectGuestPath(path: String): Boolean {
+    val root = "/workspace/projects/"
+    return path.startsWith(root) && path.length > root.length
+}
+
+/**
+ * Import a session workspace only when the session is already indexed, the cwd matches a
+ * registered workspace, or the cwd is a candidate app-managed local project path.
+ */
+internal fun shouldImportHarnessSessionWorkspace(
+    sessionAlreadyIndexed: Boolean,
+    cwdMatchesRegisteredWorkspace: Boolean,
+    cwd: String?,
+): Boolean = sessionAlreadyIndexed || cwdMatchesRegisteredWorkspace ||
+    cwd?.trim()?.let(::isManagedProjectGuestPath) == true
+
+/** Native creation requires a verified DSH group; never fall back to an ungrouped cwd. */
 internal fun harnessSessionCreateLocation(
     guestPath: String,
-    registered: HarnessPreparedWorkspace?,
+    registered: HarnessPreparedWorkspace,
 ): JsonObject = buildJsonObject {
     val normalizedPath = normalizeHarnessGuestPath(guestPath)
-    if (registered != null && registered.guestPath == normalizedPath) {
-        put("workspaceId", registered.workspaceId)
-    } else {
-        put("cwd", normalizedPath)
-    }
+    require(registered.guestPath == normalizedPath) { "WORKSPACE_IDENTITY_MISMATCH" }
+    require(registered.workspaceId.isNotBlank()) { "WORKSPACE_IDENTITY_INVALID" }
+    put("workspaceId", registered.workspaceId)
 }
 
 /**
@@ -128,4 +169,22 @@ internal class HarnessSessionEventSequencer {
 
     @Synchronized
     fun cursor(sessionId: String): Long? = cursors[sessionId]
+}
+
+/** Ignore an older group frame after a newer DSH workspace update was observed. */
+internal class HarnessWorkspaceGroupRevisionGuard {
+    private val latestByGroup = ConcurrentHashMap<String, Long>()
+
+    fun accept(groupId: String, updatedAt: String?): Boolean {
+        if (groupId.isBlank()) return false
+        val timestamp = updatedAt?.let { raw ->
+            raw.toLongOrNull() ?: runCatching { Instant.parse(raw).toEpochMilli() }.getOrNull()
+        } ?: return true
+        var accepted = false
+        latestByGroup.compute(groupId) { _, previous ->
+            accepted = previous == null || timestamp >= previous
+            if (accepted) timestamp else previous
+        }
+        return accepted
+    }
 }

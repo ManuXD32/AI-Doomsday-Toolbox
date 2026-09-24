@@ -6,6 +6,7 @@ import com.example.llamadroid.harness.client.HarnessClient
 import com.example.llamadroid.harness.client.HarnessRpcResult
 import com.example.llamadroid.harness.client.HarnessStreamPolicy
 import com.example.llamadroid.harness.HarnessSessionEventSequencer
+import com.example.llamadroid.harness.HarnessLiveCommandOutput
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -15,9 +16,11 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -59,9 +62,14 @@ class NativeHarnessController(
     private val interactions: NativeHarnessInteractionHooks? = null,
     private val jobs: NativeHarnessJobHooks = NativeHarnessJobHooks(),
     private val providerAuth: NativeHarnessProviderAuthHooks = NativeHarnessProviderAuthHooks(),
-    /** Persists context/output overrides for Android-managed provider rows. */
-    private val updateLocalModelCapability: suspend (wireId: String, contextTokens: Long?, maxOutputTokens: Long?) -> Unit =
-        { _, _, _ -> },
+    /** Atomically persists context/output plus per-model LiteRT inference overrides. */
+    private val updateLocalModelCapability: suspend (
+        wireId: String,
+        contextTokens: Long?,
+        maxOutputTokens: Long?,
+        mtpEnabled: Boolean?,
+        thinkingEnabled: Boolean?,
+    ) -> Unit = { _, _, _, _, _ -> },
     /** Host-only UI operations, such as opening Android's attachment picker. */
     private val handleExternalAction: suspend (NativeHarnessUiAction) -> Unit = {
         throw IllegalStateException("Host UI callback is not connected")
@@ -75,7 +83,9 @@ class NativeHarnessController(
     },
     /** Metadata-only diagnostics; never pass prompts, tool output, or RPC arguments. */
     private val onDiagnostic: NativeHarnessDiagnosticCallback = { _, _, _, _ -> },
-    private val sharedAttention: NativeHarnessAttentionStore? = null
+    private val sharedAttention: NativeHarnessAttentionStore? = null,
+    /** Authenticated transient output; kept out of the durable diagnostics journal. */
+    private val liveCommandOutput: Flow<HarnessLiveCommandOutput> = emptyFlow(),
 ) : NativeHarnessUiController, AutoCloseable {
     private val ownerJob = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + ownerJob)
@@ -236,6 +246,24 @@ class NativeHarnessController(
             reportFailure = { code, message -> reportFailure(code, message) }
         )
     }
+    private val commandHistoryActions by lazy {
+        NativeHarnessCommandHistoryController(
+            scope = scope,
+            clientProvider = { clientOrNull() },
+            selectedSessionProvider = { state.value.selectedSessionId },
+            addressForSession = sessionAddresses::wireAddress,
+            currentThroughSequence = { harnessLatestSequence(state.value.transcript) },
+            currentHistory = { state.value.commandHistory },
+            updateHistory = { sessionId, update ->
+                mutate { current ->
+                    if (current.selectedSessionId == sessionId) {
+                        current.copy(commandHistory = update(current.commandHistory))
+                    } else current
+                }
+            },
+            reportFailure = { code, message -> reportFailure(code, message) },
+        )
+    }
     private val offlineSessions by lazy {
         NativeHarnessOfflineSessions(
             hooks = workspace,
@@ -311,6 +339,17 @@ class NativeHarnessController(
             }
         }
         scope.launch { attention.emits.collect { applyRemoteEmit(it.event, it.args) } }
+        scope.launch {
+            liveCommandOutput.collect { chunk ->
+                commandHistoryActions.applyLiveOutput(
+                    chunk.sessionId,
+                    chunk.callId,
+                    chunk.stream,
+                    chunk.offset,
+                    chunk.text,
+                )
+            }
+        }
         scope.launch { initialize() }
     }
 
@@ -374,6 +413,7 @@ class NativeHarnessController(
             refreshRuntime(reportFailure = false)
             refreshSessions(reportFailure = false)
             management.invalidate()
+            parityActions.refreshAfterWebView()
             startControlStream()
         }
     }
@@ -468,6 +508,7 @@ class NativeHarnessController(
         providerAuthActions.close()
         followJob?.cancel()
         controlJob?.cancel()
+        commandHistoryActions.close()
         if (sharedAttention == null) attention.attach(null)
         ownerJob.cancel()
     }
@@ -477,7 +518,13 @@ class NativeHarnessController(
     }
     private suspend fun initializeConnected() {
         refreshSessions(reportFailure = false)
-        if (clientProvider() == null) return
+        if (clientProvider() == null) {
+            // Also detach a stream owned by the previous client after stop or
+            // endpoint loss; the project rows remain available offline.
+            parityActions.refreshWorkspaceStreamOnly()
+            return
+        }
+        parityActions.initialize()
         startControlStream()
         scope.launch { refreshModelCatalog(reportFailure = false) }
     }
@@ -495,6 +542,7 @@ class NativeHarnessController(
                 mutate { it.copy(notice = null) }
                 refreshRuntime(reportFailure = false)
                 refreshSessions(reportFailure = false)
+                parityActions.refreshWorkspaceStreamOnly()
                 restartSelectedSubscriptions()
             }
             NativeHarnessUiAction.OpenWorkspace -> workspace.openWorkspace(state.value.workspace)
@@ -575,6 +623,8 @@ class NativeHarnessController(
                 action.rating
             )
             is NativeHarnessUiAction.LoadOlderMessages -> loadOlderMessages()
+            NativeHarnessUiAction.RefreshCommandHistory -> commandHistoryActions.refresh()
+            NativeHarnessUiAction.LoadOlderCommandHistory -> commandHistoryActions.loadOlder()
             is NativeHarnessUiAction.SelectProvider -> selectProvider(action.providerId)
             is NativeHarnessUiAction.SelectModel -> selectModel(action.modelName)
             is NativeHarnessUiAction.SelectSessionModel -> selectModel(action.modelId, action.providerId)
@@ -600,7 +650,13 @@ class NativeHarnessController(
                 providerDiscoveryActions.dismiss(action.providerId)
             is NativeHarnessUiAction.UpdateProviderField -> updateProviderField(action)
             is NativeHarnessUiAction.UpdateLocalModelCapability -> {
-                updateLocalModelCapability(action.wireId, action.contextTokens, action.maxOutputTokens)
+                updateLocalModelCapability(
+                    action.wireId,
+                    action.contextTokens,
+                    action.maxOutputTokens,
+                    action.mtpEnabled,
+                    action.thinkingEnabled,
+                )
                 refreshModelCatalog(reportFailure = false)
             }
             is NativeHarnessUiAction.SetProviderCredential -> setProviderCredential(action)
@@ -744,12 +800,14 @@ class NativeHarnessController(
             structuredTranscriptActions.invalidate()
             followJob?.cancel()
             controlJob?.cancel()
+            commandHistoryActions.clear()
             queueStore.resetClient()
             sessionAddresses.reset()
             eventSequencer.reset()
             activeClient = client
             if (sharedAttention == null) attention.attach(client)
             mutate { current -> current.copy(queue = emptyList(), commands = emptyList(),
+                commandHistory = HarnessCommandHistoryUiState(),
                 extensions = current.extensions.copy(skills = emptyList())) }
         }
         val available = client != null
@@ -942,6 +1000,7 @@ class NativeHarnessController(
             )
         }
         sessionPageStates.remove(sessionId)
+        commandHistoryActions.reset(sessionId, loading = true)
         assistantStreamTrackers.remove(sessionId)
         eventSequencer.reset(sessionId)
         val current = state.value.sessions.firstOrNull { it.id == sessionId }
@@ -958,7 +1017,7 @@ class NativeHarnessController(
                 provider = existing.provider.copy(selectedReasoningEffort = null),
                 commands = emptyList(),
                 extensions = existing.extensions.copy(skills = emptyList()),
-                workspace = resolved ?: existing.workspace.copy(
+                workspace = resolved ?: HarnessWorkspaceUiState(
                     projectFolder = current?.projectFolder ?: harnessProjectFromCwd(sessionCwds[sessionId]),
                     backendLabel = current?.backendLabel ?: "Harness"
                 ),
@@ -972,6 +1031,7 @@ class NativeHarnessController(
                 sessionStats = null,
                 messageFeedback = emptyMap(),
                 messageFeedbackLoaded = false,
+                commandHistory = HarnessCommandHistoryUiState(isLoading = true),
                 queue = queueStore.items(sessionId),
                 questions = emptyList(),
                 approvals = emptyList(),
@@ -1001,7 +1061,13 @@ class NativeHarnessController(
                 }
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
-                if (ownerJob.isActive) reportFailure(error, event = "parser")
+                if (ownerJob.isActive) {
+                    mutate { current -> current.copy(commandHistory = current.commandHistory.copy(
+                        isLoading = false,
+                        loadFailed = true,
+                    )) }
+                    reportFailure(error, event = "parser")
+                }
             }
         }
         refreshSkills(reportFailure = false)
@@ -1853,6 +1919,7 @@ class NativeHarnessController(
                     )
                 }
                 permissionActions.applyProjection(permission)
+                commandHistoryActions.applySnapshot(sessionId, rawRecords, frame.long("cursor"), hasMore)
                 active?.let { attempt ->
                     val stream = harnessCompactedStreamText(attempt.objectArray("stream"))
                     assistantStreamUi.showBaseline(sessionId, stream)
@@ -1866,6 +1933,7 @@ class NativeHarnessController(
                 if (!eventSequencer.accept(sessionId, event.long("seq"))) return
                 structuredTranscriptActions.invalidate()
                 val parsed = harnessParseEvent(event)
+                val commandEvent = isHarnessCommandEvent(event.string("type"))
                 val runningChange = when (event.string("type")) {
                     "turn/start" -> true
                     "turn/end" -> false
@@ -1892,6 +1960,7 @@ class NativeHarnessController(
                         provider = if (event.string("type") == "model/selection") current.provider.withSessionSelection(event.objectValue("data")) else current.provider,
                     )
                 }
+                if (commandEvent) commandHistoryActions.applyEvents(sessionId, listOf(event))
                 if (event.string("type") == "session/title") {
                     val title = event.objectValue("data")?.string("title")
                     if (!title.isNullOrBlank()) {

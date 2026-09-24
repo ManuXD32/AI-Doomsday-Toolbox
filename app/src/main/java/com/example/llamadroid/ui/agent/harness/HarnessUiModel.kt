@@ -106,6 +106,36 @@ data class HarnessCommandUi(
     val description: String? = null
 )
 
+/** Bounded in-memory history for model-run shell commands in the selected Session. */
+data class HarnessCommandHistoryUiState(
+    val runs: List<HarnessCommandRunUi> = emptyList(),
+    val isLoading: Boolean = false,
+    val isLoadingOlder: Boolean = false,
+    val canLoadOlder: Boolean = false,
+    val loadFailed: Boolean = false,
+    val hasSnapshot: Boolean = false,
+)
+
+enum class HarnessCommandRunStatus {
+    RUNNING,
+    BACKGROUND,
+    COMPLETED,
+    FAILED,
+}
+
+data class HarnessCommandRunUi(
+    val id: String,
+    val command: String,
+    val output: String = "",
+    val status: HarnessCommandRunStatus = HarnessCommandRunStatus.RUNNING,
+    val timestampMs: Long? = null,
+    val startedAtMs: Long? = null,
+    val durationMs: Long? = null,
+    val sequence: Long = 0L,
+    val jobId: String? = null,
+    val outputTruncated: Boolean = false,
+)
+
 data class HarnessAttachmentUi(
     val id: String,
     val label: String,
@@ -277,7 +307,20 @@ data class HarnessProviderOption(
     /** Effective output limit per wire ID. A missing value means unknown. */
     val modelMaxOutputTokens: Map<String, Long?> = emptyMap(),
     /** `explicit`, `saved`, `detected`, or `unknown`; kept separate from labels. */
-    val modelCapabilitySources: Map<String, String> = emptyMap()
+    val modelCapabilitySources: Map<String, String> = emptyMap(),
+    /** Catalog/model-derived context before the selected backend's runtime cap. */
+    val modelAdvertisedContextWindows: Map<String, Long?> = emptyMap(),
+    /** Actual LiteRT worker limits and backend selected by the current policy. */
+    val modelBackendLimits: Map<String, HarnessModelBackendLimitsUi> = emptyMap(),
+)
+
+data class HarnessModelBackendLimitsUi(
+    val backend: String? = null,
+    val requestedBackend: String? = null,
+    val contextTokens: Long? = null,
+    val outputTokens: Long? = null,
+    val gpuSafetyLimitApplied: Boolean = false,
+    val autoChoseCpuForCapacity: Boolean = false,
 )
 
 data class HarnessReasoningEffortUi(
@@ -345,7 +388,9 @@ data class HarnessProviderUiState(
     val customProviderDiscovery: HarnessProviderDiscoveryUi = HarnessProviderDiscoveryUi(),
     /** True while the dedicated Harness model editor is presented. */
     val modelEditorOpen: Boolean = false,
-    val isCatalogLoading: Boolean = false
+    val isCatalogLoading: Boolean = false,
+    /** A manual catalog reload failed; keep this visible inside either picker. */
+    val catalogRefreshFailed: Boolean = false,
 )
 
 enum class HarnessSchemaFieldType {
@@ -670,6 +715,7 @@ data class NativeHarnessUiState(
     val failedSessionDeletionIds: Set<String> = emptySet(),
     val commandLine: String = "",
     val commands: List<HarnessCommandUi> = emptyList(),
+    val commandHistory: HarnessCommandHistoryUiState = HarnessCommandHistoryUiState(),
     val questions: List<HarnessQuestionUi> = emptyList(),
     val approvals: List<HarnessApprovalUi> = emptyList(),
     val plans: List<HarnessPlanUi> = emptyList(),
@@ -766,6 +812,8 @@ sealed interface NativeHarnessUiAction {
     ) : NativeHarnessUiAction
     data class RetractMessageFeedback(val messageId: String, val rating: HarnessFeedbackRating) : NativeHarnessUiAction
     data object LoadOlderMessages : NativeHarnessUiAction
+    data object RefreshCommandHistory : NativeHarnessUiAction
+    data object LoadOlderCommandHistory : NativeHarnessUiAction
     data class SelectProvider(val providerId: String) : NativeHarnessUiAction
     data class SelectModel(val modelName: String) : NativeHarnessUiAction
     data class SelectSessionModel(val providerId: String, val modelId: String) : NativeHarnessUiAction
@@ -793,6 +841,8 @@ sealed interface NativeHarnessUiAction {
         val wireId: String,
         val contextTokens: Long?,
         val maxOutputTokens: Long?,
+        val mtpEnabled: Boolean? = null,
+        val thinkingEnabled: Boolean? = null,
     ) : NativeHarnessUiAction
     /** Secret value is transient and is never retained in [NativeHarnessUiState]. */
     data class SetProviderCredential(val providerId: String, val value: String) : NativeHarnessUiAction

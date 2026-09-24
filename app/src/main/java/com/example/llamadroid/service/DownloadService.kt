@@ -592,7 +592,9 @@ class DownloadService : Service() {
             // it here could adopt another repository's same-named task.
             val legacyFilenameAlias = downloadId == null || downloadId == filename
             val storedTask = taskDao.getById(resolvedTaskId)
-                ?: filename?.takeIf { legacyFilenameAlias }?.let { taskDao.getByFilename(it) }
+                ?: filename?.takeIf { legacyFilenameAlias }?.let { alias ->
+                    taskDao.getByFilename(alias).singleOrNull()
+                }
             val memoryPending = PendingDownloadHolder.getPending(resolvedTaskId)
                 ?: filename?.takeIf { legacyFilenameAlias }?.let { PendingDownloadHolder.getPending(it) }
             val taskPending = memoryPending ?: storedTask?.toPendingDownload()
@@ -1396,7 +1398,9 @@ class DownloadService : Service() {
         val taskDao = db.downloadTaskDao()
         val libraryDao = db.modelLibraryDao()
         val task = taskDao.getById(requestedTaskId)
-            ?: filename?.takeIf { it == requestedTaskId }?.let { taskDao.getByFilename(it) }
+            ?: filename?.takeIf { it == requestedTaskId }?.let { alias ->
+                taskDao.getByFilename(alias).singleOrNull()
+            }
         val taskId = task?.id ?: requestedTaskId
         val pending = requestedPendingArtifactId?.let { libraryDao.getPendingArtifactById(it) }
             ?: task?.pendingArtifactId?.let { libraryDao.getPendingArtifactById(it) }

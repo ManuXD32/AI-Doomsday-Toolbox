@@ -234,7 +234,8 @@ class StableDiffusionService : Service() {
             mode = config.mode,
             modelPath = config.modelPath,
             inputImagePath = config.initImage,
-            sdBinaryPath = binaryPath
+            sdBinaryPath = binaryPath,
+            referenceImagePaths = config.referenceImages
         )
         if (launchIssue != null) {
             val message = sdLaunchIssueMessage(this, config.mode, launchIssue)
@@ -723,6 +724,15 @@ class StableDiffusionService : Service() {
                     R.string.imagegen_error_binary_missing_flags,
                     e.flags.joinToString(", ")
                 )
+            )
+        } catch (e: SdReferenceImageException) {
+            throw IllegalStateException(getString(when (e.issue) {
+                SdReferenceImageIssue.LIMIT_EXCEEDED -> R.string.imagegen_reference_images_limit_error
+                SdReferenceImageIssue.BLANK_PATH -> R.string.imagegen_reference_image_path_error
+            }))
+        } catch (e: SdImageDimensionException) {
+            throw IllegalStateException(
+                getString(R.string.imagegen_qwen_dimensions_multiple, e.multipleOf)
             )
         } catch (e: SdUnsupportedModesException) {
             throw IllegalStateException(
@@ -1527,6 +1537,40 @@ class StableDiffusionService : Service() {
 
     private fun postProcessOutputIfNeeded(config: SDConfig, outputFile: File) {
         if (!outputFile.exists()) return
+        val inpaintMaskPath = config.maskImage
+        if (config.mode == SDMode.IMG2IMG && !inpaintMaskPath.isNullOrBlank()) {
+            try {
+                val sourcePath = config.initImage
+                    ?: throw IllegalArgumentException("Missing inpaint source image")
+                SdInpaintImageCompositor.composite(
+                    sourcePath = sourcePath,
+                    maskPath = inpaintMaskPath,
+                    outputFile = outputFile
+                )
+                recordModeBreadcrumb(
+                    mode = config.mode,
+                    event = "inpaint_composite_completed",
+                    phase = "post-processing"
+                )
+            } catch (_: OutOfMemoryError) {
+                recordModeBreadcrumb(
+                    mode = config.mode,
+                    event = "inpaint_composite_failed",
+                    phase = "post-processing",
+                    details = "oom"
+                )
+                throw IllegalStateException(getString(R.string.imagegen_error_inpaint_composite))
+            } catch (failure: Exception) {
+                recordModeBreadcrumb(
+                    mode = config.mode,
+                    event = "inpaint_composite_failed",
+                    phase = "post-processing",
+                    details = failure.javaClass.simpleName
+                )
+                throw IllegalStateException(getString(R.string.imagegen_error_inpaint_composite))
+            }
+            return
+        }
         val initImagePath = config.initImage ?: return
         if (config.mode !in setOf(SDMode.IMG2IMG, SDMode.ADETAILER)) return
 

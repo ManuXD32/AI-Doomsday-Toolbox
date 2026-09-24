@@ -34,10 +34,13 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -71,6 +74,12 @@ class HarnessAppRuntime private constructor(private val context: Context) {
     val diagnostics = HarnessDiagnostics(database, scope, HarnessRuntimeJournal(
         File(context.filesDir, "agent_harness/runtime-diagnostics.json")
     ))
+    // Command text is presentation data: bounded, transient, and never journaled.
+    private val mutableLiveCommandOutput = MutableSharedFlow<HarnessLiveCommandOutput>(
+        extraBufferCapacity = 128,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val liveCommandOutput = mutableLiveCommandOutput.asSharedFlow()
     private val attentionNotifications by lazy { HarnessAttentionNotifications(context, database) }
     val attention = com.example.llamadroid.ui.agent.harness.NativeHarnessAttentionStore(
         scope, { client },
@@ -104,17 +113,16 @@ class HarnessAppRuntime private constructor(private val context: Context) {
         wireId: String,
         contextTokens: Long?,
         maxOutputTokens: Long?,
+        mtpEnabled: Boolean?,
+        thinkingEnabled: Boolean?,
     ) {
-        localModelCapabilities.set(wireId, contextTokens, maxOutputTokens)
-        if (wireId.startsWith("litert:")) {
-            val id = wireId.removePrefix("litert:").toLongOrNull()
-            if (id != null) {
-                database.liteRtModelDao().updateMaxContextTokens(
-                    id,
-                    contextTokens?.takeIf { it in 1L..Int.MAX_VALUE }?.toInt(),
-                )
-            }
-        }
+        localModelCapabilities.setOverrides(
+            wireId = wireId,
+            contextTokens = contextTokens,
+            maxOutputTokens = maxOutputTokens,
+            mtpEnabled = mtpEnabled,
+            thinkingEnabled = thinkingEnabled,
+        )
     }
     private var healthMonitor: Job? = null
     private val lifecycle = HarnessLifecycleGate()
@@ -124,7 +132,10 @@ class HarnessAppRuntime private constructor(private val context: Context) {
         val code = failure.message?.takeIf { it.matches(Regex("[A-Z_]{1,96}")) } ?: "SESSION_DELETE_FAILED"
         diagnostics.event(id, "session_delete_failed", "failure", errorCode = code)
     } }
-    private val operations = HarnessBridgeOperations(context, database, credentials, workspaces, files, models, diagnostics, workspaceActions) { session, command, cwd ->
+    private val operations = HarnessBridgeOperations(
+        context, database, credentials, workspaces, files, models, diagnostics, workspaceActions,
+        emitCommandOutput = { chunk -> mutableLiveCommandOutput.tryEmit(chunk); Unit },
+    ) { session, command, cwd ->
         val active = requireNotNull(client) { "HARNESS_NOT_RUNNING" }
         val args = buildJsonObject {
             put("sessionId", session.session.harnessSessionId)

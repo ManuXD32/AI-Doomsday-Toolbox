@@ -6,6 +6,7 @@ import com.example.llamadroid.data.db.SD_CAPABILITY_IMG2IMG
 import com.example.llamadroid.data.db.SD_CAPABILITY_TXT2IMG
 import com.example.llamadroid.data.db.buildSdCapabilities
 import com.example.llamadroid.data.db.SD_CAPABILITY_VID_GEN
+import com.example.llamadroid.data.model.SdCuratedBundleCatalog
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -184,6 +185,33 @@ class SdModelSupportTest {
             sdCompatProfiles = null
         )
         assertTrue(manuallyDownloadedVae.matchesSdFamily(SdModelFamily.QWEN_IMAGE, "2.1"))
+    }
+
+    @Test
+    fun `legacy downloaded Qwen 21 roles recover from curated filenames without redownload`() {
+        val bundle = requireNotNull(SdCuratedBundleCatalog.byId("qwen-image-21-q4-vision"))
+        val installedRows = bundle.files.map { file ->
+            val filename = file.localFilename(bundle.installPrefix)
+            ModelEntity(
+                filename = filename,
+                path = "/models/$filename",
+                sizeBytes = file.sizeBytes,
+                type = file.modelType,
+                repoId = file.repoId
+            )
+        }
+
+        assertTrue(installedRows.any { it.type == ModelType.SD_LLM && it.matchesSdFamily(SdModelFamily.QWEN_IMAGE, "2.1") })
+        assertTrue(installedRows.any { it.type == ModelType.SD_VAE && it.matchesSdFamily(SdModelFamily.QWEN_IMAGE, "2.1") })
+        assertTrue(installedRows.any { it.type == ModelType.MMPROJ && it.matchesSdFamily(SdModelFamily.QWEN_IMAGE, "2.1") })
+
+        val f16 = installedRows.single { it.type == ModelType.MMPROJ }
+        val q8 = f16.copy(filename = "Qwen-Image-2.1-Q4-mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf")
+        assertEquals(
+            listOf(f16.filename, q8.filename),
+            orderQwenImage21VisionProjectors(listOf(q8, f16)).map { it.filename }
+        )
+        assertTrue(q8.matchesSdFamily(SdModelFamily.QWEN_IMAGE, "2.1"))
     }
 
     @Test

@@ -8,7 +8,7 @@
   "nodeSha256": "6ad1325edbdb5649c379b75a237147a666c95d4f9ae8d340fef2d1575d289ad2",
   "pnpmVersion": "11.7.0",
   "archiveAsset": "harness/adt-harness-linux-arm64.tar.xz",
-  "archiveSha256": "7368fd940b326423980a8c4845a9f7e4ac1ef8a3163d6e444a65aa2d07173bf0",
+  "archiveSha256": "13ab58a78bbac31d21f63793377ad2e6bb0b7bebb5672d6d4269f4f8f69b812d",
   "command": ["/opt/adt-harness/bin/dsh", "--profile", "web"],
   "healthPath": "/",
   "installGuestPath": "/opt/adt-harness",

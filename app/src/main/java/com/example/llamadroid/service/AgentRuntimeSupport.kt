@@ -825,7 +825,7 @@ fun resolveAgentLiteRtContextTokens(
     model: LiteRtModelEntity?,
     fallbackContextTokens: Int = AGENT_LITERT_FALLBACK_CONTEXT_TOKENS,
     minContextTokens: Int = AGENT_LITERT_MIN_CONTEXT_TOKENS,
-    safeMaxContextTokens: Int = AGENT_LITERT_SAFE_MAX_CONTEXT_TOKENS
+    safeMaxContextTokens: Int = Int.MAX_VALUE
 ): Int {
     val advertisedCap = (model?.defaultLiteRtEngineMaxTokens() ?: fallbackContextTokens)
         .coerceAtLeast(minContextTokens)
@@ -986,7 +986,6 @@ fun sanitizeTerminalTranscript(raw: String): String {
 
 private const val AGENT_LITERT_MIN_CONTEXT_TOKENS = 512
 private const val AGENT_LITERT_FALLBACK_CONTEXT_TOKENS = 4000
-private const val AGENT_LITERT_SAFE_MAX_CONTEXT_TOKENS = 8192
 private const val AGENT_LITERT_MIN_MAX_OUTPUT_TOKENS = 128
 private const val AGENT_LITERT_FALLBACK_MAX_OUTPUT_TOKENS = 8096
 const val AGENT_DEFAULT_MAX_OUTPUT_TOKENS = 8096
@@ -1437,7 +1436,7 @@ internal object AgentRuntimeSupport {
         model: LiteRtModelEntity?,
         fallbackContextTokens: Int = AGENT_LITERT_FALLBACK_CONTEXT_TOKENS,
         minContextTokens: Int = AGENT_LITERT_MIN_CONTEXT_TOKENS,
-        safeMaxContextTokens: Int = AGENT_LITERT_SAFE_MAX_CONTEXT_TOKENS
+        safeMaxContextTokens: Int = Int.MAX_VALUE
     ): Int =
         com.example.llamadroid.service.resolveAgentLiteRtContextTokens(
             savedContextTokens = savedContextTokens,

@@ -27,7 +27,7 @@ class SdCuratedBundleCatalogTest {
     }
 
     @Test
-    fun qwenImage21BundleHasPinnedFullVisionContract() {
+    fun qwenImage21BundleUsesPinnedOfficialF16Projector() {
         val bundle = requireNotNull(SdCuratedBundleCatalog.byId("qwen-image-21-q4-vision"))
         assertEquals(4, bundle.files.size)
         assertEquals(
@@ -39,7 +39,11 @@ class SdCuratedBundleCatalogTest {
         assertTrue(text.sizeIsApproximate)
         val vision = bundle.files.single { it.componentRole == "llm_vision" }
         assertEquals(ModelType.MMPROJ, vision.modelType)
-        assertEquals("c6ba85508d82f42590e6eb77d5340369ab6fecf107a7561d809523d8aa5f3bfd", vision.sha256)
+        assertEquals("Qwen/Qwen3-VL-8B-Instruct-GGUF", vision.repoId)
+        assertEquals("00e7d63528e65d7b64e80e1293a8360b4af6a594", vision.revision)
+        assertEquals("mmproj-Qwen3VL-8B-Instruct-F16.gguf", vision.remotePath)
+        assertEquals("ca524100ebf825c9a870db1c580d03879e0da0ab2541697e2458e64891cf9d38", vision.sha256)
+        assertTrue(vision.sizeIsApproximate)
         assertEquals(ModelType.SD_VAE, bundle.files.single { it.componentRole == "vae" }.modelType)
         assertTrue(bundle.files.all { it.sdCompatProfiles == "qwen_image:2.1" })
         assertTrue(bundle.files.all { it.sdFamily == "qwen_image" && it.sdVariant == "2.1" })
@@ -48,6 +52,11 @@ class SdCuratedBundleCatalogTest {
             bundle.commandContract?.requiredFlags,
         )
         assertTrue(bundle.commandContract?.supportsCpuOffload == true)
+
+        val formerQ8Name = "Qwen-Image-2.1-Q4-mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"
+        val q8Fallback = requireNotNull(SdCuratedBundleCatalog.fileForLocalFilename(formerQ8Name))
+        assertEquals("c6ba85508d82f42590e6eb77d5340369ab6fecf107a7561d809523d8aa5f3bfd", q8Fallback.sha256)
+        assertEquals("qwen_image:2.1", q8Fallback.sdCompatProfiles)
     }
 
 

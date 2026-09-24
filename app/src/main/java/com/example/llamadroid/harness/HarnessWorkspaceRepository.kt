@@ -10,6 +10,7 @@ import com.example.llamadroid.data.db.HarnessWorkspaceEntity
 import com.example.llamadroid.service.AgentLocalWorkspaceSupport
 import org.json.JSONObject
 import java.io.File
+import java.nio.file.Files
 import java.util.UUID
 
 data class HarnessSessionScope(
@@ -97,7 +98,10 @@ class HarnessWorkspaceRepository(
     suspend fun createWorkspace(title: String, remote: Boolean = false): HarnessWorkspaceEntity {
         val baseFolder = AgentLocalWorkspaceSupport.sanitizeProjectFolder(title).take(80).ifBlank { "project" }
         val folder = if (remote) baseFolder else baseFolder.take(71) + "-" + UUID.randomUUID().toString().take(8)
-        if (!remote) AgentLocalWorkspaceSupport.rootForProject(context, folder)
+        if (!remote) {
+            requireManagedLocalProjectRoot(folder)
+            AgentLocalWorkspaceSupport.rootForProject(context, folder)
+        }
         val id = UUID.randomUUID().toString()
         return HarnessWorkspaceEntity(
             id = id, backend = if (remote) "REMOTE_SSH" else "LOCAL_PROOT", projectFolder = folder,
@@ -141,20 +145,48 @@ class HarnessWorkspaceRepository(
         title: String,
         cwd: String,
         preferredWorkspaceId: String? = null,
-        archived: Boolean = false
+        archived: Boolean = false,
+        harnessWorkspaceId: String? = null,
+        workspaceTitle: String? = null,
     ): HarnessSessionEntity = database.withTransaction {
         require(sessionId.isNotBlank() && sessionId.length <= 256)
         require(HarnessSessionDeletionStore(context).read(sessionId)?.removed != true) { "SESSION_REMOVED" }
         dao.session(sessionId)?.let { old ->
             val existingWorkspace = requireNotNull(dao.workspace(old.workspaceId)) { "WORKSPACE_NOT_FOUND" }
             requireProjectAvailable(existingWorkspace)
+            require(harnessSessionPathMatchesProject(cwd, existingWorkspace.guestPath,
+                exact = harnessWorkspaceId != null)) {
+                "WORKSPACE_IDENTITY_MISMATCH"
+            }
+            if (harnessWorkspaceId != null) {
+                val wasUnbound = existingWorkspace.harnessWorkspaceId == null
+                val bound = bindHarnessWorkspace(existingWorkspace, harnessWorkspaceId)
+                if (wasUnbound) adoptCanonicalGroupTitle(bound, harnessWorkspaceId, workspaceTitle)
+            }
             if (title.isNotBlank() && title != sessionId) chats.updateConversationTitle(old.conversationId, title)
             return@withTransaction old.copy(archived = archived, updatedAt = System.currentTimeMillis())
                 .also { dao.saveSession(it) }
         }
-        val known = preferredWorkspaceId?.let { dao.workspace(it) }
-            ?: dao.workspaces().firstOrNull { cwd == it.guestPath }
-        val workspace = known ?: workspaceForGuestPath(cwd, title)
+        val preferred = preferredWorkspaceId?.let { dao.workspace(it) }
+        require(preferredWorkspaceId == null || preferred != null) { "WORKSPACE_NOT_FOUND" }
+        require(preferred == null || harnessSessionPathMatchesProject(cwd, preferred.guestPath,
+            exact = harnessWorkspaceId != null)) {
+            "WORKSPACE_IDENTITY_MISMATCH"
+        }
+        val known = preferred
+            ?: dao.workspaces().firstOrNull {
+                harnessSessionPathMatchesProject(cwd, it.guestPath, exact = harnessWorkspaceId != null)
+            }
+        val workspace = (known ?: workspaceForGuestPath(cwd, workspaceTitle ?: title)).let { candidate ->
+            require(harnessSessionPathMatchesProject(cwd, candidate.guestPath,
+                exact = harnessWorkspaceId != null)) { "WORKSPACE_IDENTITY_MISMATCH" }
+            if (harnessWorkspaceId == null) candidate else {
+                val wasUnbound = candidate.harnessWorkspaceId == null
+                val bound = bindHarnessWorkspace(candidate, harnessWorkspaceId)
+                if (wasUnbound) adoptCanonicalGroupTitle(bound, harnessWorkspaceId, workspaceTitle)
+                else bound
+            }
+        }
         requireProjectAvailable(workspace)
         // Copy project presentation/configuration from legacy history without copying its execution state.
         val legacy = dao.conversations().firstOrNull {
@@ -172,6 +204,95 @@ class HarnessWorkspaceRepository(
             .also { dao.saveSession(it) }
     }
 
+    /** Register an existing managed guest directory selected in the WebUI as an app project. */
+    suspend fun registerManagedHarnessWorkspace(guestPath: String, title: String): HarnessWorkspaceEntity =
+        database.withTransaction {
+            val normalizedPath = normalizeHarnessGuestPath(guestPath)
+            val folder = normalizedPath.removePrefix("/workspace/projects/")
+            require(normalizedPath == "/workspace/projects/$folder" &&
+                folder.isNotBlank() && '/' !in folder &&
+                folder == AgentLocalWorkspaceSupport.sanitizeProjectFolder(folder)) {
+                "WORKSPACE_NOT_MANAGED"
+            }
+            requireManagedLocalProjectRoot(folder)
+            val existing = dao.workspaces().firstOrNull {
+                normalizeHarnessGuestPath(it.guestPath) == normalizedPath
+            }
+            if (existing != null) {
+                // A stale WebUI create request must not turn a durable removal
+                // receipt back into a visible Room project with the same path.
+                requireProjectAvailable(existing)
+                return@withTransaction existing
+            }
+            workspaceForGuestPath(normalizedPath, title.trim().take(120).ifBlank { folder })
+        }
+
+    /** A guest project must resolve to its own direct child of the app-managed root. */
+    internal fun verifyManagedLocalProjectRoot(projectFolder: String) {
+        requireManagedLocalProjectRoot(projectFolder)
+    }
+
+    private fun requireManagedLocalProjectRoot(projectFolder: String) {
+        val entry = AgentLocalWorkspaceSupport.rootPathForProject(context, projectFolder)
+        val appFiles = context.filesDir.canonicalFile
+        val managedRoot = requireNotNull(entry.parentFile).canonicalFile
+        val physical = entry.canonicalFile
+        require(managedRoot.name == "agent_local_workspaces" && managedRoot.parentFile == appFiles &&
+            physical.parentFile == managedRoot && !Files.isSymbolicLink(entry.toPath())) {
+            "WORKSPACE_NOT_MANAGED"
+        }
+    }
+
+    private suspend fun bindHarnessWorkspace(
+        workspace: HarnessWorkspaceEntity,
+        harnessWorkspaceId: String,
+    ): HarnessWorkspaceEntity {
+        require(harnessWorkspaceId.isNotBlank() && harnessWorkspaceId.length <= 256) {
+            "WORKSPACE_IDENTITY_MISMATCH"
+        }
+        require(workspace.harnessWorkspaceId == null || workspace.harnessWorkspaceId == harnessWorkspaceId) {
+            "HARNESS_WORKSPACE_ID_CONFLICT"
+        }
+        val owner = dao.workspaces().firstOrNull {
+            it.id != workspace.id && it.harnessWorkspaceId == harnessWorkspaceId
+        }
+        require(owner == null || harnessAliasesMayShareGroup(owner, workspace)) {
+            "HARNESS_WORKSPACE_ID_CONFLICT"
+        }
+        // Room keeps this ID unique. A legacy alias of the same project may
+        // use its canonical owner's ID without writing a duplicate index row.
+        if (owner != null) return workspace
+        if (workspace.harnessWorkspaceId == harnessWorkspaceId) return workspace
+        return workspace.copy(harnessWorkspaceId = harnessWorkspaceId, updatedAt = System.currentTimeMillis())
+            .also { dao.saveWorkspace(it) }
+    }
+
+    /** Adopt DSH's title once when binding a legacy row; later renames use the explicit route. */
+    private suspend fun adoptCanonicalGroupTitle(
+        workspace: HarnessWorkspaceEntity,
+        harnessWorkspaceId: String,
+        title: String?,
+    ): HarnessWorkspaceEntity {
+        val normalized = title?.let { runCatching { HarnessProjectManagementRules.normalizeTitle(it) }.getOrNull() }
+            ?: return workspace
+        val now = System.currentTimeMillis()
+        var result = workspace
+        dao.workspaces()
+            .filter { candidate ->
+                HarnessProjectManagementRules.sameWorkspace(workspace, candidate) &&
+                    normalizeHarnessGuestPath(candidate.guestPath) == normalizeHarnessGuestPath(workspace.guestPath) &&
+                    (candidate.harnessWorkspaceId == null || candidate.harnessWorkspaceId == harnessWorkspaceId)
+            }
+            .forEach { candidate ->
+                if (candidate.title != normalized) {
+                    val updated = candidate.copy(title = normalized, updatedAt = now)
+                    dao.saveWorkspace(updated)
+                    if (candidate.id == workspace.id) result = updated
+                }
+            }
+        return result
+    }
+
     /**
      * Stores the canonical DSH identity returned by `adt.prepareWorkspace` before a session is
      * created.  The guest path is checked against the local workspace so a response for a stale
@@ -185,10 +306,16 @@ class HarnessWorkspaceRepository(
         require(normalizeHarnessGuestPath(workspace.guestPath) == prepared.guestPath) {
             "WORKSPACE_IDENTITY_MISMATCH"
         }
+        require(workspace.harnessWorkspaceId == null || workspace.harnessWorkspaceId == prepared.workspaceId) {
+            "HARNESS_WORKSPACE_ID_CONFLICT"
+        }
         val conflict = dao.workspaces().firstOrNull {
             it.id != workspace.id && it.harnessWorkspaceId == prepared.workspaceId
         }
-        require(conflict == null) { "HARNESS_WORKSPACE_ID_CONFLICT" }
+        require(conflict == null || harnessAliasesMayShareGroup(conflict, workspace)) {
+            "HARNESS_WORKSPACE_ID_CONFLICT"
+        }
+        if (conflict != null) return@withTransaction workspace
         val updated = workspace.copy(
             harnessWorkspaceId = prepared.workspaceId,
             updatedAt = System.currentTimeMillis(),
@@ -205,6 +332,7 @@ class HarnessWorkspaceRepository(
     suspend fun reconcileHarnessWorkspace(
         harnessWorkspaceId: String,
         guestPath: String,
+        title: String? = null,
     ): HarnessWorkspaceEntity? = database.withTransaction {
         if (harnessWorkspaceId.isBlank()) return@withTransaction null
         val normalizedPath = normalizeHarnessGuestPath(guestPath)
@@ -215,6 +343,14 @@ class HarnessWorkspaceRepository(
             .filter { normalizeHarnessGuestPath(it.guestPath) == normalizedPath }
             .firstOrNull { it.id == existing?.id }
             ?: current.firstOrNull { normalizeHarnessGuestPath(it.guestPath) == normalizedPath }
+            ?: normalizedPath.takeIf { path ->
+                val folder = path.removePrefix("/workspace/projects/")
+                path == "/workspace/projects/$folder" && folder.isNotBlank() && '/' !in folder &&
+                    folder == AgentLocalWorkspaceSupport.sanitizeProjectFolder(folder)
+            }?.let { path ->
+                workspaceForGuestPath(path, title?.trim()?.take(120).orEmpty()
+                    .ifBlank { path.substringAfterLast('/') })
+            }
             ?: return@withTransaction null
         // A stale DSH row must never steal an identity that is already bound to a different
         // managed path. The stream can retry once the authoritative group is emitted again.
@@ -227,7 +363,28 @@ class HarnessWorkspaceRepository(
             updatedAt = System.currentTimeMillis(),
         )
         if (updated != candidate) dao.saveWorkspace(updated)
-        updated
+        // A Workspace group event is the authoritative DSH title observation.
+        // Native offline renames pass no title here until their durable pending
+        // receipt is confirmed, while ordinary WebUI renames update every alias.
+        if (title != null) adoptCanonicalGroupTitle(updated, harnessWorkspaceId, title) else updated
+    }
+
+    /** Associate the exact Android project selected by a native or WebUI caller. */
+    suspend fun associateHarnessWorkspace(
+        localWorkspaceId: String,
+        harnessWorkspaceId: String,
+        guestPath: String,
+        title: String? = null,
+    ): Boolean = database.withTransaction {
+        val workspace = dao.workspace(localWorkspaceId) ?: return@withTransaction false
+        if (normalizeHarnessGuestPath(workspace.guestPath) != normalizeHarnessGuestPath(guestPath)) {
+            return@withTransaction false
+        }
+        requireProjectAvailable(workspace)
+        val wasUnbound = workspace.harnessWorkspaceId == null
+        val bound = bindHarnessWorkspace(workspace, harnessWorkspaceId)
+        if (wasUnbound) adoptCanonicalGroupTitle(bound, harnessWorkspaceId, title)
+        true
     }
 
     /** Returns every app workspace alias in the same project group for DSH rename propagation. */
@@ -237,6 +394,25 @@ class HarnessWorkspaceRepository(
             .filter { HarnessProjectManagementRules.sameWorkspace(anchor, it) }
             .mapNotNull { it.harnessWorkspaceId }
             .distinct()
+    }
+
+    /** Mirror a WebUI group rename to every Android alias of the exact canonical group. */
+    suspend fun renameCanonicalHarnessWorkspace(
+        harnessWorkspaceId: String,
+        title: String,
+    ): Boolean {
+        val renamed = database.withTransaction {
+            val normalized = HarnessProjectManagementRules.normalizeTitle(title)
+            val anchor = dao.workspaces().firstOrNull { it.harnessWorkspaceId == harnessWorkspaceId }
+                ?: return@withTransaction false
+            requireProjectAvailable(anchor)
+            val now = System.currentTimeMillis()
+            dao.workspaces().filter { HarnessProjectManagementRules.sameWorkspace(anchor, it) }
+                .forEach { dao.saveWorkspace(it.copy(title = normalized, updatedAt = now)) }
+            true
+        }
+        if (renamed) HarnessWorkspaceTitleSyncStore(context).clear(harnessWorkspaceId)
+        return renamed
     }
 
     suspend fun scope(sessionId: String): HarnessSessionScope {
@@ -326,6 +502,7 @@ class HarnessWorkspaceRepository(
             "WORKSPACE_NOT_MANAGED"
         }
         require(!harnessProjectSuppressed(context, "LOCAL_PROOT", folder)) { "PROJECT_REMOVED" }
+        requireManagedLocalProjectRoot(folder)
         dao.workspaceForRoot("LOCAL_PROOT", folder)?.let { return it }
         AgentLocalWorkspaceSupport.rootForProject(context, folder)
         return HarnessWorkspaceEntity(

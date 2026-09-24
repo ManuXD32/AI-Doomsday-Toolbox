@@ -7,6 +7,7 @@ import com.example.llamadroid.data.db.SD_CAPABILITY_TXT2IMG
 import com.example.llamadroid.data.db.SD_CAPABILITY_VID_GEN
 import com.example.llamadroid.data.db.buildSdCapabilities
 import com.example.llamadroid.data.db.hasSdCapability
+import java.util.Locale
 
 enum class SdModelFamily(val storedValue: String) {
     CHECKPOINT("checkpoint"),
@@ -305,6 +306,26 @@ fun ModelEntity.effectiveSdCompatProfiles(): Set<String> {
         ?: emptySet()
     return profiles + qwenFamilyFallback
 }
+
+/** Prefer the official F16 projector while preserving already-installed Q8 choices. */
+fun orderQwenImage21VisionProjectors(models: List<ModelEntity>): List<ModelEntity> =
+    models.sortedWith(
+        compareBy<ModelEntity> {
+            when {
+                it.filename.contains("F16", ignoreCase = true) -> 0
+                it.filename.contains("Q8", ignoreCase = true) -> 1
+                else -> 2
+            }
+        }.thenBy { it.filename.lowercase(Locale.US) }
+    )
+
+/** Keep the curated Q4 encoder first when repairing legacy component selections. */
+fun orderQwenImage21TextEncoders(models: List<ModelEntity>): List<ModelEntity> =
+    models.sortedWith(
+        compareBy<ModelEntity> {
+            if (it.filename.contains("Q4", ignoreCase = true)) 0 else 1
+        }.thenBy { it.filename.lowercase(Locale.US) }
+    )
 
 fun ModelEntity.isSdImageSupportModel(): Boolean =
     type == ModelType.LLM || type == ModelType.SD_LLM ||

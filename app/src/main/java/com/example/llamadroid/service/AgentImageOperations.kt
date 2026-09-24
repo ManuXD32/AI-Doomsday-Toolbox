@@ -122,55 +122,18 @@ class AgentImageOperations(
         }
         val mainModels = db.modelDao()
             .getModelsByTypesSync(listOf(ModelType.SD_CHECKPOINT, ModelType.SD_DIFFUSION))
-            .filter { it.isSdImageMainModel() && it.supportsSdTxt2Img() }
+            .filter { it.isSdImageMainModel() && it.supportsSdTxt2Img() && File(it.path).isFile }
         val model = mainModels.find { it.filename == selectedModelId || it.path == selectedModelId }
             ?: return Result.failure(Exception(context.getString(R.string.agent_generate_image_sd_model_missing)))
         val (family, variant) = model.resolvedSdFamily()
         val spec = family?.let { com.example.llamadroid.sd.resolveSdFamilySpec(it, variant) }
             ?: return Result.failure(Exception(context.getString(R.string.agent_generate_image_sd_model_missing)))
-        val supportModels = db.modelDao().getModelsByTypesSync(
-            listOf(
-                ModelType.SD_VAE,
-                ModelType.SD_TAE,
-                ModelType.SD_CLIP_L,
-                ModelType.SD_CLIP_G,
-                ModelType.SD_T5XXL,
-                ModelType.LLM,
-                ModelType.VISION_PROJECTOR,
-                ModelType.SD_PHOTOMAKER
-            )
-        )
-        val sampler = SamplingMethod.entries.firstOrNull {
-            it.name.equals(settingsRepo.agentSdImageGenerationSampler.value, ignoreCase = true) ||
-                it.cliName.equals(settingsRepo.agentSdImageGenerationSampler.value, ignoreCase = true)
-        } ?: SamplingMethod.EULER_A
-        val sdParams = NativeChatSdImageToolParams(
-            model = model.filename,
-            vaePath = settingsRepo.agentSdImageGenerationVae.value,
-            taePath = settingsRepo.agentSdImageGenerationTae.value,
-            clipLPath = settingsRepo.agentSdImageGenerationClipL.value,
-            clipGPath = settingsRepo.agentSdImageGenerationClipG.value,
-            t5xxlPath = settingsRepo.agentSdImageGenerationT5xxl.value,
-            llmPath = settingsRepo.agentSdImageGenerationLlm.value,
-            llmVisionPath = settingsRepo.agentSdImageGenerationLlmVision.value,
-            photoMakerPath = settingsRepo.agentSdImageGenerationPhotoMaker.value,
-            width = settingsRepo.agentSdImageGenerationWidth.value,
-            height = settingsRepo.agentSdImageGenerationHeight.value,
-            steps = settingsRepo.agentSdImageGenerationSteps.value,
-            cfgScale = settingsRepo.agentSdImageGenerationCfg.value,
-            sampler = sampler,
-            seed = settingsRepo.agentSdImageGenerationSeed.value,
-            negativePrompt = settingsRepo.agentSdImageGenerationNegativePrompt.value,
-            threads = settingsRepo.agentSdImageGenerationThreads.value,
-            flowShift = settingsRepo.agentSdImageGenerationFlowShift.value,
-            diffusionFa = settingsRepo.agentSdImageGenerationDiffusionFa.value,
-            mmap = settingsRepo.agentSdImageGenerationMmap.value,
-            vaeConvDirect = settingsRepo.agentSdImageGenerationVaeConvDirect.value,
-            qwenImageZeroCondT = settingsRepo.agentSdImageGenerationQwenZeroCondT.value,
-            chromaDisableDitMask = settingsRepo.agentSdImageGenerationChromaDisableDitMask.value
-        )
+        val supportModels = db.modelDao().getModelsByTypesSync(AGENT_SD_IMAGE_SUPPORT_TYPES)
+            .filter { File(it.path).isFile }
+        val sdParams = settingsRepo.agentSdImageToolParams(model.filename)
         val components = resolveSdToolComponents(supportModels, sdParams, model)
-        val missingRequired = spec.requiredRoles.filter { components.pathForRole(it).isNullOrBlank() }
+        val missingRequired = missingRequiredSdToolComponents(model, supportModels, sdParams)
+            ?: return Result.failure(Exception(context.getString(R.string.agent_generate_image_sd_model_missing)))
         if (missingRequired.isNotEmpty()) {
             return Result.failure(
                 Exception(
@@ -198,7 +161,7 @@ class AgentImageOperations(
                 steps = sdParams.steps,
                 cfgScale = sdParams.cfgScale,
                 seed = seed,
-                samplingMethod = sampler,
+                samplingMethod = sdParams.sampler,
                 outputPath = localTempFile.absolutePath,
                 mode = SDMode.TXT2IMG,
                 threads = sdParams.threads,
@@ -254,7 +217,7 @@ class AgentImageOperations(
                 appendLine(context.getString(R.string.agent_generate_image_result_family, family.storedValue))
                 appendLine(context.getString(R.string.agent_generate_image_result_resolution, "${sdParams.width}x${sdParams.height}"))
                 appendLine(context.getString(R.string.agent_generate_image_result_steps, sdParams.steps))
-                appendLine(context.getString(R.string.agent_generate_image_result_sampler, sampler.cliName))
+                appendLine(context.getString(R.string.agent_generate_image_result_sampler, sdParams.sampler.cliName))
                 append(context.getString(R.string.agent_generate_image_result_cfg, String.format(java.util.Locale.US, "%.1f", sdParams.cfgScale)))
             }
         )

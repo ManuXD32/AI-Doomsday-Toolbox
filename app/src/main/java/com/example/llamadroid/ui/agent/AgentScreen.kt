@@ -641,7 +641,9 @@ private fun RetiredAgentScreen(
                 ModelType.SD_CLIP_G,
                 ModelType.SD_T5XXL,
                 ModelType.LLM,
+                ModelType.SD_LLM,
                 ModelType.VISION_PROJECTOR,
+                ModelType.MMPROJ,
                 ModelType.SD_PHOTOMAKER
             )
         )

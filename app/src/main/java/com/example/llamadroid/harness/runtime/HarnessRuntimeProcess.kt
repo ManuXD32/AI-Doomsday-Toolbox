@@ -85,6 +85,9 @@ class AndroidHarnessProcessLauncher(
                     spec.loaderPath?.let { environment()["PROOT_LOADER"] = it.absolutePath }
                     environment()["HOME"] = spec.paths.dshHomeGuest
                     environment()["DSH_HOME"] = spec.paths.dshHomeGuest
+                    // The bundled DSH profile also registers its DeepSeek search backend.
+                    // Select ADT's Android-backed provider for the canonical web_search tool.
+                    environment()["DSH_WEB_SEARCH_PROVIDER"] = "adt-app"
                     environment()["TMPDIR"] = AgentProotEnvironmentPaths.TMP_MOUNT
                     environment()["TMP"] = AgentProotEnvironmentPaths.TMP_MOUNT
                     environment()["TEMP"] = AgentProotEnvironmentPaths.TMP_MOUNT
@@ -153,6 +156,7 @@ class AndroidHarnessProcessLauncher(
             "ADT_HARNESS_READY_FILE",
             "ADT_HARNESS_BOOTSTRAP_NONCE",
             "DSH_WEB_TOKEN",
+            "DSH_WEB_SEARCH_PROVIDER",
             "HOME",
             "DSH_HOME",
             "PATH",

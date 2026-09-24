@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_litert_0984_effective_limit">Effective backend: %1$s · context tokens: %2$d · output tokens: %3$d</string>
+    <string name="harness_litert_0984_auto_cpu_capacity">Auto selected CPU to keep the requested context and output limits.</string>
+    <string name="harness_litert_0984_forced_gpu_warning">GPU is forced. Effective context tokens: %1$d; output tokens: %2$d. Select Auto or CPU to retain the requested limits.</string>
+    <string name="harness_litert_0984_model_mtp_setting">MTP for this model</string>
+    <string name="harness_litert_0984_model_thinking_setting">Thinking for this model</string>
+    <string name="harness_litert_0984_use_global">Global</string>
+    <string name="harness_litert_0984_enabled">On</string>
+    <string name="harness_litert_0984_disabled">Off</string>
+    <string name="harness_litert_0984_prompt_over_limit">Required input tokens for system instructions, tool schemas, and the current message: %1$d. Available after reserving output space: %2$d. Shorten the message, lower the output limit, or adjust this model’s context.</string>
+    <string name="harness_litert_0984_prompt_over_limit_generic">This request exceeds the available LiteRT model context. Shorten the message, lower the output limit, or adjust this model’s context.</string>
+    <string name="harness_litert_0984_prompt_reduced">LiteRT omitted older messages: %1$d; tool definitions: %2$d. The system instructions and current message were kept.</string>
+</resources>

@@ -107,6 +107,10 @@ class HarnessUiModelTest {
             R.string.harness_gateway_operation_failed,
             localizedHarnessNoticeMessage("gateway/bad-request")
         )
+        assertEquals(
+            R.string.harness_litert_0985_worker_interrupted,
+            localizedHarnessNoticeMessage("LITERT_WORKER_CRASHED")
+        )
     }
 
     @Test

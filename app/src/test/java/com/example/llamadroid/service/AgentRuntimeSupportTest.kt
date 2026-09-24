@@ -359,7 +359,7 @@ class AgentRuntimeSupportTest {
     }
 
     @Test
-    fun `agent litert context resolves default and clamps to phone safe cap`() {
+    fun `agent litert keeps conservative default while allowing explicit advertised capacity`() {
         val model = LiteRtModelEntity(
             id = 7L,
             displayName = "Gemma 4 E4B",
@@ -369,8 +369,8 @@ class AgentRuntimeSupportTest {
         )
 
         assertEquals(8192, AgentRuntimeSupport.resolveAgentLiteRtContextTokens(-1, model))
-        assertEquals(8192, AgentRuntimeSupport.resolveAgentLiteRtContextTokens(12000, model))
-        assertEquals(8192, AgentRuntimeSupport.resolveAgentLiteRtContextTokens(59384, model))
+        assertEquals(12000, AgentRuntimeSupport.resolveAgentLiteRtContextTokens(12000, model))
+        assertEquals(32768, AgentRuntimeSupport.resolveAgentLiteRtContextTokens(59384, model))
         assertEquals(512, AgentRuntimeSupport.resolveAgentLiteRtContextTokens(128, model))
     }
 

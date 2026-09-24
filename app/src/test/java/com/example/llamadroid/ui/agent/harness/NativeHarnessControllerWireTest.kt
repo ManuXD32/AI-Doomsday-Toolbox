@@ -40,6 +40,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
 
 class NativeHarnessControllerWireTest {
     private fun providerRouteFailure(code: String): HarnessRpcResult =
@@ -62,6 +63,51 @@ class NativeHarnessControllerWireTest {
             assertTrue(controller.state.value.commands.isEmpty())
             assertTrue(controller.state.value.extensions.skills.isEmpty())
         } finally { controller.close() }
+    }
+
+    @Test
+    fun selectingUngroupedSessionClearsPreviousWorkspaceAccess(): Unit = runBlocking {
+        val client = RecordingHarnessClient().apply { sessionItems = listOf("session-1", "session-2") }
+        val controller = NativeHarnessController(
+            parentScope = CoroutineScope(Dispatchers.Unconfined + Job()),
+            clientProvider = { client },
+            runtime = runtimeCallbacks(),
+            workspace = NativeHarnessWorkspaceHooks(resolveSession = { id, _, _, _ ->
+                if (id == "session-1") HarnessWorkspaceUiState(
+                    projectFolder = "demo",
+                    backendLabel = "Local",
+                    rootLabel = "/workspace/projects/demo",
+                    previewAvailable = true,
+                ) else null
+            }),
+        )
+        try {
+            waitUntil { controller.state.value.selectedSessionId == "session-1" &&
+                controller.state.value.workspace.previewAvailable }
+            controller.dispatch(NativeHarnessUiAction.SelectSession("session-2"))
+            waitUntil { controller.state.value.selectedSessionId == "session-2" }
+            assertNull(controller.state.value.workspace.rootLabel)
+            assertFalse(controller.state.value.workspace.previewAvailable)
+        } finally { controller.close() }
+    }
+
+    @Test
+    fun workspaceFollowStartsOnAttachAndReplacesItsSingleSubscriptionOnRefresh() = runBlocking {
+        val client = RecordingHarnessClient()
+        val controller = controller(client)
+        try {
+            waitUntil { client.activeWorkspaceFollows.get() == 1 }
+            assertEquals(1, client.workspaceFollowCalls())
+
+            controller.refreshAfterWebView()
+            waitUntil { client.workspaceFollowCalls() >= 2 && client.activeWorkspaceFollows.get() == 1 }
+
+            controller.dispatch(NativeHarnessUiAction.RefreshWorkspaces)
+            waitUntil { client.workspaceFollowCalls() >= 3 && client.activeWorkspaceFollows.get() == 1 }
+        } finally {
+            controller.close()
+        }
+        waitUntil { client.activeWorkspaceFollows.get() == 0 }
     }
 
     @Test
@@ -783,6 +829,149 @@ class NativeHarnessControllerWireTest {
     }
 
     @Test
+    fun commandHistoryFollowsSessionEventsAndLoadsOlderPages() = runBlocking {
+        val client = RecordingHarnessClient()
+        val controller = controller(client)
+        try {
+            client.followReady.await()
+            client.followFrames.emit(buildJsonObject {
+                put("type", "snapshot")
+                put("cursor", 20)
+                put("hasMore", true)
+                putJsonArray("records") {
+                    add(controllerEvent(18, "tool/call") {
+                        put("time", 1_000)
+                        put("callId", "command-current")
+                        put("name", "shell")
+                        put("arguments", "{\"command\":\"pwd\"}")
+                    })
+                    add(controllerEvent(19, "tool/result") {
+                        put("time", 1_350)
+                        putJsonObject("message") {
+                            putJsonObject("source") { put("callId", "command-current") }
+                            putJsonArray("content") {
+                                add(buildJsonObject {
+                                    put("type", "tool-result")
+                                    put("toolCallId", "command-current")
+                                    putJsonArray("content") {
+                                        add(buildJsonObject { put("type", "text"); put("text", "/workspace") })
+                                    }
+                                })
+                            }
+                        }
+                    })
+                }
+            })
+            waitUntil { controller.state.value.commandHistory.hasSnapshot }
+            val current = controller.state.value.commandHistory.runs.single()
+            assertEquals("pwd", current.command)
+            assertEquals("/workspace", current.output)
+            assertEquals(HarnessCommandRunStatus.COMPLETED, current.status)
+            assertEquals(350L, current.durationMs)
+
+            client.pageResultsByThroughSeq = mapOf(20L to HarnessRpcResult.Success(buildJsonObject {
+                put("hasMore", false)
+                putJsonArray("records") {
+                    add(controllerEvent(2, "tool/call") {
+                        put("time", 500)
+                        put("callId", "command-older")
+                        put("name", "bash")
+                        put("arguments", "{\"command\":\"echo older\"}")
+                    })
+                    add(controllerEvent(3, "tool/result") {
+                        put("time", 550)
+                        putJsonObject("message") {
+                            putJsonObject("source") { put("callId", "command-older") }
+                            putJsonArray("content") {
+                                add(buildJsonObject {
+                                    put("type", "tool-result")
+                                    put("toolCallId", "command-older")
+                                    putJsonArray("content") {
+                                        add(buildJsonObject { put("type", "text"); put("text", "older") })
+                                    }
+                                })
+                            }
+                        }
+                    })
+                }
+            }))
+            controller.dispatch(NativeHarnessUiAction.LoadOlderCommandHistory)
+            waitUntil { controller.state.value.commandHistory.runs.size == 2 }
+            assertEquals(listOf("command-older", "command-current"),
+                controller.state.value.commandHistory.runs.map { it.id })
+            assertFalse(controller.state.value.commandHistory.canLoadOlder)
+
+            client.followFrames.emit(buildJsonObject {
+                put("type", "event")
+                putJsonObject("event") {
+                    put("seq", 21)
+                    put("time", 1_500)
+                    put("type", "tool/call")
+                    putJsonObject("data") {
+                        put("callId", "command-live")
+                        put("name", "shell")
+                        put("arguments", "{\"command\":\"echo live\"}")
+                    }
+                }
+            })
+            waitUntil { controller.state.value.commandHistory.runs.lastOrNull()?.id == "command-live" }
+            assertEquals(HarnessCommandRunStatus.RUNNING, controller.state.value.commandHistory.runs.last().status)
+        } finally {
+            controller.close()
+        }
+    }
+
+    @Test
+    fun backgroundCommandShowsDetachedStatusWithoutFollowingOrConsumingJob() = runBlocking {
+        val client = RecordingHarnessClient()
+        val controller = controller(client)
+        try {
+            client.followReady.await()
+            client.followFrames.emit(buildJsonObject {
+                put("type", "snapshot")
+                put("cursor", 20)
+                putJsonArray("records") {
+                    add(controllerEvent(18, "tool/call") {
+                        put("time", 100)
+                        put("callId", "background-command")
+                        put("name", "bash")
+                        put("arguments", "{\"command\":\"sleep 1\"}")
+                    })
+                    add(controllerEvent(19, "tool/result") {
+                        put("time", 110)
+                        putJsonObject("message") {
+                            putJsonObject("source") { put("callId", "background-command") }
+                            putJsonArray("content") {
+                                add(buildJsonObject {
+                                    put("type", "tool-result")
+                                    put("toolCallId", "background-command")
+                                    putJsonArray("content") {
+                                        add(buildJsonObject {
+                                            put("type", "text")
+                                            put("text", "started background job job-1")
+                                        })
+                                    }
+                                })
+                            }
+                        }
+                    })
+                }
+            })
+            waitUntil {
+                controller.state.value.commandHistory.runs.singleOrNull()?.let { run ->
+                    run.status == HarnessCommandRunStatus.BACKGROUND &&
+                        run.jobId == "job-1" && run.output == "started background job job-1"
+                } == true
+            }
+            assertFalse(client.streamCalls.any { it.namespace == "job" && it.method == "follow" })
+            assertFalse(client.streamCalls.any { it.method == "job_output" })
+            assertFalse(client.calls.any { it.method == "job_output" })
+        } finally {
+            controller.close()
+        }
+    }
+
+    @Test
     fun controllerMergesLiveToolResultWithoutRetainingRawEvents() = runBlocking {
         val client = RecordingHarnessClient()
         val controller = controller(client)
@@ -921,11 +1110,14 @@ class NativeHarnessControllerWireTest {
     private class RecordingHarnessClient : HarnessClient {
         data class Call(val namespace: String, val method: String, val args: JsonObject)
         data class RouteCall(val path: String, val body: JsonObject?)
+        data class StreamCall(val namespace: String, val method: String, val args: JsonObject)
 
         val calls = CopyOnWriteArrayList<Call>()
         val routeCalls = CopyOnWriteArrayList<RouteCall>()
+        val streamCalls = CopyOnWriteArrayList<StreamCall>()
         val followFrames = MutableSharedFlow<JsonElement>(extraBufferCapacity = 16)
         val followReady = CompletableDeferred<Unit>()
+        val activeWorkspaceFollows = AtomicInteger()
         var sessionItems: List<String> = listOf("session-1")
         var serveReferenceCatalogs = false
         var failReferenceCatalogs = false
@@ -1060,6 +1252,7 @@ class NativeHarnessControllerWireTest {
             args: JsonObject,
             policy: HarnessStreamPolicy
         ): Flow<JsonElement> {
+            streamCalls += StreamCall(namespace, method, args)
             if (namespace == "session" && method == "follow") followCalls++
             if (namespace == "session" && method == "control") controlCalls++
             if (namespace == "session" && method == "follow") {
@@ -1067,7 +1260,21 @@ class NativeHarnessControllerWireTest {
                     emitAll(followFrames.onSubscription { followReady.complete(Unit) })
                 }
             }
+            if (namespace == "workspace" && method == "follow") {
+                return flow {
+                    activeWorkspaceFollows.incrementAndGet()
+                    try {
+                        emitAll(followFrames)
+                    } finally {
+                        activeWorkspaceFollows.decrementAndGet()
+                    }
+                }
+            }
             return emptyFlow()
+        }
+
+        fun workspaceFollowCalls(): Int = streamCalls.count {
+            it.namespace == "workspace" && it.method == "follow"
         }
 
         override suspend fun fetchJson(

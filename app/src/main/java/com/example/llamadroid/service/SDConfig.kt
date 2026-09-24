@@ -119,7 +119,9 @@ data class SDConfig(
     // nullable so older saved commands and non-curated generations remain valid.
     val workflowPresetId: String? = null,
     val workflowBundleId: String? = null,
-    val workflowRevision: String? = null
+    val workflowRevision: String? = null,
+    /** Ordered image references for families whose img2img input uses repeated `-r` flags. */
+    val referenceImages: List<String> = emptyList()
 ) : Parcelable
 
 /** Resolve old saved commands/drafts into the ordered representation. */

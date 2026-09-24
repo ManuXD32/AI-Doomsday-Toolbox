@@ -31,6 +31,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -107,8 +108,11 @@ fun DownloadTaskSection(
         refreshStaleTasks()
     }
 
+    // The Room query already includes staged rows for the requested family.
+    // Always respect the caller's filter so an active staged row cannot also
+    // appear in the recovery section beside its live, task-ID-keyed card.
     val visibleStored = storedTasks
-        .filter { task -> (task.stageOnly && artifactFamily?.storedValue == task.artifactFamily) || includeTask(task) }
+        .filter(includeTask)
         .filterNot { it.status in setOf(DOWNLOAD_TASK_STATUS_COMPLETED, DOWNLOAD_TASK_STATUS_DISCARDED) ||
             (!it.stageOnly && it.status == DOWNLOAD_TASK_STATUS_CANCELLED) }
         .filterNot { !it.stageOnly && it.status == DOWNLOAD_TASK_STATUS_ACTIVE && progressMap.containsKey(it.progressKey) }
@@ -144,24 +148,26 @@ fun DownloadTaskSection(
         }
 
         visibleTasks.forEach { task ->
-            DownloadTaskCard(
-                task = task,
-                progress = progressMap.progressForDownloadTask(task),
-                onResume = {
-                    if (task.url.isNotBlank()) {
-                        if (!task.stageOnly) {
-                            PendingDownloadHolder.addPendingFrom(task)
-                            DownloadProgressHolder.updateProgress(
-                                task.progressKey, task.filename, DownloadProgressHolder.INDETERMINATE
-                            )
+            key(task.id) {
+                DownloadTaskCard(
+                    task = task,
+                    progress = progressMap.progressForDownloadTask(task),
+                    onResume = {
+                        if (task.url.isNotBlank()) {
+                            if (!task.stageOnly) {
+                                PendingDownloadHolder.addPendingFrom(task)
+                                DownloadProgressHolder.updateProgress(
+                                    task.progressKey, task.filename, DownloadProgressHolder.INDETERMINATE
+                                )
+                            }
+                            DownloadService.resumeDownload(context, task.id, explicitRetry = true)
                         }
-                        DownloadService.resumeDownload(context, task.id, explicitRetry = true)
-                    }
-                },
-                onDiscard = { DownloadService.discardDownload(context, task.id) },
-                onCancel = { DownloadService.cancelDownload(context, task.filename, task.id) },
-                onRemovePartial = { confirmTask = task }
-            )
+                    },
+                    onDiscard = { DownloadService.discardDownload(context, task.id) },
+                    onCancel = { DownloadService.cancelDownload(context, task.filename, task.id) },
+                    onRemovePartial = { confirmTask = task }
+                )
+            }
         }
     }
 

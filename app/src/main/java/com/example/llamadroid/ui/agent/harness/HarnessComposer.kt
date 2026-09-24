@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -193,6 +194,7 @@ internal fun HarnessComposerSlot(
     val enabled = state.runtime.status != HarnessRuntimeStatus.STOPPING &&
         state.selectedSessionId != null &&
         state.selectedSessionId !in state.deletingSessionIds
+    val modelPickerEnabled = harnessModelPickerEnabled(state)
     Column(modifier = Modifier.fillMaxWidth()) {
         HarnessUsageSummaryStrip(state)
         HarnessGenerationStatus(
@@ -203,6 +205,7 @@ internal fun HarnessComposerSlot(
         HarnessComposer(
             state = state,
             enabled = enabled,
+            modelPickerEnabled = modelPickerEnabled,
             references = references,
             onReferenceQuery = onReferenceQuery,
             onClientCommand = onClientCommand,
@@ -217,6 +220,7 @@ internal fun HarnessComposerSlot(
             onSelectModel = { providerId, modelId ->
                 onAction(NativeHarnessUiAction.SelectSessionModel(providerId, modelId))
             },
+            onRefreshModelCatalog = { onAction(NativeHarnessUiAction.RefreshModelCatalog) },
             onSelectReasoning = { onAction(NativeHarnessUiAction.SelectReasoningEffort(it)) },
             onSelectPermission = { onAction(NativeHarnessUiAction.SelectPermissionPreset(it)) },
         )
@@ -228,6 +232,7 @@ internal fun HarnessComposerSlot(
 private fun HarnessComposer(
     state: NativeHarnessUiState,
     enabled: Boolean,
+    modelPickerEnabled: Boolean,
     references: List<HarnessComposerReferenceUi>,
     onReferenceQuery: (String?) -> Unit,
     onClientCommand: (String) -> Unit,
@@ -240,6 +245,7 @@ private fun HarnessComposer(
     onCancelTurn: () -> Unit,
     onSubmit: () -> Unit,
     onSelectModel: (providerId: String, modelId: String) -> Unit,
+    onRefreshModelCatalog: () -> Unit,
     onSelectReasoning: (String?) -> Unit,
     onSelectPermission: (String) -> Unit,
 ) {
@@ -394,6 +400,7 @@ private fun HarnessComposer(
             HarnessComposerSessionControls(
                 state = state,
                 enabled = enabled,
+                modelPickerEnabled = modelPickerEnabled,
                 modelExpanded = modelMenu,
                 onModelExpandedChange = { modelMenu = it },
                 reasoningExpanded = reasoningMenu,
@@ -401,6 +408,7 @@ private fun HarnessComposer(
                 permissionExpanded = permissionMenu,
                 onPermissionExpandedChange = { permissionMenu = it },
                 onSelectModel = onSelectModel,
+                onRefreshModelCatalog = onRefreshModelCatalog,
                 onSelectReasoning = onSelectReasoning,
                 selectedProvider = selectedProvider,
             )
@@ -623,10 +631,18 @@ private fun HarnessComposer(
     }
 }
 
+/** The model catalog can be refreshed and a default selected before a session exists. */
+internal fun harnessModelPickerEnabled(state: NativeHarnessUiState): Boolean {
+    val sessionId = state.selectedSessionId
+    return state.runtime.status == HarnessRuntimeStatus.RUNNING &&
+        (sessionId == null || sessionId !in state.deletingSessionIds)
+}
+
 @Composable
 private fun HarnessComposerSessionControls(
     state: NativeHarnessUiState,
     enabled: Boolean,
+    modelPickerEnabled: Boolean,
     selectedProvider: HarnessProviderOption?,
     modelExpanded: Boolean,
     onModelExpandedChange: (Boolean) -> Unit,
@@ -635,6 +651,7 @@ private fun HarnessComposerSessionControls(
     permissionExpanded: Boolean,
     onPermissionExpandedChange: (Boolean) -> Unit,
     onSelectModel: (providerId: String, modelId: String) -> Unit,
+    onRefreshModelCatalog: () -> Unit,
     onSelectReasoning: (String?) -> Unit,
 ) {
     val modelId = state.provider.selectedModel
@@ -656,13 +673,60 @@ private fun HarnessComposerSessionControls(
             FilterChip(
                 selected = modelExpanded,
                 onClick = { onModelExpandedChange(true) },
-                enabled = enabled && state.provider.providers.any { provider ->
-                    provider.models.any { harnessModelContextKnown(provider, it) }
-                },
+                enabled = modelPickerEnabled,
                 label = { Text(modelLabel, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 leadingIcon = { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) },
             )
             DropdownMenu(expanded = modelExpanded, onDismissRequest = { onModelExpandedChange(false) }) {
+                DropdownMenuItem(
+                    text = {
+                        Text(stringResource(
+                            if (state.provider.isCatalogLoading) R.string.harness_refreshing_models
+                            else R.string.harness_refresh_models
+                        ))
+                    },
+                    leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
+                    onClick = onRefreshModelCatalog,
+                    enabled = !state.provider.isCatalogLoading,
+                )
+                if (state.provider.isCatalogLoading) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.harness_refreshing_models)) },
+                        onClick = {},
+                        enabled = false,
+                    )
+                }
+                if (state.provider.catalogRefreshFailed) {
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                stringResource(R.string.harness_model_refresh_failed),
+                                color = MaterialTheme.colorScheme.error,
+                                maxLines = 2,
+                            )
+                        },
+                        onClick = {},
+                        enabled = false,
+                    )
+                }
+                state.provider.catalogFailures.take(3).forEach { failure ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                stringResource(
+                                    R.string.harness_model_catalog_failure,
+                                    failure.providerName,
+                                    failure.message,
+                                ),
+                                color = MaterialTheme.colorScheme.error,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        },
+                        onClick = {},
+                        enabled = false,
+                    )
+                }
                 state.provider.providers.mapNotNull { provider ->
                     val selectableModels = provider.models.filter { harnessModelContextKnown(provider, it) }
                     if (selectableModels.isEmpty()) null else provider to selectableModels

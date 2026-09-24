@@ -1,0 +1,16 @@
+<resources>
+    <string name="harness_app_tools_open">App tools</string>
+    <string name="harness_app_tools_description">Choose which app capabilities Harness models can call. Changes apply to the same tools used by native chat and the WebUI.</string>
+    <string name="harness_app_tool_image_title">Image generation</string>
+    <string name="harness_app_tool_image_description">Let a model create an image with the configured app image engine and save it in the current workspace.</string>
+    <string name="harness_app_tool_web_search_title">App web search</string>
+    <string name="harness_app_tool_web_search_description">Give custom models bounded web results with source links, even when their provider has no web-search API. Network search can be unavailable on some connections.</string>
+    <string name="harness_app_tool_status_off">Off</string>
+    <string name="harness_app_tool_status_ready">Ready</string>
+    <string name="harness_app_tool_status_enabled">Enabled</string>
+    <string name="harness_app_tool_status_needs_model">Choose an installed image model to make this tool ready.</string>
+    <string name="harness_app_tool_status_needs_components">Missing required image components: %1$s. Choose them in image settings.</string>
+    <string name="harness_app_tool_configure_image">Configure image engine and model</string>
+    <string name="harness_app_tools_litert_output_hint">Leave blank to use the current Harness output-token limit: %1$d.</string>
+    <string name="harness_app_tools_litert_context_hint">Harness context-token default: %1$d. This model advertises up to %2$d. App-wide context settings override the default.</string>
+</resources>

@@ -34,6 +34,11 @@ internal fun parseHarnessModelCatalog(value: JsonObject): HarnessModelCatalogUiR
                 "n_ctx"
             )?.takeIf { it > 0L }
         }
+        val modelAdvertisedContextWindows = models.associate { model ->
+            val modelId = model.string("id") ?: model.string("name").orEmpty()
+            modelId to (model.positiveLong("advertisedContextLength", "advertised_context_length")
+                ?.takeIf { it > 0L } ?: modelContextWindows[modelId])
+        }
         val modelMaxOutputTokens = models.associate { model ->
             val modelId = model.string("id") ?: model.string("name").orEmpty()
             modelId to model.positiveLong(
@@ -53,6 +58,21 @@ internal fun parseHarnessModelCatalog(value: JsonObject): HarnessModelCatalogUiR
                 ?: model.string("contextSource")
                 ?: if (context != null) "detected" else "unknown")
         }
+        val modelBackendLimits = models.mapNotNull { model ->
+            val modelId = model.string("id") ?: model.string("name") ?: return@mapNotNull null
+            val limits = HarnessModelBackendLimitsUi(
+                backend = model.string("effective_backend"),
+                requestedBackend = model.string("requested_backend"),
+                contextTokens = model.positiveLong("effective_backend_context_length"),
+                outputTokens = model.positiveLong("effective_backend_max_output_tokens"),
+                gpuSafetyLimitApplied = model.boolean("gpu_safety_limit_applied") == true,
+                autoChoseCpuForCapacity = model.boolean("auto_chose_cpu_for_capacity") == true,
+            )
+            modelId to limits.takeIf {
+                it.backend != null || it.contextTokens != null || it.outputTokens != null ||
+                    it.gpuSafetyLimitApplied || it.autoChoseCpuForCapacity
+            }
+        }.mapNotNull { (id, limits) -> limits?.let { id to it } }.toMap()
         val reasoning = models.mapNotNull model@{ model ->
             val modelId = model.string("id") ?: return@model null
             val metadata = model.objectValue("reasoning") ?: return@model null
@@ -86,7 +106,9 @@ internal fun parseHarnessModelCatalog(value: JsonObject): HarnessModelCatalogUiR
             configured = id in routable,
             modelContextWindows = modelContextWindows,
             modelMaxOutputTokens = modelMaxOutputTokens,
-            modelCapabilitySources = modelCapabilitySources
+            modelCapabilitySources = modelCapabilitySources,
+            modelAdvertisedContextWindows = modelAdvertisedContextWindows,
+            modelBackendLimits = modelBackendLimits,
         )
     }
     val failures = value.objectArray("failures").mapNotNull failure@{ row ->
@@ -146,6 +168,10 @@ internal fun parseHarnessLocalModelCatalog(value: JsonObject): List<HarnessProvi
                     "contextWindow", "context_window", "context_length", "contextTokens", "context_tokens"
                 )
             }
+            val advertisedContexts = values.associate { (_, id, row) ->
+                id to (row.positiveLong("advertised_context_length", "advertisedContextLength")
+                    ?: contexts[id])
+            }
             val outputs = values.associate { (_, id, row) ->
                 id to row.positiveLong(
                     "maxOutputTokens", "max_output_tokens", "maxTokens", "max_tokens", "n_predict"
@@ -153,6 +179,16 @@ internal fun parseHarnessLocalModelCatalog(value: JsonObject): List<HarnessProvi
             }
             val sources = values.associate { (_, id, row) ->
                 id to (row.string("capabilitySource") ?: if (contexts[id] != null) "detected" else "unknown")
+            }
+            val backendLimits = values.associate { (_, id, row) ->
+                id to HarnessModelBackendLimitsUi(
+                    backend = row.string("effective_backend"),
+                    requestedBackend = row.string("requested_backend"),
+                    contextTokens = row.positiveLong("effective_backend_context_length"),
+                    outputTokens = row.positiveLong("effective_backend_max_output_tokens"),
+                    gpuSafetyLimitApplied = row.boolean("gpu_safety_limit_applied") == true,
+                    autoChoseCpuForCapacity = row.boolean("auto_chose_cpu_for_capacity") == true,
+                )
             }
             HarnessProviderOption(
                 id = providerId,
@@ -162,6 +198,8 @@ internal fun parseHarnessLocalModelCatalog(value: JsonObject): List<HarnessProvi
                 modelContextWindows = contexts,
                 modelMaxOutputTokens = outputs,
                 modelCapabilitySources = sources,
+                modelAdvertisedContextWindows = advertisedContexts,
+                modelBackendLimits = backendLimits,
                 configured = true,
                 detail = "Android-managed provider",
                 // Android-owned rows use the native capability editor. DSH
@@ -192,6 +230,8 @@ internal fun mergeHarnessLocalModelProviders(
                 modelContextWindows = existing.modelContextWindows + local.modelContextWindows,
                 modelMaxOutputTokens = existing.modelMaxOutputTokens + local.modelMaxOutputTokens,
                 modelCapabilitySources = existing.modelCapabilitySources + local.modelCapabilitySources,
+                modelAdvertisedContextWindows = existing.modelAdvertisedContextWindows + local.modelAdvertisedContextWindows,
+                modelBackendLimits = existing.modelBackendLimits + local.modelBackendLimits,
                 detail = existing.detail ?: local.detail,
             )
         }
@@ -228,6 +268,7 @@ internal fun mergeHarnessSavedModelCapabilities(
         val context = provider.modelContextWindows.toMutableMap()
         val output = provider.modelMaxOutputTokens.toMutableMap()
         val sources = provider.modelCapabilitySources.toMutableMap()
+        val advertised = provider.modelAdvertisedContextWindows.toMutableMap()
         val names = provider.modelNames.toMutableMap()
         provider.models.forEach { modelId ->
             val row = overrides[modelId] ?: return@forEach
@@ -237,6 +278,7 @@ internal fun mergeHarnessSavedModelCapabilities(
             )?.takeIf { it > 0L }?.let {
                 context[modelId] = it
                 sources[modelId] = "explicit"
+                if (modelId !in advertised) advertised[modelId] = it
             }
             row.positiveLong(
                 "maxOutputTokens", "max_output_tokens", "maxTokens",
@@ -249,7 +291,8 @@ internal fun mergeHarnessSavedModelCapabilities(
             modelNames = names,
             modelContextWindows = context,
             modelMaxOutputTokens = output,
-            modelCapabilitySources = sources
+            modelCapabilitySources = sources,
+            modelAdvertisedContextWindows = advertised,
         )
     }
 }

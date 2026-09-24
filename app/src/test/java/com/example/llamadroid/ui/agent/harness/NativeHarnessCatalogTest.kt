@@ -144,6 +144,31 @@ class NativeHarnessCatalogTest {
     }
 
     @Test
+    fun liteRtCatalogSeparatesEffectiveBackendContextFromAdvertisedContext() {
+        val value = Json.parseToJsonElement(
+            """{"data":[{"id":"litert:43","owned_by":"adt-litert","name":"Gemma 4 E2B","context_length":4096,"effective_backend_context_length":4096,"effective_backend_max_output_tokens":1024,"effective_backend":"gpu","requested_backend":"gpu","gpu_safety_limit_applied":true,"advertised_context_length":32768,"capabilitySource":"explicit"}]}"""
+        ).jsonObject
+
+        val model = parseHarnessLocalModelCatalog(value).single().let { provider ->
+            provider.models.single() to provider
+        }
+
+        assertEquals(4_096L, model.second.modelContextWindows[model.first])
+        assertEquals(32_768L, model.second.modelAdvertisedContextWindows[model.first])
+        assertEquals("explicit", model.second.modelCapabilitySources[model.first])
+        assertEquals(
+            HarnessModelBackendLimitsUi(
+                backend = "gpu",
+                requestedBackend = "gpu",
+                contextTokens = 4_096L,
+                outputTokens = 1_024L,
+                gpuSafetyLimitApplied = true,
+            ),
+            model.second.modelBackendLimits[model.first],
+        )
+    }
+
+    @Test
     fun androidManagedCatalogOmitsSyntheticLlamaSwapWithoutDroppingNativeProviders() {
         val value = Json.parseToJsonElement(
             """{"data":[

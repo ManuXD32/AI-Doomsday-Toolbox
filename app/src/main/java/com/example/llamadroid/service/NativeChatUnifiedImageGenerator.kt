@@ -54,7 +54,7 @@ class NativeChatSdImageGenerator(
             val modelDao = database.modelDao()
             val mainModels = modelDao
                 .getModelsByTypesSync(listOf(ModelType.SD_CHECKPOINT, ModelType.SD_DIFFUSION))
-                .filter { it.isSdImageMainModel() && it.supportsSdTxt2Img() }
+                .filter { it.isSdImageMainModel() && it.supportsSdTxt2Img() && File(it.path).isFile }
             val selectedModelId = imageParams.model?.trim().orEmpty()
             val model = mainModels.firstOrNull { it.matchesToolModelId(selectedModelId) }
                 ?: mainModels.firstOrNull()
@@ -63,24 +63,15 @@ class NativeChatSdImageGenerator(
             val (family, variant) = model.resolvedSdFamily()
             val spec = family?.let { resolveSdFamilySpec(it, variant) }
                 ?: return@withContext Result.failure(Exception(context.getString(R.string.native_chat_generate_image_sd_model_missing)))
-            val supportModels = modelDao.getModelsByTypesSync(
-                listOf(
-                    ModelType.SD_VAE,
-                    ModelType.SD_TAE,
-                    ModelType.SD_CLIP_L,
-                    ModelType.SD_CLIP_G,
-                    ModelType.SD_T5XXL,
-                    ModelType.LLM,
-                    ModelType.VISION_PROJECTOR,
-                    ModelType.SD_PHOTOMAKER
-                )
-            )
+            val supportModels = modelDao.getModelsByTypesSync(AGENT_SD_IMAGE_SUPPORT_TYPES)
+                .filter { File(it.path).isFile }
             val components = resolveSdToolComponents(
                 supportModels = supportModels,
                 sdParams = imageParams,
                 model = model
             )
-            val missingRequired = spec.requiredRoles.filter { components.pathForRole(it).isNullOrBlank() }
+            val missingRequired = missingRequiredSdToolComponents(model, supportModels, imageParams)
+                ?: return@withContext Result.failure(Exception(context.getString(R.string.native_chat_generate_image_sd_model_missing)))
             if (missingRequired.isNotEmpty()) {
                 return@withContext Result.failure(
                     Exception(
@@ -193,6 +184,85 @@ class NativeChatSdImageGenerator(
     }
 }
 
+internal val AGENT_SD_IMAGE_SUPPORT_TYPES = listOf(
+    ModelType.SD_VAE,
+    ModelType.SD_TAE,
+    ModelType.SD_CLIP_L,
+    ModelType.SD_CLIP_G,
+    ModelType.SD_T5XXL,
+    ModelType.LLM,
+    ModelType.SD_LLM,
+    ModelType.VISION_PROJECTOR,
+    ModelType.MMPROJ,
+    ModelType.SD_PHOTOMAKER,
+)
+
+/** Reads the same saved SD component choices used by the app image tool. */
+internal fun SettingsRepository.agentSdImageToolParams(
+    modelId: String? = agentSdImageGenerationModel.value,
+): NativeChatSdImageToolParams {
+    val savedSampler = agentSdImageGenerationSampler.value
+    val sampler = SamplingMethod.entries.firstOrNull {
+        it.name.equals(savedSampler, ignoreCase = true) ||
+            it.cliName.equals(savedSampler, ignoreCase = true)
+    } ?: SamplingMethod.EULER_A
+    return NativeChatSdImageToolParams(
+        model = modelId,
+        vaePath = agentSdImageGenerationVae.value,
+        taePath = agentSdImageGenerationTae.value,
+        clipLPath = agentSdImageGenerationClipL.value,
+        clipGPath = agentSdImageGenerationClipG.value,
+        t5xxlPath = agentSdImageGenerationT5xxl.value,
+        llmPath = agentSdImageGenerationLlm.value,
+        llmVisionPath = agentSdImageGenerationLlmVision.value,
+        photoMakerPath = agentSdImageGenerationPhotoMaker.value,
+        width = agentSdImageGenerationWidth.value,
+        height = agentSdImageGenerationHeight.value,
+        steps = agentSdImageGenerationSteps.value,
+        cfgScale = agentSdImageGenerationCfg.value,
+        sampler = sampler,
+        seed = agentSdImageGenerationSeed.value,
+        negativePrompt = agentSdImageGenerationNegativePrompt.value,
+        threads = agentSdImageGenerationThreads.value,
+        flowShift = agentSdImageGenerationFlowShift.value,
+        diffusionFa = agentSdImageGenerationDiffusionFa.value,
+        mmap = agentSdImageGenerationMmap.value,
+        vaeConvDirect = agentSdImageGenerationVaeConvDirect.value,
+        qwenImageZeroCondT = agentSdImageGenerationQwenZeroCondT.value,
+        chromaDisableDitMask = agentSdImageGenerationChromaDisableDitMask.value,
+    )
+}
+
+internal data class AgentSdImageReadiness(
+    val modelSelected: Boolean,
+    val familySupported: Boolean,
+    val missingRequiredRoles: List<SdComponentRole> = emptyList(),
+) {
+    val ready: Boolean
+        get() = modelSelected && familySupported && missingRequiredRoles.isEmpty()
+}
+
+/** Shared status preflight for the app tool UI, RPC status, and the SD image operation. */
+internal fun resolveAgentSdImageReadiness(
+    mainModels: List<ModelEntity>,
+    supportModels: List<ModelEntity>,
+    sdParams: NativeChatSdImageToolParams,
+): AgentSdImageReadiness {
+    val selectedModelId = sdParams.model?.trim().orEmpty()
+    if (selectedModelId.isBlank()) return AgentSdImageReadiness(modelSelected = false, familySupported = false)
+    val model = mainModels.firstOrNull { candidate ->
+        (candidate.filename == selectedModelId || candidate.path == selectedModelId) &&
+            candidate.isSdImageMainModel() && candidate.supportsSdTxt2Img() && File(candidate.path).isFile
+    } ?: return AgentSdImageReadiness(modelSelected = false, familySupported = false)
+    val missingRoles = missingRequiredSdToolComponents(model, supportModels, sdParams)
+        ?: return AgentSdImageReadiness(modelSelected = true, familySupported = false)
+    return AgentSdImageReadiness(
+        modelSelected = true,
+        familySupported = true,
+        missingRequiredRoles = missingRoles,
+    )
+}
+
 internal data class NativeChatSdResolvedComponents(
     val vaePath: String? = null,
     val taePath: String? = null,
@@ -222,25 +292,39 @@ internal fun resolveSdToolComponents(
     model: ModelEntity
 ): NativeChatSdResolvedComponents {
     val (family, variant) = model.resolvedSdFamily()
-    fun resolve(type: ModelType, id: String?): String? {
+    fun resolve(types: Set<ModelType>, id: String?): String? {
         if (family == null) return null
         val cleanId = id?.trim().orEmpty()
         if (cleanId.isBlank()) return null
         return supportModels
-            .filter { it.type == type && it.matchesSdFamily(family, variant) }
+            .filter { it.type in types && it.matchesSdFamily(family, variant) && File(it.path).isFile }
             .firstOrNull { it.matchesToolModelId(cleanId) }
             ?.path
     }
     return NativeChatSdResolvedComponents(
-        vaePath = resolve(ModelType.SD_VAE, sdParams.vaePath),
-        taePath = resolve(ModelType.SD_TAE, sdParams.taePath),
-        clipLPath = resolve(ModelType.SD_CLIP_L, sdParams.clipLPath),
-        clipGPath = resolve(ModelType.SD_CLIP_G, sdParams.clipGPath),
-        t5xxlPath = resolve(ModelType.SD_T5XXL, sdParams.t5xxlPath),
-        llmPath = resolve(ModelType.LLM, sdParams.llmPath),
-        llmVisionPath = resolve(ModelType.VISION_PROJECTOR, sdParams.llmVisionPath),
-        photoMakerPath = resolve(ModelType.SD_PHOTOMAKER, sdParams.photoMakerPath)
+        vaePath = resolve(setOf(ModelType.SD_VAE), sdParams.vaePath),
+        taePath = resolve(setOf(ModelType.SD_TAE), sdParams.taePath),
+        clipLPath = resolve(setOf(ModelType.SD_CLIP_L), sdParams.clipLPath),
+        clipGPath = resolve(setOf(ModelType.SD_CLIP_G), sdParams.clipGPath),
+        t5xxlPath = resolve(setOf(ModelType.SD_T5XXL), sdParams.t5xxlPath),
+        llmPath = resolve(setOf(ModelType.LLM, ModelType.SD_LLM), sdParams.llmPath),
+        llmVisionPath = resolve(setOf(ModelType.VISION_PROJECTOR, ModelType.MMPROJ), sdParams.llmVisionPath),
+        photoMakerPath = resolve(setOf(ModelType.SD_PHOTOMAKER), sdParams.photoMakerPath)
     )
+}
+
+/** Returns null only when the main model has no known generation-family specification. */
+internal fun missingRequiredSdToolComponents(
+    model: ModelEntity,
+    supportModels: List<ModelEntity>,
+    sdParams: NativeChatSdImageToolParams,
+): List<SdComponentRole>? {
+    val (family, variant) = model.resolvedSdFamily()
+    val spec = family?.let { resolveSdFamilySpec(it, variant) } ?: return null
+    val components = resolveSdToolComponents(supportModels, sdParams, model)
+    return spec.requiredRoles.filter { role ->
+        components.pathForRole(role)?.let { File(it).isFile } != true
+    }
 }
 
 internal fun ModelEntity.supportsSdTxt2Img(): Boolean {
