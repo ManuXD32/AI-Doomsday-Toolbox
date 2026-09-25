@@ -96,6 +96,10 @@ class VideoGenerationService : Service() {
                 val useDistributedStateHolder = intent.getBooleanExtra(EXTRA_USE_DISTRIBUTED_STATE_HOLDER, false)
                 if (config == null) {
                     DebugLog.log("[VIDEO-GEN] Missing config in start intent")
+                } else if (!useDistributedStateHolder && GenerationQueueRuntime.isActive) {
+                    VideoGenerationStateHolder.getForMode(config.mode, false).updateState(
+                        VideoGenerationState.Error(getString(R.string.generation_queue_manual_wait))
+                    )
                 } else if (hasActiveModeJob(config.mode, useDistributedStateHolder)) {
                     VideoGenerationStateHolder.getForMode(config.mode, useDistributedStateHolder).updateState(
                         VideoGenerationState.Error(getString(R.string.video_gen_error_already_running))
@@ -130,7 +134,27 @@ class VideoGenerationService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun startGeneration(config: VideoGenerationConfig, useDistributedStateHolder: Boolean) {
+    /** Runs under the bound queue service's foreground lifetime. */
+    fun isGenerationWakeLockHeld(): Boolean = wakeLock?.isHeld == true
+
+    fun startQueued(config: VideoGenerationConfig, onResult: (QueuedGenerationOutcome) -> Unit) {
+        if (hasActiveModeJob(config.mode, false)) {
+            onResult(QueuedGenerationOutcome.failed(getString(R.string.video_gen_error_already_running)))
+            return
+        }
+        val binary = config.sdBinaryPathOverride?.let(::File)
+        if (binary == null || !binary.isFile || !binary.canRead()) {
+            onResult(QueuedGenerationOutcome.failed(getString(R.string.video_gen_error_sd_binary_missing)))
+            return
+        }
+        startGeneration(config, false, onResult)
+    }
+
+    private fun startGeneration(
+        config: VideoGenerationConfig,
+        useDistributedStateHolder: Boolean,
+        queuedCallback: ((QueuedGenerationOutcome) -> Unit)? = null
+    ) {
         val holder = VideoGenerationStateHolder.getForMode(config.mode, useDistributedStateHolder)
         val lane = laneFor(config.mode, useDistributedStateHolder)
         holder.updatePrompt(config.prompt)
@@ -150,18 +174,22 @@ class VideoGenerationService : Service() {
         ensureStallMonitorRunning()
 
         modeJobs[lane] = serviceScope.launch {
+            var queueOutcome = QueuedGenerationOutcome.interrupted(getString(R.string.generation_queue_interrupted))
             try {
                 val (metadata, warningMessage) = runGeneration(config, holder, useDistributedStateHolder)
                 markActivity(config.mode, "complete")
                 holder.updateState(VideoGenerationState.Complete(metadata, warningMessage))
+                queueOutcome = QueuedGenerationOutcome.succeeded(metadata.preferredArtifactPath, metadata.metadataPath)
                 finishModeSession(config.mode, useDistributedStateHolder, "complete", metadata.diffusionModelName)
                 completeForegroundTask(getString(R.string.video_gen_notification_complete))
             } catch (cancelled: CancellationException) {
                 if (isTimedOutLane(lane)) {
                     val message = timeoutMessage(cancelled)
+                    queueOutcome = QueuedGenerationOutcome.interrupted(message)
                     publishTimeoutForLane(lane, message, event = "foreground_timeout_cancelled")
                     DebugLog.log("[VIDEO-GEN] ${config.mode} stopped after foreground timeout")
                 } else {
+                    queueOutcome = QueuedGenerationOutcome.stopped()
                     markActivity(config.mode, "cancelled")
                     holder.reset()
                     finishModeSession(config.mode, useDistributedStateHolder, "cancelled")
@@ -170,10 +198,12 @@ class VideoGenerationService : Service() {
             } catch (e: Exception) {
                 if (isTimedOutLane(lane)) {
                     val message = getString(R.string.video_gen_error_media_processing_timeout)
+                    queueOutcome = QueuedGenerationOutcome.interrupted(message)
                     publishTimeoutForLane(lane, message, event = "foreground_timeout_failed")
                     DebugLog.log("[VIDEO-GEN] ${config.mode} native process exited during foreground timeout: ${e.message}")
                 } else {
                     val message = localizeVideoRuntimeError(e)
+                    queueOutcome = QueuedGenerationOutcome.failed(message)
                     markActivity(config.mode, "failed")
                     DebugLog.log("[VIDEO-GEN] Failed: $message")
                     holder.updateState(VideoGenerationState.Error(message))
@@ -186,6 +216,7 @@ class VideoGenerationService : Service() {
                 clearTimedOutLane(lane)
                 clearDiagnostics(config.mode)
                 cleanupAfterWork()
+                queuedCallback?.let { callback -> runCatching { callback(queueOutcome) } }
             }
         }
     }
@@ -295,7 +326,7 @@ class VideoGenerationService : Service() {
         val startedAtMs = SystemClock.elapsedRealtime()
         var stageTimings = SdStageTimings()
         val binaryRepo = BinaryRepository(applicationContext)
-        var sdBinary = binaryRepo.getSdBinary()
+        var sdBinary = config.sdBinaryPathOverride?.let(::File) ?: binaryRepo.getSdBinary()
             ?: throw IllegalStateException(getString(R.string.video_gen_error_sd_binary_missing))
         var binaryCapabilities = probeSdBinaryCapabilities(applicationContext, sdBinary, binaryRepo)
         val missingDistributedFlags = missingSdDistributedFlags(config.distributedRuntime, binaryCapabilities)

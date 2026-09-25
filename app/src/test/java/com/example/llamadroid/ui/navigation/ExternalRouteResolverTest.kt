@@ -32,7 +32,9 @@ class ExternalRouteResolverTest {
             Screen.Tama.route,
             Screen.NotesManager.route,
             Screen.LlamaScheduler.route,
-            Screen.Dataset.route
+            Screen.Dataset.route,
+            Screen.GenerationQueue.route,
+            Screen.GenerationQueueHistory.route
         ).forEach { route ->
             assertEquals(route, ExternalRouteResolver.resolveRoute(route))
         }

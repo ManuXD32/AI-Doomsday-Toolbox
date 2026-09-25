@@ -203,6 +203,11 @@
             android:exported="false" />
 
         <service
+            android:name=".service.GenerationQueueService"
+            android:foregroundServiceType="mediaProcessing"
+            android:exported="false" />
+
+        <service
             android:name=".service.OrganizerAlarmRingingService"
             android:foregroundServiceType="mediaPlayback"
             android:exported="false" />
@@ -392,6 +397,10 @@
 
         <receiver
             android:name=".service.LlamaScheduledTaskReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".service.GenerationQueueAlarmReceiver"
             android:exported="false" />
 
         <receiver

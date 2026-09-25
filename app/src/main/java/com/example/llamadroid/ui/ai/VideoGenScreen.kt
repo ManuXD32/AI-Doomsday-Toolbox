@@ -125,6 +125,9 @@ import com.example.llamadroid.service.VideoReusePayload
 import com.example.llamadroid.service.VideoReuseHandoffStore
 import com.example.llamadroid.service.VideoReuseTarget
 import com.example.llamadroid.service.GeneratedVideoMetadata
+import com.example.llamadroid.service.GenerationQueueRepository
+import com.example.llamadroid.service.GenerationQueueRuntime
+import com.example.llamadroid.service.GenerationQueueSnapshot
 import com.example.llamadroid.service.SamplingMethod
 import com.example.llamadroid.service.SdCacheMode
 import com.example.llamadroid.service.SdCacheScmPolicy
@@ -192,6 +195,8 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
     val resources = LocalResources.current
     val walkthroughTargets = LocalWalkthroughTargets.current
     val scope = rememberCoroutineScope()
+    val queueRepository = remember(context) { GenerationQueueRepository(context) }
+    val queueRunning by GenerationQueueRuntime.active.collectAsState()
     val batteryGateState = rememberBatteryOptimizationGateState()
     val settingsRepo = remember { SettingsRepository(context) }
     val restoredDraft = remember { settingsRepo.videoGenerationDraft() }
@@ -567,7 +572,7 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
         }
     }
 
-    val generateVideo = generation@ fun() {
+    val generateVideo = generation@ fun(addToQueue: Boolean) {
         val mode = if (selectedMode == 1) VideoGenerationMode.IMG2VID else VideoGenerationMode.TXT2VID
         val frames = videoFramesText.toIntOrNull()
         val fps = fpsText.toIntOrNull()
@@ -777,7 +782,18 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
             lingBotPromptJson = effectiveVideoOptions.lingBotPromptJson
         )
 
-        batteryGateState.runAfterCheck {
+        if (addToQueue) {
+            scope.launch {
+                runCatching { queueRepository.add(GenerationQueueSnapshot.video(context, config)) }
+                    .onSuccess {
+                        android.widget.Toast.makeText(context, R.string.generation_queue_added,
+                            android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                    .onFailure { error ->
+                        errorMessage = error.message ?: resources.getString(R.string.generation_queue_add_failed)
+                    }
+            }
+        } else batteryGateState.runAfterCheck {
             context.startForegroundService(VideoGenerationService.createStartIntent(context, config))
         }
     }
@@ -956,6 +972,7 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
                 overflow = TextOverflow.Ellipsis
             )
             FeatureGuideAction()
+            GenerationQueueHeaderAction(navController)
             IconButton(onClick = { showInfoDialog = true }) {
                 Icon(Icons.Default.Info, contentDescription = stringResource(R.string.gen_help_open))
             }
@@ -1518,32 +1535,26 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(stringResource(R.string.soft_studio_cancel))
                     }
+                    OutlinedButton(
+                        onClick = { generateVideo(true) },
+                        enabled = selectedVideoModelPath != null && prompt.isNotBlank() &&
+                            videoReadiness.isSatisfied && videoPathsAvailable == true && videoBinaryReady &&
+                            (selectedMode == 0 || effectiveVideoInputPath != null),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    ) { Text(stringResource(R.string.generation_queue_add)) }
                 } else {
-                    Button(
-                        onClick = generateVideo,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 52.dp)
-                            .walkthroughTarget("video.generate"),
-                        shape = RoundedCornerShape(14.dp),
-                        enabled = selectedVideoModelPath != null &&
-                            prompt.isNotBlank() &&
-                            videoReadiness.isSatisfied &&
-                            videoPathsAvailable == true &&
-                            videoBinaryReady &&
-                            (selectedMode == 0 || effectiveVideoInputPath != null)
-                    ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null)
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            if (selectedMode == 0) {
-                                stringResource(R.string.video_gen_generate_txt2vid)
-                            } else {
-                                stringResource(R.string.video_gen_generate_img2vid)
-                            },
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
+                    val readyToGenerate = selectedVideoModelPath != null && prompt.isNotBlank() &&
+                        videoReadiness.isSatisfied && videoPathsAvailable == true && videoBinaryReady &&
+                        (selectedMode == 0 || effectiveVideoInputPath != null)
+                    GenerationStartAndQueueButtons(
+                        startLabel = stringResource(if (selectedMode == 0)
+                            R.string.video_gen_generate_txt2vid else R.string.video_gen_generate_img2vid),
+                        startEnabled = readyToGenerate && !queueRunning,
+                        addEnabled = readyToGenerate,
+                        onStart = { generateVideo(false) },
+                        onAdd = { generateVideo(true) },
+                        modifier = Modifier.walkthroughTarget("video.generate")
+                    )
                 }
             }
         }

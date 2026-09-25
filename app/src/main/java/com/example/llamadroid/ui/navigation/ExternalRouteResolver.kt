@@ -34,6 +34,8 @@ object ExternalRouteResolver {
         Screen.LlamaServers.route,
         Screen.ImageGen.route,
         Screen.ImageGenUpscale.route,
+        Screen.GenerationQueue.route,
+        Screen.GenerationQueueHistory.route,
         Screen.OnnxImageGen.route,
         Screen.OnnxBackgroundRemoval.route,
         Screen.OnnxTts.route,

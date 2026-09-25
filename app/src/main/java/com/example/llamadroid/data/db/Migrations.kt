@@ -4195,7 +4195,8 @@ object Migrations {
         MIGRATION_119_120,
         MIGRATION_120_121,
         MIGRATION_121_122,
-        HarnessMigration.MIGRATION_122_123
+        HarnessMigration.MIGRATION_122_123,
+        GenerationQueueMigration.MIGRATION_123_124
     )
     /**
      * Check if a column exists in a table.

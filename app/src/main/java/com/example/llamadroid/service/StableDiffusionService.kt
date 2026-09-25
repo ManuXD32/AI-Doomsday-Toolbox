@@ -175,6 +175,10 @@ class StableDiffusionService : Service() {
                 val useDistributedStateHolder = intent.getBooleanExtra(EXTRA_USE_DISTRIBUTED_STATE_HOLDER, false)
                 if (config == null) {
                     surfaceStartFailure(getString(R.string.imagegen_error_missing_config))
+                } else if (!useDistributedStateHolder && GenerationQueueRuntime.isActive) {
+                    getModeStateHolder(config.mode, useWorkflowStateHolder, false).updateState(
+                        SDGenerationState.Error(getString(R.string.generation_queue_manual_wait))
+                    )
                 } else if (hasActiveModeJob(config.mode, useDistributedStateHolder)) {
                     val message = getString(R.string.imagegen_error_already_running)
                     getModeStateHolder(config.mode, useWorkflowStateHolder, useDistributedStateHolder)
@@ -189,6 +193,10 @@ class StableDiffusionService : Service() {
                 val useDistributedStateHolder = intent.getBooleanExtra(EXTRA_USE_DISTRIBUTED_STATE_HOLDER, false)
                 if (config == null) {
                     surfaceStartFailure(getString(R.string.imagegen_error_missing_config))
+                } else if (!useDistributedStateHolder && GenerationQueueRuntime.isActive) {
+                    getModeStateHolder(SDMode.UPSCALE, false, false).updateState(
+                        SDGenerationState.Error(getString(R.string.generation_queue_manual_wait))
+                    )
                 } else if (hasActiveModeJob(SDMode.UPSCALE, useDistributedStateHolder)) {
                     val message = getString(R.string.imagegen_error_already_running)
                     getModeStateHolder(SDMode.UPSCALE, false, useDistributedStateHolder)
@@ -221,6 +229,38 @@ class StableDiffusionService : Service() {
         return START_NOT_STICKY
     }
 
+    /** Bound queue runs share the queue's foreground lifetime and notification. */
+    fun isGenerationWakeLockHeld(): Boolean = wakeLock?.isHeld == true
+
+    fun startQueued(config: SDConfig, onResult: (QueuedGenerationOutcome) -> Unit) {
+        if (hasActiveModeJob(config.mode, false)) {
+            onResult(QueuedGenerationOutcome.failed(getString(R.string.imagegen_error_already_running)))
+            return
+        }
+        val binaryPath = config.sdBinaryPathOverride
+        val issue = validateSdLaunchInputs(config.mode, config.modelPath, config.initImage,
+            binaryPath, config.referenceImages)
+        if (issue != null) {
+            onResult(QueuedGenerationOutcome.failed(sdLaunchIssueMessage(this, config.mode, issue)))
+            return
+        }
+        startGeneration(config, false, false, onResult)
+    }
+
+    fun startQueued(config: SDUpscaleConfig, onResult: (QueuedGenerationOutcome) -> Unit) {
+        if (hasActiveModeJob(SDMode.UPSCALE, false)) {
+            onResult(QueuedGenerationOutcome.failed(getString(R.string.imagegen_error_already_running)))
+            return
+        }
+        val issue = validateSdLaunchInputs(SDMode.UPSCALE, config.modelPath,
+            config.inputImagePath, config.sdBinaryPathOverride)
+        if (issue != null) {
+            onResult(QueuedGenerationOutcome.failed(sdLaunchIssueMessage(this, SDMode.UPSCALE, issue)))
+            return
+        }
+        startUpscale(config, false, onResult)
+    }
+
     private fun startGenerationSafely(
         config: SDConfig,
         useWorkflowStateHolder: Boolean,
@@ -229,7 +269,8 @@ class StableDiffusionService : Service() {
         val launchDetails = buildSdLaunchBreadcrumbDetails(config)
         recordLaunchBreadcrumb(config.mode, "service_start_requested", launchDetails)
 
-        val binaryPath = BinaryRepository(applicationContext).getSdBinary()?.absolutePath
+        val binaryPath = config.sdBinaryPathOverride
+            ?: BinaryRepository(applicationContext).getSdBinary()?.absolutePath
         val launchIssue = validateSdLaunchInputs(
             mode = config.mode,
             modelPath = config.modelPath,
@@ -300,7 +341,8 @@ class StableDiffusionService : Service() {
         val launchDetails = buildSdLaunchBreadcrumbDetails(config)
         recordLaunchBreadcrumb(SDMode.UPSCALE, "service_start_requested", launchDetails)
 
-        val binaryPath = BinaryRepository(applicationContext).getSdBinary()?.absolutePath
+        val binaryPath = config.sdBinaryPathOverride
+            ?: BinaryRepository(applicationContext).getSdBinary()?.absolutePath
         val launchIssue = validateSdLaunchInputs(
             mode = SDMode.UPSCALE,
             modelPath = config.modelPath,
@@ -340,7 +382,8 @@ class StableDiffusionService : Service() {
     private fun startGeneration(
         config: SDConfig,
         useWorkflowStateHolder: Boolean,
-        useDistributedStateHolder: Boolean
+        useDistributedStateHolder: Boolean,
+        queuedCallback: ((QueuedGenerationOutcome) -> Unit)? = null
     ) {
         cancelPostRunHealthSampling()
         val modeStateHolder = getModeStateHolder(config.mode, useWorkflowStateHolder, useDistributedStateHolder)
@@ -362,6 +405,7 @@ class StableDiffusionService : Service() {
 
         val lane = laneFor(config.mode, useDistributedStateHolder)
         storeModeJob(config.mode, useDistributedStateHolder, serviceScope.launch {
+            var queueOutcome = QueuedGenerationOutcome.interrupted(getString(R.string.generation_queue_interrupted))
             try {
                 val result = executeGeneration(
                     config = config,
@@ -373,14 +417,17 @@ class StableDiffusionService : Service() {
                 _generationState.value = SDGenerationState.Complete(result)
                 _progress.value = 1f
                 modeStateHolder.updateState(SDGenerationState.Complete(result))
+                queueOutcome = QueuedGenerationOutcome.succeeded(result)
                 finishModeSession(config.mode, useDistributedStateHolder, "complete", File(config.modelPath).name)
                 completeForegroundTask(getString(R.string.imagegen_notification_complete))
             } catch (cancelled: CancellationException) {
                 if (isTimedOutLane(lane)) {
                     val message = timeoutMessage(cancelled)
+                    queueOutcome = QueuedGenerationOutcome.interrupted(message)
                     publishTimeoutForLane(lane, message, event = "foreground_timeout_cancelled")
                     DebugLog.log("[StableDiffusionService] ${config.mode} stopped after foreground timeout")
                 } else {
+                    queueOutcome = QueuedGenerationOutcome.stopped()
                     markActivity(config.mode, "cancelled")
                     finishModeSession(config.mode, useDistributedStateHolder, "cancelled")
                     DebugLog.log("[StableDiffusionService] ${config.mode} cancelled")
@@ -388,12 +435,14 @@ class StableDiffusionService : Service() {
             } catch (e: Exception) {
                 if (isTimedOutLane(lane)) {
                     val message = getString(R.string.imagegen_error_media_processing_timeout)
+                    queueOutcome = QueuedGenerationOutcome.interrupted(message)
                     publishTimeoutForLane(lane, message, event = "foreground_timeout_failed")
                     DebugLog.log(
                         "[StableDiffusionService] ${config.mode} native process exited during foreground timeout: ${e.message}"
                     )
                 } else {
                     val message = e.message ?: getString(R.string.error_generic)
+                    queueOutcome = QueuedGenerationOutcome.failed(message)
                     markActivity(config.mode, "failed")
                     DebugLog.log("[StableDiffusionService] ${config.mode} failed: $message")
                     _generationState.value = SDGenerationState.Error(message)
@@ -407,11 +456,16 @@ class StableDiffusionService : Service() {
                 clearTimedOutLane(lane)
                 clearDiagnostics(config.mode)
                 cleanupAfterWork()
+                queuedCallback?.let { callback -> runCatching { callback(queueOutcome) } }
             }
         })
     }
 
-    private fun startUpscale(config: SDUpscaleConfig, useDistributedStateHolder: Boolean) {
+    private fun startUpscale(
+        config: SDUpscaleConfig,
+        useDistributedStateHolder: Boolean,
+        queuedCallback: ((QueuedGenerationOutcome) -> Unit)? = null
+    ) {
         cancelPostRunHealthSampling()
         val modeStateHolder = getModeStateHolder(SDMode.UPSCALE, false, useDistributedStateHolder)
         ensureWakeLockHeld()
@@ -431,6 +485,7 @@ class StableDiffusionService : Service() {
 
         val lane = laneFor(SDMode.UPSCALE, useDistributedStateHolder)
         storeModeJob(SDMode.UPSCALE, useDistributedStateHolder, serviceScope.launch {
+            var queueOutcome = QueuedGenerationOutcome.interrupted(getString(R.string.generation_queue_interrupted))
             try {
                 val result = executeUpscaleGeneration(
                     config = config,
@@ -441,14 +496,17 @@ class StableDiffusionService : Service() {
                 _generationState.value = SDGenerationState.Complete(result)
                 _progress.value = 1f
                 modeStateHolder.updateState(SDGenerationState.Complete(result))
+                queueOutcome = QueuedGenerationOutcome.succeeded(result)
                 finishModeSession(SDMode.UPSCALE, useDistributedStateHolder, "complete", File(config.modelPath).name)
                 completeForegroundTask(getString(R.string.imagegen_notification_complete))
             } catch (cancelled: CancellationException) {
                 if (isTimedOutLane(lane)) {
                     val message = timeoutMessage(cancelled)
+                    queueOutcome = QueuedGenerationOutcome.interrupted(message)
                     publishTimeoutForLane(lane, message, event = "foreground_timeout_cancelled")
                     DebugLog.log("[StableDiffusionService] ${SDMode.UPSCALE} stopped after foreground timeout")
                 } else {
+                    queueOutcome = QueuedGenerationOutcome.stopped()
                     markActivity(SDMode.UPSCALE, "cancelled")
                     finishModeSession(SDMode.UPSCALE, useDistributedStateHolder, "cancelled")
                     DebugLog.log("[StableDiffusionService] ${SDMode.UPSCALE} cancelled")
@@ -456,12 +514,14 @@ class StableDiffusionService : Service() {
             } catch (e: Exception) {
                 if (isTimedOutLane(lane)) {
                     val message = getString(R.string.imagegen_error_media_processing_timeout)
+                    queueOutcome = QueuedGenerationOutcome.interrupted(message)
                     publishTimeoutForLane(lane, message, event = "foreground_timeout_failed")
                     DebugLog.log(
                         "[StableDiffusionService] ${SDMode.UPSCALE} native process exited during foreground timeout: ${e.message}"
                     )
                 } else {
                     val message = e.message ?: getString(R.string.error_generic)
+                    queueOutcome = QueuedGenerationOutcome.failed(message)
                     markActivity(SDMode.UPSCALE, "failed")
                     DebugLog.log("[StableDiffusionService] ${SDMode.UPSCALE} failed: $message")
                     _generationState.value = SDGenerationState.Error(message)
@@ -475,6 +535,7 @@ class StableDiffusionService : Service() {
                 clearTimedOutLane(lane)
                 clearDiagnostics(SDMode.UPSCALE)
                 cleanupAfterWork()
+                queuedCallback?.let { callback -> runCatching { callback(queueOutcome) } }
             }
         })
     }
@@ -637,7 +698,7 @@ class StableDiffusionService : Service() {
     ): String = withContext(Dispatchers.IO) {
         SdGenerationProcessLock.withLock {
         val binaryRepo = BinaryRepository(applicationContext)
-        val sdBinary = binaryRepo.getSdBinary()
+        val sdBinary = config.sdBinaryPathOverride?.let(::File) ?: binaryRepo.getSdBinary()
 
         if (sdBinary == null || !sdBinary.exists()) {
             throw IllegalStateException(getString(R.string.video_gen_error_sd_binary_missing))
@@ -870,7 +931,7 @@ class StableDiffusionService : Service() {
     ): String = withContext(Dispatchers.IO) {
         SdGenerationProcessLock.withLock {
         val binaryRepo = BinaryRepository(applicationContext)
-        val sdBinary = binaryRepo.getSdBinary()
+        val sdBinary = config.sdBinaryPathOverride?.let(::File) ?: binaryRepo.getSdBinary()
 
         if (sdBinary == null || !sdBinary.exists()) {
             throw IllegalStateException(getString(R.string.video_gen_error_sd_binary_missing))

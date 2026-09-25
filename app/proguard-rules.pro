@@ -79,6 +79,27 @@
 -keep class com.google.gson.reflect.TypeToken { *; }
 -keep class * extends com.google.gson.reflect.TypeToken
 
+# Queue snapshots survive app upgrades. Keep the JSON field and enum names of
+# the frozen image/video request graph stable across R8 builds.
+-keep class com.example.llamadroid.service.SDConfig { *; }
+-keep class com.example.llamadroid.service.SDUpscaleConfig { *; }
+-keep class com.example.llamadroid.service.VideoGenerationConfig { *; }
+-keep class com.example.llamadroid.service.SdIpAdapterConfig { *; }
+-keep class com.example.llamadroid.service.SdADetailerConfig { *; }
+-keep class com.example.llamadroid.service.SdDistributedRuntimeConfig { *; }
+-keep class com.example.llamadroid.service.SdDistributedPlacementMode { *; }
+-keep class com.example.llamadroid.service.SdDistributedSplitMode { *; }
+-keep class com.example.llamadroid.service.SamplingMethod { *; }
+-keep class com.example.llamadroid.service.SdScheduler { *; }
+-keep class com.example.llamadroid.service.SdCacheMode { *; }
+-keep class com.example.llamadroid.service.SdCacheScmPolicy { *; }
+-keep class com.example.llamadroid.service.SDMode { *; }
+-keep class com.example.llamadroid.service.VideoGenerationMode { *; }
+-keep class com.example.llamadroid.sd.SdVideo* { *; }
+-keep class com.example.llamadroid.sd.SdLoraSpec { *; }
+-keep class com.example.llamadroid.sd.SdLoraApplyMode { *; }
+-keep class com.example.llamadroid.sd.SdMainLayout { *; }
+
 # Explicitly keep HuggingFace API DTOs (Gson needs these for generic List<T>)
 -keep class com.example.llamadroid.data.api.HfModelDto { *; }
 -keep class com.example.llamadroid.data.api.HfRepoInfoDto { *; }

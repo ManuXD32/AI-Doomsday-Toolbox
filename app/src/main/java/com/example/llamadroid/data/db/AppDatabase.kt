@@ -177,9 +177,11 @@ class Converters {
         com.example.llamadroid.audio.library.AudioLibraryItemEntity::class,
         com.example.llamadroid.audio.library.AudioLibraryPreferencesEntity::class,
         com.example.llamadroid.data.model.library.ModelDeletionJournalOperationEntity::class,
-        com.example.llamadroid.data.model.library.ModelDeletionJournalPathEntity::class
+        com.example.llamadroid.data.model.library.ModelDeletionJournalPathEntity::class,
+        GenerationQueueItemEntity::class,
+        GenerationQueueControlEntity::class
     ], 
-    version = 123,
+    version = 124,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -232,6 +234,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun audioDao(): com.example.llamadroid.audio.AudioDao
     abstract fun audioLibraryDao(): com.example.llamadroid.audio.library.AudioLibraryDao
     abstract fun modelDeletionJournalDao(): com.example.llamadroid.data.model.library.ModelDeletionJournalDao
+    abstract fun generationQueueDao(): GenerationQueueDao
 
     companion object {
         @Volatile

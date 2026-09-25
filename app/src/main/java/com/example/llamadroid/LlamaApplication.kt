@@ -27,6 +27,7 @@ import com.example.llamadroid.data.model.library.PendingArtifactStatus
 import com.example.llamadroid.onnx.OnnxStorage
 import com.example.llamadroid.service.AiRuntimeJobStore
 import com.example.llamadroid.service.GenerationDiagnosticsStore
+import com.example.llamadroid.service.GenerationQueueRepository
 import com.example.llamadroid.service.OrganizerAlarmScheduler
 import com.example.llamadroid.service.LlamaScheduledTaskScheduler
 import com.example.llamadroid.service.LlamaRuntimeStateProjection
@@ -71,6 +72,8 @@ class LlamaApplication : Application() {
         PhoneWearGateway.start(this)
         installCrashBreadcrumbHandler()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            runCatching { GenerationQueueRepository(this@LlamaApplication).recoverOrphanedRun() }
+                .onFailure { DebugLog.log("[GENERATION_QUEUE] recovery failed: ${it.message}") }
             // A process death can leave the keyed OCR child alive.  Reconcile its metadata-only
             // lease before any new OCR request is allowed to start; restoration commands carry
             // the lease token and therefore remain valid across the process boundary.

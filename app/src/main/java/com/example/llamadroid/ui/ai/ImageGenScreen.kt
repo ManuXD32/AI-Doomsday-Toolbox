@@ -182,6 +182,8 @@ fun ImageGenScreen(
     val sdMaxCpuRamGiB by settingsRepo.sdMaxCpuRamGiB.collectAsState()
     val selectedSdNativeBinary by settingsRepo.stableDiffusionNativeBinarySelection.collectAsState()
     val scope = rememberCoroutineScope()
+    val queueRepository = remember(context) { GenerationQueueRepository(context) }
+    val queueRunning by GenerationQueueRuntime.active.collectAsState()
 
     // Available SD models - Classic checkpoints (SD1.5/SDXL)
     val sdCheckpoints by db.modelDao().getModelsByType(ModelType.SD_CHECKPOINT)
@@ -1746,7 +1748,7 @@ fun ImageGenScreen(
     )
 
     // Generate function - handles all modes
-    val generate: () -> Unit = generate@{
+    val generate: (Boolean) -> Unit = generate@{ addToQueue ->
         if (selectedMode != IMAGE_GEN_MODE_UPSCALE &&
             selectedPipeline?.blockingIssues?.isNotEmpty() == true
         ) {
@@ -1938,7 +1940,18 @@ fun ImageGenScreen(
                     customFlags = manualCommandFlags
                 )
 
-                batteryGateState.runAfterCheck {
+                if (addToQueue) {
+                    scope.launch {
+                        runCatching { queueRepository.add(GenerationQueueSnapshot.upscale(context, config)) }
+                            .onSuccess {
+                                android.widget.Toast.makeText(context, R.string.generation_queue_added,
+                                    android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                            .onFailure { error ->
+                                errorMessage = error.message ?: resources.getString(R.string.generation_queue_add_failed)
+                            }
+                    }
+                } else batteryGateState.runAfterCheck {
                     val launchDetails = buildString {
                         append("model=${File(config.modelPath).name}")
                         append(" input=${File(config.inputImagePath).name}")
@@ -2075,7 +2088,18 @@ fun ImageGenScreen(
                         ?.joinToString(",") { file -> "${file.id}@${file.revision}" }
                 )
 
-                batteryGateState.runAfterCheck {
+                if (addToQueue) {
+                    scope.launch {
+                        runCatching { queueRepository.add(GenerationQueueSnapshot.image(context, config)) }
+                            .onSuccess {
+                                android.widget.Toast.makeText(context, R.string.generation_queue_added,
+                                    android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                            .onFailure { error ->
+                                errorMessage = error.message ?: resources.getString(R.string.generation_queue_add_failed)
+                            }
+                    }
+                } else batteryGateState.runAfterCheck {
                     val launchDetails = buildSdLaunchBreadcrumbDetails(config)
                     GenerationDiagnosticsStore.recordBreadcrumb(
                         source = IMAGE_GEN_UI_DIAGNOSTIC_SOURCE,
@@ -4135,6 +4159,7 @@ fun ImageGenScreen(
                 overflow = TextOverflow.Ellipsis
             )
             com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
+            GenerationQueueHeaderAction(navController)
             IconButton(onClick = { showInfoDialog = true }) {
                 Icon(Icons.Default.Info, stringResource(R.string.gen_help_open))
             }
@@ -4320,25 +4345,20 @@ fun ImageGenScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(stringResource(R.string.soft_studio_cancel))
                     }
-                } else {
-                    Button(
-                        onClick = generate,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 52.dp),
+                    OutlinedButton(
+                        onClick = { generate(true) },
                         enabled = imageGenReadiness.isReady,
-                        shape = RoundedCornerShape(14.dp)
-                    ) {
-                        Icon(Icons.Default.Create, contentDescription = null)
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            when (selectedMode) {
-                                2 -> stringResource(R.string.imagegen_upscale_btn)
-                                else -> stringResource(R.string.soft_studio_generate)
-                            },
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    ) { Text(stringResource(R.string.generation_queue_add)) }
+                } else {
+                    GenerationStartAndQueueButtons(
+                        startLabel = if (selectedMode == 2) stringResource(R.string.imagegen_upscale_btn)
+                            else stringResource(R.string.soft_studio_generate),
+                        startEnabled = imageGenReadiness.isReady && !queueRunning,
+                        addEnabled = imageGenReadiness.isReady,
+                        onStart = { generate(false) },
+                        onAdd = { generate(true) }
+                    )
                 }
             }
         }

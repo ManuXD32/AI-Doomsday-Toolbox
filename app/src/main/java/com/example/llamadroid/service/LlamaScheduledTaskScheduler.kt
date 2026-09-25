@@ -182,6 +182,7 @@ class LlamaScheduledTaskBootReceiver : BroadcastReceiver() {
                 if (resolveLlamaScheduledTaskBootRoute(intent?.action) == LlamaScheduledTaskBroadcastRoute.RESCHEDULE_ALL) {
                     LlamaScheduledTaskScheduler.rescheduleAll(appContext)
                     AgentSleepWakeScheduler.rescheduleAll(appContext)
+                    GenerationQueueScheduler.restoreFutureSchedule(appContext)
                 }
             } finally {
                 pendingResult.finish()

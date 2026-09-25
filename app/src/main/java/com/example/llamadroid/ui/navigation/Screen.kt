@@ -20,6 +20,8 @@ sealed class Screen(val route: String) {
         }
     }
     object ImageGenUpscale : Screen("image_gen_upscale") // Compatibility route into the unified Enlarge task
+    object GenerationQueue : Screen("generation_queue")
+    object GenerationQueueHistory : Screen("generation_queue_history")
     object OnnxImageGen : Screen("onnx_image_gen") // ONNX Runtime image generation
     object OnnxBackgroundRemoval : Screen("onnx_background_removal") // ONNX Runtime background removal
     object OnnxTts : Screen("onnx_tts")       // ONNX Runtime text-to-speech

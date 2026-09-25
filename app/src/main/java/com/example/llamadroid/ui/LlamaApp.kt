@@ -53,6 +53,8 @@ import com.example.llamadroid.ui.ai.AIHubScreen
 import com.example.llamadroid.ui.ai.AiServersHubScreen
 import com.example.llamadroid.ui.ai.ToolCatalog
 import com.example.llamadroid.ui.ai.ImageGenScreen
+import com.example.llamadroid.ui.ai.GenerationQueueScreen
+import com.example.llamadroid.ui.ai.GenerationQueueHistoryScreen
 import com.example.llamadroid.ui.ai.OnnxImageGenScreen
 import com.example.llamadroid.ui.ai.OnnxBackgroundRemovalScreen
 import com.example.llamadroid.ui.ai.OnnxTtsScreen
@@ -672,6 +674,8 @@ fun LlamaApp(
             composable(Screen.ImageGenUpscale.route) {
                 ImageGenUpscaleCompatibilityRedirect(navController)
             }
+            composable(Screen.GenerationQueue.route) { GenerationQueueScreen(navController) }
+            composable(Screen.GenerationQueueHistory.route) { GenerationQueueHistoryScreen(navController) }
             composable(Screen.OnnxImageGen.route) { OnnxImageGenScreen(navController) }
             composable(Screen.OnnxBackgroundRemoval.route) { OnnxBackgroundRemovalScreen(navController) }
             composable(Screen.OnnxTts.route) { OnnxTtsScreen(navController) }

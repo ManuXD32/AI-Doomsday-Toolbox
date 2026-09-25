@@ -121,7 +121,9 @@ data class SDConfig(
     val workflowBundleId: String? = null,
     val workflowRevision: String? = null,
     /** Ordered image references for families whose img2img input uses repeated `-r` flags. */
-    val referenceImages: List<String> = emptyList()
+    val referenceImages: List<String> = emptyList(),
+    /** Frozen binary selected when a request is added to the generation queue. */
+    val sdBinaryPathOverride: String? = null
 ) : Parcelable
 
 /** Resolve old saved commands/drafts into the ordered representation. */
@@ -146,7 +148,8 @@ data class SDUpscaleConfig(
     val sdRuntimeBackendMode: String = "auto",
     val maxVramCpuGiB: String = "",
     val distributedRuntime: SdDistributedRuntimeConfig = SdDistributedRuntimeConfig(),
-    val customFlags: String = ""
+    val customFlags: String = "",
+    val sdBinaryPathOverride: String? = null
 ) : Parcelable
 
 enum class SamplingMethod(val cliName: String) {
