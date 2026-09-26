@@ -1,5 +1,9 @@
 package com.example.llamadroid.onnx
 
+import com.example.llamadroid.data.db.ModelEntity
+import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.data.db.ONNX_CAPABILITY_TXT2IMG
+import com.example.llamadroid.data.db.buildOnnxCapabilities
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -63,6 +67,26 @@ class OnnxBundleValidatorTest {
 
         assertFalse(result.isValid)
         assertTrue(result.missingPaths.contains(OnnxBundleValidator.img2imgEncoderRelativePath))
+    }
+
+    @Test
+    fun `installed txt2img readiness accepts a valid directory and rejects a missing component`() {
+        val root = createBundleRoot()
+        createRequiredBundleFiles(root)
+        val model = ModelEntity(
+            filename = "test-sdai-bundle",
+            path = root.absolutePath,
+            sizeBytes = 1L,
+            type = ModelType.ONNX_IMAGE_GEN,
+            repoId = "local/test-sdai-bundle",
+            onnxCapabilities = buildOnnxCapabilities(ONNX_CAPABILITY_TXT2IMG),
+            onnxPipelineFamily = ONNX_PIPELINE_FAMILY_SDAI_LOCAL_DIFFUSION,
+        )
+
+        assertTrue(model.isInstalledOnnxTxt2ImgBundle())
+
+        File(root, "unet/model.ort").delete()
+        assertFalse(model.isInstalledOnnxTxt2ImgBundle())
     }
 
     private fun createBundleRoot(): File =

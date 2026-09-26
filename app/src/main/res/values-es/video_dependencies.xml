@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="video_native_llm_required">Instala los binarios nativos LLM en Ajustes → Binarios nativos y vuelve a intentar el reconocimiento de vídeo.</string>
+</resources>

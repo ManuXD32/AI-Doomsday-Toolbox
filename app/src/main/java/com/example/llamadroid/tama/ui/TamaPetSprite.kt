@@ -1,16 +1,9 @@
 package com.example.llamadroid.tama.ui
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -27,13 +20,7 @@ import com.example.llamadroid.tama.data.PetSpriteState
 import com.example.llamadroid.tama.data.TamaRoomCatalog
 import com.example.llamadroid.tama.data.TamaPet
 import com.example.llamadroid.tama.data.mapPetActionToSpriteState
-import com.example.llamadroid.tama.data.resolvePetSpriteAssetPath
 
-private const val PET_FRAME_DURATION_MS = 560
-private const val WALK_FRAME_DURATION_MS = 240
-private const val EAT_FRAME_DURATION_MS = 90
-private const val EGG_IDLE_CYCLE_MS = 2400
-private const val EGG_BLINK_WINDOW_MS = 220
 private const val TAMA_PET_VISUAL_SCALE = 0.8f
 
 @Composable
@@ -49,53 +36,13 @@ fun TamaPetSprite(
     val spriteState = remember(action, pet.isSleeping) {
         mapPetActionToSpriteState(action, pet.isSleeping)
     }
-    val frameIndex = rememberAnimatedPetFrame(pet.stage, spriteState)
-    val assetPath = remember(speciesLine, pet.stage, spriteState, frameIndex) {
-        resolvePetSpriteAssetPath(
-            speciesLine = speciesLine,
-            stage = pet.stage,
-            state = spriteState,
-            frameIndex = frameIndex
-        )
-    }
-
-    AsyncImage(
-        model = "file:///android_asset/$assetPath",
-        contentDescription = null,
-        modifier = modifier.size(size * TAMA_PET_VISUAL_SCALE),
-        contentScale = ContentScale.Fit,
-        filterQuality = FilterQuality.None
+    TamaFrameAnimation(
+        speciesLine = speciesLine,
+        stage = pet.stage,
+        spriteState = if (pet.stage == GrowthStage.EGG) PetSpriteState.IDLE else spriteState,
+        frozen = pet.cycleFrozen,
+        modifier = modifier.size(size * TAMA_PET_VISUAL_SCALE)
     )
-}
-
-@Composable
-private fun rememberAnimatedPetFrame(stage: GrowthStage, state: PetSpriteState): Int {
-    if (state.frameCount <= 1) return 0
-    val infiniteTransition = rememberInfiniteTransition(label = "tama_pet_frame")
-    val frameDurationMs = when (state) {
-        PetSpriteState.WALK -> WALK_FRAME_DURATION_MS
-        PetSpriteState.EAT -> EAT_FRAME_DURATION_MS
-        else -> PET_FRAME_DURATION_MS
-    }
-    val cycleDurationMs = if (stage == GrowthStage.EGG && state == PetSpriteState.IDLE) {
-        EGG_IDLE_CYCLE_MS
-    } else {
-        state.frameCount * frameDurationMs
-    }
-    val frameProgress by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = cycleDurationMs.toFloat(),
-        animationSpec = infiniteRepeatable(
-            animation = tween(cycleDurationMs, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "tama_pet_frame_value"
-    )
-    if (stage == GrowthStage.EGG && state == PetSpriteState.IDLE) {
-        return if (frameProgress < (EGG_IDLE_CYCLE_MS - EGG_BLINK_WINDOW_MS).toFloat()) 0 else 1
-    }
-    val frameIndex = (frameProgress / frameDurationMs.toFloat()).toInt() % state.frameCount
-    return frameIndex.coerceIn(0, state.frameCount - 1)
 }
 
 @Composable

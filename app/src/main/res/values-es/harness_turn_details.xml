@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_turn_copy">Copiar turno</string>
+    <string name="harness_turn_cancel_copy">Cancelar copia</string>
+    <string name="harness_message_copy">Copiar mensaje</string>
+    <string name="harness_turn_branch">Crear rama aquí</string>
+    <string name="harness_turn_branch_unavailable">Rama no disponible</string>
+    <string name="harness_turn_usage">Uso del turno</string>
+    <string name="harness_turn_time">Tiempo del turno</string>
+    <string name="harness_turn_input">Tokens de entrada: %1$d</string>
+    <string name="harness_turn_output">Tokens de salida: %1$d</string>
+    <string name="harness_turn_cache_read">Lectura de caché: %1$d</string>
+    <string name="harness_turn_cache_write">Escritura de caché: %1$d</string>
+    <string name="harness_turn_reasoning">Tokens de razonamiento: %1$d</string>
+    <string name="harness_turn_total">Tokens totales: %1$d</string>
+    <string name="harness_turn_duration">Duración: %1$d ms</string>
+    <string name="harness_turn_speed">Velocidad: %1$.1f tokens/s</string>
+    <string name="harness_turn_ttft">Primer token: %1$d ms</string>
+    <string name="harness_turn_retry_title">Reintento del modelo</string>
+    <string name="harness_turn_retry_status">Reintento %1$d%2$s · %3$s</string>
+    <string name="harness_turn_retry_delay">Espera: %1$d ms</string>
+    <string name="harness_turn_retry_failure">Fallo: %1$s</string>
+    <string name="harness_turn_retry_scheduled">Programado</string>
+    <string name="harness_turn_retry_started">Iniciado</string>
+    <string name="harness_turn_retry_cancelled">Cancelado</string>
+    <string name="harness_turn_compaction_title">Compactación</string>
+    <string name="harness_turn_compaction_summary">Elementos: %1$d · tokens: %2$d</string>
+    <string name="harness_turn_compaction_running">Compactación en curso</string>
+    <string name="harness_turn_compaction_done">Compactación completada</string>
+    <string name="harness_turn_compaction_failed">Estado de compactación no disponible</string>
+    <string name="harness_turn_no_usage">El uso del turno aún no está completo.</string>
+    <string name="harness_turn_no_time">El tiempo del turno aún no está disponible.</string>
+</resources>

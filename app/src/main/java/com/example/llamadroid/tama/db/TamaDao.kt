@@ -22,6 +22,9 @@ data class TamaPetEntity(
     val health: Float,
     val energy: Float,
     val hygiene: Float,
+    @ColumnInfo(defaultValue = "100") val hydration: Float = 100f,
+    @ColumnInfo(defaultValue = "100") val social: Float = 100f,
+    @ColumnInfo(defaultValue = "100") val curiosity: Float = 100f,
 
     val mood: String,
     val personality: String,

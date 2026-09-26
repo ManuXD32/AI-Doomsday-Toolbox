@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_tab_runtime">Runtime</string>
+    <string name="harness_runtime_shortcut">Runtime: %1$s</string>
+    <string name="harness_runtime_open_tab">Open</string>
+    <string name="harness_runtime_error_code">Error code: %1$s</string>
+    <string name="harness_runtime_diagnostics_title">Runtime diagnostics</string>
+    <string name="harness_runtime_diagnostics_description">Metadata only: lifecycle events, status, timing, and sanitized error codes.</string>
+    <string name="harness_runtime_refresh_diagnostics">Refresh diagnostics</string>
+    <string name="harness_runtime_copy_diagnostics">Copy diagnostics</string>
+    <string name="harness_runtime_diagnostics_empty">No runtime events have been recorded yet.</string>
+    <string name="harness_runtime_diagnostics_last_updated">Updated %1$s</string>
+    <string name="harness_runtime_duration">Duration: %1$d ms</string>
+    <string name="harness_runtime_exit_code">Exit code: %1$d</string>
+</resources>

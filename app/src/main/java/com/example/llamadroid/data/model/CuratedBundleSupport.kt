@@ -1,7 +1,11 @@
 package com.example.llamadroid.data.model
 
+import android.content.Context
 import androidx.annotation.StringRes
+import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.data.db.isAudioTtsComponentType
+import com.example.llamadroid.data.db.isStableAudioComponentType
 import java.io.File
 import java.security.MessageDigest
 import java.util.Locale
@@ -17,9 +21,19 @@ data class CuratedBundleFile(
     val sizeBytes: Long,
     val sha256: String,
     val license: String,
+    /** Runtime vision capability for the model represented by this file. */
+    val isVision: Boolean = false,
     val strictSize: Boolean = false,
     val note: String = "",
-    val downloadUrlOverride: String? = null
+    val downloadUrlOverride: String? = null,
+    /** Stable role consumed by runtime adapters; never inferred from filename suffixes. */
+    val componentRole: String? = null,
+    /** Native speech family, when this file is an audio component. */
+    val audioFamily: String? = null,
+    /** Native speech language metadata, when the checkpoint fixes one. */
+    val audioLanguage: String? = null,
+    /** Optional semantic identity shared by equivalent files across bundles. */
+    val sharedArtifactKey: String? = null
 ) {
     init {
         require(id.isNotBlank())
@@ -29,19 +43,64 @@ data class CuratedBundleFile(
         require(File(localFilename).name == localFilename)
         require(sizeBytes > 0L)
         require(sha256.matches(Regex("[0-9a-f]{64}")))
+        require(componentRole == null || componentRole.trim().isNotEmpty())
+        require(audioFamily == null || audioFamily.trim().isNotEmpty())
+        require(audioLanguage == null || audioLanguage.trim().isNotEmpty())
+        require(sharedArtifactKey == null || sharedArtifactKey.trim().isNotEmpty())
     }
 
     val downloadUrl: String
         get() = downloadUrlOverride
             ?: "https://huggingface.co/$repoId/resolve/$revision/$remotePath"
 
+    /** Stable source identity retained for provenance and diagnostics. */
+    val sourceIdentity: String
+        get() = "hf:$repoId@$revision:$remotePath"
+
+    /** Stable content identity used for reuse and deletion protection. */
+    val artifactIdentity: String
+        get() = sharedArtifactKey?.trim()
+            ?: "sha256:$sha256"
+
+    /** Payload digest retained separately from source identity for verification. */
+    val artifactDigest: String get() = sha256
+
+    /**
+     * Capability passed to the download finalizer. Projector rows retain the
+     * historical type-based marker; curated main files opt in explicitly so
+     * video/vision bundles cannot lose the capability at install time.
+     */
+    val runtimeIsVision: Boolean
+        get() = isVision || type == ModelType.VISION_PROJECTOR ||
+            type == ModelType.MMPROJ || type == ModelType.VISION
+
     fun installedFilename(prefix: String): String {
         val cleanPrefix = sanitizeCuratedBundlePrefix(prefix)
+        // Shared components use a digest-derived canonical name so a second
+        // bundle reuses the already verified payload instead of downloading a
+        // prefix-specific copy. Main model names retain their bundle prefix.
+        if (sharedArtifactKey != null) {
+            return "shared-${sha256.take(12)}-$localFilename"
+        }
         return if (cleanPrefix.isBlank()) localFilename else "$cleanPrefix-$localFilename"
     }
 
     fun matchesInstalledFilename(filename: String): Boolean =
         filename == localFilename || filename.endsWith("-$localFilename")
+
+    /**
+     * Installed-state check used by bundle UI. Native audio files need both a
+     * physical size and the persisted digest identity; a same-name row alone
+     * is never sufficient because imports and interrupted/corrupt copies can
+     * collide with a curated prefix.
+     */
+    fun matchesVerifiedInstalledModel(expectedFilename: String, model: ModelEntity): Boolean {
+        if (model.filename != expectedFilename || model.type != type || !model.isDownloaded) return false
+        val payload = File(model.path)
+        if (!payload.isFile || payload.length() != sizeBytes) return false
+        return !(type.isAudioTtsComponentType() || type.isStableAudioComponentType()) ||
+            model.audioArtifactIdentity == artifactIdentity
+    }
 }
 
 data class CuratedModelBundle(
@@ -50,7 +109,9 @@ data class CuratedModelBundle(
     @StringRes val descriptionRes: Int,
     val files: List<CuratedBundleFile>,
     val capabilityRes: List<Int> = emptyList(),
-    val defaultPrefix: String = ""
+    val defaultPrefix: String = "",
+    /** Runtime capability, independent of translated titles and install prefixes. */
+    val videoPolicy: VideoRecognitionPolicy? = null
 ) {
     init {
         require(id.matches(Regex("[a-z0-9][a-z0-9_-]*")))
@@ -62,34 +123,166 @@ data class CuratedModelBundle(
     val totalBytes: Long get() = files.sumOf { it.sizeBytes }
 }
 
+/**
+ * A bundle carries vision provenance when it includes a vision projector (or
+ * an equivalent vision model type) or when it has an explicit video policy.
+ * This is derived from the catalog relationship, rather than UI labels.
+ */
+val CuratedModelBundle.isVisionCapable: Boolean
+    get() = videoPolicy != null || files.any {
+        it.type == ModelType.VISION_PROJECTOR ||
+            it.type == ModelType.MMPROJ ||
+            it.type == ModelType.VISION
+    }
+
+/** Returns the vision marker that should be carried into installed metadata. */
+fun CuratedModelBundle.runtimeIsVision(file: CuratedBundleFile): Boolean =
+    file.runtimeIsVision || (isVisionCapable && file.type == ModelType.LLM)
+
+/**
+ * Finds already-installed curated vision rows whose durable marker predates
+ * the catalog capability contract. Matching still requires the same verified
+ * filename, type, size, and downloaded state used by the bundle UI.
+ */
+fun curatedVisionRepairTargets(
+    bundle: CuratedModelBundle,
+    prefix: String,
+    installedModels: List<ModelEntity>
+): List<ModelEntity> = bundle.files.mapNotNull { file ->
+    if (!bundle.runtimeIsVision(file)) return@mapNotNull null
+    val expectedName = file.installedFilename(prefix)
+    installedModels.firstOrNull { model ->
+        !model.isVision && file.matchesVerifiedInstalledModel(expectedName, model)
+    }
+}
+
 fun sanitizeCuratedBundlePrefix(value: String): String {
     val normalized = value.trim()
         .replace(Regex("\\s+"), "-")
         .replace(Regex("[^A-Za-z0-9._-]"), "-")
         .replace(Regex("-+"), "-")
+        .replace(Regex("\\.{2,}"), ".")
         .trim('-', '.', '_')
         .take(48)
-    require('/' !in normalized && '\\' !in normalized && ".." !in normalized) {
-        "Unsafe bundle prefix"
-    }
     return normalized
 }
 
 object CuratedModelBundleRegistry {
     val bundles: List<CuratedModelBundle>
-        get() = LlamaCuratedBundleCatalog.bundles + AdetailerCuratedBundleCatalog.bundles
+        get() = LlamaCuratedBundleCatalog.bundles + AdetailerCuratedBundleCatalog.bundles +
+            AudioCuratedBundleCatalog.bundles
 
     val files: List<CuratedBundleFile>
         get() = bundles.flatMap { it.files }
 
-    fun fileForInstalledFilename(filename: String): CuratedBundleFile? {
-        val matches = files.filter { it.matchesInstalledFilename(filename) }
-        return matches.singleOrNull()
+    /** Context-aware view used by the shared catalog after asset manifests load. */
+    fun bundles(context: Context): List<CuratedModelBundle> =
+        bundles + StableAudioCuratedBundleCatalog.bundles(context)
+
+    fun files(context: Context): List<CuratedBundleFile> =
+        bundles(context).flatMap { it.files }
+
+    fun fileForInstalledFilename(filename: String, context: Context? = null): CuratedBundleFile? {
+        val matches = (context?.let { files(it) } ?: files).filter { it.matchesInstalledFilename(filename) }
+        return matches.singleOrNull() ?: matches
+            .distinctBy { it.artifactIdentity to it.sha256 }
+            .singleOrNull()
     }
+
+    fun fileForDownload(
+        localFilename: String,
+        repoId: String?,
+        sourceUrl: String?,
+        context: Context? = null
+    ): CuratedBundleFile? {
+        val matches = (context?.let { files(it) } ?: files).filter { file ->
+            file.matchesInstalledFilename(localFilename) &&
+                (repoId == null || file.repoId == repoId) &&
+                (sourceUrl == null || file.downloadUrl == sourceUrl)
+        }
+        return matches.singleOrNull() ?: matches
+            .distinctBy { it.artifactIdentity to it.sha256 }
+            .singleOrNull()
+    }
+
+    /**
+     * Resolve a curated component from the bytes that were actually installed.
+     * A source row may only retain a repository URL after redirects or manual
+     * promotion, while the verified digest is still an unambiguous identity.
+     */
+    fun fileForArtifactDigest(
+        digest: String,
+        type: ModelType? = null,
+        context: Context? = null
+    ): CuratedBundleFile? {
+        val normalized = digest.trim()
+            .removePrefix("sha256:")
+            .trim()
+            .lowercase(Locale.US)
+        if (!normalized.matches(Regex("[0-9a-f]{64}"))) return null
+        val matches = (context?.let { files(it) } ?: files).filter { file ->
+            file.sha256.equals(normalized, ignoreCase = true) &&
+                (type == null || file.type == type)
+        }
+        return matches.singleOrNull() ?: matches
+            .distinctBy { it.artifactIdentity to it.sha256 }
+            .singleOrNull()
+    }
+
+    fun filesForArtifactIdentity(identity: String, context: Context? = null): List<CuratedBundleFile> =
+        (context?.let { files(it) } ?: files).filter { it.artifactIdentity == identity }
+
+    /** Static catalog information: whether more than one bundle can use it. */
+    fun isCuratedArtifactShared(identity: String, context: Context? = null): Boolean =
+        (context?.let { bundles(it) } ?: bundles).count { bundle ->
+            bundle.files.any { it.artifactIdentity == identity }
+        } > 1
+
+    /**
+     * Runtime deletion callers supply identities from actual model/provenance
+     * and bundle-item rows. The catalog cannot infer installed references.
+     */
+    fun isArtifactReferenced(identity: String, actualReferences: Set<String>): Boolean =
+        identity in actualReferences
+
+    @Deprecated("Use isArtifactReferenced with actual persisted references")
+    fun isArtifactReferencedByCatalog(identity: String, excludingBundleId: String? = null): Boolean =
+        bundles.any { bundle ->
+            bundle.id != excludingBundleId && bundle.files.any { it.artifactIdentity == identity }
+        }
 }
 
-fun verifyCuratedModelDownload(localFilename: String, downloadedFile: File) {
-    val expected = CuratedModelBundleRegistry.fileForInstalledFilename(localFilename) ?: return
+fun verifyCuratedModelDownload(
+    localFilename: String,
+    downloadedFile: File,
+    repoId: String? = null,
+    sourceUrl: String? = null,
+    context: Context? = null
+) {
+    // A filename is only a presentation key. A custom source can deliberately
+    // reuse a curated basename, so verification is bound to the repository
+    // and exact pinned URL when the download task provides them.
+    val expected = CuratedModelBundleRegistry.fileForDownload(
+        localFilename = localFilename,
+        repoId = repoId,
+        sourceUrl = sourceUrl,
+        context = context
+    ) ?: return
+    verifyCuratedBundleFile(expected, localFilename, downloadedFile)
+}
+
+/**
+ * Verifies a caller-owned catalog entry after the source identity has already
+ * been matched. Dynamic catalogs (for example an asset-backed LiteRT audio
+ * manifest) use this same byte-level check without being added to the static
+ * llama.cpp registry. The filename remains a presentation detail; the
+ * expected digest and size come from the pinned entry.
+ */
+fun verifyCuratedBundleFile(
+    expected: CuratedBundleFile,
+    localFilename: String,
+    downloadedFile: File
+) {
     require(downloadedFile.isFile) { "Downloaded file is missing: ${downloadedFile.absolutePath}" }
     if (expected.strictSize) {
         require(downloadedFile.length() == expected.sizeBytes) {

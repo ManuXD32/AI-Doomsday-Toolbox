@@ -114,6 +114,7 @@ fun AgentTopBar(
     onShowSettings: () -> Unit,
     onShowSetupInfo: () -> Unit,
     onShowProjectManagement: () -> Unit,
+    onShowDetails: () -> Unit,
     onShowCustomTools: () -> Unit,
     onShowCustomAgents: () -> Unit,
     onShowSkills: () -> Unit,
@@ -200,6 +201,11 @@ fun AgentTopBar(
                         onClick = { showMenu = false; onShowProjectManagement() },
                         leadingIcon = { Icon(Icons.Default.Inventory, null) }
                     )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.agent_details_title)) },
+                        onClick = { showMenu = false; onShowDetails() },
+                        leadingIcon = { Icon(Icons.Default.Info, null) }
+                    )
                     HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                     DropdownMenuItem(
                         text = { Text(if (showAllOutput) stringResource(R.string.agent_hide_output) else stringResource(R.string.agent_show_output)) },
@@ -248,10 +254,11 @@ fun AgentWorkspaceConsoleHeader(
     onShowDashboard: () -> Unit,
     onNavigateToWorkspace: () -> Unit,
     onStopAll: () -> Unit,
-    onPlanningModeChanged: (Boolean) -> Unit,
     onShowAgentSettings: () -> Unit,
     onShowKnowledgeBases: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    idleStatusText: String? = null,
+    directRuntimeStatus: AgentDirectRuntimeStatus? = null
 ) {
     val hasProject = !projectPath.isNullOrBlank()
     var expanded by rememberSaveable { mutableStateOf(false) }
@@ -265,7 +272,8 @@ fun AgentWorkspaceConsoleHeader(
     val runtimeLabel = if (isRunning) {
         statusText.takeIf { it.isNotBlank() } ?: stringResource(R.string.agent_console_running)
     } else {
-        stringResource(R.string.agent_console_ready)
+        idleStatusText?.takeIf { it.isNotBlank() }
+            ?: stringResource(R.string.agent_console_ready)
     }
     val contextLabel = contextSnapshot?.let { snapshot ->
         val promptTokens = snapshot.actualPromptTokens ?: snapshot.calibratedRequestTokens ?: snapshot.packedEstimatedTokens
@@ -341,7 +349,6 @@ fun AgentWorkspaceConsoleHeader(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Surface(
-                        onClick = { onPlanningModeChanged(!planningModeEnabled) },
                         shape = RoundedCornerShape(50),
                         color = if (planningModeEnabled) {
                             MaterialTheme.colorScheme.secondaryContainer
@@ -437,26 +444,6 @@ fun AgentWorkspaceConsoleHeader(
                         label = stringResource(R.string.agent_console_last_saved),
                         value = savedLabel
                     )
-                    FilterChip(
-                        selected = planningModeEnabled,
-                        onClick = { onPlanningModeChanged(true) },
-                        label = { Text(stringResource(R.string.agent_mode_plan), maxLines = 1) },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Default.Lock,
-                                null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    )
-                    FilterChip(
-                        selected = !planningModeEnabled,
-                        onClick = { onPlanningModeChanged(false) },
-                        label = { Text(stringResource(R.string.agent_mode_build), maxLines = 1) },
-                        leadingIcon = {
-                            Icon(Icons.Default.LockOpen, null, modifier = Modifier.size(18.dp))
-                        }
-                    )
                     AssistChip(
                         onClick = onShowAgentSettings,
                         label = { Text(stringResource(R.string.agent_settings_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
@@ -484,6 +471,9 @@ fun AgentWorkspaceConsoleHeader(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
+                }
+                directRuntimeStatus?.let { status ->
+                    AgentDirectRuntimeStatusCard(status = status)
                 }
             }
         }

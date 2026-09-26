@@ -327,6 +327,17 @@ fun buildVideoCommandArgs(
 
     if (!config.distributedRuntime.enabled) {
         val binaryFile = File(executablePath)
+        appendSdAutoFitArg(
+            args = args,
+            enabled = false,
+            binaryCapabilities = binaryCapabilities,
+            flagSupported = { flag ->
+                binaryCapabilities == null ||
+                    binaryCapabilities == SdBinaryCapabilities.ALLOW_ALL ||
+                    binaryCapabilities.supports(flag)
+            },
+            onUnsupported = { requiredFlags += "--auto-fit" }
+        )
         appendLocalSdBackendArgs(
             args = args,
             paramsBackendMode = config.sdParamsBackendMode,

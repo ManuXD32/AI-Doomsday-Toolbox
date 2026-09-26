@@ -130,7 +130,12 @@ class FeatureGuideCatalogTest {
                 Screen.Chat.route, Screen.LlamaServers.route, Screen.LlamaServerList.route,
                 Screen.LlamaChatList.route, Screen.LlamaChat.route, Screen.LlamaScheduler.route
             ),
-            "agent" to routes(Screen.Agent.route, Screen.AgentWorkspace.route, Screen.AgentInvocation.route),
+            "agent" to routes(
+                Screen.Agent.route,
+                Screen.AgentWorkspace.route,
+                Screen.AgentProotTerminal.route,
+                Screen.AgentInvocation.route
+            ),
             "organizer" to routes(Screen.NotesManager.route),
             "library" to routes(Screen.Library.route),
             "knowledge" to routes(Screen.KnowledgeBase.route, Screen.KnowledgeChunkReader.route),

@@ -4,6 +4,22 @@ plugins {
     alias(libs.plugins.jetbrains.kotlin.serialization)
 }
 
+val sharedPhoneAssets = rootProject.file("app/src/main/assets")
+val wearAssetStaging = layout.buildDirectory.dir("generated/wearAssets")
+val syncWearAssets = tasks.register<Sync>("syncWearAssets") {
+    into(wearAssetStaging)
+
+    // Keep the complete pre-existing phone asset tree. The new world and animation
+    // trees are staged separately below so the watch receives only lightweight
+    // poster frames from the animation tree.
+    from(sharedPhoneAssets) {
+        exclude("tama/world/**", "tama/animations/**")
+    }
+    from(sharedPhoneAssets) {
+        include("tama/animations/frames/**/*_0.png")
+    }
+}
+
 android {
     namespace = "com.example.llamadroid.wear"
     compileSdk = 36
@@ -52,7 +68,16 @@ android {
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.10"
     }
-    sourceSets["main"].assets.srcDir(rootProject.file("app/src/main/assets"))
+    sourceSets["main"].assets.setSrcDirs(
+        listOf(
+            layout.projectDirectory.dir("src/main/assets"),
+            wearAssetStaging
+        )
+    )
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(syncWearAssets)
 }
 
 configurations.configureEach {

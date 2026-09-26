@@ -7,6 +7,65 @@ import org.junit.Test
 
 class AgentNavigationSupportTest {
     @Test
+    fun `back from a selected project returns to the project dashboard first`() {
+        var dashboardCalls = 0
+        var popCalls = 0
+        var fallbackCalls = 0
+
+        val result = performAgentBackNavigationFromProject(
+            hasActiveProject = true,
+            returnToProjectDashboard = { dashboardCalls++ },
+            popBackStack = {
+                popCalls++
+                true
+            },
+            navigateToTools = { fallbackCalls++ }
+        )
+
+        assertEquals(AgentBackNavigationResult.RETURNED_TO_PROJECT_DASHBOARD, result)
+        assertEquals(1, dashboardCalls)
+        assertEquals(0, popCalls)
+        assertEquals(0, fallbackCalls)
+    }
+
+    @Test
+    fun `back from the dashboard uses the real navigation origin`() {
+        var dashboardCalls = 0
+        var popCalls = 0
+
+        val result = performAgentBackNavigationFromProject(
+            hasActiveProject = false,
+            returnToProjectDashboard = { dashboardCalls++ },
+            popBackStack = {
+                popCalls++
+                true
+            },
+            navigateToTools = {}
+        )
+
+        assertEquals(AgentBackNavigationResult.POPPED_PREVIOUS, result)
+        assertEquals(0, dashboardCalls)
+        assertEquals(1, popCalls)
+    }
+
+    @Test
+    fun `dashboard delegates complete navigation exactly once`() {
+        var navigationCalls = 0
+
+        val result = performAgentBackNavigationFromProject(
+            hasActiveProject = false,
+            returnToProjectDashboard = {},
+            navigateBackToPreviousPage = {
+                navigationCalls++
+                AgentBackNavigationResult.POPPED_PREVIOUS
+            }
+        )
+
+        assertEquals(AgentBackNavigationResult.POPPED_PREVIOUS, result)
+        assertEquals(1, navigationCalls)
+    }
+
+    @Test
     fun `back pops the previous page without invoking Tools fallback`() {
         var fallbackCalls = 0
 

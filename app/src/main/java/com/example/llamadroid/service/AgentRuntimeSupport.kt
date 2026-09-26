@@ -331,6 +331,11 @@ private val PLAN_SAFE_CUSTOM_AGENT_TOOLS = setOf(
 )
 
 private val CRITICAL_AGENT_PROTOCOL_TOOLS = setOf(
+    "read_file",
+    "list_directory",
+    "search_code",
+    "write_file",
+    "edit_file",
     "question",
     "call_agent",
     "propose_plan",
@@ -339,7 +344,11 @@ private val CRITICAL_AGENT_PROTOCOL_TOOLS = setOf(
     "todo_read",
     "todo_write",
     "todo_transition",
-    "tool_help"
+    "tool_help",
+    "run_project",
+    "run_command",
+    "observe_preview",
+    "interact_preview"
 )
 
 internal fun isCriticalAgentProtocolTool(toolName: String): Boolean =
@@ -511,6 +520,45 @@ data class TokenBudgetedRecentTail(
     val targetRecentTokens: Int
 )
 
+private const val COMPACT_HISTORICAL_SUMMARY_MAX_CHARS = 2_400
+
+private val MARKDOWN_HEADING_PATTERN = Regex("^\\s*(#{1,6})\\s+(.+?)\\s*#*\\s*$")
+
+/**
+ * Compaction summaries can predate the current Room control packet. Remove
+ * embedded packet sections before they become optional historical prose so an
+ * old decision cannot compete with the fresh required snapshot.
+ */
+private fun stripEmbeddedProjectControlPacket(summary: String): String {
+    if (summary.isBlank()) return ""
+    val kept = mutableListOf<String>()
+    var packetHeadingLevel: Int? = null
+    summary.replace("\r", "").lines().forEach { line ->
+        val heading = MARKDOWN_HEADING_PATTERN.matchEntire(line)
+        val headingLevel = heading?.groupValues?.getOrNull(1)?.length
+        if (packetHeadingLevel != null) {
+            if (headingLevel == null || headingLevel > packetHeadingLevel!!) {
+                return@forEach
+            }
+            packetHeadingLevel = null
+        }
+        val headingTitle = heading
+            ?.groupValues
+            ?.getOrNull(2)
+            ?.trim()
+            ?.trimEnd('#')
+            ?.trim()
+        if (
+            headingTitle?.equals("Project Control Packet", ignoreCase = true) == true
+        ) {
+            packetHeadingLevel = headingLevel
+            return@forEach
+        }
+        kept += line
+    }
+    return kept.joinToString("\n").trim()
+}
+
 fun buildCompactPromptBasisSections(
     systemPrompt: String,
     initialOrder: String,
@@ -518,24 +566,41 @@ fun buildCompactPromptBasisSections(
     compactionSummary: String,
     compactStateSnapshot: String?
 ): CompactPromptBasisSections {
+    val historicalSummary = stripEmbeddedProjectControlPacket(compactionSummary)
+    val canonicalCoverage = canonicalAgentPromptCoverage(compactStateSnapshot)
+    val normalizedInitialOrder = normalizeAgentPromptCoverageText(initialOrder)
+    val initialOrderCovered = normalizedInitialOrder.isNotBlank() &&
+        canonicalCoverage.initialGoal?.let(::normalizeAgentPromptCoverageText)
+            ?.equals(normalizedInitialOrder, ignoreCase = false) == true
+    val normalizedPlan = planContent?.let(::normalizeAgentPromptCoverageText)
+    val planCovered = normalizedPlan?.isNotBlank() == true &&
+        canonicalCoverage.approvedPlanContent
+            ?.let(::normalizeAgentPromptCoverageText)
+            ?.equals(normalizedPlan, ignoreCase = false) == true
     val required = buildList {
         add(systemPrompt)
-        AgentProjectControlPlane.compactDocumentReference(
-            title = "Initial Order",
-            content = initialOrder,
-            maxChars = 1_400
-        )?.let(::add)
-        AgentProjectControlPlane.compactDocumentReference(
-            title = "Plan",
-            content = planContent,
-            maxChars = 2_000
-        )?.let(::add)
-        add(compactionSummary.take(8_000))
-    }
-    val optional = listOfNotNull(
+        if (!initialOrderCovered) {
+            AgentProjectControlPlane.compactDocumentReference(
+                title = "Initial Order",
+                content = initialOrder,
+                maxChars = 1_400
+            )?.let(::add)
+        }
+        if (!planCovered) {
+            AgentProjectControlPlane.compactDocumentReference(
+                title = "Plan",
+                content = planContent,
+                maxChars = 2_000
+            )?.let(::add)
+        }
         compactStateSnapshot
             ?.takeIf { it.isNotBlank() }
-            ?.take(12_000)
+            ?.let(::add)
+    }
+    val optional = listOfNotNull(
+        historicalSummary
+            .takeIf { it.isNotBlank() }
+            ?.take(COMPACT_HISTORICAL_SUMMARY_MAX_CHARS)
     )
     return CompactPromptBasisSections(
         requiredSections = required,
@@ -760,7 +825,7 @@ fun resolveAgentLiteRtContextTokens(
     model: LiteRtModelEntity?,
     fallbackContextTokens: Int = AGENT_LITERT_FALLBACK_CONTEXT_TOKENS,
     minContextTokens: Int = AGENT_LITERT_MIN_CONTEXT_TOKENS,
-    safeMaxContextTokens: Int = AGENT_LITERT_SAFE_MAX_CONTEXT_TOKENS
+    safeMaxContextTokens: Int = Int.MAX_VALUE
 ): Int {
     val advertisedCap = (model?.defaultLiteRtEngineMaxTokens() ?: fallbackContextTokens)
         .coerceAtLeast(minContextTokens)
@@ -921,7 +986,6 @@ fun sanitizeTerminalTranscript(raw: String): String {
 
 private const val AGENT_LITERT_MIN_CONTEXT_TOKENS = 512
 private const val AGENT_LITERT_FALLBACK_CONTEXT_TOKENS = 4000
-private const val AGENT_LITERT_SAFE_MAX_CONTEXT_TOKENS = 8192
 private const val AGENT_LITERT_MIN_MAX_OUTPUT_TOKENS = 128
 private const val AGENT_LITERT_FALLBACK_MAX_OUTPUT_TOKENS = 8096
 const val AGENT_DEFAULT_MAX_OUTPUT_TOKENS = 8096
@@ -1372,7 +1436,7 @@ internal object AgentRuntimeSupport {
         model: LiteRtModelEntity?,
         fallbackContextTokens: Int = AGENT_LITERT_FALLBACK_CONTEXT_TOKENS,
         minContextTokens: Int = AGENT_LITERT_MIN_CONTEXT_TOKENS,
-        safeMaxContextTokens: Int = AGENT_LITERT_SAFE_MAX_CONTEXT_TOKENS
+        safeMaxContextTokens: Int = Int.MAX_VALUE
     ): Int =
         com.example.llamadroid.service.resolveAgentLiteRtContextTokens(
             savedContextTokens = savedContextTokens,
@@ -1495,13 +1559,17 @@ internal object AgentRuntimeSupport {
     fun parseCustomToolParameterSpecs(parametersJson: String): Map<String, CustomToolParameterSpec> {
         return runCatching {
             val json = JSONObject(parametersJson)
+            val parameterObject = json.optJSONObject("properties")
+                ?.takeIf { json.optString("type").equals("object", ignoreCase = true) }
+                ?: json
             buildMap {
-                json.keys().forEach { key ->
-                    val node = json.opt(key)
+                parameterObject.keys().forEach { key ->
+                    val node = parameterObject.opt(key)
                     val spec = when (node) {
                         is JSONObject -> CustomToolParameterSpec(
                             description = node.optString("description", key),
-                            maxLength = node.optInt("maxLength").takeIf { it > 0 },
+                            maxLength = node.optInt("maxLength").takeIf { it > 0 }
+                                ?: node.optInt("max_length").takeIf { it > 0 },
                             enumValues = node.optJSONArray("enum")?.toStringList().orEmpty()
                         )
                         else -> CustomToolParameterSpec(description = node?.toString().orEmpty().ifBlank { key })
@@ -1958,6 +2026,9 @@ internal object AgentRuntimeSupport {
         val role = agentLabel.trim().uppercase(Locale.ROOT)
         if (role == "CODEBASE_SCOUT") {
             payload = sanitizeCodebaseScoutReportPayload(payload)
+        }
+        if (role == "CODER" && status == "SUCCESS" && payload.has("changed_files")) {
+            requireCoderSuccessEvidence(payload)
         }
 
         val terminalFallback = when (status) {
@@ -2428,9 +2499,7 @@ internal object AgentRuntimeSupport {
                 remainingRisks = json.optJSONArray("remaining_risks").toStringList()
             ).also {
                 if (it.status == "SUCCESS") {
-                    require(it.changedFiles.isNotEmpty()) {
-                        "CoderResult.changed_files must not be empty on success."
-                    }
+                    requireCoderSuccessEvidence(json)
                 }
             }
             "REVIEWER" -> AgentResult.ReviewerResult(
@@ -2493,6 +2562,15 @@ internal object AgentRuntimeSupport {
                 status = status,
                 summary = json.optString("summary").ifBlank { trimmed }
             )
+        }
+    }
+
+    private fun requireCoderSuccessEvidence(payload: JSONObject) {
+        require(payload.optJSONArray("changed_files").toStringList().isNotEmpty()) {
+            "Coder success requires changed_files."
+        }
+        require(payload.optJSONArray("verification_reads").toStringList().isNotEmpty()) {
+            "Coder success requires verification_reads with actual checks or inspected results."
         }
     }
 

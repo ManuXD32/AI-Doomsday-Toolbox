@@ -30,6 +30,10 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -49,6 +53,8 @@ internal object LiteRtLmWorkerProtocol {
     const val MSG_THINKING = 8
     const val MSG_CACHE_STATUS = 9
     const val MSG_CACHE_UNLOAD = 10
+    const val MSG_CANCEL = 11
+    const val MSG_RELEASE_OWNER = 12
 
     const val KEY_REQUEST_ID = "request_id"
     const val KEY_REQUEST_JSON = "request_json"
@@ -59,6 +65,7 @@ internal object LiteRtLmWorkerProtocol {
 class LiteRtLmWorkerService : Service() {
     private val gson = Gson()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val activeRequests = java.util.concurrent.ConcurrentHashMap<String, Job>()
     private val inbound = Messenger(
         Handler(Looper.getMainLooper()) { message ->
             if (message.what == LiteRtLmWorkerProtocol.MSG_START) {
@@ -72,6 +79,14 @@ class LiteRtLmWorkerService : Service() {
                 true
             } else if (message.what == LiteRtLmWorkerProtocol.MSG_CACHE_UNLOAD) {
                 handleCacheUnload(message)
+                true
+            } else if (message.what == LiteRtLmWorkerProtocol.MSG_CANCEL) {
+                message.data.getString(LiteRtLmWorkerProtocol.KEY_REQUEST_ID)?.let { activeRequests[it]?.cancel() }
+                true
+            } else if (message.what == LiteRtLmWorkerProtocol.MSG_RELEASE_OWNER) {
+                handleCacheCommand(message) { service, request ->
+                    service.releaseOwnedEngines(request.params[LITERT_PARAM_ENGINE_OWNER] as? String ?: "").toString()
+                }
                 true
             } else {
                 false
@@ -99,7 +114,7 @@ class LiteRtLmWorkerService : Service() {
             return
         }
 
-        serviceScope.launch {
+        val job = serviceScope.launch(start = CoroutineStart.LAZY) {
             try {
                 replyTo.sendWorkerMessage(
                     what = LiteRtLmWorkerProtocol.MSG_LOG,
@@ -160,6 +175,8 @@ class LiteRtLmWorkerService : Service() {
                     requestId = requestId,
                     statsJson = gson.toJson(LiteRtLmChatStatsDto.from(stats))
                 )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Throwable) {
                 val detail = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.name
                 DebugLog.log("LiteRtLmWorkerService: backend failed: $detail")
@@ -168,8 +185,10 @@ class LiteRtLmWorkerService : Service() {
                     requestId = requestId,
                     text = detail
                 )
-            }
+            } finally { activeRequests.remove(requestId) }
         }
+        val previous = activeRequests.putIfAbsent(requestId, job)
+        if (previous == null) job.start() else job.cancel()
     }
 
     private fun handleDoctor(message: Message) {
@@ -304,7 +323,7 @@ class LiteRtLmWorkerService : Service() {
 
     private fun handleCacheCommand(
         message: Message,
-        block: (LiteRtLmChatService, LiteRtLmChatRequest) -> String
+        block: suspend (LiteRtLmChatService, LiteRtLmChatRequest) -> String
     ) {
         val replyTo = message.replyTo ?: return
         val requestId = message.data.getString(LiteRtLmWorkerProtocol.KEY_REQUEST_ID).orEmpty()
@@ -441,13 +460,15 @@ private data class LiteRtToolDefinitionDto(
     @SerializedName("name") val name: String? = null,
     @SerializedName("description") val description: String? = null,
     @SerializedName("parameters") val parameters: Map<String, String>? = null,
-    @SerializedName("required_params") val requiredParams: List<String>? = null
+    @SerializedName("required_params") val requiredParams: List<String>? = null,
+    @SerializedName("parameter_schema_json") val parameterSchemaJson: String? = null
 ) {
     fun toToolDefinition(): LiteRtToolDefinition = LiteRtToolDefinition(
         name = name.orEmpty(),
         description = description.orEmpty(),
         parameters = parameters.orEmpty(),
-        requiredParams = requiredParams.orEmpty()
+        requiredParams = requiredParams.orEmpty(),
+        parameterSchemaJson = parameterSchemaJson
     )
 
     companion object {
@@ -455,7 +476,8 @@ private data class LiteRtToolDefinitionDto(
             name = tool.name,
             description = tool.description,
             parameters = tool.parameters,
-            requiredParams = tool.requiredParams
+            requiredParams = tool.requiredParams,
+            parameterSchemaJson = tool.parameterSchemaJson
         )
     }
 }
@@ -725,6 +747,21 @@ internal class LiteRtLmWorkerClient(private val context: Context) {
             messageType = LiteRtLmWorkerProtocol.MSG_CACHE_UNLOAD
         ).toIntOrNull() ?: 0
 
+    suspend fun releaseOwnedEngines(request: LiteRtLmChatRequest): Int =
+        streamCacheCommand(request, LiteRtLmWorkerProtocol.MSG_RELEASE_OWNER).toIntOrNull() ?: 0
+
+    /** Cleanup needs only an owner token; no prompt/history or installed model is required. */
+    suspend fun releaseOwnedEngines(owner: String): Int {
+        require(owner.isNotBlank() && owner.length <= 128)
+        val request = LiteRtLmChatRequest(
+            model = LiteRtModelEntity(displayName = "", path = "", filename = ""),
+            chat = LlamaChatEntity(title = "", systemPrompt = ""), history = emptyList(),
+            backendMode = LITERT_BACKEND_CPU, params = mapOf(LITERT_PARAM_ENGINE_OWNER to owner)
+        )
+        return streamCacheCommand(request, LiteRtLmWorkerProtocol.MSG_RELEASE_OWNER).toIntOrNull()
+            ?: error("LITERT_CLEANUP_RESPONSE_INVALID")
+    }
+
     suspend fun runInAppGpuParityDoctor(model: LiteRtModelEntity): LiteRtBackendDoctorResult = withContext(Dispatchers.Default) {
         val appContext = context.applicationContext
         val startedAt = System.currentTimeMillis()
@@ -979,6 +1016,15 @@ internal class LiteRtLmWorkerClient(private val context: Context) {
                 }
             }
         } finally {
+            if (finishedStats == null && serviceMessenger.isCompleted && !serviceMessenger.isCancelled) {
+                withContext(NonCancellable) {
+                    runCatching {
+                        serviceMessenger.await().send(Message.obtain(null, LiteRtLmWorkerProtocol.MSG_CANCEL).apply {
+                            data = Bundle().apply { putString(LiteRtLmWorkerProtocol.KEY_REQUEST_ID, requestId) }
+                        })
+                    }
+                }
+            }
             events.close()
             if (bound) {
                 runCatching { appContext.unbindService(connection) }

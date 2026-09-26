@@ -275,6 +275,7 @@ class AgentRuntimePolicyTest {
         assertTrue(prompt.contains("RESEARCHER"))
         assertTrue(prompt.contains("PLANNER"))
         assertTrue(prompt.contains("omit todo_id"))
+        assertTrue(prompt.contains("Ask at least one structured user question"))
         assertTrue("Plan control prompt grew unexpectedly", prompt.length < 1_000)
     }
 

@@ -126,7 +126,9 @@ data class VideoGenerationConfig(
     val temporalTiling: Boolean = false,
     val promptFormat: SdVideoPromptFormat? = null,
     /** Optional pre-shaped LingBot caption JSON. */
-    val lingBotPromptJson: String? = null
+    val lingBotPromptJson: String? = null,
+    /** Frozen binary selected when a request is added to the generation queue. */
+    val sdBinaryPathOverride: String? = null
 ) : Parcelable
 
 fun VideoGenerationConfig.resolvedLoras(): List<SdLoraSpec> {

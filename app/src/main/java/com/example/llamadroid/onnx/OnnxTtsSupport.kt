@@ -220,7 +220,9 @@ object OnnxTtsStorage {
 }
 
 class SupertonicTtsPipeline(
-    private val context: Context? = null
+    private val context: Context? = null,
+    /** Optional private directory for workspace callers that must not write to the global temp root. */
+    private val outputDirectory: File? = null
 ) {
     fun generate(
         request: OnnxTtsRequest,
@@ -235,7 +237,10 @@ class SupertonicTtsPipeline(
             val paths = OnnxTtsBundleValidator.requirePaths(File(request.modelPath))
             val voice = resolveVoiceFile(paths.voiceStylesDir, request.voiceName)
             val env = OrtEnvironmentProvider.environment
-            val outputWav = context?.let {
+            val outputWav = outputDirectory?.let { directory ->
+                directory.mkdirs()
+                File.createTempFile("onnx_tts_", ".wav", directory)
+            } ?: context?.let {
                 OnnxTtsStorage.buildWavFile(it, OnnxTtsStorage.outputPrefixForSource(request.sourceName))
             }
                 ?: File.createTempFile("onnx_tts_", ".wav")
@@ -294,6 +299,12 @@ class SupertonicTtsPipeline(
                 OnnxTtsStorage.writeMetadata(playable, metadata)
                 if (playable.absolutePath != outputWav.absolutePath) {
                     OnnxTtsStorage.writeMetadata(outputWav, metadata)
+                }
+                if (context != null) {
+                    kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+                        com.example.llamadroid.audio.library.AudioLibraryRepository(context)
+                            .indexLegacyOutput(playable)
+                    }
                 }
                 DebugLog.log("$ONNX_TTS_LOG_TAG Completed generation output=${playable.absolutePath} duration=${result.durationSeconds}s mp3=$mp3Status")
                 onProgress(1f, "Complete")

@@ -8,7 +8,21 @@ import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToInt
 
-const val AGENT_PROMPT_BUDGET_VERSION = 4
+const val AGENT_PROMPT_BUDGET_VERSION = 5
+
+/**
+ * Direct keeps its complete ordinary history until the measured request uses
+ * 80% of the input budget.  This is deliberately separate from the legacy
+ * soft-packing ratios below: those ratios are allowed to tune non-Direct
+ * history, while Direct may compact only at an explicit boundary or during
+ * documented recovery.
+ */
+const val AGENT_DIRECT_COMPACTION_THRESHOLD_RATIO = 0.80
+const val AGENT_DIRECT_COMPACTION_THRESHOLD_PERCENT = 80
+
+private const val AGENT_DIRECT_CAPSULE_INPUT_RATIO = 0.45
+private const val AGENT_DIRECT_CAPSULE_MIN_CHARS = 7_500
+private const val AGENT_DIRECT_CAPSULE_MAX_CHARS = 24_000
 
 enum class AgentPromptCountSource(val wireValue: String) {
     LLAMA_SERVER_EXACT("llama-server exact"),
@@ -31,8 +45,21 @@ data class AgentPromptOutputBudget(
     val effectiveMaxOutputTokens: Int,
     val minimumUsefulOutputTokens: Int,
     val availableOutputTokens: Int,
-    val canSend: Boolean
+    val canSend: Boolean,
+    /**
+     * The output reservation the caller must keep intact for this request.
+     * A request is sendable only when the full configured value fits; a
+     * smaller clamped value is never silently used as a substitute.
+     */
+    val reservedOutputTokens: Int = configuredMaxOutputTokens,
+    val requiredContextTokens: Int = 0,
+    val cannotSendReason: AgentPromptBudgetFailureReason? = null
 )
+
+enum class AgentPromptBudgetFailureReason(val wireValue: String) {
+    CONFIGURED_OUTPUT_DOES_NOT_FIT("configured_output_does_not_fit"),
+    NO_OUTPUT_CAPACITY("no_output_capacity")
+}
 
 data class AgentPromptPackingLimits(
     val triggerTokens: Int,
@@ -195,7 +222,9 @@ data class AgentHardCompactionMetadata(
 fun resolveAgentPromptCapacity(
     configuredContextTokens: Int,
     reportedContextTokens: Int?,
-    exactCountingAvailable: Boolean
+    exactCountingAvailable: Boolean,
+    configuredMaxOutputTokens: Int? = null,
+    fallbackMaxOutputTokens: Int = AGENT_DEFAULT_MAX_OUTPUT_TOKENS
 ): AgentPromptCapacity {
     val configured = configuredContextTokens.coerceAtLeast(512)
     val reported = reportedContextTokens?.takeIf { it > 0 }
@@ -207,14 +236,24 @@ fun resolveAgentPromptCapacity(
         capacity <= 32_768 -> 1_536
         else -> 2_048
     }
-    val safetyReserve = if (exactCountingAvailable) {
-        maxOf(256, capacity / 100)
-    } else {
-        maxOf(1_024, capacity / 10)
-    }
-    val maximumInput = (
+    // Direct Agent invariant: input + reserved output + 512 must fit. When
+    // exact endpoint counting is unavailable the input estimate itself carries
+    // the additional 1.25 conservative factor.
+    val safetyReserve = 512
+    val minimumReserveInput = (
         capacity - minimumGenerationReserve - safetyReserve
     ).coerceAtLeast(1)
+    val configuredOutput = configuredMaxOutputTokens?.let {
+        if (it > 0) it else fallbackMaxOutputTokens
+    }?.coerceAtLeast(1)
+    val maximumInput = if (configuredOutput != null) {
+        minOf(
+            minimumReserveInput,
+            (capacity - safetyReserve - configuredOutput).coerceAtLeast(0)
+        )
+    } else {
+        minimumReserveInput
+    }
     return AgentPromptCapacity(
         configuredContextTokens = configured,
         reportedContextTokens = reported,
@@ -240,18 +279,52 @@ fun resolveAgentPromptOutputBudget(
             authoritativeInputTokens.coerceAtLeast(0) -
             capacity.safetyReserveTokens
     ).coerceAtLeast(0)
-    val effective = minOf(configured, available)
+    // Keep the configured output reservation intact.  Clamping it to the
+    // remaining context makes a request appear sendable while silently
+    // removing the space needed for a structured tool call or terminal answer.
+    val canSend = available >= configured
+    val effective = configured.takeIf { canSend } ?: 0
     val usefulMinimum = minOf(
         configured.coerceAtLeast(1),
         capacity.minimumGenerationReserveTokens
     )
+    val requiredContext = authoritativeInputTokens.coerceAtLeast(0) +
+        capacity.safetyReserveTokens + configured
     return AgentPromptOutputBudget(
         configuredMaxOutputTokens = configured,
-        effectiveMaxOutputTokens = effective.coerceAtLeast(0),
+        effectiveMaxOutputTokens = effective,
         minimumUsefulOutputTokens = usefulMinimum,
         availableOutputTokens = available,
-        canSend = effective >= usefulMinimum
+        canSend = canSend,
+        reservedOutputTokens = configured,
+        requiredContextTokens = requiredContext,
+        cannotSendReason = if (canSend) {
+            null
+        } else if (available <= 0) {
+            AgentPromptBudgetFailureReason.NO_OUTPUT_CAPACITY
+        } else {
+            AgentPromptBudgetFailureReason.CONFIGURED_OUTPUT_DOES_NOT_FIT
+        }
     )
+}
+
+/**
+ * Maximum input that can be packed while preserving a caller's complete
+ * configured output reservation and the safety reserve.
+ */
+fun maximumAgentPromptInputTokensForOutput(
+    capacity: AgentPromptCapacity,
+    configuredMaxOutputTokens: Int,
+    fallbackMaxOutputTokens: Int = AGENT_DEFAULT_MAX_OUTPUT_TOKENS
+): Int {
+    val configured = configuredMaxOutputTokens
+        .takeIf { it > 0 }
+        ?: fallbackMaxOutputTokens
+    return (
+        capacity.contextCapacityTokens -
+            capacity.safetyReserveTokens -
+            configured.coerceAtLeast(1)
+    ).coerceAtLeast(0)
 }
 
 fun resolveAgentPromptPackingLimits(
@@ -282,6 +355,80 @@ fun resolveAgentPromptPackingLimits(
         triggerTokens = trigger,
         targetTokens = target,
         maximumCompactedTokens = trigger
+    )
+}
+
+/**
+ * Returns the Direct threshold in input tokens without rounding down into an
+ * early compaction.  Ceiling is important for capacities that are not evenly
+ * divisible by 100: a request must reach, rather than merely approach, 80%.
+ */
+fun directPromptCompactionThresholdTokens(
+    availableInputTokens: Int,
+    thresholdRatio: Double = AGENT_DIRECT_COMPACTION_THRESHOLD_RATIO
+): Int {
+    require(thresholdRatio in 0.0..1.0)
+    val available = availableInputTokens.coerceAtLeast(0)
+    if (available == 0) return 0
+    return ceil(available * thresholdRatio)
+        .toInt()
+        .coerceIn(0, available)
+}
+
+/** True when measured input has reached the Direct compaction boundary. */
+fun directPromptCompactionThresholdReached(
+    measuredInputTokens: Int,
+    availableInputTokens: Int,
+    thresholdRatio: Double = AGENT_DIRECT_COMPACTION_THRESHOLD_RATIO
+): Boolean {
+    if (availableInputTokens <= 0) return false
+    return measuredInputTokens.coerceAtLeast(0) >=
+        directPromptCompactionThresholdTokens(availableInputTokens, thresholdRatio)
+}
+
+/**
+ * Direct ordinary packing has no arbitrary target below its measured
+ * threshold.  The target is intentionally equal to the threshold because
+ * callers must opt into compaction/recovery before using a destructive pack.
+ * Compact mode keeps the existing 50% hard-compaction target.
+ */
+fun resolveDirectPromptPackingLimits(
+    maximumInputTokens: Int,
+    compactMode: Boolean = false
+): AgentPromptPackingLimits {
+    val available = maximumInputTokens.coerceAtLeast(1)
+    if (compactMode) {
+        return resolveAgentPromptPackingLimits(
+            maximumInputTokens = available,
+            softTargetRatio = 0.50,
+            compactMode = true
+        ).copy(
+            triggerTokens = directPromptCompactionThresholdTokens(available)
+        )
+    }
+    val threshold = directPromptCompactionThresholdTokens(available)
+    return AgentPromptPackingLimits(
+        triggerTokens = threshold,
+        targetTokens = threshold,
+        maximumCompactedTokens = threshold
+    )
+}
+
+/**
+ * Bounds the authoritative Direct capsule against the real input budget.
+ *
+ * A fixed character ceiling can reject valid state as soon as the first
+ * artifact receipt is added to an approved plan, even while thousands of
+ * measured input tokens remain available. The capsule may use at most 45% of
+ * the input window (using the deliberately conservative four chars/token
+ * projection); exact request counting remains the final send gate.
+ */
+fun resolveDirectControlCapsuleMaxChars(maximumInputTokens: Int): Int {
+    val budgetedChars = (maximumInputTokens.coerceAtLeast(1) *
+        AGENT_DIRECT_CAPSULE_INPUT_RATIO * 4.0).toInt()
+    return budgetedChars.coerceIn(
+        AGENT_DIRECT_CAPSULE_MIN_CHARS,
+        AGENT_DIRECT_CAPSULE_MAX_CHARS
     )
 }
 
@@ -593,5 +740,5 @@ fun resolveHardCompactionRecentTailBudget(
             requiredPrimacyTokens.coerceAtLeast(0) -
             toolSchemaTokens.coerceAtLeast(0) -
             summaryTarget
-    ).coerceAtLeast(0)
+    ).coerceIn(0, 4_096)
 }

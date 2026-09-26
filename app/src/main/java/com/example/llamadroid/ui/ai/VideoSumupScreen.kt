@@ -35,7 +35,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -45,15 +44,24 @@ import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.db.NoteType
-import com.example.llamadroid.service.RemoteSummaryClientFactory
+import com.example.llamadroid.data.model.VideoRecognitionBundleCatalog
 import com.example.llamadroid.service.VideoSummaryStateHolder
 import com.example.llamadroid.service.VideoSumupService
+import com.example.llamadroid.service.VideoRecognitionAudioFallbackRequest
+import com.example.llamadroid.service.VideoRecognitionLimits
+import com.example.llamadroid.service.VideoProcessingMode
+import com.example.llamadroid.service.VideoRecognitionSettingsRepository
+import com.example.llamadroid.service.VideoRecognitionSummaryRequest
+import com.example.llamadroid.service.VideoRecognitionSummaryService
+import com.example.llamadroid.service.VideoRecognitionSummaryStatus
+import com.example.llamadroid.service.VideoRecognitionTarget
+import com.example.llamadroid.service.VideoRecognitionTargetSelector
+import com.example.llamadroid.service.videoRecognitionTargetFromBundle
 import com.example.llamadroid.service.WhisperLanguages
 import com.example.llamadroid.service.WhisperVadAssetStore
 import com.example.llamadroid.ui.components.IntInputField
 import com.example.llamadroid.ui.components.IntSliderWithInput
 import com.example.llamadroid.ui.components.WhisperVadInlineControl
-import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.ui.components.SliderWithInput
 import com.example.llamadroid.ui.components.SummaryMarkdownCard
 import com.example.llamadroid.ui.components.AppTaskActionFooter
@@ -66,11 +74,14 @@ import java.io.File
 fun VideoSumupScreen(navController: NavController) {
     val context = LocalContext.current
     val walkthroughTargets = LocalWalkthroughTargets.current
-    val resources = LocalResources.current
+    val resources = context.resources
     val settingsRepo = remember { SettingsRepository(context) }
+    val videoRecognitionSettings = remember { VideoRecognitionSettingsRepository(context) }
     val db = remember { AppDatabase.getDatabase(context) }
 
+    val allModels by db.modelDao().getAllModels().collectAsState(initial = emptyList())
     val whisperModels by db.modelDao().getModelsByType(ModelType.WHISPER).collectAsState(initial = emptyList())
+    val llamaServers by db.llamaServerDao().getAllServers().collectAsState(initial = emptyList())
     var selectedWhisperPath by rememberSaveable {
         mutableStateOf(settingsRepo.videoSumupWhisperModelPath.value)
     }
@@ -89,17 +100,63 @@ fun VideoSumupScreen(navController: NavController) {
     val projectedChunkCount by VideoSummaryStateHolder.projectedChunkCount.collectAsState()
     val cancelled by VideoSummaryStateHolder.cancelled.collectAsState()
 
+    val visualState by VideoRecognitionSummaryService.state.collectAsState()
+    // Keep the live UI bounded for long videos; the coordinator retains the full list for
+    // hierarchical merging and only exposes the latest observations as a progress preview.
+    val visualPartialSummaries = visualState.partialSummaries.takeLast(3)
+    val videoSavedTargetId by videoRecognitionSettings.savedTargetId.collectAsState()
+    val videoProcessingMode by videoRecognitionSettings.processingMode.collectAsState()
+    val videoRemoteEnabled by videoRecognitionSettings.remoteEnabled.collectAsState()
+    val videoAudioEnabled by videoRecognitionSettings.audioEnabled.collectAsState()
+    val videoParallelWhisperEnabled by videoRecognitionSettings.parallelWhisperEnabled.collectAsState()
+    val videoSegmentSeconds by videoRecognitionSettings.segmentSeconds.collectAsState()
+    val videoMaxFrames by videoRecognitionSettings.maxFrames.collectAsState()
+    val videoMaxFps by videoRecognitionSettings.maxFps.collectAsState()
+    val videoTargetLanguage by videoRecognitionSettings.targetLanguage.collectAsState()
+    val videoPrompt by videoRecognitionSettings.prompt.collectAsState()
+    val videoContextSize by videoRecognitionSettings.contextSize.collectAsState()
+    val videoMaxTokens by videoRecognitionSettings.maxTokens.collectAsState()
+    val videoTemperature by videoRecognitionSettings.temperature.collectAsState()
+
+    val installedVideoBundles = remember(allModels) {
+        VideoRecognitionBundleCatalog.installedBundles(allModels)
+    }
+    val localVideoTargets = remember(installedVideoBundles, allModels) {
+        installedVideoBundles.mapNotNull { bundle ->
+            videoRecognitionTargetFromBundle(
+                bundle = bundle,
+                installedModels = VideoRecognitionBundleCatalog.installedModels(bundle, allModels)
+            )
+        }
+    }
+    val selectedLocalTarget = remember(videoSavedTargetId, localVideoTargets) {
+        VideoRecognitionTargetSelector.select(videoSavedTargetId, localVideoTargets)
+    }
+    val selectedLocalBundle = remember(selectedLocalTarget, installedVideoBundles) {
+        installedVideoBundles.firstOrNull { it.id == selectedLocalTarget?.id }
+    }
+    val remoteVideoTargets = remember(llamaServers) {
+        llamaServers.mapNotNull { VideoRecognitionTarget.fromServer(it) }
+    }
+    val selectedRemoteTarget = remember(videoSavedTargetId, remoteVideoTargets) {
+        VideoRecognitionTargetSelector.selectRemote(videoSavedTargetId, remoteVideoTargets).target
+    }
+    val selectedVisualTarget = remember(videoSavedTargetId, localVideoTargets, remoteVideoTargets) {
+        VideoRecognitionTargetSelector.selectConfigured(
+            savedTargetId = videoSavedTargetId,
+            localTargets = localVideoTargets,
+            remoteTargets = remoteVideoTargets
+        ).target
+    }
+    // A remote row is shown only after it is explicitly persisted. With no saved target the
+    // coordinator uses the verified local sole/recommended bundle and never auto-selects remote.
+    val showRemoteTarget = videoRemoteEnabled ||
+        videoSavedTargetId?.startsWith("remote-server:") == true
+
     val whisperLanguage by settingsRepo.videoSummaryWhisperLanguage.collectAsState()
     val whisperThreads by settingsRepo.videoSummaryWhisperThreads.collectAsState()
     val whisperVad by settingsRepo.whisperVadConfig.collectAsState()
     val effectiveWhisperVadPath = WhisperVadAssetStore.resolvePath(context, whisperVad.modelPath)
-    val backend by settingsRepo.videoSummaryBackend.collectAsState()
-    val ollamaUrl by settingsRepo.videoSummaryOllamaUrl.collectAsState()
-    val llamaServerUrl by settingsRepo.videoSummaryLlamaServerUrl.collectAsState()
-    val llamaSwapUrl by settingsRepo.videoSummaryLlamaSwapUrl.collectAsState()
-    val ollamaModel by settingsRepo.videoSummaryOllamaModel.collectAsState()
-    val llamaSwapModel by settingsRepo.videoSummaryLlamaSwapModel.collectAsState()
-    val thinkingEnabled by settingsRepo.videoSummaryThinkingEnabled.collectAsState()
     val videoSummaryPrompt by settingsRepo.videoSummaryPrompt.collectAsState()
     val targetLanguage by settingsRepo.videoSummaryTargetLanguage.collectAsState()
     val chunkContext by settingsRepo.videoSummaryChunkContext.collectAsState()
@@ -108,12 +165,7 @@ fun VideoSumupScreen(navController: NavController) {
     val mergeMaxTokens by settingsRepo.videoSummaryMergeMaxTokens.collectAsState()
     val temperature by settingsRepo.videoSummaryTemperature.collectAsState()
     val timeoutMinutes by settingsRepo.videoSummaryTimeoutMinutes.collectAsState()
-    val serverModelLabel by settingsRepo.videoSummaryLlamaServerModelLabel.collectAsState()
-    val serverContextLabel by settingsRepo.videoSummaryLlamaServerContextLabel.collectAsState()
-    val serverContextTokens by settingsRepo.videoSummaryLlamaServerContextTokens.collectAsState()
-    val liteRtModelId by settingsRepo.videoSummaryLiteRtModelId.collectAsState()
-    val liteRtBackend by settingsRepo.videoSummaryLiteRtBackend.collectAsState()
-    val liteRtMtpEnabled by settingsRepo.videoSummaryLiteRtMtpEnabled.collectAsState()
+    val thinkingEnabled by settingsRepo.videoSummaryThinkingEnabled.collectAsState()
 
     LaunchedEffect(whisperModels) {
         val selectedStillExists = whisperModels.any { it.path == selectedWhisperPath }
@@ -123,54 +175,58 @@ fun VideoSumupScreen(navController: NavController) {
         }
     }
 
+    LaunchedEffect(visualState.status) {
+        if (!visualState.isRunning) {
+            videoRecognitionSettings.refreshSavedTargetId()
+        }
+    }
+
     val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let {
             try {
                 context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             } catch (_: Exception) {
             }
-            if (isRunning) return@let
+            if (isRunning || visualState.isRunning) return@let
             VideoSummaryStateHolder.reset()
+            VideoRecognitionSummaryService.clear()
             VideoSummaryStateHolder.setSelectedSourceUri(it.toString())
             VideoSummaryStateHolder.setSelectedSourceName(it.lastPathSegment ?: resources.getString(R.string.video_sumup_video_placeholder))
         }
     }
 
-    val backendReady = when (SettingsRepository.normalizeOllamaOrLlamaBackend(backend)) {
-        SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> llamaServerUrl.isNotBlank()
-        SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> llamaSwapUrl.isNotBlank() && !llamaSwapModel.isNullOrBlank()
-        else -> ollamaUrl.isNotBlank() && !ollamaModel.isNullOrBlank()
-    }
+    val anySummaryRunning = isRunning || visualState.isRunning
+    val visualTargetAvailable = selectedVisualTarget != null
+    val audioFallbackAvailable = selectedWhisperPath != null &&
+        (!whisperVad.enabled || effectiveWhisperVadPath != null)
 
-    fun persistMetadata(metadata: com.example.llamadroid.service.RemoteSummaryMetadata) {
-        if (SettingsRepository.isLlamaServerBackend(metadata.backend)) {
-            settingsRepo.setVideoSummaryLlamaServerModelLabel(metadata.serverModelLabel)
-            settingsRepo.setVideoSummaryLlamaServerContextTokens(metadata.serverContextTokens)
-            settingsRepo.setVideoSummaryLlamaServerContextLabel(metadata.serverContextLabel)
-        }
-    }
-
-    fun startSummary() {
+    fun startSummary(forceAudioFallback: Boolean = false) {
         val selectedUri = selectedVideoString?.let(Uri::parse) ?: return
-        val videoPath = context.contentResolver.openInputStream(selectedUri)?.use { input ->
-            val tempFile = File(context.cacheDir, "temp_video.mp4")
-            tempFile.outputStream().use { output -> input.copyTo(output) }
-            tempFile.absolutePath
-        }
-        if (videoPath != null && selectedWhisperPath != null && backendReady) {
-            walkthroughTargets?.recordEvent("documents.summary.input")
-            VideoSumupService.startSummarization(
-                context = context,
-                videoPath = videoPath,
-                videoFileName = selectedVideoName ?: resources.getString(R.string.video_sumup_video_placeholder),
-                whisperModelPath = selectedWhisperPath!!,
-                language = whisperLanguage,
-                threads = whisperThreads,
-                vadConfig = settingsRepo.whisperVadConfigSnapshot(),
+        walkthroughTargets?.recordEvent("documents.summary.input")
+        val legacySettings = settingsRepo.videoSummarySettings.snapshot()
+        VideoRecognitionSummaryService.start(
+            context = context,
+            request = VideoRecognitionSummaryRequest(
+                sourceUri = selectedUri,
+                sourceName = selectedVideoName
+                    ?: resources.getString(R.string.video_sumup_video_placeholder),
+                localTargets = localVideoTargets,
+                remoteTargets = remoteVideoTargets,
+                settings = videoRecognitionSettings.snapshot(),
+                audioFallback = VideoRecognitionAudioFallbackRequest(
+                    whisperModelPath = selectedWhisperPath.takeIf { audioFallbackAvailable },
+                    language = whisperLanguage,
+                    threads = whisperThreads,
+                    vadConfig = settingsRepo.whisperVadConfigSnapshot(),
+                    settingsOverride = legacySettings,
+                    saveToNotes = true,
+                    noteType = NoteType.VIDEO_SUMMARY
+                ),
+                forceAudioFallback = forceAudioFallback,
                 saveToNotes = true,
                 noteType = NoteType.VIDEO_SUMMARY
             )
-        }
+        )
     }
 
     Scaffold(
@@ -204,6 +260,291 @@ fun VideoSumupScreen(navController: NavController) {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.32f)
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        stringResource(R.string.video_recognition_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        stringResource(R.string.video_recognition_description),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    var modeMenuExpanded by remember { mutableStateOf(false) }
+                    ExposedDropdownMenuBox(
+                        expanded = modeMenuExpanded,
+                        onExpandedChange = { if (!isRunning && !visualState.isRunning) modeMenuExpanded = it }
+                    ) {
+                        OutlinedTextField(
+                            value = when (videoProcessingMode) {
+                                VideoProcessingMode.AUTO_MULTIMODAL ->
+                                    stringResource(R.string.video_recognition_mode_auto)
+                                VideoProcessingMode.VISUAL_WHISPER ->
+                                    stringResource(R.string.video_recognition_mode_visual_whisper)
+                                VideoProcessingMode.LEGACY_TRANSCRIPT ->
+                                    stringResource(R.string.video_recognition_mode_legacy)
+                            },
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text(stringResource(R.string.video_recognition_processing_mode)) },
+                            trailingIcon = {
+                                ExposedDropdownMenuDefaults.TrailingIcon(expanded = modeMenuExpanded)
+                            },
+                            modifier = Modifier.menuAnchor().fillMaxWidth()
+                        )
+                        ExposedDropdownMenu(
+                            expanded = modeMenuExpanded,
+                            onDismissRequest = { modeMenuExpanded = false }
+                        ) {
+                            listOf(
+                                VideoProcessingMode.AUTO_MULTIMODAL to R.string.video_recognition_mode_auto,
+                                VideoProcessingMode.VISUAL_WHISPER to R.string.video_recognition_mode_visual_whisper,
+                                VideoProcessingMode.LEGACY_TRANSCRIPT to R.string.video_recognition_mode_legacy
+                            ).forEach { (mode, labelRes) ->
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(labelRes)) },
+                                    onClick = {
+                                        videoRecognitionSettings.setProcessingMode(mode)
+                                        modeMenuExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        stringResource(R.string.video_recognition_processing_mode_help),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(stringResource(R.string.video_recognition_remote_target))
+                        Switch(
+                            checked = videoRemoteEnabled,
+                            onCheckedChange = videoRecognitionSettings::setRemoteEnabled,
+                            enabled = !anySummaryRunning
+                        )
+                    }
+
+                    if (showRemoteTarget) {
+                        var remoteTargetMenuExpanded by remember { mutableStateOf(false) }
+                        ExposedDropdownMenuBox(
+                            expanded = remoteTargetMenuExpanded,
+                            onExpandedChange = { if (!anySummaryRunning) remoteTargetMenuExpanded = it }
+                        ) {
+                            OutlinedTextField(
+                                value = selectedRemoteTarget?.label
+                                    ?: stringResource(R.string.video_recognition_remote_server_placeholder),
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text(stringResource(R.string.video_recognition_remote_target)) },
+                                trailingIcon = {
+                                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = remoteTargetMenuExpanded)
+                                },
+                                modifier = Modifier.menuAnchor().fillMaxWidth()
+                            )
+                            ExposedDropdownMenu(
+                                expanded = remoteTargetMenuExpanded,
+                                onDismissRequest = { remoteTargetMenuExpanded = false }
+                            ) {
+                                remoteVideoTargets.forEach { target ->
+                                    DropdownMenuItem(
+                                        text = { Text(target.label) },
+                                        onClick = {
+                                            videoRecognitionSettings.setSavedTargetId(target.id)
+                                            remoteTargetMenuExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        if (remoteVideoTargets.isEmpty()) {
+                            Text(
+                                stringResource(R.string.video_recognition_no_remote_server),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            if (selectedRemoteTarget == null && selectedLocalTarget != null) {
+                                Text(
+                                    stringResource(R.string.video_recognition_remote_default_local),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text(
+                                stringResource(R.string.video_recognition_remote_video_help),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        var targetMenuExpanded by remember { mutableStateOf(false) }
+                        val localTargetLabel = selectedLocalBundle?.let { resources.getString(it.titleRes) }
+                            ?: stringResource(R.string.video_recognition_bundle_placeholder)
+                        ExposedDropdownMenuBox(
+                            expanded = targetMenuExpanded,
+                            onExpandedChange = { if (!anySummaryRunning) targetMenuExpanded = it }
+                        ) {
+                            OutlinedTextField(
+                                value = localTargetLabel,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text(stringResource(R.string.video_recognition_local_target)) },
+                                trailingIcon = {
+                                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = targetMenuExpanded)
+                                },
+                                modifier = Modifier.menuAnchor().fillMaxWidth()
+                            )
+                            ExposedDropdownMenu(
+                                expanded = targetMenuExpanded,
+                                onDismissRequest = { targetMenuExpanded = false }
+                            ) {
+                                localVideoTargets.forEach { target ->
+                                    val bundle = installedVideoBundles.firstOrNull { it.id == target.id }
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(bundle?.let { resources.getString(it.titleRes) } ?: target.label)
+                                        },
+                                        onClick = {
+                                            videoRecognitionSettings.setSavedTargetId(target.id)
+                                            targetMenuExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        if (installedVideoBundles.isEmpty()) {
+                            Text(
+                                stringResource(R.string.video_recognition_no_model),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Text(
+                        stringResource(
+                            R.string.video_recognition_policy,
+                            videoSegmentSeconds,
+                            videoMaxFrames,
+                            videoMaxFps
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            stringResource(R.string.video_recognition_audio_enabled),
+                            modifier = Modifier.weight(1f)
+                        )
+                        Switch(
+                            checked = videoAudioEnabled,
+                            onCheckedChange = videoRecognitionSettings::setAudioEnabled,
+                            enabled = !anySummaryRunning &&
+                                visualTargetAvailable &&
+                                videoProcessingMode == VideoProcessingMode.AUTO_MULTIMODAL
+                        )
+                    }
+                    Text(
+                        stringResource(R.string.video_recognition_audio_enabled_help),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (videoAudioEnabled && selectedVisualTarget?.supportsAudio != true) {
+                        Text(
+                            stringResource(R.string.video_recognition_audio_unsupported),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.tertiary
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            stringResource(R.string.video_recognition_parallel_whisper),
+                            modifier = Modifier.weight(1f)
+                        )
+                        Switch(
+                            checked = videoParallelWhisperEnabled,
+                            onCheckedChange = videoRecognitionSettings::setParallelWhisperEnabled,
+                            enabled = !anySummaryRunning && audioFallbackAvailable
+                        )
+                    }
+                    Text(
+                        stringResource(R.string.video_recognition_parallel_whisper_help),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    IntSliderWithInput(
+                        value = videoSegmentSeconds,
+                        onValueChange = videoRecognitionSettings::setSegmentSeconds,
+                        valueRange = 5..VideoRecognitionLimits.MAX_SEGMENT_SECONDS,
+                        label = stringResource(R.string.video_recognition_segment_seconds)
+                    )
+                    IntSliderWithInput(
+                        value = videoMaxFrames,
+                        onValueChange = videoRecognitionSettings::setMaxFrames,
+                        valueRange = 1..VideoRecognitionLimits.DEFAULT_MAX_FRAMES,
+                        label = stringResource(R.string.video_recognition_max_frames)
+                    )
+                    SliderWithInput(
+                        value = videoMaxFps,
+                        onValueChange = videoRecognitionSettings::setMaxFps,
+                        valueRange = 0.1f..VideoRecognitionLimits.DEFAULT_MAX_FPS,
+                        label = stringResource(R.string.video_recognition_max_fps),
+                        decimalPlaces = 2
+                    )
+                    OutlinedTextField(
+                        value = videoTargetLanguage,
+                        onValueChange = videoRecognitionSettings::setTargetLanguage,
+                        label = { Text(stringResource(R.string.video_recognition_target_language)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = videoPrompt,
+                        onValueChange = videoRecognitionSettings::setPrompt,
+                        label = { Text(stringResource(R.string.video_recognition_prompt)) },
+                        minLines = 3,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    IntInputField(
+                        value = videoContextSize,
+                        onValueChange = videoRecognitionSettings::setContextSize,
+                        label = stringResource(R.string.video_recognition_context_size)
+                    )
+                    IntInputField(
+                        value = videoMaxTokens,
+                        onValueChange = videoRecognitionSettings::setMaxTokens,
+                        label = stringResource(R.string.video_recognition_max_tokens)
+                    )
+                    SliderWithInput(
+                        value = videoTemperature,
+                        onValueChange = videoRecognitionSettings::setTemperature,
+                        valueRange = 0f..2f,
+                        label = stringResource(R.string.video_recognition_temperature),
+                        decimalPlaces = 1
+                    )
+                }
+            }
+
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(stringResource(R.string.video_sumup_whisper_label), fontWeight = FontWeight.Bold)
@@ -280,40 +621,8 @@ fun VideoSumupScreen(navController: NavController) {
                 }
             }
 
-            RemoteSummaryBackendEditor(
-                title = stringResource(R.string.video_summary_remote_settings_title),
-                backend = backend,
-                onBackendChange = settingsRepo::setVideoSummaryBackend,
-                ollamaUrl = ollamaUrl,
-                onOllamaUrlChange = settingsRepo::setVideoSummaryOllamaUrl,
-                llamaServerUrl = llamaServerUrl,
-                onLlamaServerUrlChange = settingsRepo::setVideoSummaryLlamaServerUrl,
-                llamaSwapUrl = llamaSwapUrl,
-                onLlamaSwapUrlChange = settingsRepo::setVideoSummaryLlamaSwapUrl,
-                ollamaModel = ollamaModel,
-                onOllamaModelSelected = settingsRepo::setVideoSummaryOllamaModel,
-                llamaSwapModel = llamaSwapModel,
-                onLlamaSwapModelSelected = settingsRepo::setVideoSummaryLlamaSwapModel,
-                llamaServerModelLabel = serverModelLabel,
-                llamaServerContextLabel = serverContextLabel,
-                llamaServerContextTokens = serverContextTokens,
-                requestedContextForWarning = mergeContext,
-                liteRtModelId = liteRtModelId.takeIf { it > 0L },
-                onLiteRtModelSelected = settingsRepo::setVideoSummaryLiteRtModelId,
-                liteRtBackend = liteRtBackend,
-                onLiteRtBackendChange = settingsRepo::setVideoSummaryLiteRtBackend,
-                liteRtMtpEnabled = liteRtMtpEnabled,
-                onLiteRtMtpEnabledChange = settingsRepo::setVideoSummaryLiteRtMtpEnabled,
-                liteRtThinkingEnabled = thinkingEnabled,
-                onLiteRtThinkingEnabledChange = settingsRepo::setVideoSummaryThinkingEnabled,
-                fetchMetadata = {
-                    RemoteSummaryClientFactory.fromSnapshot(context, settingsRepo.videoSummarySettings.snapshot())
-                        .fetchMetadata()
-                },
-                onMetadataLoaded = ::persistMetadata
-            )
-
-            Card(modifier = Modifier.fillMaxWidth()) {
+            if (videoProcessingMode == VideoProcessingMode.LEGACY_TRANSCRIPT) {
+                Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(stringResource(R.string.workflow_step_summarize), fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(8.dp))
@@ -380,6 +689,7 @@ fun VideoSumupScreen(navController: NavController) {
                         )
                     }
                 }
+                }
             }
 
             if (selectedVideoString == null) {
@@ -388,7 +698,7 @@ fun VideoSumupScreen(navController: NavController) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .walkthroughTarget("documents.summary.input"),
-                    enabled = !isRunning
+                    enabled = !anySummaryRunning
                 ) {
                     Icon(Icons.Default.PlayArrow, null)
                     Spacer(modifier = Modifier.size(8.dp))
@@ -403,8 +713,13 @@ fun VideoSumupScreen(navController: NavController) {
                     androidx.compose.foundation.layout.Row(modifier = Modifier.padding(16.dp)) {
                         Text(selectedVideoName ?: stringResource(R.string.video_sumup_video_placeholder), modifier = Modifier.weight(1f))
                         IconButton(
-                            onClick = { if (!isRunning) VideoSummaryStateHolder.reset() },
-                            enabled = !isRunning
+                            onClick = {
+                                if (!anySummaryRunning) {
+                                    VideoSummaryStateHolder.reset()
+                                    VideoRecognitionSummaryService.clear()
+                                }
+                            },
+                            enabled = !anySummaryRunning
                         ) {
                             Icon(Icons.Default.Close, stringResource(R.string.action_remove))
                         }
@@ -444,6 +759,139 @@ fun VideoSumupScreen(navController: NavController) {
                         }
                     }
                 } else {
+                }
+            }
+
+            if (visualState.status != VideoRecognitionSummaryStatus.IDLE &&
+                visualState.status != VideoRecognitionSummaryStatus.CANCELLED
+            ) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.3f)
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            visualState.message.ifBlank {
+                                stringResource(R.string.video_recognition_progress_preparing)
+                            },
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        if (visualState.isRunning) {
+                            LinearProgressIndicator(
+                                progress = { visualState.progress.coerceIn(0f, 1f) },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        if (visualState.visualPhase.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                stringResource(
+                                    R.string.video_recognition_visual_phase,
+                                    visualState.visualPhase
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2
+                            )
+                        }
+                        if (visualState.audioPhase.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                stringResource(
+                                    R.string.video_recognition_audio_phase,
+                                    visualState.audioPhase
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2
+                            )
+                        }
+                        if (visualState.sourceDurationSeconds > 0.0) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                stringResource(
+                                    R.string.video_recognition_processed_percentage,
+                                    visualState.processedFraction * 100f,
+                                    visualState.processedSeconds.toFloat(),
+                                    visualState.sourceDurationSeconds.toFloat()
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (visualState.totalSegments > 0) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                stringResource(
+                                    R.string.video_recognition_segment_count,
+                                    visualState.currentSegment.coerceAtLeast(1),
+                                    visualState.totalSegments
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (visualPartialSummaries.isNotEmpty()) {
+                SummaryMarkdownCard(
+                    title = stringResource(R.string.video_recognition_partial_label),
+                    markdown = visualPartialSummaries.mapIndexed { index, part ->
+                        "### ${resources.getString(R.string.summary_partial_item_label, visualState.partialSummaries.size - visualPartialSummaries.size + index + 1)}\n$part"
+                    }.joinToString("\n\n")
+                )
+            }
+
+            if (visualState.summary.isNotBlank()) {
+                SummaryMarkdownCard(
+                    title = stringResource(R.string.video_recognition_summary_label),
+                    markdown = visualState.summary
+                )
+            }
+
+            if (visualState.transcript.isNotBlank()) {
+                SummaryMarkdownCard(
+                    title = stringResource(R.string.video_sumup_transcript_label),
+                    markdown = visualState.transcript
+                )
+            }
+
+            if (visualState.status == VideoRecognitionSummaryStatus.ERROR) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            visualState.error ?: visualState.message,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (visualState.canRetry) {
+                                OutlinedButton(
+                                    onClick = { startSummary() },
+                                    enabled = !anySummaryRunning,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(stringResource(R.string.video_recognition_retry))
+                                }
+                            }
+                            if (visualState.canUseAudioFallback) {
+                                Button(
+                                    onClick = { startSummary(forceAudioFallback = true) },
+                                    enabled = !anySummaryRunning,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(stringResource(R.string.video_recognition_use_audio_fallback))
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -498,9 +946,12 @@ fun VideoSumupScreen(navController: NavController) {
             modifier = Modifier
                 .fillMaxWidth()
         ) {
-            if (isRunning) {
+            if (anySummaryRunning) {
                 OutlinedButton(
-                    onClick = { VideoSumupService.cancel() },
+                    onClick = {
+                        VideoRecognitionSummaryService.cancel()
+                        VideoSumupService.cancel()
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
                 ) {
@@ -510,10 +961,17 @@ fun VideoSumupScreen(navController: NavController) {
                 Button(
                     onClick = ::startSummary,
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = selectedVideoString != null && selectedWhisperPath != null && backendReady &&
-                        (!whisperVad.enabled || effectiveWhisperVadPath != null)
+                    enabled = selectedVideoString != null && (visualTargetAvailable || audioFallbackAvailable)
                 ) {
-                    Text(stringResource(R.string.video_sumup_btn))
+                    Text(
+                        stringResource(
+                            if (visualTargetAvailable) {
+                                R.string.video_recognition_start
+                            } else {
+                                R.string.video_sumup_btn
+                            }
+                        )
+                    )
                 }
             }
         }

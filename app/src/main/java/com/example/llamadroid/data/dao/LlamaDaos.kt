@@ -38,13 +38,15 @@ interface LlamaServerDao {
     suspend fun updateModelName(id: Long, modelName: String?)
 
     @Query(
-        "UPDATE llama_servers SET modelName = :modelName, supportsVision = :supportsVision, supportsAudio = :supportsAudio WHERE id = :id"
+        "UPDATE llama_servers SET modelName = :modelName, supportsVision = :supportsVision, " +
+            "supportsAudio = :supportsAudio, supportsVideo = :supportsVideo WHERE id = :id"
     )
     suspend fun updateModelMetadata(
         id: Long,
         modelName: String?,
         supportsVision: Boolean,
-        supportsAudio: Boolean
+        supportsAudio: Boolean,
+        supportsVideo: Boolean = false
     )
 
     @Update

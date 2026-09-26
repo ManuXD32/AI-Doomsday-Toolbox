@@ -25,7 +25,8 @@ class LlamaLoadModeMigrationTest {
             LlamaConfig(
                 modelPath = "/models/main.gguf",
                 loadMode = LlamaLoadMode.AUTO.value,
-                customFlags = "--mmap --no-mmap --load-mode mlock --load-mode=dio --other value"
+                customFlags = "--mmap --no-mmap --mlock --direct-io -dio -ndio --no-direct-io " +
+                    "--load-mode mlock --load-mode=dio --other value"
             )
         )
 
@@ -33,7 +34,10 @@ class LlamaLoadModeMigrationTest {
         assertEquals("dio", args[args.indexOf("--load-mode") + 1])
         assertFalse(
             args.any {
-                it in setOf("--mmap", "--no-mmap", "--mlock", "--direct-io", "--no-direct-io")
+                it in setOf(
+                    "--mmap", "--no-mmap", "--mlock", "--direct-io", "--no-direct-io",
+                    "-dio", "-ndio"
+                )
             }
         )
         assertEquals("value", args[args.indexOf("--other") + 1])

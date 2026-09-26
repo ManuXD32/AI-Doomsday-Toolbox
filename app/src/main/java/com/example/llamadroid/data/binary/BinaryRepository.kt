@@ -126,6 +126,7 @@ class BinaryRepository(private val context: Context) {
             "rpc-server",
             "sd-rpc-server",
             "llama-bench",
+            "llama-tts",
             "mtmd",
             "sd",
             "kiwix-serve",
@@ -311,7 +312,7 @@ class BinaryRepository(private val context: Context) {
 
     private fun llamaAutomaticTiers(deviceTier: String, name: String): List<String> {
         val fallbackTiers = tiersForSelection(deviceTier)
-        if (name !in setOf("llama_server", "llama-bench", "rpc-server", "mtmd")) {
+        if (name !in setOf("llama_server", "llama-bench", "llama-tts", "rpc-server", "mtmd")) {
             return fallbackTiers
         }
         val i8mmAvailability = binaryAvailabilityForTier(name, TIER_I8MM)
@@ -398,7 +399,7 @@ class BinaryRepository(private val context: Context) {
     }
 
     private fun packageNamesForTier(name: String, tier: String): List<String> = buildList {
-        if (name in setOf("llama_server", "llama-bench", "rpc-server", "mtmd", "whisper-cli", "quadtrix_trainer")) {
+        if (name in setOf("llama_server", "llama-bench", "llama-tts", "rpc-server", "mtmd", "whisper-cli", "quadtrix_trainer")) {
             add("com.example.llamadroid.feature.llm.$tier")
         }
         if (name in setOf("ffmpeg", "ffprobe", "sd", "sd-rpc-server", "whisper-cli")) {
@@ -418,7 +419,7 @@ class BinaryRepository(private val context: Context) {
         moduleNamesForTier(name, tier).firstOrNull()
 
     private fun moduleNamesForTier(name: String, tier: String): List<String> = buildList {
-        if (name in setOf("llama_server", "llama-bench", "rpc-server", "mtmd", "whisper-cli", "quadtrix_trainer")) {
+        if (name in setOf("llama_server", "llama-bench", "llama-tts", "rpc-server", "mtmd", "whisper-cli", "quadtrix_trainer")) {
             add("feature_llm_$tier")
         }
         if (name in setOf("ffmpeg", "ffprobe", "sd", "sd-rpc-server", "whisper-cli")) {
@@ -513,7 +514,7 @@ class BinaryRepository(private val context: Context) {
         val installed = isTierInstalledForBinary(name, tier)
         val hardwareCompatible = isHardwareCompatibleWithTier(tier)
         val abiCompatible = CpuFeatures.getArch().lowercase(Locale.US).contains("arm64")
-        val complete = if (tier == TIER_I8MM && name in setOf("llama_server", "llama-bench", "rpc-server", "mtmd")) {
+        val complete = if (tier == TIER_I8MM && name in setOf("llama_server", "llama-bench", "llama-tts", "rpc-server", "mtmd")) {
             isI8mmBinarySetComplete(name)
         } else {
             findExactTieredFile(name, tier) != null
@@ -1089,6 +1090,9 @@ class BinaryRepository(private val context: Context) {
      * Get llama-bench binary (tiered) for benchmarking.
      */
     fun getLlamaBenchBinary(): File? = getTieredBinary("llama-bench")
+
+    /** Speech uses the packaged CPU runtime, independent of chat accelerator selection. */
+    fun getLlamaTtsBinary(): File? = getCpuTieredBinary("llama-tts")
 
     /**
      * Get kiwix-serve binary (for serving ZIM files).

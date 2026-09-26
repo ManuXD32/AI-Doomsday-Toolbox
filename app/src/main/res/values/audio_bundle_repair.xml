@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="audio_bundle_shared_title">Shared audio components</string>
+    <string name="audio_bundle_shared_description">These components are downloaded once and reused by Music and Sound Effects.</string>
+    <string name="audio_bundle_shared_status">%1$d of %2$d shared components ready · %3$d%%</string>
+    <string name="audio_bundle_picker_empty">No verified bundle is available for this audio family yet.</string>
+    <string name="audio_bundle_picker_components">%1$d of %2$d components installed</string>
+    <string name="audio_bundle_picker_selected">Selected bundle</string>
+    <string name="audio_bundle_picker_use">Use this bundle</string>
+    <string name="audio_bundle_picker_download">Download bundle</string>
+    <string name="audio_bundle_picker_downloading">Download in progress</string>
+    <string name="audio_bundle_picker_download_progress">Bundle download: %1$d%%</string>
+    <string name="audio_bundle_download_start_error">The bundle download could not be started. Try again.</string>
+</resources>

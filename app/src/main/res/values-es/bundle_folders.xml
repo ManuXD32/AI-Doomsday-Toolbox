@@ -1,0 +1,13 @@
+<resources>
+    <string name="bundle_folder_normal">Modelos normales</string>
+    <string name="bundle_folder_vision">Modelos de visión</string>
+    <string name="bundle_folder_speech">Modelos de voz</string>
+    <string name="bundle_folder_music">Modelos de música</string>
+    <string name="bundle_folder_video">Modelos de vídeo</string>
+    <string name="bundle_folder_upscaling">Modelos de reescalado</string>
+    <string name="bundle_folder_editing">Flujos de edición</string>
+    <string name="bundle_folder_detectors">Modelos de detección</string>
+    <string name="bundle_folder_back">Todas las carpetas</string>
+    <string name="bundle_folder_count">Paquetes: %1$d</string>
+    <string name="bundle_folder_description">Revisa un paquete para descargar sus componentes o usar un modelo instalado.</string>
+</resources>

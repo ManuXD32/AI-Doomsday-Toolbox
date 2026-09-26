@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="llama_attach_video">Adjuntar vídeo</string>
+    <string name="llama_video_attached">Vídeo adjunto</string>
+    <string name="llama_video_play">Reproducir vídeo</string>
+    <string name="llama_video_duration">Duración: %1$s</string>
+    <string name="llama_video_file_missing">Falta el archivo de vídeo adjunto</string>
+    <string name="llama_video_unsupported">Este servidor no admite entrada de vídeo</string>
+    <string name="llama_video_note_label">Vídeo</string>
+    <string name="llama_video_mode">Entrada de vídeo</string>
+    <string name="llama_video_desc">Activar la entrada de vídeo para este servidor</string>
+    <string name="llama_video_sampling_disclosure">El vídeo largo se muestreó en %1$d fotogramas con marcas de tiempo uniformes para esta solicitud; el adjunto original sigue disponible para turnos futuros.</string>
+    <string name="llama_video_sampling_failed">No se pudo muestrear el vídeo en fotogramas acotados.</string>
+    <string name="llama_video_open_failed">No se pudo abrir el vídeo seleccionado.</string>
+    <string name="llama_video_duration_unavailable">No se pudo leer la duración del vídeo, por lo que no se envió.</string>
+    <string name="llama_video_segment_prompt">Describe únicamente los eventos, personas, objetos, textos y cambios observables de este segmento de vídeo en orden cronológico.</string>
+    <string name="llama_video_observation_disclosure">Vídeo analizado en segmentos acotados de 12 segundos. Observaciones del modelo para esta solicitud (el adjunto original sigue disponible para turnos futuros): %1$s</string>
+    <string name="llama_video_transcript_disclosure">Transcripción del vídeo preparada por Whisper para esta solicitud (el adjunto original sigue disponible para turnos futuros): %1$s</string>
+    <string name="llama_video_whisper_unavailable">El modo de vídeo heredado seleccionado requiere Whisper, pero no hay un modelo de voz utilizable.</string>
+</resources>

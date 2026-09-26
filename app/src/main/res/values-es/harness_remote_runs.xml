@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_remote_run_started">Proyecto remoto %1$s iniciado en %2$s.</string>
+    <string name="harness_remote_run_recovered">No se encontró el propietario remoto tras recuperar el entorno.</string>
+    <string name="harness_remote_run_stopped">Ejecución remota detenida.</string>
+    <string name="harness_remote_run_force_stopped">Se ha forzado la detención de la ejecución remota.</string>
+    <string name="harness_remote_run_cleanup_pending">La limpieza remota está pendiente. Vuelve a conectar SSH y reintenta la limpieza.</string>
+</resources>

@@ -27,7 +27,7 @@ class WalkthroughCatalogTest {
             .filter { it.toolId != null }
         val toolIds = ToolCatalog.tools.map { it.id }
 
-        assertEquals(29, toolIds.size)
+        assertEquals(30, toolIds.size)
         assertEquals(toolIds.sorted(), lessons.mapNotNull { it.toolId }.sorted())
         assertEquals(lessons.size, lessons.mapNotNull { it.toolId }.toSet().size)
         lessons.forEach { lesson ->
@@ -79,7 +79,7 @@ class WalkthroughCatalogTest {
     fun `every lesson id has an actual screenshot preview`() {
         val lessons = WalkthroughCatalog.chapters.flatMap { it.lessons }
 
-        assertEquals(39, lessons.size)
+        assertEquals(40, lessons.size)
         assertEquals(lessons.size, lessons.map { it.id }.toSet().size)
         lessons.forEach { lesson ->
             assertNotNull("Missing screenshot preview for ${lesson.id}", lessonPreviewResource(lesson.id))

@@ -9,6 +9,7 @@ import com.example.llamadroid.util.DebugLog
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
+import java.io.IOException
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
@@ -32,7 +33,25 @@ enum class LlamaSlotAffinityMode(val value: String) {
 data class LlamaServerRequestOptions(
     val cachePrompt: Boolean = true,
     val slotId: Int? = null,
-    val returnPromptProgress: Boolean = true
+    val returnPromptProgress: Boolean = true,
+    val requireToolCall: Boolean = false,
+    /** Per-request llama.cpp reasoning cap. Null keeps the server default. */
+    val thinkingBudgetTokens: Int? = null,
+    /** OpenAI tool choice after the Harness adapter has validated its shape. */
+    val toolChoice: String? = null,
+    /**
+     * Network retries are safe only when the transport proves the old request
+     * was rejected before admission. Harness requests disable the historical
+     * retry because a dropped connection cannot prove server-side generation
+     * termination; the owning request/session identity then remains unique.
+     */
+    val allowRecoveryAfterConfirmedEnd: Boolean = true,
+    /**
+     * Read deadline for the generation SSE stream. The existing 30-minute
+     * default remains for ordinary callers; an owned Harness request sets this
+     * to zero and lets request cancellation/slot ownership end the stream.
+     */
+    val streamReadTimeoutMs: Int = 1_800_000
 )
 
 data class LlamaPromptProcessingProgress(
@@ -107,6 +126,8 @@ class LlamaServerChatService {
         private const val INPUT_TOKEN_UNSUPPORTED_TTL_MS = 10L * 60L * 1000L
         private const val HEALTH_CHECK_ATTEMPTS = 3
         private const val HEALTH_CHECK_RETRY_DELAY_MS = 500L
+        /** Optional usage/[DONE] frames get a short drain window after finish. */
+        private const val POST_FINISH_DRAIN_TIMEOUT_MS = 1_000
         private val unsupportedInputTokenEndpoints =
             java.util.concurrent.ConcurrentHashMap<String, Long>()
     }
@@ -121,6 +142,42 @@ class LlamaServerChatService {
         @Volatile var connection: HttpURLConnection? = null
         @Volatile var baseUrl: String? = null
         @Volatile var slotId: Int? = null
+    }
+
+    /**
+     * Bounds the optional tail after a terminal SSE choice even when the
+     * platform socket ignores a read-timeout change made after connect.
+     */
+    private class PostFinishDrainGuard(
+        private val connection: HttpURLConnection,
+        private val timeoutMs: Long
+    ) {
+        private val cancelled = AtomicBoolean(false)
+        private var worker: Thread? = null
+
+        fun arm() {
+            if (worker != null) return
+            val thread = Thread {
+                try {
+                    Thread.sleep(timeoutMs)
+                    if (cancelled.compareAndSet(false, true)) {
+                        runCatching { connection.disconnect() }
+                    }
+                } catch (_: InterruptedException) {
+                    // The optional usage/[DONE] tail arrived before the bound.
+                }
+            }.apply {
+                name = "llama-server-finish-drain"
+                isDaemon = true
+            }
+            worker = thread
+            thread.start()
+        }
+
+        fun cancel() {
+            cancelled.set(true)
+            worker?.interrupt()
+        }
     }
 
     @Volatile
@@ -156,7 +213,8 @@ class LlamaServerChatService {
         messages: List<OllamaService.ChatMessage>,
         tools: List<AgentTool> = emptyList(),
         modelLabel: String? = null,
-        thinkingEnabled: Boolean = true
+        thinkingEnabled: Boolean = true,
+        requireToolCall: Boolean = false
     ): LlamaInputTokenCountResult = withContext(Dispatchers.IO) {
         val normalizedBase = normalizeLlamaServerBaseUrlForHealth(baseUrl)
             ?: return@withContext LlamaInputTokenCountResult(
@@ -186,7 +244,8 @@ class LlamaServerChatService {
                 requestOptions = LlamaServerRequestOptions(
                     cachePrompt = false,
                     slotId = null,
-                    returnPromptProgress = false
+                    returnPromptProgress = false,
+                    requireToolCall = requireToolCall
                 )
             ).toMutableMap().apply {
                 put("stream", false)
@@ -289,6 +348,7 @@ class LlamaServerChatService {
      * @param tools available tools for function calling
      * @param thinkingEnabled if false, strip <think> tags from output
      * @param maxTokens optional maximum output tokens hint
+     * @param onStreamDiagnostics metadata-only response-channel counts callback
      * @param onChunk streaming callback: (contentDelta, thinkingDelta)
      */
     internal suspend fun chatWithToolsStreaming(
@@ -303,17 +363,33 @@ class LlamaServerChatService {
         slotOwner: LlamaSlotOwnerKey? = null,
         slotAffinityMode: LlamaSlotAffinityMode = LlamaSlotAffinityMode.AUTOMATIC,
         onPromptProgress: (LlamaPromptProcessingProgress) -> Unit = {},
-        onChunk: (String?, String?) -> Unit = { _, _ -> }
+        onStreamDiagnostics: (LlamaServerStreamChannelCounts) -> Unit = {},
+        onChunk: (String?, String?) -> Unit = { _, _ -> },
+        /** Optional suspending delivery path for consumers that require backpressure. */
+        onPromptProgressSuspending: (suspend (LlamaPromptProcessingProgress) -> Unit)? = null,
+        /** Optional suspending delivery path for consumers that require backpressure. */
+        onChunkSuspending: (suspend (String?, String?) -> Unit)? = null
     ): Result<OllamaService.ChatResponse> = withContext(Dispatchers.IO) {
         val generation = GenerationRequest()
         activeGeneration = generation
         shouldStop = false
         var sawStreamOutput = false
-        val guardedOnChunk: (String?, String?) -> Unit = { chunk, thinkingChunk ->
+        val guardedOnPromptProgress: suspend (LlamaPromptProcessingProgress) -> Unit = { progress ->
+            if (onPromptProgressSuspending != null) {
+                onPromptProgressSuspending.invoke(progress)
+            } else {
+                onPromptProgress(progress)
+            }
+        }
+        val guardedOnChunk: suspend (String?, String?) -> Unit = { chunk, thinkingChunk ->
             if (!chunk.isNullOrBlank() || !thinkingChunk.isNullOrBlank()) {
                 sawStreamOutput = true
             }
-            onChunk(chunk, thinkingChunk)
+            if (onChunkSuspending != null) {
+                onChunkSuspending.invoke(chunk, thinkingChunk)
+            } else {
+                onChunk(chunk, thinkingChunk)
+            }
         }
 
         try {
@@ -331,28 +407,36 @@ class LlamaServerChatService {
             ) { assignedSlot ->
                 suspend fun execute(options: LlamaServerRequestOptions): OllamaService.ChatResponse {
                     return RemoteAgentProtection.withProtection(baseUrl, "Running remote llama-server agent…") {
-                        RemoteBackendResilience.runWithSingleRetry(
-                            onRetry = { firstError ->
-                                DebugLog.log(
-                                    "[$TAG] Recoverable llama-server chat failure, retrying: " +
-                                        RemoteBackendResilience.summarize(firstError)
-                                )
-                            },
-                            shouldRetry = { !sawStreamOutput }
-                        ) {
-                            performChatWithToolsStreaming(
-                                baseUrl,
-                                messages,
-                                tools,
-                                modelLabel,
-                                thinkingEnabled,
-                                maxTokens,
-                                samplingParams,
-                                options,
-                                onPromptProgress,
-                                guardedOnChunk,
-                                generation
-                            )
+                        suspend fun perform(): OllamaService.ChatResponse = performChatWithToolsStreaming(
+                            baseUrl,
+                            messages,
+                            tools,
+                            modelLabel,
+                            thinkingEnabled,
+                            maxTokens,
+                            samplingParams,
+                            options,
+                            guardedOnPromptProgress,
+                            guardedOnChunk,
+                            onStreamDiagnostics,
+                            generation
+                        )
+                        if (options.allowRecoveryAfterConfirmedEnd) {
+                            RemoteBackendResilience.runWithSingleRetry(
+                                onRetry = { firstError ->
+                                    DebugLog.log(
+                                        "[$TAG] Recoverable llama-server chat failure, retrying: " +
+                                            firstError.javaClass.simpleName
+                                    )
+                                },
+                                // A retry is allowed only before any output;
+                                // Harness disables this path because an EOF or
+                                // socket reset does not prove old generation
+                                // termination to a remote server.
+                                shouldRetry = { !sawStreamOutput }
+                            ) { perform() }
+                        } else {
+                            perform()
                         }
                     }
                 }
@@ -389,7 +473,7 @@ class LlamaServerChatService {
         }
     }
 
-    private fun performChatWithToolsStreaming(
+    private suspend fun performChatWithToolsStreaming(
         baseUrl: String,
         messages: List<OllamaService.ChatMessage>,
         tools: List<AgentTool>,
@@ -398,8 +482,9 @@ class LlamaServerChatService {
         maxTokens: Int?,
         samplingParams: LlamaServerSamplingParams,
         requestOptions: LlamaServerRequestOptions,
-        onPromptProgress: (LlamaPromptProcessingProgress) -> Unit,
-        onChunk: (String?, String?) -> Unit,
+        onPromptProgress: suspend (LlamaPromptProcessingProgress) -> Unit,
+        onChunk: suspend (String?, String?) -> Unit,
+        onStreamDiagnostics: (LlamaServerStreamChannelCounts) -> Unit,
         generation: GenerationRequest
     ): OllamaService.ChatResponse {
         ensureGenerationActive(generation)
@@ -418,7 +503,8 @@ class LlamaServerChatService {
         conn.setRequestProperty("Content-Type", "application/json")
         conn.doOutput = true
         conn.connectTimeout = 30000
-        conn.readTimeout = 1800000 // 30 minutes for long reasoning
+        conn.readTimeout = requestOptions.streamReadTimeoutMs.coerceAtLeast(0)
+        var postFinishDrain: PostFinishDrainGuard? = null
 
         val requestJson = buildJsonObject(
             buildLlamaServerChatRequestPayload(
@@ -448,7 +534,21 @@ class LlamaServerChatService {
             val fullThinking = StringBuilder()
             var insideThinkTag = false
             var usage: OllamaService.ChatUsage? = null
+            var terminalFinishReason: String? = null
+            var deltaChoiceChunks = 0
+            var messageFallbackChoiceChunks = 0
+            var contentChannelChunks = 0
+            var reasoningContentChannelChunks = 0
+            var thinkingChannelChunks = 0
+            var reasoningChannelChunks = 0
+            var toolCallChannelChunks = 0
             val toolCallBuilders = mutableMapOf<Int, ToolCallBuilder>()
+            val fallbackToolArgumentSnapshots = mutableMapOf<Int, String>()
+            var fallbackContentSnapshot = ""
+            val fallbackReasoningSnapshots = mutableMapOf<String, String>()
+            val responseBudget = LlamaServerSseResponseBudget(maxTokens)
+            var terminalFinishSeen = false
+            var terminalBlankLines = 0
 
             BufferedReader(InputStreamReader(conn.inputStream)).use { reader ->
                 while (true) {
@@ -458,12 +558,51 @@ class LlamaServerChatService {
                         throw CancellationException("Stopped by user")
                     }
 
-                    val data = reader.readLine() ?: break
+                    if (terminalFinishSeen && postFinishDrain == null) {
+                        // Harness requests intentionally use readTimeout=0 while
+                        // a model is pre-filling or reasoning. Once a terminal
+                        // finish is observed, only an optional usage frame or
+                        // [DONE] is useful; a server that keeps the socket open
+                        // must not hold the turn forever.
+                        postFinishDrain = PostFinishDrainGuard(
+                            connection = conn,
+                            timeoutMs = POST_FINISH_DRAIN_TIMEOUT_MS.toLong()
+                        ).also { it.arm() }
+                    }
+                    val line = try {
+                        readBoundedLlamaServerSseLine(reader, responseBudget)
+                    } catch (io: IOException) {
+                        if (terminalFinishSeen) break
+                        throw io
+                    }
+                    val data = line.text
+                    if (data.isEmpty() && line.reachedEof) break
                     if (isGenerationCancelled(generation)) {
                         DebugLog.log("[$TAG] stop requested after SSE read")
                         conn.disconnect()
                         throw CancellationException("Stopped by user")
                     }
+
+                    // A terminal choice may be followed by one usage frame.
+                    // Consume only that bounded frame, then stop even when a
+                    // compatible server omits [DONE] or keeps heartbeats open.
+                    if (terminalFinishSeen) {
+                        when (classifyLlamaServerTerminalLine(data, terminalBlankLines)) {
+                            LlamaServerTerminalLineAction.SKIP_BLANK -> {
+                                terminalBlankLines++
+                                continue
+                            }
+                            LlamaServerTerminalLineAction.STOP -> break
+                            LlamaServerTerminalLineAction.PARSE_USAGE -> {
+                                val jsonStr = data.removePrefix("data: ").trim()
+                                runCatching { parseLlamaServerUsage(JSONObject(jsonStr)) }
+                                    .getOrNull()
+                                    ?.let { usage = it }
+                                break
+                            }
+                        }
+                    }
+
                     if (!data.startsWith("data: ")) continue
                     val jsonStr = data.removePrefix("data: ").trim()
                     if (jsonStr == "[DONE]") break
@@ -473,16 +612,39 @@ class LlamaServerChatService {
                         if (chunk.has("id_slot")) {
                             generation.slotId = chunk.optInt("id_slot")
                         }
-                        parseLlamaPromptProcessingProgress(chunk)?.let(onPromptProgress)
+                        parseLlamaPromptProcessingProgress(chunk)?.let { onPromptProgress(it) }
                         parseLlamaServerUsage(chunk)?.let { usage = it }
                         val choices = chunk.optJSONArray("choices") ?: continue
                         if (choices.length() == 0) continue
 
                         val choice = choices.getJSONObject(0)
-                        val delta = choice.optJSONObject("delta") ?: continue
+                        choice.optString("finish_reason", "")
+                            .takeIf { it.isNotBlank() && it != "null" }
+                            ?.let {
+                                terminalFinishReason = it
+                                if (isTerminalLlamaServerFinishReason(it)) {
+                                    terminalFinishSeen = true
+                                }
+                            }
+                        val responseChannel = selectLlamaServerChoicePayload(choice) ?: continue
+                        when (responseChannel.source) {
+                            LlamaServerChoiceSource.DELTA -> deltaChoiceChunks++
+                            LlamaServerChoiceSource.MESSAGE_FALLBACK -> messageFallbackChoiceChunks++
+                        }
+                        val choicePayload = responseChannel.payload
 
-                        val content = delta.optString("content", "").takeUnless { it.equals("null", ignoreCase = true) }.orEmpty()
+                        val contentChannel = firstLlamaServerStringChannel(choicePayload, "content")
+                        val rawContent = contentChannel?.value.orEmpty()
+                        val content = if (responseChannel.source == LlamaServerChoiceSource.MESSAGE_FALLBACK) {
+                            val delta = llamaServerFallbackSnapshotDelta(fallbackContentSnapshot, rawContent)
+                            if (rawContent.isNotEmpty()) fallbackContentSnapshot = rawContent
+                            delta
+                        } else {
+                            rawContent
+                        }
+                        if (content.isNotEmpty()) contentChannelChunks++
                         if (content.isNotEmpty()) {
+                            responseBudget.accountSemanticCharacters(content.length)
                             var remaining = content
                             while (remaining.isNotEmpty()) {
                                 if (!insideThinkTag) {
@@ -517,15 +679,39 @@ class LlamaServerChatService {
                             }
                         }
 
-                        val reasoningContent = delta.optString("reasoning_content", "")
-                            .takeUnless { it.equals("null", ignoreCase = true) }
-                            .orEmpty()
+                        val reasoningChannel = firstLlamaServerStringChannel(
+                            choicePayload,
+                            "reasoning_content",
+                            "thinking",
+                            "reasoning"
+                        )
+                        val rawReasoningContent = reasoningChannel?.value.orEmpty()
+                        val reasoningContent = if (
+                            responseChannel.source == LlamaServerChoiceSource.MESSAGE_FALLBACK &&
+                            reasoningChannel != null
+                        ) {
+                            val previous = fallbackReasoningSnapshots[reasoningChannel.name].orEmpty()
+                            val delta = llamaServerFallbackSnapshotDelta(previous, rawReasoningContent)
+                            if (rawReasoningContent.isNotEmpty()) {
+                                fallbackReasoningSnapshots[reasoningChannel.name] = rawReasoningContent
+                            }
+                            delta
+                        } else {
+                            rawReasoningContent
+                        }
                         if (reasoningContent.isNotEmpty()) {
+                            when (reasoningChannel?.name) {
+                                "reasoning_content" -> reasoningContentChannelChunks++
+                                "thinking" -> thinkingChannelChunks++
+                                "reasoning" -> reasoningChannelChunks++
+                            }
+                            responseBudget.accountSemanticCharacters(reasoningContent.length)
                             fullThinking.append(reasoningContent)
                             if (thinkingEnabled) onChunk(null, reasoningContent)
                         }
 
-                        val tcArray = delta.optJSONArray("tool_calls")
+                        val tcArray = choicePayload.optJSONArray("tool_calls")
+                        if (tcArray != null && tcArray.length() > 0) toolCallChannelChunks++
                         if (tcArray != null) {
                             for (i in 0 until tcArray.length()) {
                                 val tcObj = tcArray.getJSONObject(i)
@@ -539,13 +725,27 @@ class LlamaServerChatService {
                                     val name = funcObj.optString("name", "")
                                     val args = funcObj.optString("arguments", "")
                                     if (name.isNotEmpty()) builder.name = name
-                                    builder.arguments.append(args)
+                                    val argumentDelta = if (responseChannel.source == LlamaServerChoiceSource.MESSAGE_FALLBACK) {
+                                        val previous = fallbackToolArgumentSnapshots[index].orEmpty()
+                                        val delta = llamaServerFallbackSnapshotDelta(previous, args)
+                                        if (args.isNotEmpty()) fallbackToolArgumentSnapshots[index] = args
+                                        delta
+                                    } else {
+                                        args
+                                    }
+                                    responseBudget.accountSemanticCharacters(argumentDelta.length)
+                                    builder.arguments.append(argumentDelta)
                                 }
                             }
                         }
 
                         val finishReason = choice.optString("finish_reason", "")
-                        if (finishReason == "stop" || finishReason == "tool_calls") break
+                        if (finishReason.isNotBlank() && finishReason != "null") {
+                            terminalFinishReason = finishReason
+                            if (isTerminalLlamaServerFinishReason(finishReason)) {
+                                terminalFinishSeen = true
+                            }
+                        }
                     } catch (e: Exception) {
                         when (classifySseProcessingFailure(e)) {
                             SseProcessingFailureKind.CANCELLATION -> {
@@ -554,10 +754,10 @@ class LlamaServerChatService {
                                 throw e
                             }
                             SseProcessingFailureKind.MALFORMED_JSON -> {
-                                DebugLog.log("[$TAG] SSE parse error: ${e.message} for line: $jsonStr")
+                                DebugLog.log("[$TAG] SSE parse error: ${e.javaClass.simpleName}")
                             }
                             SseProcessingFailureKind.PROCESSING -> {
-                                DebugLog.log("[$TAG] SSE processing error: ${e.javaClass.simpleName}: ${e.message}")
+                                DebugLog.log("[$TAG] SSE processing error: ${e.javaClass.simpleName}")
                                 throw e
                             }
                         }
@@ -567,32 +767,34 @@ class LlamaServerChatService {
 
             val toolCalls = if (toolCallBuilders.isNotEmpty()) {
                 toolCallBuilders.entries.sortedBy { it.key }.mapNotNull { (_, builder) ->
-                    if (builder.name.isNotEmpty()) {
-                        try {
-                            val args = AgentRuntimeSupport.normalizeToolArguments(builder.arguments.toString())
-                            DebugLog.log("[$TAG] Assembled tool call: ${builder.name} (id: ${builder.id})")
-                            val rawArgumentsJson = builder.arguments.toString()
-                                .takeIf { it.isNotBlank() }
-                            OllamaService.ToolCall(
-                                name = builder.name,
-                                arguments = args,
-                                id = builder.id.takeIf { it.isNotBlank() }
-                                    ?: stableToolCallId(builder.name, rawArgumentsJson.orEmpty()),
-                                rawArgumentsJson = rawArgumentsJson
-                            )
-                        } catch (e: Exception) {
-                            DebugLog.log("[$TAG] Failed to parse tool call args: ${e.message}")
-                            null
-                        }
-                    } else {
-                        null
-                    }
+                    assembleLlamaServerToolCall(
+                        name = builder.name,
+                        id = builder.id,
+                        rawArgumentsJson = builder.arguments.toString()
+                    )
                 }
             } else {
                 null
             }
 
-            DebugLog.log("[$TAG] Stream finished. ${toolCalls?.size ?: 0} tool calls detected.")
+            onStreamDiagnostics(
+                LlamaServerStreamChannelCounts(
+                    deltaChoiceChunks = deltaChoiceChunks,
+                    messageFallbackChoiceChunks = messageFallbackChoiceChunks,
+                    contentChannelChunks = contentChannelChunks,
+                    reasoningContentChannelChunks = reasoningContentChannelChunks,
+                    thinkingChannelChunks = thinkingChannelChunks,
+                    reasoningChannelChunks = reasoningChannelChunks,
+                    toolCallChannelChunks = toolCallChannelChunks
+                )
+            )
+            DebugLog.log(
+                "[$TAG] Stream finished. ${toolCalls?.size ?: 0} tool calls detected; " +
+                    "channels=delta:$deltaChoiceChunks message:$messageFallbackChoiceChunks " +
+                    "content:$contentChannelChunks reasoning_content:$reasoningContentChannelChunks " +
+                    "thinking:$thinkingChannelChunks reasoning:$reasoningChannelChunks " +
+                    "tool_calls:$toolCallChannelChunks"
+            )
 
             return OllamaService.ChatResponse(
                 message = OllamaService.ChatMessage(
@@ -603,9 +805,11 @@ class LlamaServerChatService {
                 ),
                 done = true,
                 toolCalls = toolCalls,
-                usage = usage
+                usage = usage,
+                finishReason = terminalFinishReason
             )
         } finally {
+            postFinishDrain?.cancel()
             if (generation.connection === conn) {
                 generation.connection = null
                 generation.baseUrl = null
@@ -644,7 +848,7 @@ class LlamaServerChatService {
                 // pause and can re-block the next user retry.
                 throw cancelled
             } catch (error: Exception) {
-                DebugLog.log("[$TAG] llama-server health probe failed: ${error.message ?: error.javaClass.simpleName}")
+                DebugLog.log("[$TAG] llama-server health probe failed: ${error.javaClass.simpleName}")
                 false
             }
             if (healthy) return@withContext true
@@ -738,7 +942,12 @@ class LlamaServerChatService {
 
     private fun sendBestEffortLlamaServerCancel(baseUrl: String, slotId: Int?) {
         val normalizedBase = HttpEndpointUrlSupport.normalizeBaseUrl(baseUrl) ?: return
-        val candidateSlotIds = listOfNotNull(slotId, -1).distinct()
+        // A missing slot identity is intentionally not replaced with llama.cpp's
+        // `-1` broadcast sentinel. Disconnecting the owned HTTP connection is
+        // safe in that case; a broadcast cancel could terminate another user's
+        // generation or every active slot on a shared server.
+        val candidateSlotIds = listOfNotNull(slotId).distinct()
+        if (candidateSlotIds.isEmpty()) return
         for (candidate in candidateSlotIds) {
             runCatching {
                 val conn = URL(
@@ -766,7 +975,7 @@ class LlamaServerChatService {
                     conn.disconnect()
                 }
             }.onFailure { error ->
-                DebugLog.log("[$TAG] Best-effort cancel failed for id_slot=$candidate: ${error.message}")
+                DebugLog.log("[$TAG] Best-effort cancel failed for id_slot=$candidate: ${error.javaClass.simpleName}")
             }
         }
     }
@@ -833,6 +1042,11 @@ internal fun buildLlamaServerChatRequestPayload(
     if (maxTokens != null && maxTokens > 0) {
         payload["max_tokens"] = maxTokens
     }
+    if (thinkingEnabled) {
+        requestOptions.thinkingBudgetTokens
+            ?.takeIf { it > 0 }
+            ?.let { payload["thinking_budget_tokens"] = it }
+    }
 
     samplingParams.temperature?.let { payload["temperature"] = it }
     samplingParams.topP?.let { payload["top_p"] = it }
@@ -873,7 +1087,13 @@ internal fun buildLlamaServerChatRequestPayload(
                 )
             )
         }
-        payload["tool_choice"] = "auto"
+        val toolChoice = requestOptions.toolChoice?.trim()?.lowercase()
+            ?: if (requestOptions.requireToolCall) "required" else "auto"
+        require(toolChoice == "auto" || toolChoice == "required") {
+            "Unsupported llama-server tool choice: $toolChoice"
+        }
+        payload["tool_choice"] = toolChoice
+        if (toolChoice == "required") payload["parallel_tool_calls"] = false
     }
 
     if (!thinkingEnabled) {
@@ -882,6 +1102,36 @@ internal fun buildLlamaServerChatRequestPayload(
     }
 
     return payload
+}
+
+/**
+ * Preserve an output-limited native tool argument as bounded transport state.
+ * The Direct runtime can safely stage an incomplete write/edit prefix; every
+ * other caller still receives empty parsed arguments and must reject it during
+ * normal validation. Dropping the call here loses the only recoverable mutation
+ * boundary and makes a 4K-output model repeat the same oversized call forever.
+ */
+internal fun assembleLlamaServerToolCall(
+    name: String,
+    id: String?,
+    rawArgumentsJson: String
+): OllamaService.ToolCall? {
+    val normalizedName = name.trim()
+    if (normalizedName.isEmpty()) return null
+    val raw = rawArgumentsJson.takeIf { it.isNotBlank() }
+    val arguments = runCatching {
+        AgentRuntimeSupport.normalizeToolArguments(rawArgumentsJson)
+    }.getOrElse {
+        DebugLog.log("[LlamaServerChat] Preserving incomplete tool call: $normalizedName")
+        emptyMap()
+    }
+    return OllamaService.ToolCall(
+        name = normalizedName,
+        arguments = arguments,
+        id = id?.takeIf { it.isNotBlank() }
+            ?: stableToolCallId(normalizedName, raw.orEmpty()),
+        rawArgumentsJson = raw
+    )
 }
 
 internal fun parseLlamaInputTokenCountBody(body: String): Int? {
@@ -999,6 +1249,59 @@ data class LlamaServerSamplingParams(
         )
     }
 }
+
+internal enum class LlamaServerChoiceSource {
+    DELTA,
+    MESSAGE_FALLBACK
+}
+
+internal data class LlamaServerChoicePayload(
+    val source: LlamaServerChoiceSource,
+    val payload: JSONObject
+)
+
+/**
+ * Prefer a delta whenever the server supplied one, including an empty delta.
+ * A full message is only a fallback for servers that omit delta entirely.
+ */
+internal fun selectLlamaServerChoicePayload(choice: JSONObject): LlamaServerChoicePayload? {
+    if (choice.has("delta")) {
+        val delta = choice.optJSONObject("delta") ?: return null
+        return LlamaServerChoicePayload(LlamaServerChoiceSource.DELTA, delta)
+    }
+    return choice.optJSONObject("message")?.let {
+        LlamaServerChoicePayload(LlamaServerChoiceSource.MESSAGE_FALLBACK, it)
+    }
+}
+
+internal data class LlamaServerStringChannel(
+    val name: String,
+    val value: String
+)
+
+/** Read only string-valued response channels; objects and JSON null are ignored. */
+internal fun firstLlamaServerStringChannel(
+    payload: JSONObject,
+    vararg names: String
+): LlamaServerStringChannel? {
+    for (name in names) {
+        val value = payload.opt(name) as? String ?: continue
+        if (value.equals("null", ignoreCase = true) || value.isEmpty()) continue
+        return LlamaServerStringChannel(name, value)
+    }
+    return null
+}
+
+/** Non-content metadata for diagnosing alternate streaming response channels. */
+internal data class LlamaServerStreamChannelCounts(
+    val deltaChoiceChunks: Int = 0,
+    val messageFallbackChoiceChunks: Int = 0,
+    val contentChannelChunks: Int = 0,
+    val reasoningContentChannelChunks: Int = 0,
+    val thinkingChannelChunks: Int = 0,
+    val reasoningChannelChunks: Int = 0,
+    val toolCallChannelChunks: Int = 0
+)
 
 internal fun parseLlamaServerUsage(chunk: JSONObject): OllamaService.ChatUsage? {
     val usage = chunk.optJSONObject("usage") ?: return null

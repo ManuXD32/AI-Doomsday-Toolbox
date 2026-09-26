@@ -10,6 +10,7 @@ import androidx.compose.ui.unit.dp
 import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.llamadroid.R
+import com.example.llamadroid.data.db.AgentProotEnvironmentEntity
 import com.example.llamadroid.service.AgentWorkspaceBackendType
 import com.example.llamadroid.ui.components.AppTaskActionFooter
 
@@ -21,8 +22,14 @@ fun AgentNewProjectDialog(
     onNameChange: (String) -> Unit,
     backend: AgentWorkspaceBackendType,
     onBackendChange: (AgentWorkspaceBackendType) -> Unit,
+    prootEnvironments: List<AgentProotEnvironmentEntity> = emptyList(),
+    selectedProotEnvironmentId: String? = null,
+    onProotEnvironmentChange: (String?) -> Unit = {},
+    onManageProotEnvironments: () -> Unit = {},
     onCreate: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    errorMessage: String? = null,
+    isCreating: Boolean = false
 ) {
     Dialog(onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
@@ -32,10 +39,30 @@ fun AgentNewProjectDialog(
                     actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },title = { Text(stringResource(R.string.agent_new_project_title)) }) },
             bottomBar = {
                 AppTaskActionFooter {
-                    Button(onClick = onCreate, modifier = Modifier.fillMaxWidth()) {
-                        Text(stringResource(R.string.action_create))
+                    Button(
+                        onClick = onCreate,
+                        enabled = !isCreating,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (isCreating) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Text(
+                            stringResource(
+                                if (isCreating) R.string.agent_project_creating
+                                else R.string.action_create
+                            )
+                        )
                     }
-                    OutlinedButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        enabled = !isCreating,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         Text(stringResource(R.string.action_cancel))
                     }
                 }
@@ -62,9 +89,47 @@ fun AgentNewProjectDialog(
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp))
                 }
                 item {
-                    Text(stringResource(if (backend == AgentWorkspaceBackendType.LOCAL_SANDBOX)
-                        R.string.agent_project_backend_local_desc else R.string.agent_project_backend_remote_desc),
+                    FilterChip(selected = backend == AgentWorkspaceBackendType.LOCAL_PROOT,
+                        onClick = { onBackendChange(AgentWorkspaceBackendType.LOCAL_PROOT) },
+                        label = { Text(stringResource(R.string.agent_proot_backend_label)) },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp))
+                }
+                item {
+                    Text(stringResource(
+                        when (backend) {
+                            AgentWorkspaceBackendType.LOCAL_SANDBOX -> R.string.agent_project_backend_local_desc
+                            AgentWorkspaceBackendType.LOCAL_PROOT -> R.string.agent_proot_backend_desc
+                            AgentWorkspaceBackendType.REMOTE_SSH -> R.string.agent_project_backend_remote_desc
+                        }
+                    ),
                         style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (backend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                    item {
+                        AgentProotEnvironmentPicker(
+                            environments = prootEnvironments,
+                            selectedEnvironmentId = selectedProotEnvironmentId,
+                            onSelectionChange = onProotEnvironmentChange,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    item {
+                        OutlinedButton(
+                            onClick = onManageProotEnvironments,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(stringResource(R.string.agent_proot_manage_action))
+                        }
+                    }
+                }
+                errorMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                    item {
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
             }
         }

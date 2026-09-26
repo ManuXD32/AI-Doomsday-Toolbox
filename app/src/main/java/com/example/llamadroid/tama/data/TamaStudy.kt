@@ -25,6 +25,7 @@ enum class TamaStudyPhase {
     LONG_REST
 }
 
+@kotlinx.serialization.Serializable
 data class TamaPomodoroSettings(
     val focusMinutes: Int = 25,
     val shortBreakMinutes: Int = 5,

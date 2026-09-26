@@ -111,6 +111,27 @@ class LlamaClientServiceLocalServerTest {
     }
 
     @Test
+    fun localLlamaServerAutoStart_attachesMmprojForVideoOnlyTurn() {
+        val videoServer = LlamaServerEntity(
+            name = "Video llama-server",
+            host = "127.0.0.1",
+            port = 8080,
+            engine = LlamaServerEntity.ENGINE_LLAMA_SERVER,
+            supportsVideo = true
+        )
+
+        assertTrue(
+            shouldAttachMmprojForLocalAutoStart(
+                server = videoServer,
+                imagePath = null,
+                visionEnabled = false,
+                selectedMmprojPath = "/tmp/projector.gguf",
+                videoPath = "/tmp/clip.mp4"
+            )
+        )
+    }
+
+    @Test
     fun liteRtAutoGpuRetries_areConservativeForNonGemmaCatalogModels() {
         val gemma = LiteRtModelEntity(
             displayName = "Gemma 4 E2B",

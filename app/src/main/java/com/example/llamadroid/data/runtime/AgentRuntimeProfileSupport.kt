@@ -105,8 +105,10 @@ data class AgentRuntimeGlobalOverride(
     val liteRtBackend: String = "auto",
     val liteRtMtpEnabled: Boolean = false,
     val contextSize: Int = 16_384,
-    val maxOutputTokens: Int = 8_096,
-    val thinkingEnabled: Boolean = true,
+    val maxOutputTokens: Int = 4_096,
+    val thinkingEnabled: Boolean = false,
+    /** Null lets the provider choose; a positive value requests an exact reasoning cap. */
+    val thinkingBudgetTokens: Int? = null,
     val visionEnabled: Boolean = true
 ) {
     val normalizedBackend: AgentRuntimeBackend
@@ -123,7 +125,10 @@ data class AgentRuntimeGlobalOverride(
             liteRtModelId = liteRtModelId?.takeIf { it > 0L },
             liteRtBackend = liteRtBackend.trim().ifBlank { "auto" },
             contextSize = contextSize.coerceIn(1_024, 1_048_576),
-            maxOutputTokens = maxOutputTokens.coerceIn(1, 1_048_576)
+            maxOutputTokens = maxOutputTokens.coerceIn(1, 1_048_576),
+            thinkingBudgetTokens = thinkingBudgetTokens
+                ?.takeIf { it > 0 }
+                ?.coerceAtMost(maxOutputTokens.coerceIn(1, 1_048_576))
         )
     }
 
@@ -160,6 +165,7 @@ data class AgentRuntimeDispatchSettings(
     val contextSize: Int,
     val maxOutputTokens: Int,
     val thinkingEnabled: Boolean,
+    val thinkingBudgetTokens: Int? = null,
     val visionEnabled: Boolean
 ) {
     val normalizedBackend: AgentRuntimeBackend
@@ -175,9 +181,15 @@ data class AgentRuntimeDispatchSettings(
         liteRtModelId = liteRtModelId?.takeIf { it > 0L },
         liteRtBackend = liteRtBackend.trim().ifBlank { "auto" },
         contextSize = contextSize.coerceIn(1_024, 1_048_576),
-        maxOutputTokens = maxOutputTokens.coerceIn(1, 1_048_576)
+        maxOutputTokens = maxOutputTokens.coerceIn(1, 1_048_576),
+        thinkingBudgetTokens = thinkingBudgetTokens
+            ?.takeIf { it > 0 }
+            ?.coerceAtMost(maxOutputTokens.coerceIn(1, 1_048_576))
     )
 }
+
+/** Public name for the one immutable settings snapshot consumed by a request. */
+typealias ResolvedAgentDispatchSettings = AgentRuntimeDispatchSettings
 
 data class AgentRuntimeProfileMigrationResult(
     val profiles: List<AgentRuntimeProfile>,

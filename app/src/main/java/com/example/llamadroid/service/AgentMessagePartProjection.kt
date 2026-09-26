@@ -101,6 +101,11 @@ fun projectAgentMessageParts(
         else -> null
     }
 
+    val privateContentRef = message.content.lineSequence()
+        .firstOrNull { it.startsWith("content_ref: agent-output://") }
+        ?.substringAfter("content_ref: ")
+        ?.trim()
+
     add(
         type = primaryType,
         status = when {
@@ -112,6 +117,7 @@ fun projectAgentMessageParts(
             message.toolName?.let { "Tool: $it" }
         },
         canonicalJson = canonical,
+        contentRef = privateContentRef,
         toolName = message.toolName ?: toolCall?.name,
         toolCallId = message.toolCallId ?: toolCall?.id,
         safeTarget = safeToolTarget(message.toolArgs ?: toolCall?.arguments)

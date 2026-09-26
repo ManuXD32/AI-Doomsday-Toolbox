@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_world_brain_recoverable_error">Se interrumpió el entrenamiento. Reanúdalo para volver a intentarlo o restaura un punto de control guardado.</string>
+    <string name="tama_world_brain_evaluate_again">El candidato ha cambiado. Compáralo de nuevo antes de adoptarlo.</string>
+    <string name="tama_world_brain_checkpoint_curriculum_error">Selecciona el programa del punto de control antes de compararlo.</string>
+    <string name="tama_world_brain_resources_title">Límites de recursos del entrenamiento</string>
+    <string name="tama_world_brain_battery_limit">Pausar con menos de %1$d%% de batería</string>
+    <string name="tama_world_brain_thread_limit">Máximo de hilos de trabajo: %1$d</string>
+    <string name="tama_world_brain_environment_limit">Mundos de práctica en paralelo: %1$d</string>
+    <string name="tama_world_brain_resources_body">Al cambiar los límites de trabajo, se selecciona Personalizado y se pausa el entrenamiento. Se conserva tu progreso. El entrenamiento también se pausa si el dispositivo alcanza un estado térmico grave.</string>
+    <string name="tama_world_brain_unit_steps">pasos</string>
+</resources>

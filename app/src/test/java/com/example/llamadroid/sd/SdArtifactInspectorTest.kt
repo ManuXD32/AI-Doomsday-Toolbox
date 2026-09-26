@@ -115,6 +115,39 @@ class SdArtifactInspectorTest {
     }
 
     @Test
+    fun specificFlux2AndChroma2MarkersWinOverGenericFluxAndChroma() {
+        val cases = listOf(
+            "flux.2-dev.safetensors",
+            "flux-2_dev.safetensors",
+            "flux_2-dev.safetensors",
+            "flux 2 dev.safetensors",
+            "flux2-klein-4b.safetensors",
+            "chroma2-kaleidoscope.safetensors",
+            "kaleidoscope.safetensors"
+        )
+        cases.forEach { filename ->
+            val file = tempFile(filename)
+            writeSafeTensors(file, listOf("double_blocks.0.img_attn.weight"))
+
+            val inspection = SdArtifactInspector.inspect(file)
+
+            assertEquals(filename, SdModelFamily.FLUX_2, inspection.detectedFamily)
+            file.delete()
+        }
+    }
+
+    @Test
+    fun radianceWinsOverGenericChroma() {
+        val file = tempFile("chroma1-radiance.safetensors")
+        writeSafeTensors(file, listOf("double_blocks.0.img_attn.weight"))
+
+        val inspection = SdArtifactInspector.inspect(file)
+
+        assertEquals(SdModelFamily.CHROMA_RADIANCE, inspection.detectedFamily)
+        file.delete()
+    }
+
+    @Test
     fun classicSdAndSdxlTensorLayouts_areDetectedAsFullCheckpoints() {
         listOf("sd-v1-5.safetensors", "sdxl-base.safetensors").forEach { filename ->
             val file = tempFile(filename)

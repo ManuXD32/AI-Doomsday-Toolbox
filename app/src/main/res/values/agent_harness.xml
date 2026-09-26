@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="agent_project_control_packet_title">Project control packet</string>
+    <string name="agent_project_control_packet_phase">Phase: %1$s</string>
+    <string name="agent_project_control_packet_next_action">Next: %1$s</string>
+    <string name="agent_project_control_packet_show">Show project control packet</string>
+    <string name="agent_project_control_packet_hide">Hide project control packet</string>
+    <string name="agent_thinking_budget_label">Requested thinking budget</string>
+    <string name="agent_thinking_budget_desc">Optional exact llama.cpp/llama-swap reasoning-token cap. Leave blank for the provider default. A server command-line budget can take precedence.</string>
+    <string name="agent_thinking_budget_unsupported">Exact thinking-token budgets are not supported by this backend.</string>
+    <string name="agent_direct_thinking_budget_value">Enabled · %,d-token budget</string>
+    <string name="agent_direct_thinking_provider_default">Enabled · provider default</string>
+    <string name="agent_direct_title">Direct Agent</string>
+    <string name="agent_direct_desc">One durable agent carries the task through Plan, Build, and Verify. Specialist lanes are kept only as historical data and are not invoked.</string>
+    <string name="agent_direct_fixed_note">Direct is the only active execution profile. The plan needs one approval; other mutation approvals follow the selected safety mode.</string>
+    <string name="agent_direct_model_label">Direct Agent model</string>
+    <string name="agent_direct_model_unavailable">No local model list is available yet. Keep the saved model or configure a connection.</string>
+    <string name="agent_direct_litert_model_note">The Direct Agent uses the selected LiteRT model from the runtime settings.</string>
+    <string name="agent_direct_server_model">Server model: %1$s</string>
+    <string name="agent_direct_server_context">Server context: %1$s</string>
+    <string name="agent_direct_context_label">Context</string>
+    <string name="agent_direct_plan_output_label">Plan output</string>
+    <string name="agent_direct_build_output_label">Build output</string>
+    <string name="agent_direct_thinking_label">Thinking</string>
+    <string name="agent_direct_thinking_disabled">Disabled for the Spark-class default</string>
+    <string name="agent_direct_tokens_value" tools:ignore="PluralsCandidate">%1$d tokens</string>
+    <string name="agent_direct_global_override_active">Controlled by override. The global override is authoritative for model, endpoint, and tuning.</string>
+    <string name="agent_direct_global_override_inactive">Stored Direct defaults are active. Enable Global override when one connection and tuning snapshot must control every project.</string>
+    <string name="agent_direct_tool_policy_note">Direct runtime tools and recovery are fixed for reliability. Specialist delegation, automatic reflection, and model-managed TODO or memory tools are not available.</string>
+    <string name="agent_direct_status_title">Direct runtime checkpoint</string>
+    <string name="agent_direct_status_phase">Phase</string>
+    <string name="agent_direct_status_next_action">Exact next action</string>
+    <string name="agent_direct_status_prompt">Prompt use</string>
+    <string name="agent_direct_status_input">Input tokens</string>
+    <string name="agent_direct_status_output">Output tokens</string>
+    <string name="agent_direct_status_cached">Cached tokens</string>
+    <string name="agent_direct_status_invalidation">Last cache invalidation</string>
+    <string name="agent_direct_status_compaction_history">Compaction history</string>
+    <string name="agent_direct_status_compaction_item">%1$s · input %2$s · retained %3$s · %4$s</string>
+    <string name="agent_direct_status_tokens" tools:ignore="PluralsCandidate">%1$d tokens</string>
+    <string name="agent_direct_status_unknown">Unknown</string>
+    <string name="agent_direct_status_none">None</string>
+    <string name="agent_direct_phase_plan">Plan</string>
+    <string name="agent_direct_phase_build">Build</string>
+    <string name="agent_direct_phase_verify">Verify</string>
+    <string name="agent_direct_phase_complete">Complete</string>
+    <string name="agent_direct_phase_managed">Plan, Build, and Verify are controlled by Direct Agent. Build starts only after plan approval.</string>
+    <string name="agent_direct_step_completed">Approved step completed: %1$s. The Direct Agent will continue with the next durable step.</string>
+    <string name="agent_harness_general_output_recommendation" tools:ignore="PluralsCandidate">Optimized recommendation when General is unset: %1$d control tokens; Orchestrator and Coder use %2$d during Build. Saved values are used as entered.</string>
+    <string name="agent_harness_control_output_recommendation" tools:ignore="PluralsCandidate">Optimized recommendation when this role is unset: %1$d control tokens. Saved values are used as entered.</string>
+    <string name="agent_harness_build_output_recommendation" tools:ignore="PluralsCandidate">Optimized recommendation when this role is unset: %1$d Plan/control tokens and %2$d during Build. Saved values are used as entered.</string>
+    <string name="agent_harness_summary_output_recommendation" tools:ignore="PluralsCandidate">Optimized recommendation when this role is unset: %1$d summary tokens. Saved values are used as entered.</string>
+    <string name="agent_harness_research_limit">Research is bounded for this profile. Continue with the available evidence or ask for direction.</string>
+    <string name="agent_harness_no_progress">The agent paused because the workflow made no progress. Continue after reviewing the current state.</string>
+    <string name="agent_harness_capacity_limit">Required task state cannot fit this context. Narrow the task, then Continue.</string>
+    <string name="agent_harness_older_messages">Older messages</string>
+    <string name="agent_harness_newer_messages">Newer messages</string>
+    <string name="agent_harness_history_load_failed">Could not load that history page. The current page is still available.</string>
+    <string name="agent_harness_questions_suppressed">The user requested no more questions. Resolve this blocker using the saved decisions or provide direction, then Continue.</string>
+    <string name="agent_harness_local_plan_unsupported">The plan still requires an unavailable local backend. Review the supported runtimes, then Continue.</string>
+    <string name="agent_harness_no_scout">Codebase scouting is disabled by the saved project instructions.</string>
+    <string name="agent_harness_no_scout_hint">Use the saved task state and relevant research, then propose the plan. Do not list or search the codebase.</string>
+    <string name="agent_direct_greenfield_write_required">This greenfield project has no committed artifact to inspect yet.</string>
+    <string name="agent_direct_greenfield_write_hint">Greenfield inspection is already complete. Call write_file now for the exact current TODO’s first artifact; do not read, list, or search again.</string>
+    <string name="agent_harness_local_ready">Local project **%1$s** is ready. Describe the task to begin. Files are relative to this project; use `.` for its root.</string>
+    <string name="agent_direct_greenfield_marker_unavailable">Direct could not persist the greenfield project marker (%1$s), so model dispatch is paused.</string>
+</resources>

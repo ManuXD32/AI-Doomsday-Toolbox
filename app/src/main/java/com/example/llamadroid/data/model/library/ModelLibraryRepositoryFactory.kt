@@ -10,10 +10,11 @@ import retrofit2.Retrofit
 
 /** Builds the shared persistent source repository for UI and startup recovery. */
 object ModelLibraryRepositoryFactory {
-    private fun createService(): HuggingFaceService {
+    internal fun createService(baseUrl: String = "https://huggingface.co/api/", client: okhttp3.OkHttpClient = okhttp3.OkHttpClient()): HuggingFaceService {
         val json = Json { ignoreUnknownKeys = true; isLenient = true }
         return Retrofit.Builder()
-            .baseUrl("https://huggingface.co/api/")
+            .baseUrl(baseUrl)
+            .client(client)
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
             .create(HuggingFaceService::class.java)

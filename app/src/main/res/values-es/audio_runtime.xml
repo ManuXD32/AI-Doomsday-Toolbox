@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="audio_runtime_title">Generación de audio</string>
+    <string name="audio_runtime_status_preparing">Preparando audio</string>
+    <string name="audio_runtime_status_queued">En cola</string>
+    <string name="audio_runtime_status_generating">Generando voz</string>
+    <string name="audio_runtime_status_saving">Guardando audio</string>
+    <string name="audio_runtime_status_complete">Audio listo</string>
+    <string name="audio_runtime_status_cancelling">Cancelando generación de audio</string>
+    <string name="audio_runtime_status_cancelled">Generación de audio cancelada</string>
+    <string name="audio_runtime_status_error">La generación de audio falló</string>
+    <string name="audio_runtime_status_interrupted">Interrumpida por el reinicio del motor</string>
+    <string name="audio_runtime_complete">Generación de audio completada</string>
+    <string name="audio_runtime_error_no_adapter">No hay un adaptador de audio local compatible instalado</string>
+    <string name="audio_runtime_error_empty_text">Se necesita texto o un documento de origen</string>
+    <string name="audio_runtime_error_cancelled">Generación de audio cancelada</string>
+    <string name="audio_runtime_error_generic">El motor de audio local no pudo completar este trabajo</string>
+    <string name="audio_runtime_error_model_missing">El modelo de audio seleccionado no está disponible</string>
+    <string name="audio_runtime_error_companion_missing">El proyector complementario seleccionado no está disponible</string>
+    <string name="audio_runtime_error_native_binary_missing">El motor local de TTS de llama no está instalado</string>
+    <string name="audio_runtime_error_reference_required">Este modelo necesita una referencia de voz válida</string>
+    <string name="audio_runtime_error_voice_invalid">No se pudo leer la referencia de voz seleccionada</string>
+    <string name="audio_runtime_error_ffmpeg_missing">Este paso de procesamiento necesita FFmpeg</string>
+</resources>

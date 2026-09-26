@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_world_brain_baseline">Deterministic living baseline</string>
+    <string name="tama_world_brain_policy_history_title">Adopted brain history</string>
+    <string name="tama_world_brain_policy_history_body">Restore an earlier adopted brain or return to the deterministic living baseline. Training checkpoints remain separate.</string>
+    <string name="tama_world_brain_policy_history_empty">No adopted brains are saved yet.</string>
+    <string name="tama_world_brain_policy_baseline">Living baseline</string>
+    <string name="tama_world_brain_policy_version">Brain version %1$d</string>
+    <string name="tama_world_brain_policy_hash">Hash %1$s</string>
+    <string name="tama_world_brain_policy_no_hash">No neural artifact</string>
+    <string name="tama_world_brain_policy_created">Saved at %1$s</string>
+    <string name="tama_world_brain_checkpoint_created">Saved: %1$s</string>
+    <string name="tama_world_brain_policy_active">Active</string>
+    <string name="tama_world_brain_policy_restore">Restore</string>
+    <string name="tama_world_brain_metric_invalid">Invalid actions</string>
+    <string name="tama_world_brain_checkpoint_measurements">Objective %1$.1f · path %2$.0f%% · exploration %3$.0f%%</string>
+</resources>

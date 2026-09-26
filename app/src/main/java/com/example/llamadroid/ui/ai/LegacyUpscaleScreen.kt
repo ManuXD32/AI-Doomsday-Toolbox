@@ -57,6 +57,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,6 +80,9 @@ import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.service.GenerationDiagnosticsStore
+import com.example.llamadroid.service.GenerationQueueRepository
+import com.example.llamadroid.service.GenerationQueueRuntime
+import com.example.llamadroid.service.GenerationQueueSnapshot
 import com.example.llamadroid.service.SDGenerationState
 import com.example.llamadroid.service.SDMode
 import com.example.llamadroid.service.SDModeStateHolder
@@ -97,6 +101,7 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.launch
 import kotlin.math.max
 
 private const val LEGACY_UPSCALE_UI_DIAGNOSTIC_SOURCE = "image_generation_ui"
@@ -109,6 +114,9 @@ fun LegacyUpscaleScreen(navController: NavController) {
     val db = remember { AppDatabase.getDatabase(context) }
     val binaryRepo = remember { BinaryRepository(context) }
     val settingsRepo = remember { SettingsRepository(context) }
+    val scope = rememberCoroutineScope()
+    val queueRepository = remember(context) { GenerationQueueRepository(context) }
+    val queueRunning by GenerationQueueRuntime.active.collectAsState()
     val batteryGateState = rememberBatteryOptimizationGateState()
     val keepScreenAwakeDuringGeneration by settingsRepo.keepScreenAwakeDuringGeneration.collectAsState()
     val sdMaxCpuRamEnabled by settingsRepo.sdMaxCpuRamEnabled.collectAsState()
@@ -240,7 +248,7 @@ fun LegacyUpscaleScreen(navController: NavController) {
             .distinctBy { it.absolutePath }
     }
 
-    val generate = fun() {
+    val generate = fun(addToQueue: Boolean) {
         val modelPath = selectedUpscalerModelPath
         val inputImagePath = selectedImagePath
         val sdBinaryPath = binaryRepo.getSdBinary()?.absolutePath
@@ -277,7 +285,18 @@ fun LegacyUpscaleScreen(navController: NavController) {
             maxVramCpuGiB = if (sdMaxCpuRamEnabled) sdMaxCpuRamGiB else ""
         )
 
-        batteryGateState.runAfterCheck {
+        if (addToQueue) {
+            scope.launch {
+                runCatching { queueRepository.add(GenerationQueueSnapshot.upscale(context, config)) }
+                    .onSuccess {
+                        android.widget.Toast.makeText(context, R.string.generation_queue_added,
+                            android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                    .onFailure { error ->
+                        errorMessage = error.message ?: resources.getString(R.string.generation_queue_add_failed)
+                    }
+            }
+        } else batteryGateState.runAfterCheck {
             val launchDetails = buildString {
                 append("legacy=true")
                 append(" model=${File(config.modelPath).name}")
@@ -341,6 +360,7 @@ fun LegacyUpscaleScreen(navController: NavController) {
                 overflow = TextOverflow.Ellipsis
             )
             com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
+            GenerationQueueHeaderAction(navController)
         }
 
         val mainTabs = listOf(
@@ -761,19 +781,20 @@ fun LegacyUpscaleScreen(navController: NavController) {
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(stringResource(R.string.soft_studio_cancel))
                     }
-                } else {
-                    Button(
-                        onClick = generate,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 52.dp),
+                    OutlinedButton(
+                        onClick = { generate(true) },
                         enabled = selectedUpscalerModelPath != null && selectedImagePath != null,
-                        shape = RoundedCornerShape(14.dp)
-                    ) {
-                        Icon(Icons.Default.Create, contentDescription = null)
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(stringResource(R.string.imagegen_upscale_btn), fontWeight = FontWeight.Bold)
-                    }
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    ) { Text(stringResource(R.string.generation_queue_add)) }
+                } else {
+                    val readyToUpscale = selectedUpscalerModelPath != null && selectedImagePath != null
+                    GenerationStartAndQueueButtons(
+                        startLabel = stringResource(R.string.imagegen_upscale_btn),
+                        startEnabled = readyToUpscale && !queueRunning,
+                        addEnabled = readyToUpscale,
+                        onStart = { generate(false) },
+                        onAdd = { generate(true) }
+                    )
                 }
             }
         } else {

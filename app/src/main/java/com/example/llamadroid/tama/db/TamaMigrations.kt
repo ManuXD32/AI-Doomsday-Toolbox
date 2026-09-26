@@ -14,6 +14,7 @@ import com.example.llamadroid.util.DebugLog
  * 4. Test the migration thoroughly before release
  */
 object TamaMigrations {
+    val MIGRATION_43_44: Migration = com.example.llamadroid.tama.world.persistence.TamaWorldMigration
     
     /**
      * Versions where destructive migration is allowed.
@@ -971,7 +972,8 @@ object TamaMigrations {
         MIGRATION_39_40,
         MIGRATION_40_41,
         MIGRATION_41_42,
-        MIGRATION_42_43
+        MIGRATION_42_43,
+        MIGRATION_43_44
     )
     
     // ========== HELPER FUNCTIONS ==========

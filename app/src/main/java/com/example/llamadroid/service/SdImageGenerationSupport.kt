@@ -19,7 +19,8 @@ internal fun validateSdLaunchInputs(
     mode: SDMode,
     modelPath: String?,
     inputImagePath: String?,
-    sdBinaryPath: String?
+    sdBinaryPath: String?,
+    referenceImagePaths: List<String> = emptyList()
 ): SdLaunchIssue? {
     if (sdBinaryPath.isNullOrBlank() || !isReadableRegularFile(sdBinaryPath)) {
         return SdLaunchIssue.MISSING_BINARY
@@ -39,6 +40,9 @@ internal fun validateSdLaunchInputs(
         if (!isReadableRegularFile(inputImagePath)) {
             return SdLaunchIssue.UNREADABLE_INPUT_IMAGE
         }
+    }
+    if (mode == SDMode.IMG2IMG && referenceImagePaths.any { !isReadableRegularFile(it) }) {
+        return SdLaunchIssue.UNREADABLE_INPUT_IMAGE
     }
     return null
 }

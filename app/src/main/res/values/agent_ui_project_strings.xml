@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="agent_details_title">Agent details</string>
+    <string name="agent_details_project_section">Project</string>
+    <string name="agent_details_runtime_section">Runtime</string>
+    <string name="agent_details_settings_section">Settings</string>
+    <string name="agent_details_no_project">No project selected</string>
+    <string name="agent_details_no_value">Unavailable</string>
+    <string name="agent_details_project_name">Name</string>
+    <string name="agent_details_project_id">Project ID</string>
+    <string name="agent_details_workspace_type">Workspace type</string>
+    <string name="agent_details_project_path">Project path</string>
+    <string name="agent_details_resume_state">Resume state</string>
+    <string name="agent_details_backend">Backend</string>
+    <string name="agent_details_model">Model</string>
+    <string name="agent_details_endpoint">Endpoint</string>
+    <string name="agent_details_connection">Connection</string>
+    <string name="agent_details_agent">Agent</string>
+    <string name="agent_details_execution_profile">Execution profile</string>
+    <string name="agent_details_planning_mode">Planning mode</string>
+    <string name="agent_details_knowledge_bases">Knowledge bases</string>
+    <string name="agent_details_extra_output">Extra output</string>
+    <string name="agent_details_enabled">Enabled</string>
+    <string name="agent_details_disabled">Disabled</string>
+    <string name="agent_details_plan">Plan</string>
+    <string name="agent_details_build">Build</string>
+    <string name="agent_details_phase">Workflow phase</string>
+    <string name="agent_details_finish_reason">Last finish reason or error</string>
+    <string name="agent_details_context_limit">Context limit</string>
+    <string name="agent_details_output_limit">Output limit</string>
+    <string name="agent_details_token_usage">Tokens: prompt / output / total</string>
+    <string name="agent_details_cache_packet">Prompt packing/cache data</string>
+    <string name="agent_details_active_tools">Active tools</string>
+    <string name="agent_details_active_skills">Loaded skills this turn</string>
+    <string name="agent_details_global_scope">Global defaults</string>
+    <string name="agent_details_project_scope">Project %1$d · agent %2$s</string>
+    <string name="agent_project_creating">Creating…</string>
+    <string name="agent_project_create_remote_error">A remote project needs a live SSH connection. Connect to the Agent workspace and try again.%1$s</string>
+    <string name="agent_project_create_error">Project creation failed.%1$s</string>
+    <string name="agent_skill_scope_global">Global skill defaults</string>
+    <string name="agent_skill_scope_project">Project %1$d · agent %2$s</string>
+    <string name="agent_skill_scope_summary" tools:ignore="PluralsCandidate">%1$d installed · %2$d allowed to load</string>
+    <string name="agent_skill_status_activated">Activated for this project</string>
+    <string name="agent_skill_status_approval">Approval required before loading</string>
+    <string name="agent_skill_status_disabled">Disabled for this project</string>
+</resources>

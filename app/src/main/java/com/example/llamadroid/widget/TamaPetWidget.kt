@@ -347,10 +347,6 @@ class TamaPetWidgetProvider : AppWidgetProvider() {
 private object TamaPetWidgetSceneRenderer {
     private const val WIDTH = 480
     private const val HEIGHT = 280
-    private const val STUDY_ACTION_ICON_ASSET = "tama/actions/study.png"
-    private const val WORK_ACTION_ICON_ASSET = "tama/actions/work.png"
-    private const val RELAX_ACTION_ICON_ASSET = "tama/icons/ui/park_tree_relax.png"
-    private const val TRAINING_ACTION_ICON_ASSET = "tama/icons/ui/exercise_glove.png"
     private const val POOP_PROP_ASSET = "tama/decor/poop.png"
 
     fun renderEmpty(context: Context): Bitmap =
@@ -370,7 +366,6 @@ private object TamaPetWidgetSceneRenderer {
             if (homeScene) drawHomeDecor(context, canvas, pet)
             drawPoopIfNeeded(context, canvas, pet)
             drawPet(context, canvas, pet, actionFor(pet))
-            drawActivityProp(context, canvas, pet)
         }
 
     private fun backgroundAssetFor(pet: TamaPet): String {
@@ -449,11 +444,9 @@ private object TamaPetWidgetSceneRenderer {
     private fun drawPet(context: Context, canvas: Canvas, pet: TamaPet, action: String) {
         val speciesLine = PetSpeciesLine.fromSpeciesId(pet.species, pet.genetics.bodyStyle)
         val spriteState = mapPetActionToSpriteState(action, pet.isSleeping)
-        val frameIndex = if (spriteState.frameCount > 1) {
-            ((System.currentTimeMillis() / 600L) % spriteState.frameCount).toInt()
-        } else {
-            0
-        }
+        // RemoteViews receives one bitmap snapshot. A deterministic authored frame avoids
+        // phase-dependent posters and keeps the sprite baseline stable between refreshes.
+        val frameIndex = 0
         val assetPath = resolvePetSpriteAssetPath(speciesLine, pet.stage, spriteState, frameIndex)
         val size = when (pet.stage) {
             GrowthStage.EGG -> 118f
@@ -462,34 +455,26 @@ private object TamaPetWidgetSceneRenderer {
         }
         val centerX = if (pet.currentActivity == ActivityType.WORKING) 276f else 240f
         val bottom = if (pet.isSleeping) 252f else 266f
-        drawAsset(
+        val rendered = drawAsset(
             context = context,
             canvas = canvas,
             assetPath = assetPath,
             target = RectF(centerX - size / 2f, bottom - size, centerX + size / 2f, bottom)
         )
-    }
-
-    private fun drawActivityProp(context: Context, canvas: Canvas, pet: TamaPet) {
-        when {
-            pet.currentActivity == ActivityType.STUDYING -> {
-                drawAsset(context, canvas, STUDY_ACTION_ICON_ASSET, RectF(306f, 150f, 408f, 252f))
-            }
-            pet.currentActivity == ActivityType.WORKING -> {
-                drawAsset(context, canvas, WORK_ACTION_ICON_ASSET, RectF(84f, 154f, 194f, 264f))
-            }
-            pet.currentActivity == ActivityType.RELAXING -> {
-                drawAsset(context, canvas, RELAX_ACTION_ICON_ASSET, RectF(320f, 140f, 418f, 238f))
-            }
-            pet.currentActivity == ActivityType.TRAINING -> {
-                drawAsset(context, canvas, TRAINING_ACTION_ICON_ASSET, RectF(320f, 140f, 418f, 238f))
-            }
+        if (!rendered) {
+            drawAsset(
+                context = context,
+                canvas = canvas,
+                assetPath = "tama/pets/${speciesLine.id}/${pet.stage.name.lowercase()}/idle_0.png",
+                target = RectF(centerX - size / 2f, bottom - size, centerX + size / 2f, bottom)
+            )
         }
     }
 
-    private fun drawAsset(context: Context, canvas: Canvas, assetPath: String, target: RectF) {
-        val bitmap = decodeAsset(context, assetPath) ?: return
+    private fun drawAsset(context: Context, canvas: Canvas, assetPath: String, target: RectF): Boolean {
+        val bitmap = decodeAsset(context, assetPath) ?: return false
         canvas.drawBitmap(bitmap, null, target, bitmapPaint(filter = false))
+        return true
     }
 
     private fun decodeAsset(context: Context, assetPath: String): Bitmap? =

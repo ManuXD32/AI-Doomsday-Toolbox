@@ -258,7 +258,11 @@ class WhisperService : Service() {
                     }
                     if (exitCode != 0) {
                         throw IllegalStateException(
-                            getString(R.string.whisper_error_failed_with_exit_code, exitCode)
+                            if (whisperExitCodeIndicatesMissingModel(exitCode)) {
+                                getString(R.string.whisper_error_no_model)
+                            } else {
+                                getString(R.string.whisper_error_failed_with_exit_code, exitCode)
+                            }
                         )
                     }
 

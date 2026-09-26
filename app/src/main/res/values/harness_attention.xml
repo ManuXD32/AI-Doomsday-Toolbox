@@ -1,0 +1,7 @@
+<resources>
+    <string name="harness_attention_completed">Harness work finished</string>
+    <string name="harness_attention_stopped">Harness work stopped</string>
+    <string name="harness_attention_interrupted">Harness work interrupted</string>
+    <string name="harness_attention_open_conversation">Open the conversation to review its status.</string>
+    <string name="harness_session_delete_pending">Deletion is pending: running terminals will close and work will finish. If the runtime is stopped, start it to continue.</string>
+</resources>

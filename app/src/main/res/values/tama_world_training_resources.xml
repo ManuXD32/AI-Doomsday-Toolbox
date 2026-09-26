@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_world_brain_recoverable_error">Training was interrupted. Resume to try again, or restore a saved checkpoint.</string>
+    <string name="tama_world_brain_evaluate_again">The candidate changed. Compare it again before adoption.</string>
+    <string name="tama_world_brain_checkpoint_curriculum_error">Select the checkpoint’s curriculum before comparing it.</string>
+    <string name="tama_world_brain_resources_title">Training resource limits</string>
+    <string name="tama_world_brain_battery_limit">Pause below %1$d%% battery</string>
+    <string name="tama_world_brain_thread_limit">Maximum worker threads: %1$d</string>
+    <string name="tama_world_brain_environment_limit">Parallel practice worlds: %1$d</string>
+    <string name="tama_world_brain_resources_body">Changing worker limits selects Custom and pauses training. Your progress is preserved. Training also pauses if the device reaches a severe thermal state.</string>
+    <string name="tama_world_brain_unit_steps">steps</string>
+</resources>

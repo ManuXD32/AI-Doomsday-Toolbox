@@ -14,12 +14,16 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.lang.reflect.InvocationTargetException
 import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.locks.ReentrantLock
 
 data class AgentLocalRunState(
     val conversationId: Long,
@@ -36,17 +40,37 @@ data class AgentLocalRunState(
 )
 
 class AgentLocalProjectRunner(private val context: Context) {
-    private data class ActiveRun(
-        val stateKey: Long,
+    private class ActiveRun(
+        val runId: String,
+        val runtime: AgentLocalRuntimeType,
         val projectRoot: File,
         val server: LocalProjectHttpServer?,
-        val job: Job?
+        @Volatile var job: Job? = null,
+        @Volatile var stopRequested: Boolean = false
     )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val activeRuns = ConcurrentHashMap<Long, ActiveRun>()
+    private val lifecycleMutex = Mutex()
     private val _states = MutableStateFlow<Map<Long, AgentLocalRunState>>(emptyMap())
     val states: StateFlow<Map<Long, AgentLocalRunState>> = _states.asStateFlow()
+
+    /*
+     * runpy changes process-global cwd, argv, sys.path, stdout and stderr.
+     * The lease is static so separate runner instances cannot overlap calls.
+     */
+    private fun <T> withPythonExecution(block: () -> T): T {
+        PYTHON_EXECUTION_LOCK.lock()
+        return try {
+            block()
+        } finally {
+            PYTHON_EXECUTION_LOCK.unlock()
+        }
+    }
+
+    private companion object {
+        val PYTHON_EXECUTION_LOCK = ReentrantLock()
+    }
 
     suspend fun runProject(
         conversationId: Long,
@@ -55,6 +79,14 @@ class AgentLocalProjectRunner(private val context: Context) {
     ): Result<AgentLocalRunState> = withContext(Dispatchers.IO) {
         runCatching {
             stopProject(conversationId, force = true).getOrNull()
+            lifecycleMutex.lock()
+            try {
+                require(activeRuns[conversationId] == null) {
+                    "RUN_ACTIVE: previous local project run is still stopping; wait for check_project_run."
+                }
+            } finally {
+                lifecycleMutex.unlock()
+            }
             val projectRoot = AgentLocalWorkspaceSupport.rootForProject(context, projectFolder)
             val runFile = File(projectRoot, ".adt/run.json")
             require(runFile.isFile) { ".adt/run.json is required before the project can run." }
@@ -79,22 +111,54 @@ class AgentLocalProjectRunner(private val context: Context) {
 
     suspend fun stopProject(conversationId: Long, force: Boolean = false): Result<AgentLocalRunState> = withContext(Dispatchers.IO) {
         runCatching {
-            val now = System.currentTimeMillis()
-            val active = activeRuns.remove(conversationId)
-            active?.server?.stop()
-            active?.job?.cancel(CancellationException(if (force) "Force stopped by user." else "Stopped by user."))
-            val current = _states.value[conversationId]
-                ?: AppDatabase.getDatabase(context).agentChatDao().getLatestProjectRun(conversationId)?.toState()
-                ?: error("No local project run is active.")
-            val stopped = current.copy(
-                status = if (force) "FORCE_STOPPED" else "STOPPED",
-                logs = current.logs.appendLog(if (force) "Force stop requested." else "Stop requested."),
-                endedAt = now,
-                exitCode = current.exitCode
-            )
-            publishState(stopped)
-            persistRun(stopped, forceStop = force, stop = !force)
-            stopped
+            lifecycleMutex.lock()
+            try {
+                val now = System.currentTimeMillis()
+                val active = activeRuns[conversationId]
+                if (active?.runtime == AgentLocalRuntimeType.PYTHON) {
+                    // Job.cancel cannot interrupt the synchronous Chaquopy call.
+                    // Leave the worker alive so it can persist its terminal state.
+                    active.stopRequested = true
+                    val current = _states.value[conversationId]
+                        ?: AppDatabase.getDatabase(context).agentChatDao().getLatestProjectRun(conversationId)?.toState()
+                        ?: error("No local project run is active.")
+                    val requested = current.copy(
+                        status = "RUNNING",
+                        logs = current.logs.appendLog(
+                            if (force) {
+                                "Force stop requested; embedded Python remains active until the script returns. / Se solicitó forzar la detención; Python integrado seguirá activo hasta que termine el script."
+                            } else {
+                                "Stop requested; embedded Python remains active until the script returns. / Se solicitó la detención; Python integrado seguirá activo hasta que termine el script."
+                            }
+                        ),
+                        endedAt = null,
+                        exitCode = null
+                    )
+                    persistRun(requested, forceStop = force, stop = true)
+                    publishState(requested)
+                    requested
+                } else {
+                    active?.server?.stop()
+                    active?.job?.cancel(
+                        CancellationException(if (force) "Force stopped by user." else "Stopped by user.")
+                    )
+                    val current = _states.value[conversationId]
+                        ?: AppDatabase.getDatabase(context).agentChatDao().getLatestProjectRun(conversationId)?.toState()
+                        ?: error("No local project run is active.")
+                    val stopped = current.copy(
+                        status = if (force) "FORCE_STOPPED" else "STOPPED",
+                        logs = current.logs.appendLog(if (force) "Force stop requested." else "Stop requested."),
+                        endedAt = now,
+                        exitCode = current.exitCode
+                    )
+                    persistRun(stopped, forceStop = force, stop = !force)
+                    if (active != null) activeRuns.remove(conversationId, active)
+                    publishState(stopped)
+                    stopped
+                }
+            } finally {
+                lifecycleMutex.unlock()
+            }
         }
     }
 
@@ -173,7 +237,9 @@ class AgentLocalProjectRunner(private val context: Context) {
             require(args.size <= 32 && args.all { it.length <= 2_000 }) {
                 "Skill script arguments exceed the sandbox limit"
             }
-            runPythonViaChaquopy(projectRoot, script, args, capabilities).takeLast(32_000)
+            withPythonExecution {
+                runPythonViaChaquopy(projectRoot, script, args, capabilities)
+            }.takeLast(32_000)
         }
     }
 
@@ -183,25 +249,47 @@ class AgentLocalProjectRunner(private val context: Context) {
         projectRoot: File,
         config: AgentRunConfig
     ): AgentLocalRunState {
-        val port = AgentLocalWorkspaceSupport.acquireLoopbackPort()
-        val server = LocalProjectHttpServer(port, projectRoot)
-        server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
-        val previewUrl = "http://127.0.0.1:$port/${config.entrypoint}"
-        val state = AgentLocalRunState(
-            conversationId = conversationId,
-            projectFolder = projectFolder,
-            runtime = "web",
-            entrypoint = config.entrypoint,
-            uiMode = "WEB",
-            status = "RUNNING",
-            logs = "Web project serving from app-private sandbox.\nPreview: $previewUrl",
-            previewUrl = previewUrl,
-            startedAt = System.currentTimeMillis()
-        )
-        activeRuns[conversationId] = ActiveRun(conversationId, projectRoot, server, null)
-        publishState(state)
-        persistRun(state)
-        return state
+        lifecycleMutex.lock()
+        var server: LocalProjectHttpServer? = null
+        try {
+            require(activeRuns[conversationId] == null) {
+                "RUN_ACTIVE: a local project run is already active; stop it before starting another run."
+            }
+            val port = AgentLocalWorkspaceSupport.acquireLoopbackPort()
+            val startedServer = LocalProjectHttpServer(port, projectRoot)
+            server = startedServer
+            startedServer.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
+            val previewUrl = "http://127.0.0.1:$port/${config.entrypoint}"
+            val state = AgentLocalRunState(
+                conversationId = conversationId,
+                projectFolder = projectFolder,
+                runtime = "web",
+                entrypoint = config.entrypoint,
+                uiMode = "WEB",
+                status = "RUNNING",
+                logs = "Web project serving from app-private sandbox.\nPreview: $previewUrl",
+                previewUrl = previewUrl,
+                startedAt = System.currentTimeMillis()
+            )
+            activeRuns[conversationId] = ActiveRun(
+                runId = UUID.randomUUID().toString(),
+                runtime = AgentLocalRuntimeType.WEB,
+                projectRoot = projectRoot,
+                server = startedServer
+            )
+            publishState(state)
+            persistRun(state)
+            return state
+        } catch (error: Throwable) {
+            val registered = activeRuns[conversationId]
+            if (server != null && registered != null && registered.server === server) {
+                activeRuns.remove(conversationId, registered)
+            }
+            server?.stop()
+            throw error
+        } finally {
+            lifecycleMutex.unlock()
+        }
     }
 
     private suspend fun startPythonProject(
@@ -222,31 +310,74 @@ class AgentLocalProjectRunner(private val context: Context) {
             logs = "Python project started in app-private sandbox.",
             startedAt = System.currentTimeMillis()
         )
-        publishState(started)
-        persistRun(started)
-        val job = scope.launch {
-            val finished = runCatching {
-                val output = runPythonViaChaquopy(projectRoot, entryFile, config.args, capabilities)
-                started.copy(
-                    status = "STOPPED",
-                    logs = started.logs.appendLog(output.ifBlank { "Python script completed without output." }),
-                    endedAt = System.currentTimeMillis(),
-                    exitCode = 0
-                )
-            }.getOrElse { error ->
-                started.copy(
-                    status = if (error is CancellationException) "STOPPED" else "FAILED",
-                    logs = started.logs.appendLog(error.message ?: "Python script failed."),
-                    endedAt = System.currentTimeMillis(),
-                    exitCode = if (error is CancellationException) null else 1
-                )
+        val runId = UUID.randomUUID().toString()
+        val active = ActiveRun(
+            runId = runId,
+            runtime = AgentLocalRuntimeType.PYTHON,
+            projectRoot = projectRoot,
+            server = null
+        )
+        lifecycleMutex.lock()
+        try {
+            require(activeRuns.putIfAbsent(conversationId, active) == null) {
+                "PYTHON_RUN_ACTIVE: previous local project run is still stopping; wait for check_project_run."
             }
-            activeRuns.remove(conversationId)
-            publishState(finished)
-            persistRun(finished)
+            publishState(started)
+            persistRun(started)
+            val job = scope.launch {
+                val finished = try {
+                    val output = withPythonExecution {
+                        if (active.stopRequested) {
+                            null
+                        } else {
+                            runPythonViaChaquopy(projectRoot, entryFile, config.args, capabilities)
+                        }
+                    }
+                    if (output == null) {
+                        started.copy(
+                            status = "STOPPED",
+                            logs = started.logs.appendLog(
+                                "Stop request acknowledged before embedded Python started. / Se confirmó la detención antes de iniciar Python integrado."
+                            ),
+                            endedAt = System.currentTimeMillis(),
+                            exitCode = null
+                        )
+                    } else {
+                        started.copy(
+                            status = "STOPPED",
+                            logs = started.logs.appendLog(output.ifBlank { "Python script completed without output." }),
+                            endedAt = System.currentTimeMillis(),
+                            exitCode = 0
+                        )
+                    }
+                } catch (error: Throwable) {
+                    started.copy(
+                        status = if (active.stopRequested) "STOPPED" else "FAILED",
+                        logs = started.logs.appendLog(pythonFailureMessage(error)),
+                        endedAt = System.currentTimeMillis(),
+                        exitCode = if (active.stopRequested) null else 1
+                    )
+                }
+                lifecycleMutex.lock()
+                try {
+                    if (activeRuns[conversationId]?.runId == runId) {
+                        // Keep the run registered until its terminal state is durable.
+                        persistRun(finished)
+                        activeRuns.remove(conversationId, active)
+                        publishState(finished)
+                    }
+                } finally {
+                    lifecycleMutex.unlock()
+                }
+            }
+            active.job = job
+            return started
+        } catch (error: Throwable) {
+            activeRuns.remove(conversationId, active)
+            throw error
+        } finally {
+            lifecycleMutex.unlock()
         }
-        activeRuns[conversationId] = ActiveRun(conversationId, projectRoot, null, job)
-        return started
     }
 
     private fun runPythonViaChaquopy(
@@ -257,10 +388,14 @@ class AgentLocalProjectRunner(private val context: Context) {
     ): String {
         val pythonClass = Class.forName("com.chaquo.python.Python")
         val androidPlatformClass = Class.forName("com.chaquo.python.android.AndroidPlatform")
+        val platformClass = Class.forName("com.chaquo.python.Python\$Platform")
         val isStarted = pythonClass.getMethod("isStarted").invoke(null) as Boolean
         if (!isStarted) {
             val platform = androidPlatformClass.getConstructor(Context::class.java).newInstance(context.applicationContext)
-            pythonClass.getMethod("start", androidPlatformClass).invoke(null, platform)
+            // Chaquopy declares start(Python.Platform); AndroidPlatform is a
+            // subclass, so looking up start(AndroidPlatform) fails exactly at
+            // the first Python run.
+            pythonClass.getMethod("start", platformClass).invoke(null, platform)
         }
         val python = pythonClass.getMethod("getInstance").invoke(null)
         val module = python.javaClass.getMethod("getModule", String::class.java).invoke(python, "adt_local_runner")
@@ -276,6 +411,22 @@ class AgentLocalProjectRunner(private val context: Context) {
             arrayOf(projectRoot.absolutePath, entryFile.absolutePath, JSONArray(args).toString(), sitePackages.absolutePath, packageList.toString())
         )
         return result?.toString().orEmpty()
+    }
+
+    private fun pythonFailureMessage(error: Throwable): String {
+        var cause = error
+        var depth = 0
+        while (cause is InvocationTargetException && cause.cause != null && depth < 4) {
+            val next = (cause as? InvocationTargetException)?.cause ?: break
+            cause = next
+            depth += 1
+        }
+        val detail = cause.message?.trim().orEmpty()
+        return if (detail.isBlank()) {
+            "Python script failed (${cause::class.java.simpleName})."
+        } else {
+            "Python script failed (${cause::class.java.simpleName}): ${detail.take(4_000)}"
+        }
     }
 
     private fun publishState(state: AgentLocalRunState) {

@@ -1,0 +1,4 @@
+<resources>
+    <string name="agent_harness_plan_too_large">El plan supera 500 palabras o 4.000 caracteres. Se permite una reparación compacta; después, pausa para recibir instrucciones. Conserva todos los requisitos, las fórmulas exactas, los límites numéricos y las comprobaciones.</string>
+    <string name="agent_harness_plan_shorten">Acorta este plan a un máximo de 500 palabras y 4.000 caracteres. Conserva todos los requisitos, las fórmulas exactas, los límites numéricos y las comprobaciones de validación; elimina la prosa explicativa.</string>
+</resources>

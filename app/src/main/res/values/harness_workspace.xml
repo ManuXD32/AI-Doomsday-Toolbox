@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_projects_title">Projects</string>
+    <string name="harness_projects_description">Choose a project to see its threads and shared workspace.</string>
+    <string name="harness_project_create">Create project</string>
+    <string name="harness_projects_count">Projects: %1$d</string>
+    <string name="harness_project_open">Open %1$s</string>
+    <string name="harness_project_actions">Actions for %1$s</string>
+    <string name="harness_projects_empty_title">No projects yet</string>
+    <string name="harness_projects_empty_description">Create a project to keep its conversations and files together.</string>
+    <string name="harness_project_threads">Threads: %1$d</string>
+    <string name="harness_tab_conversation">Conversation</string>
+    <string name="harness_tab_plan">Plan</string>
+    <string name="harness_tab_requests">Requests</string>
+    <string name="harness_tab_changes">Changes</string>
+    <string name="harness_tab_tools">Tools</string>
+    <string name="harness_tab_files">Files</string>
+    <string name="harness_tab_commands">Commands</string>
+    <string name="harness_tab_terminal">Terminal</string>
+    <string name="harness_more_destinations">More destinations</string>
+    <string name="harness_back_to_projects">Back to projects</string>
+    <string name="harness_plan_empty_title">No plan for this thread</string>
+    <string name="harness_plan_empty_description">A plan appears here when the agent creates one.</string>
+    <string name="harness_requests_empty_title">No pending requests</string>
+    <string name="harness_requests_empty_description">Questions, approvals, and queued actions appear here when they need your attention.</string>
+    <string name="harness_files_project_title">Project files</string>
+    <string name="harness_files_project_description">Files are shared by this project’s threads.</string>
+    <string name="harness_open_project_files">Open project files</string>
+    <string name="harness_files_thread_title">Thread attachments</string>
+    <string name="harness_files_uploading">Uploading</string>
+    <string name="harness_files_attached">Open</string>
+    <string name="harness_files_thread_empty">No attachments in this thread.</string>
+    <string name="harness_changes_title">Changes</string>
+    <string name="harness_changes_description">Review files produced or referenced by this thread.</string>
+    <string name="harness_changes_empty_title">No changes yet</string>
+    <string name="harness_changes_empty_description">Changes will appear here as the agent works.</string>
+    <string name="harness_terminal_unavailable_title">Terminal unavailable</string>
+    <string name="harness_terminal_unavailable_description">The runtime has not supplied terminal content for this thread.</string>
+    <string name="harness_activity_group_title">Activity</string>
+    <string name="harness_activity_group_count">Internal events: %1$d</string>
+    <string name="harness_activity_group_show">Show</string>
+    <string name="harness_activity_group_hide">Hide</string>
+    <string name="harness_tools_empty_title">No tool activity</string>
+    <string name="harness_tools_empty_description">Tool calls, reasoning, and runtime details will appear here.</string>
+    <string name="harness_jump_to_latest">Jump to latest</string>
+</resources>

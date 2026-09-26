@@ -29,6 +29,8 @@ import com.example.llamadroid.ui.theme.LlamaDroidTheme
 import com.example.llamadroid.ui.LlamaApp
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.RestoreCoordinator
+import com.example.llamadroid.ui.settings.RestoreBootstrapScreen
 import com.example.llamadroid.service.AgentService
 import com.example.llamadroid.service.AiRuntimeJobStore
 import com.example.llamadroid.service.GenerationDiagnosticsStore
@@ -75,7 +77,8 @@ class MainActivity : ComponentActivity() {
      * Override to apply locale setting to the Activity context
      */
     override fun attachBaseContext(newBase: Context) {
-        super.attachBaseContext(LlamaApplication.updateLocale(newBase))
+        super.attachBaseContext(if (RestoreCoordinator.isMaintenance(newBase)) newBase
+            else LlamaApplication.updateLocale(newBase))
     }
 
     private fun reconcileAgentJobsAfterCrash(hadActiveGeneration: Boolean) {
@@ -110,6 +113,17 @@ class MainActivity : ComponentActivity() {
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (RestoreCoordinator.isMaintenance(this)) {
+            setContent {
+                MaterialTheme {
+                    RestoreBootstrapScreen(
+                        install = { RestoreCoordinator.installPending(this@MainActivity) },
+                        restart = { RestoreCoordinator.scheduleProcessRestart(this@MainActivity) }
+                    )
+                }
+            }
+            return
+        }
         normalLaunchId.value = savedInstanceState?.getInt("walkthrough_normal_launch_id") ?: 0
         externalLaunchId.value = savedInstanceState?.getInt("walkthrough_external_launch_id") ?: 0
 
@@ -266,6 +280,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        if (RestoreCoordinator.isMaintenance(this)) return
         setIntent(intent)
         val normalLaunch = isNormalAppLaunch(intent)
         if (normalLaunch) {
@@ -281,6 +296,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        if (RestoreCoordinator.isMaintenance(this)) return
         DatasetForegroundService.requestResume(this)
         lifecycle.coroutineScope.launch(Dispatchers.IO) {
             runCatching {

@@ -1,0 +1,27 @@
+<resources>
+    <string name="harness_command_result">Command result</string>
+    <string name="harness_command_unknown">This command is unknown or incomplete. Your draft and attachments have been kept.</string>
+    <string name="harness_command_rejected">The command could not be completed. Your draft and attachments have been kept.</string>
+    <string name="harness_command_history_description">Model-run Bash commands and their output for this thread.</string>
+    <string name="harness_commands_no_session">Select a thread to view its commands.</string>
+    <string name="harness_commands_empty">No model-run Bash commands yet.</string>
+    <string name="harness_commands_loading">Loading command history…</string>
+    <string name="harness_commands_load_failed">Command history could not be refreshed.</string>
+    <string name="harness_commands_refresh">Refresh</string>
+    <string name="harness_commands_load_older">Load older commands</string>
+    <string name="harness_commands_loading_older">Loading older commands…</string>
+    <string name="harness_command_label">Command</string>
+    <string name="harness_command_output_label">Output</string>
+    <string name="harness_command_status_running">Running</string>
+    <string name="harness_command_status_background">Background</string>
+    <string name="harness_command_status_completed">Completed</string>
+    <string name="harness_command_status_failed">Failed</string>
+    <string name="harness_command_duration_label">Duration: %1$s</string>
+    <string name="harness_command_duration_milliseconds">%1$d ms</string>
+    <string name="harness_command_duration_seconds">%1$d s</string>
+    <string name="harness_command_duration_minutes">%1$d min %2$d s</string>
+    <string name="harness_command_duration_hours">%1$d h %2$d min</string>
+    <string name="harness_command_output_truncated">Output preview shortened.</string>
+    <string name="harness_commands_waiting_output">Waiting for output…</string>
+    <string name="harness_commands_background_status_unobserved">Status and output update when the Session returns a job_output result.</string>
+</resources>

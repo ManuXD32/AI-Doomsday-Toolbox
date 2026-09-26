@@ -55,9 +55,20 @@ enum class PetSpeciesLine(
 
 enum class PetSpriteState(val assetState: String, val frameCount: Int) {
     IDLE("idle", 2),
-    WALK("walk", 2),
-    SLEEP("sleep", 1),
-    EAT("eat", 2)
+    WALK("walk", 4),
+    RUN("run", 4),
+    SLEEP("sleep", 2),
+    EAT("eat", 4),
+    CLEAN("clean", 4),
+    PLAY("play", 4),
+    WORK("work", 4),
+    STUDY("study", 4),
+    TRAIN("train", 4),
+    RELAX("relax", 2),
+    TALK("talk", 3),
+    HAPPY("happy", 3),
+    HURT_TIRED("hurt_tired", 2),
+    SIT("sit", 2)
 }
 
 val TamaSpriteSupportedActions: Set<String> = setOf(
@@ -70,7 +81,15 @@ val TamaSpriteSupportedActions: Set<String> = setOf(
     "studying",
     "sunbathing",
     "walking",
-    "relaxing"
+    "running",
+    "relaxing",
+    "training",
+    "talking",
+    "happy",
+    "hurt",
+    "tired",
+    "sitting",
+    "poop_cleaning"
 )
 
 fun normalizePetSpecies(species: String?, legacyBodyStyle: Int = 0): String {
@@ -90,10 +109,20 @@ fun speciesDisplayName(context: Context, species: String?, legacyBodyStyle: Int 
 fun mapPetActionToSpriteState(action: String?, isSleeping: Boolean): PetSpriteState {
     if (isSleeping) return PetSpriteState.SLEEP
     return when (action?.lowercase()) {
-        "walking" -> PetSpriteState.WALK
-        "sleeping" -> PetSpriteState.SLEEP
-        "eating" -> PetSpriteState.EAT
-        "idle", "cleaning", "playing", "working", "studying", "training", "sunbathing", "relaxing" -> PetSpriteState.IDLE
+        "walk", "walking" -> PetSpriteState.WALK
+        "run", "running" -> PetSpriteState.RUN
+        "sleep", "sleeping" -> PetSpriteState.SLEEP
+        "eat", "eating", "drink", "drinking" -> PetSpriteState.EAT
+        "clean", "cleaning", "wash", "washing", "poop_cleaning" -> PetSpriteState.CLEAN
+        "play", "playing" -> PetSpriteState.PLAY
+        "work", "working" -> PetSpriteState.WORK
+        "study", "studying" -> PetSpriteState.STUDY
+        "train", "training" -> PetSpriteState.TRAIN
+        "sunbathing", "relax", "relaxing" -> PetSpriteState.RELAX
+        "talk", "talking" -> PetSpriteState.TALK
+        "happy" -> PetSpriteState.HAPPY
+        "hurt", "tired", "hurt_tired" -> PetSpriteState.HURT_TIRED
+        "sit", "sitting" -> PetSpriteState.SIT
         else -> PetSpriteState.IDLE
     }
 }
@@ -104,10 +133,7 @@ fun resolvePetSpriteAssetPath(
     state: PetSpriteState,
     frameIndex: Int
 ): String {
-    val frame = if (state.frameCount <= 1) {
-        0
-    } else {
-        Math.floorMod(frameIndex, state.frameCount)
-    }
-    return "tama/pets/${speciesLine.id}/${stage.name.lowercase()}/${state.assetState}_$frame.png"
+    val actualState = if (stage == GrowthStage.EGG) PetSpriteState.IDLE else state
+    val frame = Math.floorMod(frameIndex, actualState.frameCount)
+    return "tama/animations/frames/${speciesLine.id}/${stage.name.lowercase()}/${actualState.assetState}_$frame.png"
 }

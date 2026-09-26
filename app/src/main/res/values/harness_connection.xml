@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_dismiss_notice">Dismiss</string>
+    <string name="harness_connection_connected">Chat connection: connected</string>
+    <string name="harness_connection_connecting">Chat connection: connecting</string>
+    <string name="harness_connection_interrupted">Chat connection: interrupted. Use Continue in Chat to reconnect.</string>
+    <string name="harness_event_rpc">Harness request</string>
+    <string name="harness_event_websocket">Chat connection</string>
+    <string name="harness_event_webview">Original interface</string>
+    <string name="harness_event_native_failure">Native interface failure</string>
+    <string name="harness_event_native_recovered">Native interface recovered</string>
+    <string name="harness_diagnostic_success">Succeeded</string>
+    <string name="harness_diagnostic_connected">Connected</string>
+    <string name="harness_diagnostic_connecting">Connecting / retrying</string>
+    <string name="harness_diagnostic_closed">Closed</string>
+    <string name="harness_diagnostic_failed">Failed</string>
+    <string name="harness_management_load_failed">Could not load this section: %1$s</string>
+    <string name="harness_extensions_back">Back to extensions</string>
+</resources>

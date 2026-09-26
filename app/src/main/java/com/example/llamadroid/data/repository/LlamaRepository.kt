@@ -33,8 +33,9 @@ class LlamaRepository(
         id: Long,
         modelName: String?,
         supportsVision: Boolean,
-        supportsAudio: Boolean
-    ) = serverDao.updateModelMetadata(id, modelName, supportsVision, supportsAudio)
+        supportsAudio: Boolean,
+        supportsVideo: Boolean = false
+    ) = serverDao.updateModelMetadata(id, modelName, supportsVision, supportsAudio, supportsVideo)
 
     // Chats
     val allChats: Flow<List<LlamaChatEntity>> = chatDao.getAllChats()
@@ -134,14 +135,16 @@ class LlamaRepository(
         role: String,
         content: String,
         imagePath: String? = null,
-        audioPath: String? = null
+        audioPath: String? = null,
+        videoPath: String? = null
     ): Long {
         val msg = LlamaMessageEntity(
             chatId = chatId,
             role = role,
             content = content,
             imagePath = imagePath,
-            audioPath = audioPath
+            audioPath = audioPath,
+            videoPath = videoPath
         )
         val id = messageDao.insertMessage(msg)
         chatDao.updateLastModified(chatId)

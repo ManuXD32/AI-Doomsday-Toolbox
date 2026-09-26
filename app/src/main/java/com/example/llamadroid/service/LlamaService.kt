@@ -74,6 +74,7 @@ class LlamaService : Service() {
     private var lifecycleCommand: Job? = null
     private var notificationTaskId: Int? = null
     @Volatile private var currentServerPort: Int? = null
+    @Volatile private var activeVideoRuntime: LlamaVideoRuntimeDirectories? = null
     override fun onCreate() {
         super.onCreate()
         Companion.attachRuntimeProcess(applicationContext)
@@ -102,6 +103,7 @@ class LlamaService : Service() {
             // Closing the native child unblocks its line reader before waiting for the
             // superseded coroutine. Cancelling alone cannot interrupt BufferedReader.readLine().
             processController.stop()
+            cleanupVideoRuntime()
             previous?.cancelAndJoin()
             if (!isCurrentGeneration(generation)) return@launch
             if (restartDelayMs > 0L) delay(restartDelayMs)
@@ -123,6 +125,7 @@ class LlamaService : Service() {
         var previous: Job? = null
         val command = serviceScope.launch(start = CoroutineStart.LAZY) {
             processController.stop()
+            cleanupVideoRuntime()
             previous?.cancelAndJoin()
             if (!isCurrentGeneration(generation)) return@launch
             stopServer(startId = startId, generation = generation)
@@ -216,6 +219,15 @@ class LlamaService : Service() {
 
     private fun clearServerLogsForGeneration(generation: Long?) {
         if (isCurrentGeneration(generation)) Companion.clearServerLogs(lifecycleGeneration = generation)
+    }
+
+    private fun cleanupVideoRuntime() {
+        activeVideoRuntime?.let { runtime ->
+            NativeLlamaVideoSupport.clearActiveRuntime(applicationContext, runtime)
+            runCatching { runtime.cleanup() }
+                .onFailure { DebugLog.log("LlamaService: video runtime cleanup failed: ${it.message}") }
+        }
+        activeVideoRuntime = null
     }
 
     private fun recordOwnedRuntimeForGeneration(
@@ -653,8 +665,13 @@ class LlamaService : Service() {
             else -> "127.0.0.1"
         }
         val port = distributedConfig?.port ?: portOverride ?: if (isMasterProfile) 8080 else settingsRepo.serverPort.value
-        val enableVision = localLaunchProfile?.visionEnabled ?: if (isMasterProfile || isOcrProfile) mmprojPath != null else settingsRepo.enableVision.value
+        val enableVision = localLaunchProfile?.let { it.visionEnabled || it.videoEnabled }
+            ?: if (isMasterProfile || isOcrProfile) mmprojPath != null else settingsRepo.enableVision.value
         val selectedMmprojPath = localLaunchProfile?.mmprojPath ?: if (isMasterProfile || isOcrProfile) null else settingsRepo.selectedMmprojPath.value
+        val videoEnabled = localLaunchProfile?.videoEnabled == true
+        val videoFps = localLaunchProfile?.videoFps ?: NativeLlamaVideoSupport.DEFAULT_VIDEO_FPS
+        val videoTimestampIntervalMs = localLaunchProfile?.videoTimestampIntervalMs
+            ?: NativeLlamaVideoSupport.DEFAULT_TIMESTAMP_INTERVAL_MS
         val selectedLoras = localLaunchProfile?.resolvedLoras()
             ?: loraSpecsOverride
             ?: if (isMasterProfile || isOcrProfile) emptyList() else settingsRepo.selectedLlmLoras.value
@@ -869,6 +886,9 @@ class LlamaService : Service() {
                 "modelPath" to modelPath,
                 "isEmbedding" to isEmbedding,
                 "mmprojPath" to effectiveMmprojPath,
+                "videoEnabled" to videoEnabled,
+                "videoFps" to videoFps,
+                "videoTimestampIntervalMs" to videoTimestampIntervalMs,
                 "loraPath" to selectedLoraPath,
                 "loras" to selectedLoras,
                 "loadMode" to loadMode.value,
@@ -964,6 +984,26 @@ class LlamaService : Service() {
         
         return serviceScope.launch {
             try {
+                // Provision the model and media modules before a video launch. If ffmpeg/ffprobe
+                // are unavailable, retain projector/vision support and let the caller use the
+                // bounded Android frame fallback instead of passing unusable MTMD directories.
+                val videoDependencies = if (videoEnabled && !previewMode) {
+                    NativeVideoDependencies.ensure(
+                        context = applicationContext,
+                        requireLlm = true
+                    )
+                } else {
+                    null
+                }
+                val nativeVideoEnabled = videoEnabled &&
+                    (previewMode || videoDependencies?.mediaAvailable == true)
+                if (videoEnabled && !nativeVideoEnabled) {
+                    DebugLog.log(
+                        "LlamaService: native video media dependencies unavailable; " +
+                            "using bounded frame fallback"
+                    )
+                }
+
                 // Get binary from BinaryRepository
                 val binaryRepo = BinaryRepository(applicationContext)
                 val binaryFile = binaryRepo.getExecutable(localLaunchProfile?.nativeBinarySelection)
@@ -972,9 +1012,37 @@ class LlamaService : Service() {
                     throw Exception("Binary not found. Please ensure binaries are extracted.")
                 }
                 val binary = binaryFile.absolutePath
+                val videoRuntime = if (nativeVideoEnabled && !previewMode) {
+                    NativeLlamaVideoSupport.createRuntimeDirectories(
+                        context = applicationContext,
+                        binaryRepository = binaryRepo,
+                        sessionId = "server_${generation ?: System.currentTimeMillis()}"
+                    ).also {
+                        activeVideoRuntime = it
+                        NativeLlamaVideoSupport.registerActiveRuntime(
+                            context = applicationContext,
+                            runtime = it,
+                            serverPort = port
+                        )
+                    }
+                } else {
+                    null
+                }
 
                 if (!finalCustomCommand.isNullOrBlank()) {
-                    val args = processController.splitCommandLine(finalCustomCommand)
+                    val customConfig = LlamaConfig(
+                        modelPath = modelPath,
+                        videoEnabled = nativeVideoEnabled,
+                        videoFps = videoFps,
+                        videoTimestampIntervalMs = videoTimestampIntervalMs,
+                        mediaPath = videoRuntime?.mediaPath,
+                        videoFfmpegDir = videoRuntime?.ffmpegDirPath
+                    )
+                    val args = processController.appendVideoArgsIfNeeded(
+                        args = processController.splitCommandLine(finalCustomCommand),
+                        config = customConfig,
+                        enabled = nativeVideoEnabled
+                    )
                     if (!isMasterProfile && !isOcrProfile && processController.containsDistributedOnlyArgument(args)) {
                         handlePreLaunchStartFailure(
                             getString(R.string.llama_local_distributed_args_rejected),
@@ -997,8 +1065,9 @@ class LlamaService : Service() {
                     currentServerPort = port
                     val customResult = processController.start(
                         binary,
-                        LlamaConfig(modelPath = modelPath),
+                        customConfig,
                         filesDir,
+                        runtimeWorkingDir = videoRuntime?.root,
                         customArgs = args,
                         runtimeGenerationId = Companion.runtimeGenerationId(),
                         onState = { updateStateForGeneration(generation, it) },
@@ -1193,7 +1262,7 @@ class LlamaService : Service() {
                     }
                 }
                 
-                val config = distributedConfig ?: LlamaConfig(
+                val config = (distributedConfig ?: LlamaConfig(
                     modelPath = modelPath, 
                     isEmbedding = isEmbedding,
                     threads = threads,
@@ -1205,6 +1274,11 @@ class LlamaService : Service() {
                     port = port,
                     host = host,
                     mmprojPath = effectiveMmprojPath,
+                    videoEnabled = nativeVideoEnabled,
+                    videoFps = videoFps,
+                    videoTimestampIntervalMs = videoTimestampIntervalMs,
+                    mediaPath = videoRuntime?.mediaPath,
+                    videoFfmpegDir = videoRuntime?.ffmpegDirPath,
                     loadMode = loadMode.value,
                     loraPath = selectedLoraPath,
                     loras = selectedLoras,
@@ -1258,7 +1332,20 @@ class LlamaService : Service() {
                     sleepIdleSeconds = sleepIdleSeconds,
                     customFlags = customFlags,
                     flashAttention = flashAttention
-                )
+                )).let { baseConfig ->
+                    if (!nativeVideoEnabled) {
+                        baseConfig
+                    } else {
+                        baseConfig.copy(
+                            mmprojPath = baseConfig.mmprojPath ?: effectiveMmprojPath,
+                            videoEnabled = true,
+                            videoFps = videoFps,
+                            videoTimestampIntervalMs = videoTimestampIntervalMs,
+                            mediaPath = videoRuntime?.mediaPath ?: baseConfig.mediaPath,
+                            videoFfmpegDir = videoRuntime?.ffmpegDirPath ?: baseConfig.videoFfmpegDir
+                        )
+                    }
+                }
                 currentServerPort = config.port
                 
                 
@@ -1331,7 +1418,15 @@ class LlamaService : Service() {
                         kvOffloadMode = effectiveKvOffloadModeForBinary(candidateBinary, candidateConfig.kvOffloadMode)
                     )
                     return if (commandTemplate.isNullOrBlank()) {
-                        processController.getCommand(candidateBinary, effectiveConfig)
+                        processController.getCommand(
+                            candidateBinary,
+                            effectiveConfig,
+                            processController.probeBinaryCapabilities(
+                                binaryPath = candidateBinary,
+                                filesDir = filesDir,
+                                workingDirectory = videoRuntime?.root ?: filesDir
+                            )
+                        )
                     } else {
                         DebugLog.log("LlamaService: Rendering command template for ${if (isMasterProfile) "master" else "general"} profile")
                         val rendered = processController.renderCommandTemplate(
@@ -1426,6 +1521,7 @@ class LlamaService : Service() {
                         candidateConfig,
                         filesDir,
                         nativeToolsWorkspaceDir = nativeToolsWorkspaceDir,
+                        runtimeWorkingDir = videoRuntime?.root,
                         customArgs = args,
                         runtimeGenerationId = Companion.runtimeGenerationId(),
                         onState = { updateStateForGeneration(generation, it) },
@@ -1726,6 +1822,7 @@ class LlamaService : Service() {
         val openClWasActive = processController.activeProcessWasOpenCl()
         val ownedChildPid = processController.ownedChildPid()
         processController.stop()
+        cleanupVideoRuntime()
         DebugLog.log(
             "LlamaService: owned native shutdown complete openCl=$openClWasActive " +
                 "childPid=$ownedChildPid cleanupPort=${cleanupTarget?.port} " +
@@ -1803,6 +1900,7 @@ class LlamaService : Service() {
         )
         val ownedChildPid = processController.ownedChildPid()
         processController.stop()
+        cleanupVideoRuntime()
         DebugLog.log(
             "LlamaService: destroy cleaned only owned native tree childPid=$ownedChildPid " +
                 "cleanupPort=${cleanupTarget?.port} cleanupSource=${cleanupTarget?.source} " +

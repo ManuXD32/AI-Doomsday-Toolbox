@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.AgentConversationEntity
+import com.example.llamadroid.data.db.AgentDirectReanchorState
+import com.example.llamadroid.data.db.AgentDirectRuntime
 import com.example.llamadroid.data.db.AgentMessageEntity
 import com.example.llamadroid.service.AgentService
 import com.example.llamadroid.service.OllamaService
@@ -38,6 +40,7 @@ class AgentViewModel(
     private val db: AppDatabase,
     private val settingsRepository: SettingsRepository
 ) : ViewModel() {
+    private val appContext = context.applicationContext
     // Services
     val ollamaService = OllamaService(context.applicationContext)
     val agentService = AgentService(context.applicationContext)
@@ -158,7 +161,7 @@ class AgentViewModel(
         }
         
         // Load messages
-        val entities = db.agentChatDao().getMessagesForConversationSync(conversationId)
+        val entities = AgentHistoryPager(db.agentChatDao()).newest(conversationId).messages
         val restoredMessages = entities.map { AgentService.chatMessageFromEntity(it) }
         AgentService.resetMessageCounter(restoredMessages.maxOfOrNull { it.sequenceNumber } ?: 0)
         AgentService.setMessages(restoredMessages)
@@ -188,7 +191,11 @@ class AgentViewModel(
             title = if (projectName.isNotBlank()) projectName else "New Project",
             projectFolder = folderName,
             planningModeEnabled = true,
-            lastAgentRole = AgentService.Companion.AgentRole.ORCHESTRATOR.name
+            lastAgentRole = AgentService.Companion.AgentRole.ORCHESTRATOR.name,
+            directRuntimeVersion = AgentDirectRuntime.CURRENT_VERSION,
+            directReanchorState = AgentDirectReanchorState.COMPLETE,
+            directReanchorReason = "created_direct",
+            directReanchoredAt = System.currentTimeMillis()
         )
         
         val newId = db.agentChatDao().insertConversation(conversation)
@@ -249,6 +256,10 @@ class AgentViewModel(
         level = DeprecationLevel.WARNING
     )
     suspend fun deleteConversation(conversationId: Long, projectFolder: String?) {
+        com.example.llamadroid.service.AgentSleepWakeScheduler.cancelConversation(
+            appContext,
+            conversationId
+        )
         db.agentChatDao().deleteConversationById(conversationId)
         
         if (projectFolder != null) {

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_world_brain_baseline">Base determinista del mundo vivo</string>
+    <string name="tama_world_brain_policy_history_title">Historial de cerebros adoptados</string>
+    <string name="tama_world_brain_policy_history_body">Restaura un cerebro adoptado anterior o vuelve a la base determinista del mundo vivo. Los checkpoints de entrenamiento se mantienen separados.</string>
+    <string name="tama_world_brain_policy_history_empty">Todavía no hay cerebros adoptados guardados.</string>
+    <string name="tama_world_brain_policy_baseline">Base del mundo vivo</string>
+    <string name="tama_world_brain_policy_version">Versión del cerebro %1$d</string>
+    <string name="tama_world_brain_policy_hash">Hash %1$s</string>
+    <string name="tama_world_brain_policy_no_hash">Sin artefacto neuronal</string>
+    <string name="tama_world_brain_policy_created">Guardado: %1$s</string>
+    <string name="tama_world_brain_checkpoint_created">Guardado: %1$s</string>
+    <string name="tama_world_brain_policy_active">Activo</string>
+    <string name="tama_world_brain_policy_restore">Restaurar</string>
+    <string name="tama_world_brain_metric_invalid">Acciones inválidas</string>
+    <string name="tama_world_brain_checkpoint_measurements">Objetivo %1$.1f · ruta %2$.0f%% · exploración %3$.0f%%</string>
+</resources>

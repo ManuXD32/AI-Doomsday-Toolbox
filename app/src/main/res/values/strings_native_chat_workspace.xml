@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="native_chat_file_tools">Workspace file tools</string>
+    <string name="native_chat_file_tools_desc">Let this chat create, read, append, edit, and patch files in its private workspace.</string>
+    <string name="native_chat_custom_tools">Custom API tools</string>
+    <string name="native_chat_custom_tools_desc">Use enabled curl-style API tools that you explicitly marked as not requiring approval.</string>
+    <string name="native_chat_manage_custom_tools">Create or manage custom tools</string>
+    <string name="native_chat_workspace_open">Open chat workspace</string>
+    <string name="native_chat_workspace_title">Chat workspace</string>
+    <string name="native_chat_workspace_content">File content</string>
+    <string name="native_chat_workspace_io_error">The workspace action failed. Check the file name and try again.</string>
+    <string name="native_chat_workspace_new_file">New file</string>
+    <string name="native_chat_workspace_new_folder">New folder</string>
+</resources>

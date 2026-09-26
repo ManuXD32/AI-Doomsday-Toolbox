@@ -15,7 +15,9 @@ enum class ModelFamily(val storedValue: String) {
     SD("SD"),
     ONNX("ONNX"),
     LITERT("LITERT"),
-    WHISPER("WHISPER");
+    WHISPER("WHISPER"),
+    // Append only: ModelFamily values are persisted in model-library rows.
+    AUDIO("AUDIO");
 
     /** Stable lower-case key for storage/inventory filters. */
     val storageValue: String

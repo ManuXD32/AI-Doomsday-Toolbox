@@ -24,9 +24,11 @@ rootProject.name = "LlamaDroid"
 include(":app")
 include(":wear")
 include(":wear-protocol")
+include(":tama-world-core", ":tama-world-policy", ":tama-world-training")
 
 // Asset Packs for native binary delivery
 include(":asset_upscaler")
+include(":asset_debian")
 include(":feature_llm_baseline", ":feature_llm_dotprod", ":feature_llm_armv9", ":feature_llm_i8mm")
 include(":feature_llm_snapdragon_opencl")
 include(":feature_kiwix_baseline", ":feature_kiwix_dotprod", ":feature_kiwix_armv9")

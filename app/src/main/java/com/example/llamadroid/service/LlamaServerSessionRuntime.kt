@@ -336,8 +336,20 @@ class LlamaServerSessionRuntime(private val context: Context) {
                 host = profile.host,
                 customFlags = profile.customFlags
             )
+            val runtimeWorkingDir = File(
+                appContext.filesDir,
+                "llama_server_sessions/${sessionId.replace(Regex("[^A-Za-z0-9._:-]"), "_")}"
+            ).apply { mkdirs() }
             val rawArgs = if (profile.commandTemplate.isNullOrBlank()) {
-                runtime.controller.getCommand(binary.absolutePath, config)
+                runtime.controller.getCommand(
+                    binary.absolutePath,
+                    config,
+                    runtime.controller.probeBinaryCapabilities(
+                        binaryPath = binary.absolutePath,
+                        filesDir = appContext.filesDir,
+                        workingDirectory = runtimeWorkingDir
+                    )
+                )
             } else {
                 runtime.controller.renderCommandTemplate(profile.commandTemplate, binary.absolutePath, config)
             }
@@ -355,10 +367,7 @@ class LlamaServerSessionRuntime(private val context: Context) {
                 binaryPath = binary.absolutePath,
                 config = config,
                 filesDir = appContext.filesDir,
-                runtimeWorkingDir = File(
-                    appContext.filesDir,
-                    "llama_server_sessions/${sessionId.replace(Regex("[^A-Za-z0-9._:-]"), "_")}"
-                ).apply { mkdirs() },
+                runtimeWorkingDir = runtimeWorkingDir,
                 customArgs = args,
                 onState = { state ->
                     if (isCurrent(sessionId, runtime)) {
@@ -381,7 +390,7 @@ class LlamaServerSessionRuntime(private val context: Context) {
                                 pid = pid,
                                 processStartTimeTicks = startTicks,
                                 port = profile.serverPort,
-                                launchProfileJson = LlamaServerLaunchProfile.encode(profile)
+                                launchProfileJson = LlamaServerLaunchProfile.encodeForPersistence(profile)
                             )
                         )
                     }

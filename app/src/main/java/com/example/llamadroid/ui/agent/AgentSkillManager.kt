@@ -178,6 +178,38 @@ fun AgentSkillManagerDialog(
                     label = { Text(stringResource(R.string.agent_skills_search)) },
                     singleLine = true
                 )
+                val scopeDescription = conversationId?.let {
+                    stringResource(R.string.agent_skill_scope_project, it, agentKey)
+                } ?: stringResource(R.string.agent_skill_scope_global)
+                val activatedCount = installed.count { skill ->
+                    resolveDisplayedPermission(
+                        skill = skill,
+                        assignments = assignments,
+                        conversationId = conversationId,
+                        agentKey = agentKey
+                    ) == SkillPermission.ALLOW
+                }
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Text(scopeDescription, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            stringResource(
+                                R.string.agent_skill_scope_summary,
+                                installed.size,
+                                activatedCount
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
                 if (selectedTab == 0) {
                     Card(
                         onClick = { importsExpanded = !importsExpanded },
@@ -324,6 +356,13 @@ fun AgentSkillManagerDialog(
                             InstalledSkillCard(
                                 skill = skill,
                                 selectedPermission = selectedPermission,
+                                statusLabel = stringResource(
+                                    when (selectedPermission) {
+                                        SkillPermission.ALLOW -> R.string.agent_skill_status_activated
+                                        SkillPermission.ASK -> R.string.agent_skill_status_approval
+                                        SkillPermission.DENY -> R.string.agent_skill_status_disabled
+                                    }
+                                ),
                                 operationInProgress = activeOperation?.startsWith("permission:${skill.id}:") == true,
                                 operationsEnabled = activeOperation == null,
                                 onPermission = { permission ->
@@ -423,6 +462,7 @@ private fun SkillCatalogCard(
 private fun InstalledSkillCard(
     skill: AgentSkillEntity,
     selectedPermission: SkillPermission,
+    statusLabel: String,
     operationInProgress: Boolean,
     operationsEnabled: Boolean,
     onPermission: (SkillPermission) -> Unit,
@@ -444,6 +484,17 @@ private fun InstalledSkillCard(
                 ),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                statusLabel,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (selectedPermission == SkillPermission.ALLOW) {
+                    MaterialTheme.colorScheme.primary
+                } else if (selectedPermission == SkillPermission.DENY) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.tertiary
+                }
             )
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 SkillPermission.entries.forEach { permission ->

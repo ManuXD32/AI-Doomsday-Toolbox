@@ -343,6 +343,49 @@ class TamaDatabaseMigrationTest {
         }
     }
 
+    @Test
+    fun migrate43To44_preservesProgressAndAddsSparseWorldTables() {
+        helper.createDatabase(TEST_DB, 43).apply {
+            val values = android.content.ContentValues()
+            query("PRAGMA table_info(tama_pets)").use { cursor ->
+                while (cursor.moveToNext()) {
+                    val name = cursor.getString(cursor.getColumnIndexOrThrow("name"))
+                    val type = cursor.getString(cursor.getColumnIndexOrThrow("type"))
+                    val required = cursor.getInt(cursor.getColumnIndexOrThrow("notnull")) != 0
+                    val defaultValue = cursor.getString(cursor.getColumnIndexOrThrow("dflt_value"))
+                    if (required && defaultValue == null) {
+                        if (type == "TEXT") values.put(name, "") else values.put(name, 0)
+                    }
+                }
+            }
+            values.put("id", "migration-pet")
+            values.put("name", "Pixel")
+            values.put("money", 12345L)
+            values.put("currentLocationId", "fixed_4_2")
+            values.put("relationshipsJson", "{\"farm_farmer\":42}")
+            insert("tama_pets", android.database.sqlite.SQLiteDatabase.CONFLICT_ABORT, values)
+            execSQL("INSERT INTO tama_farm_tiles (id,petId,status,cropJson,lastWateredTime) VALUES (0,'migration-pet','WET_FARMLAND','{\"type\":\"carrot\",\"stage\":2}',1234)")
+            close()
+        }
+        val migrated = helper.runMigrationsAndValidate(TEST_DB, 44, true, TamaMigrations.MIGRATION_43_44)
+        migrated.query("SELECT money,currentLocationId,relationshipsJson,hydration,social,curiosity FROM tama_pets WHERE id='migration-pet'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(12345L, it.getLong(0))
+            assertEquals("fixed_4_2", it.getString(1))
+            assertEquals("{\"farm_farmer\":42}", it.getString(2))
+            for (column in 3..5) assertEquals(100f, it.getFloat(column), 0f)
+        }
+        migrated.query("SELECT cropJson,lastWateredTime FROM tama_farm_tiles WHERE id=0").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("{\"type\":\"carrot\",\"stage\":2}", it.getString(0))
+            assertEquals(1234L, it.getLong(1))
+        }
+        listOf("tama_worlds", "tama_world_actors", "tama_world_chunks", "tama_world_structures",
+            "tama_world_objects", "tama_world_npcs", "tama_world_relationships", "tama_world_events",
+            "tama_world_episodes", "tama_world_policies", "tama_world_action_receipts").forEach { assertTableExists(migrated, it) }
+        migrated.query("SELECT COUNT(*) FROM tama_worlds").use { assertTrue(it.moveToFirst()); assertEquals(0, it.getInt(0)) }
+    }
+
     private fun assertTableExists(
         db: androidx.sqlite.db.SupportSQLiteDatabase,
         tableName: String

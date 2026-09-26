@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_litert_0984_effective_limit">Backend efectivo: %1$s · tokens de contexto: %2$d · tokens de salida: %3$d</string>
+    <string name="harness_litert_0984_auto_cpu_capacity">El modo automático eligió la CPU para conservar los límites solicitados de contexto y salida.</string>
+    <string name="harness_litert_0984_forced_gpu_warning">La GPU está forzada. Tokens de contexto efectivos: %1$d; tokens de salida: %2$d. Elige Automático o CPU para conservar los límites solicitados.</string>
+    <string name="harness_litert_0984_model_mtp_setting">MTP para este modelo</string>
+    <string name="harness_litert_0984_model_thinking_setting">Razonamiento para este modelo</string>
+    <string name="harness_litert_0984_use_global">Global</string>
+    <string name="harness_litert_0984_enabled">Activado</string>
+    <string name="harness_litert_0984_disabled">Desactivado</string>
+    <string name="harness_litert_0984_prompt_over_limit">Tokens de entrada necesarios para las instrucciones del sistema, los esquemas de herramientas y el mensaje actual: %1$d. Disponibles después de reservar espacio para la salida: %2$d. Acorta el mensaje, reduce el límite de salida o ajusta el contexto de este modelo.</string>
+    <string name="harness_litert_0984_prompt_over_limit_generic">Esta solicitud supera el contexto disponible del modelo LiteRT. Acorta el mensaje, reduce el límite de salida o ajusta el contexto de este modelo.</string>
+    <string name="harness_litert_0984_prompt_reduced">LiteRT omitió mensajes anteriores: %1$d; definiciones de herramientas: %2$d. Se conservaron las instrucciones del sistema y el mensaje actual.</string>
+</resources>

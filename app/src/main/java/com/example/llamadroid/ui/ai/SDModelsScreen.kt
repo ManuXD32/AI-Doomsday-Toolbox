@@ -40,6 +40,8 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.llamadroid.data.api.HfModelDto
 import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_ACTIVE
+import com.example.llamadroid.data.db.DownloadTaskEntity
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.db.SD_CAPABILITY_IMG2IMG
@@ -49,10 +51,14 @@ import com.example.llamadroid.data.db.buildSdCapabilities
 import com.example.llamadroid.data.db.hasSdCapability
 import com.example.llamadroid.data.db.parseSdCapabilities
 import com.example.llamadroid.data.model.DownloadProgressHolder
+import com.example.llamadroid.data.model.progressForDownloadTask
+import com.example.llamadroid.data.model.stableDownloadTaskOrder
 import com.example.llamadroid.data.model.FileInfo
 import com.example.llamadroid.data.model.ModelLibraryManager
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.data.model.library.ModelFamily
+import com.example.llamadroid.data.model.library.ModelClassificationPolicy
+import com.example.llamadroid.data.model.library.ModelClassificationSource
 import com.example.llamadroid.data.model.library.ModelSourceDraft
 import com.example.llamadroid.data.model.library.ModelSourceRepository
 import com.example.llamadroid.data.model.isStableDiffusionArtifact
@@ -77,6 +83,7 @@ import com.example.llamadroid.sd.sdArtifactInspection
 import com.example.llamadroid.sd.withSdArtifactInspection
 import com.example.llamadroid.data.model.SdArtifactValidationException
 import com.example.llamadroid.service.smokeCheckSdADetailerDetector
+import com.example.llamadroid.service.DownloadService
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.Dispatchers
@@ -144,6 +151,30 @@ enum class SDModelSelectionType(
 // Video and image pipelines can share LLM encoders with native chat. These are the
 // same model records; selecting them here does not create a second installed copy.
 private val SD_MANAGER_SELECTION_TYPES = SDModelSelectionType.entries
+
+/** Durable download rows shown by the SD screen, including Qwen companion roles. */
+private val SD_DOWNLOAD_MODEL_TYPES = listOf(
+    ModelType.SD_CHECKPOINT,
+    ModelType.SD_UPSCALER,
+    ModelType.SD_DIFFUSION,
+    ModelType.SD_CLIP_L,
+    ModelType.SD_CLIP_G,
+    ModelType.SD_T5XXL,
+    ModelType.SD_TAE,
+    ModelType.SD_VAE,
+    ModelType.SD_LORA,
+    ModelType.SD_TEXTUAL_INVERSION,
+    ModelType.SD_CONTROLNET,
+    ModelType.SD_PHOTOMAKER,
+    ModelType.SD_CLIP_VISION,
+    ModelType.SD_IP_ADAPTER,
+    ModelType.SD_ADETAILER,
+    ModelType.SD_AUDIO_VAE,
+    ModelType.SD_EMBEDDINGS_CONNECTORS,
+    ModelType.SD_MOTION_MODULE,
+    ModelType.SD_LLM,
+    ModelType.MMPROJ,
+)
 
 private enum class SdInspectionRowStatus {
     IDLE,
@@ -219,8 +250,16 @@ fun SDModelsScreen(navController: NavController) {
     // Download progress
     val downloadProgress by DownloadProgressHolder.progress.collectAsState()
     
-    // Active downloads count
-    val activeDownloads = downloadProgress.filter { it.value > 0f && it.value < 1f }
+    val sdDownloadTypeNames = remember { SD_DOWNLOAD_MODEL_TYPES.map { it.name } }
+    val persistedDownloadTasks by db.downloadTaskDao()
+        .observeByLibraryFamily(sdDownloadTypeNames, ModelFamily.SD.storedValue)
+        .collectAsState(initial = emptyList())
+    // Room owns row identity; the progress holder is only a live overlay.
+    val activeDownloads = remember(persistedDownloadTasks) {
+        persistedDownloadTasks
+            .filter { it.status == DOWNLOAD_TASK_STATUS_ACTIVE }
+            .stableDownloadTaskOrder()
+    }
     
     // Search state
     var searchQuery by remember { mutableStateOf("") }
@@ -774,11 +813,8 @@ fun SDModelsScreen(navController: NavController) {
                 onSourceRequest = { sourceAsset = com.example.llamadroid.ui.models.installedAssetForModel(it) }
             )
             1 -> DownloadingTab(
+                downloadTasks = activeDownloads,
                 downloadProgress = downloadProgress,
-                onCancel = { filename ->
-                    com.example.llamadroid.util.Downloader.cancelDownload(filename)
-                    DownloadProgressHolder.removeProgress(filename)
-                }
             )
             2 -> DiscoverTab(
                 searchQuery = searchQuery,
@@ -1169,8 +1205,13 @@ private fun InstalledSDModelsTab(
         val selectionInspectionBlock = pendingInspection
             ?.takeIf { selectionNeedsInspection }
             ?.let { inspection ->
-                inspectionBlockForSelection(inspection, selectedImportType, importSdFamily)
+                inspectionBlockForSelection(inspection)
             }
+        val selectionInspectionMismatch = pendingInspection
+            ?.takeIf { selectionNeedsInspection }
+            ?.let { inspection ->
+                inspectionHasSemanticMismatch(inspection, selectedImportType, importSdFamily)
+            } == true
         LaunchedEffect(selectedImportType, pendingFilename) {
             val metadata = defaultSdMetadataForSelection(
                 selectionType = selectedImportType,
@@ -1262,7 +1303,17 @@ private fun InstalledSDModelsTab(
                             Spacer(modifier = Modifier.height(12.dp))
                         } else if (selectionNeedsInspection) {
                             pendingInspection?.let { inspection ->
-                                SdSelectedArtifactSummary(inspection)
+                                SdSelectedArtifactSummary(inspection, importSdFamily)
+                                if (selectionInspectionMismatch) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        stringResource(R.string.sd_models_detection_mismatch_warning),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.tertiary,
+                                        maxLines = 4,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                                 Spacer(modifier = Modifier.height(12.dp))
                             }
                         }
@@ -1345,7 +1396,14 @@ private fun InstalledSDModelsTab(
                             sdVariant = importSdVariant,
                             onSdVariantChange = { importSdVariant = it },
                             compatProfiles = importCompatProfiles,
-                            onCompatProfilesChange = { importCompatProfiles = it }
+                            onCompatProfilesChange = { importCompatProfiles = it },
+                            detectedFamily = pendingInspection?.detectedFamily,
+                            onResetToDetected = {
+                                pendingInspection?.detectedFamily?.let { detected ->
+                                    importSdFamily = detected
+                                    importSdVariant = pendingInspection?.detectedVariant.orEmpty()
+                                }
+                            }
                         )
                         if (isImageMainSelection(selectedImportType) && importSdFamily == null) {
                             Spacer(modifier = Modifier.height(8.dp))
@@ -2199,7 +2257,19 @@ private fun InstalledSDModelsTab(
                                 sdVariant = editSdVariant,
                                 onSdVariantChange = { editSdVariant = it },
                                 compatProfiles = editCompatProfiles,
-                                onCompatProfilesChange = { editCompatProfiles = it }
+                                onCompatProfilesChange = { editCompatProfiles = it },
+                                detectedFamily = editingModel?.sdDetectedFamily
+                                    ?.let(SdModelFamily::fromStoredValue),
+                                onResetToDetected = {
+                                    editingModel?.let { model ->
+                                        model.sdDetectedFamily
+                                            ?.let(SdModelFamily::fromStoredValue)
+                                            ?.let { detected -> editSdFamily = detected }
+                                        editSdVariant = editingModel?.sdArtifactInspection()
+                                            ?.detectedVariant
+                                            ?: editSdVariant
+                                    }
+                                }
                             )
                             if (isImageMainSelection(selectedEditType) &&
                                 editingModel?.sdInspectionConfidence != SdInspectionConfidence.HIGH.storedValue
@@ -2405,7 +2475,10 @@ private suspend fun importSDModel(
             sdCapabilities = capabilities,
             sdFamily = sdFamily,
             sdVariant = sdVariant,
-            sdCompatProfiles = sdCompatProfiles
+            sdCompatProfiles = sdCompatProfiles,
+            classificationSource = ModelClassificationSource.USER_OVERRIDE.storedValue,
+            detectedClassificationJson = inspection?.toJson()
+                ?.let(ModelClassificationPolicy::boundedEvidence)
         ).let { entity ->
             inspection?.let { entity.withSdArtifactInspection(it) } ?: entity
         }
@@ -2611,7 +2684,7 @@ private fun selectionTypeForModel(model: ModelEntity): SDModelSelectionType = wh
     ModelType.SD_AUDIO_VAE -> SDModelSelectionType.AUDIO_VAE
     ModelType.SD_EMBEDDINGS_CONNECTORS -> SDModelSelectionType.CONNECTORS
     ModelType.SD_MOTION_MODULE -> SDModelSelectionType.MOTION_MODULE
-    ModelType.LLM -> SDModelSelectionType.IMAGE_LLM
+    ModelType.LLM, ModelType.SD_LLM -> SDModelSelectionType.IMAGE_LLM
     ModelType.VISION_PROJECTOR, ModelType.MMPROJ -> SDModelSelectionType.IMAGE_LLM_VISION
     ModelType.SD_UPSCALER -> SDModelSelectionType.UPSCALER
     else -> SDModelSelectionType.CHECKPOINT
@@ -2720,7 +2793,11 @@ private fun installedCapabilitiesFor(model: ModelEntity): List<SDCapability> = w
         if (model.hasSdCapability(SD_CAPABILITY_VID_GEN)) {
             add(SDCapability.VID_GEN)
         } else {
-            val fallback = defaultCapabilitiesForFamily(model.sdFamilyEnum(), model.type).parseSdCapabilities()
+            val fallback = defaultCapabilitiesForFamily(
+                model.sdFamilyEnum(),
+                model.type,
+                model.sdVariant
+            ).parseSdCapabilities()
             val capabilities = if (model.sdCapabilities.isNullOrBlank()) fallback else model.sdCapabilities.parseSdCapabilities()
             if (SD_CAPABILITY_TXT2IMG in capabilities) add(SDCapability.TXT2IMG)
             if (SD_CAPABILITY_IMG2IMG in capabilities) add(SDCapability.IMG2IMG)
@@ -2739,7 +2816,9 @@ private fun SDMetadataEditor(
     sdVariant: String,
     onSdVariantChange: (String) -> Unit,
     compatProfiles: String,
-    onCompatProfilesChange: (String) -> Unit
+    onCompatProfilesChange: (String) -> Unit,
+    detectedFamily: SdModelFamily? = null,
+    onResetToDetected: (() -> Unit)? = null
 ) {
     if (isImageMainSelection(selectionType)) {
         Text(stringResource(R.string.sd_models_family_label), style = MaterialTheme.typography.labelMedium)
@@ -2787,6 +2866,28 @@ private fun SDMetadataEditor(
             placeholder = { Text(stringResource(R.string.sd_models_variant_hint)) },
             singleLine = true
         )
+        if (detectedFamily != null && sdFamily != null && sdFamily != detectedFamily) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                stringResource(R.string.sd_models_family_override_warning),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.tertiary,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis
+            )
+            onResetToDetected?.let { reset ->
+                TextButton(
+                    onClick = reset,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        stringResource(R.string.sd_models_reset_to_detection),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
     } else if (requiresCompatProfiles(selectionType)) {
         Text(stringResource(R.string.sd_models_compat_profiles_label), style = MaterialTheme.typography.labelMedium)
         Spacer(modifier = Modifier.height(8.dp))
@@ -3051,7 +3152,10 @@ private fun hasStaleSdCompatibilityMetadata(model: ModelEntity): Boolean {
 }
 
 @Composable
-private fun SdSelectedArtifactSummary(inspection: SdArtifactInspection) {
+private fun SdSelectedArtifactSummary(
+    inspection: SdArtifactInspection,
+    selectedFamily: SdModelFamily?
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -3077,6 +3181,27 @@ private fun SdSelectedArtifactSummary(inspection: SdArtifactInspection) {
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+        Text(
+            stringResource(
+                R.string.sd_models_selected_family,
+                selectedFamily?.let { stringResource(sdFamilyLabelRes(it)) }
+                    ?: stringResource(R.string.sd_models_unknown_value)
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (selectedFamily != null && inspection.detectedFamily != null &&
+            selectedFamily != inspection.detectedFamily
+        ) {
+            Text(
+                stringResource(R.string.sd_models_manual_override_badge),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.tertiary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
         Text(
             stringResource(
                 R.string.sd_models_detected_role,
@@ -3150,31 +3275,30 @@ private fun expectedRoleForSelection(selectionType: SDModelSelectionType): SdArt
     else -> null
 }
 
-private fun inspectionBlockForSelection(
+private fun inspectionBlockForSelection(inspection: SdArtifactInspection): String? {
+    if (!inspection.isInspected || !inspection.isStructurallyUsable) return "invalid"
+    // Detection disagreements are semantic metadata warnings. The user may
+    // intentionally classify a valid artifact differently, so neither role
+    // nor family evidence may block import here. Structural integrity is the
+    // only blocker handled by this dialog.
+    return null
+}
+
+private fun inspectionHasSemanticMismatch(
     inspection: SdArtifactInspection,
     selectionType: SDModelSelectionType,
     configuredFamily: SdModelFamily?
-): String? {
-    if (!inspection.isInspected || !inspection.isStructurallyUsable) return "invalid"
+): Boolean {
     val expectedRole = expectedRoleForSelection(selectionType)
     val detectedRole = inspection.detectedRole
-    if (inspection.confidence == SdInspectionConfidence.HIGH &&
-        expectedRole != null && detectedRole != null &&
-        when (expectedRole) {
-            SdArtifactRole.FULL_MODEL -> detectedRole != SdArtifactRole.FULL_MODEL &&
-                detectedRole != SdArtifactRole.MAIN_MODEL
-            else -> detectedRole != expectedRole
-        }
-    ) {
-        return "role"
+    val roleMismatch = expectedRole != null && detectedRole != null && when (expectedRole) {
+        SdArtifactRole.FULL_MODEL -> detectedRole != SdArtifactRole.FULL_MODEL &&
+            detectedRole != SdArtifactRole.MAIN_MODEL
+        else -> detectedRole != expectedRole
     }
-    if (inspection.confidence == SdInspectionConfidence.HIGH &&
-        configuredFamily != null && inspection.detectedFamily != null &&
+    val familyMismatch = configuredFamily != null && inspection.detectedFamily != null &&
         configuredFamily != inspection.detectedFamily
-    ) {
-        return "family"
-    }
-    return null
+    return roleMismatch || familyMismatch
 }
 
 @Composable
@@ -3357,6 +3481,25 @@ private fun SdInspectionEvidence(
             )
             Text(
                 stringResource(
+                    R.string.sd_models_selected_family,
+                    model.sdFamilyEnum()?.let { stringResource(sdFamilyLabelRes(it)) }
+                        ?: stringResource(R.string.sd_models_unknown_value)
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (model.sdFamily != null && model.sdFamily != model.sdDetectedFamily) {
+                Text(
+                    stringResource(R.string.sd_models_manual_override_badge),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Text(
+                stringResource(
                     R.string.sd_models_detected_role,
                     inspection.detectedRole?.storedValue
                         ?: stringResource(R.string.sd_models_unknown_value)
@@ -3510,30 +3653,10 @@ private fun inspectionComponentSummary(inspection: SdArtifactInspection): String
 
 @Composable
 private fun DownloadingTab(
+    downloadTasks: List<DownloadTaskEntity>,
     downloadProgress: Map<String, Float>,
-    onCancel: (String) -> Unit
 ) {
-    val sdProgressPrefixes = setOf(
-        "sd_checkpoint|",
-        "sd_upscaler|",
-        "sd_diffusion|",
-        "sd_clip_l|",
-        "sd_clip_g|",
-        "sd_t5xxl|",
-        "sd_tae|",
-        "sd_vae|",
-        "sd_lora|",
-        "sd_controlnet|",
-        "sd_photomaker|",
-        "sd_clip_vision|",
-        "sd_ip_adapter|",
-        "sd_adetailer|"
-    )
-    val activeDownloads = downloadProgress.filter { (key, value) ->
-        sdProgressPrefixes.any { key.startsWith(it) } &&
-            (value == DownloadProgressHolder.INDETERMINATE || value in 0f..0.999f)
-    }
-    
+    val context = LocalContext.current
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -3543,29 +3666,14 @@ private fun DownloadingTab(
             DownloadTaskSection(
                 artifactFamily = com.example.llamadroid.data.model.library.ModelFamily.SD,
                 modelTypes = listOf(
-                    ModelType.SD_CHECKPOINT,
-                    ModelType.SD_UPSCALER,
-                    ModelType.SD_DIFFUSION,
-                    ModelType.SD_CLIP_L,
-                    ModelType.SD_CLIP_G,
-                    ModelType.SD_T5XXL,
-                    ModelType.SD_TAE,
-                    ModelType.SD_VAE,
-                    ModelType.SD_LORA,
-                    ModelType.SD_TEXTUAL_INVERSION,
-                    ModelType.SD_CONTROLNET,
-                    ModelType.SD_PHOTOMAKER,
-                    ModelType.SD_CLIP_VISION,
-                    ModelType.SD_IP_ADAPTER,
-                    ModelType.SD_ADETAILER,
-                    ModelType.SD_AUDIO_VAE,
-                    ModelType.SD_EMBEDDINGS_CONNECTORS,
-                    ModelType.SD_MOTION_MODULE
-                )
+                    *SD_DOWNLOAD_MODEL_TYPES.toTypedArray()
+                ),
+                // The durable active rows below own the live-progress cards.
+                includeTask = { it.status != DOWNLOAD_TASK_STATUS_ACTIVE }
             )
         }
 
-        if (activeDownloads.isEmpty()) {
+        if (downloadTasks.isEmpty()) {
             item {
                 Box(
                     modifier = Modifier
@@ -3590,12 +3698,19 @@ private fun DownloadingTab(
                 }
             }
         } else {
-            items(activeDownloads.toList()) { (key, progress) ->
-                val filename = DownloadProgressHolder.getFilename(key) ?: key
+            items(downloadTasks, key = { it.id }) { task ->
+                val progress = downloadProgress.progressForDownloadTask(task)
+                    ?: task.totalBytes?.takeIf { it > 0L }?.let {
+                        (task.bytesDownloaded.toFloat() / it.toFloat()).coerceIn(0f, 0.999f)
+                    }
+                    ?: DownloadProgressHolder.INDETERMINATE
                 DownloadingCard(
-                    filename = filename,
+                    filename = task.filename,
+                    repository = task.repoId,
                     progress = progress,
-                    onCancel = { onCancel(filename) }
+                    onCancel = {
+                        DownloadService.cancelDownload(context, task.filename, task.id)
+                    }
                 )
             }
         }
@@ -3605,6 +3720,7 @@ private fun DownloadingTab(
 @Composable
 private fun DownloadingCard(
     filename: String,
+    repository: String,
     progress: Float,
     onCancel: () -> Unit
 ) {
@@ -3627,8 +3743,21 @@ private fun DownloadingCard(
                         filename,
                         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
                     )
+                    if (repository.isNotBlank()) {
+                        Text(
+                            repository,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                     Text(
-                        "${(progress * 100).toInt()}%",
+                        if (progress == DownloadProgressHolder.INDETERMINATE) {
+                            stringResource(R.string.models_downloading)
+                        } else {
+                            "${(progress * 100).toInt()}%"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -3643,12 +3772,14 @@ private fun DownloadingCard(
             }
             
             Spacer(modifier = Modifier.height(8.dp))
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(4.dp),
-            )
+            if (progress == DownloadProgressHolder.INDETERMINATE) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(4.dp))
+            } else {
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.fillMaxWidth().height(4.dp),
+                )
+            }
         }
     }
 }
@@ -3715,17 +3846,8 @@ private fun DiscoverTab(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             if (com.example.llamadroid.ui.components.isCuratedCatalogBrowseMode(searchQuery)) {
-                item {
-                    // Complete SD/workflow bundles come first; individual
-                    // detector downloads remain the focused follow-up section.
-                    SdCuratedBundlesSection()
-                }
-                item(key = "phase_c_adetailer_curated_bundles") {
-                    com.example.llamadroid.ui.components.CuratedModelBundleSection(
-                        title = stringResource(R.string.phase_c_adetailer_bundles_title),
-                        description = stringResource(R.string.adetailer_bundles_desc),
-                        bundles = com.example.llamadroid.data.model.AdetailerCuratedBundleCatalog.bundles
-                    )
+                item(key = "sd_bundle_folders") {
+                    SdBundleFolders()
                 }
             }
 

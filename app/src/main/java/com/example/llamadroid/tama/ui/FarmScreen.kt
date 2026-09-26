@@ -43,6 +43,11 @@ import coil.compose.AsyncImage
 import com.example.llamadroid.tama.data.*
 import com.example.llamadroid.tama.game.FarmRepository
 import com.example.llamadroid.tama.game.TamaGameEngine
+import com.example.llamadroid.tama.game.WorldFarmMaintenance
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import com.example.llamadroid.tama.world.core.ActionId
+import com.example.llamadroid.tama.world.runtime.WorldFarmActions
 import com.example.llamadroid.tama.game.FARM_COMPOSTER_MAX_LEVEL
 import com.example.llamadroid.tama.game.FARM_COMPOSTER_PROCESS_MS
 import com.example.llamadroid.tama.game.FARM_WELL_MAX_LEVEL
@@ -97,7 +102,12 @@ fun FarmScreen(
     var inspectedCropTile by remember { mutableStateOf<FarmTile?>(null) }
     var currentTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val context = LocalContext.current
-    val resources = LocalResources.current
+    fun submitMaintenance(operation: String, arguments: Map<String, String> = emptyMap()) {
+        scope.launch {
+            val result = WorldFarmMaintenance.request(context, gameEngine, operation, arguments)
+            Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+        }
+    }
     val walkthroughTargets = LocalWalkthroughTargets.current
     val wellUpgrade = upgrades.find { u -> u.type == "well" }
     val composterUpgrade = upgrades.find { u -> u.type == "composter" }
@@ -258,12 +268,7 @@ fun FarmScreen(
                         canAffordPurchase = canBuyWell,
                         onOpen = { showWellDialog = true },
                         onPurchase = {
-                            scope.launch {
-                                if (gameEngine.spendMoney(FARM_WELL_COST.toLong())) {
-                                    farmRepository.buyUpgrade(pet.id, "well", FARM_WELL_COST)
-                                    gameEngine.logEvent(pet.id, EventType.OTHER, resources.getString(R.string.tama_event_well_upgrade))
-                                }
-                            }
+                            submitMaintenance("buy_well")
                         }
                     )
                     UpgradeItem(
@@ -272,12 +277,7 @@ fun FarmScreen(
                         canAffordPurchase = canBuyComposter,
                         onOpen = { showComposterDialog = true },
                         onPurchase = {
-                            scope.launch {
-                                if (gameEngine.spendMoney(800)) {
-                                    farmRepository.buyUpgrade(pet.id, "composter", 800)
-                                    gameEngine.logEvent(pet.id, EventType.OTHER, resources.getString(R.string.tama_event_composter_upgrade))
-                                }
-                            }
+                            submitMaintenance("buy_composter")
                         }
                     )
                 }
@@ -313,14 +313,10 @@ fun FarmScreen(
                                             tile = tile,
                                             tool = selectedTool,
                                             gameEngine = gameEngine,
-                                            pet = pet,
                                             scope = scope,
                                             context = context,
                                             onSeedPlantRequest = {
                                                 showSeedPicker = tile.id
-                                            },
-                                            onAction = { updated ->
-                                                scope.launch { farmRepository.saveTile(pet.id, updated) }
                                             }
                                         )
                                         walkthroughTargets?.recordEvent("tama.farm")
@@ -349,19 +345,11 @@ fun FarmScreen(
                 inventory = pet.inventory,
                 onDismiss = { showSeedPicker = null },
                 onSeedSelected = { seed ->
-                    val tile = tiles.find { it.id == showSeedPicker } ?: FarmTile(id = showSeedPicker!!)
-                    val updatedTile = tile.copy(
-                        crop = PlantedCrop(
-                            type = seed.id.replace("seed_", ""),
-                            plantedTime = System.currentTimeMillis(),
-                            lastStageUpdateTime = System.currentTimeMillis()
-                        )
-                    )
-                    scope.launch { 
-                        farmRepository.saveTile(pet.id, updatedTile)
-                        gameEngine.logEvent(pet.id, EventType.PLANTED, resources.getString(R.string.tama_event_planted, inventoryItemDisplayName(context, seed)))
-                        // Remove 1 seed from inventory
-                        gameEngine.consumeItem(seed, 1)
+                    val plotId = showSeedPicker ?: return@SeedPickerDialog
+                    scope.launch {
+                        val message = WorldFarmActions.request(context, gameEngine, plotId, ActionId.PLANT,
+                            mapOf("cropId" to seed.id.removePrefix("seed_")))
+                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                     }
                     showSeedPicker = null
                 }
@@ -376,55 +364,13 @@ fun FarmScreen(
                 money = pet.money,
                 onDismiss = { showWellDialog = false },
                 onCollectTile = { slotIndex ->
-                    scope.launch {
-                        val collected = farmRepository.collectWellTileOutput(
-                            petId = pet.id,
-                            slotIndex = slotIndex,
-                            collectedAt = System.currentTimeMillis()
-                        )
-                        if (collected > 0) {
-                            gameEngine.grantItem(
-                                InventoryItem(
-                                    id = "water",
-                                    name = resources.getString(R.string.tama_item_water),
-                                    type = ItemType.MATERIAL
-                                ),
-                                collected
-                            )
-                            gameEngine.logEvent(pet.id, EventType.OTHER, resources.getString(R.string.tama_event_collected_well_water, collected))
-                        }
-                    }
+                    submitMaintenance("collect_water", mapOf("slot" to slotIndex.toString()))
                 },
                 onUpgradeCapacity = {
-                    scope.launch {
-                        val currentLevel = wellUpgrade?.level ?: 1
-                        val upgradeCost = wellCapacityUpgradeCostForLevel(currentLevel).toLong()
-                        if (currentLevel >= FARM_WELL_MAX_LEVEL) return@launch
-                        if (gameEngine.spendMoney(upgradeCost) && farmRepository.upgradeWellCapacity(pet.id)) {
-                            gameEngine.logEvent(
-                                pet.id,
-                                EventType.OTHER,
-                                resources.getString(R.string.tama_event_well_capacity_upgrade, currentLevel + 1)
-                            )
-                        }
-                    }
+                    submitMaintenance("well_capacity")
                 },
                 onUpgradeSpeed = {
-                    scope.launch {
-                        val speedLevel = wellState.speedLevel
-                        val upgradeCost = wellSpeedUpgradeCostForLevel(speedLevel)?.toLong() ?: return@launch
-                        if (speedLevel >= FARM_WELL_MAX_SPEED_LEVEL) return@launch
-                        if (gameEngine.spendMoney(upgradeCost) && farmRepository.upgradeWellSpeed(pet.id)) {
-                            gameEngine.logEvent(
-                                pet.id,
-                                EventType.OTHER,
-                                resources.getString(
-                                    R.string.tama_event_well_speed_upgrade,
-                                    wellIntervalHoursForSpeedLevel(speedLevel + 1)
-                                )
-                            )
-                        }
-                    }
+                    submitMaintenance("well_speed")
                 }
             )
         }
@@ -445,41 +391,13 @@ fun FarmScreen(
                             }
                         }
                         ComposterSlotState.READY -> {
-                            scope.launch {
-                                val collected = farmRepository.collectComposterTileOutput(pet.id, slotIndex)
-                                if (collected > 0) {
-                                    gameEngine.grantItem(
-                                        InventoryItem(
-                                            id = "fertilizer",
-                                            name = resources.getString(R.string.tama_item_fertilizer),
-                                            type = ItemType.MATERIAL
-                                        ),
-                                        collected
-                                    )
-                                    gameEngine.logEvent(
-                                        pet.id,
-                                        EventType.OTHER,
-                                        resources.getString(R.string.tama_event_collected_fertilizer, collected)
-                                    )
-                                }
-                            }
+                            submitMaintenance("collect_compost", mapOf("slot" to slotIndex.toString()))
                         }
                         ComposterSlotState.PROCESSING -> Unit
                     }
                 },
                 onUpgrade = {
-                    scope.launch {
-                        val currentLevel = composterUpgrade?.level ?: 1
-                        val upgradeCost = composterCapacityUpgradeCostForLevel(currentLevel).toLong()
-                        if (currentLevel >= FARM_COMPOSTER_MAX_LEVEL) return@launch
-                        if (gameEngine.spendMoney(upgradeCost) && farmRepository.upgradeComposterCapacity(pet.id)) {
-                            gameEngine.logEvent(
-                                pet.id,
-                                EventType.OTHER,
-                                resources.getString(R.string.tama_event_composter_capacity_upgrade, currentLevel + 1)
-                            )
-                        }
-                    }
+                    submitMaintenance("composter_capacity")
                 }
             )
         }
@@ -491,41 +409,13 @@ fun FarmScreen(
                 currentTime = currentTime,
                 onDismiss = { showPlantingDroneDialog = false },
                 onStateChange = { updated ->
-                    scope.launch {
-                        farmRepository.savePlantingDroneState(
-                            pet.id,
-                            updated.copy(lastUpdatedAt = System.currentTimeMillis())
-                        )
-                    }
+                    submitMaintenance("planting_settings", mapOf("settings" to Json.encodeToString(updated)))
                 },
-                onTransferItem = { item, quantity, transform ->
-                    scope.launch {
-                        if (gameEngine.consumeItem(item, quantity)) {
-                            val latest = farmRepository.decodePlantingDroneState(
-                                farmRepository.getUpgrade(pet.id, FARM_PLANTING_DRONE_ID),
-                                System.currentTimeMillis()
-                            )
-                            farmRepository.savePlantingDroneState(
-                                pet.id,
-                                transform(latest).copy(lastUpdatedAt = System.currentTimeMillis())
-                            )
-                        }
-                    }
+                onTransferItem = { item, quantity, _ ->
+                    submitMaintenance("planting_item", mapOf("itemId" to item.id, "quantity" to quantity.toString()))
                 },
-                onTransferToolDurability = { familyId, amount, transform ->
-                    scope.launch {
-                        val transferred = gameEngine.consumeFarmToolDurability(familyId, amount)
-                        if (transferred > 0) {
-                            val latest = farmRepository.decodePlantingDroneState(
-                                farmRepository.getUpgrade(pet.id, FARM_PLANTING_DRONE_ID),
-                                System.currentTimeMillis()
-                            )
-                            farmRepository.savePlantingDroneState(
-                                pet.id,
-                                transform(latest, transferred).copy(lastUpdatedAt = System.currentTimeMillis())
-                            )
-                        }
-                    }
+                onTransferToolDurability = { familyId, amount, _ ->
+                    submitMaintenance("planting_tool", mapOf("family" to familyId, "amount" to amount.toString()))
                 }
             )
         }
@@ -537,37 +427,13 @@ fun FarmScreen(
                 currentTime = currentTime,
                 onDismiss = { showHarvesterDroneDialog = false },
                 onStateChange = { updated ->
-                    scope.launch {
-                        farmRepository.saveHarvesterDroneState(
-                            pet.id,
-                            updated.copy(lastUpdatedAt = System.currentTimeMillis())
-                        )
-                    }
+                    submitMaintenance("harvester_settings", mapOf("settings" to Json.encodeToString(updated)))
                 },
                 onTransferFuel = { item, quantity ->
-                    scope.launch {
-                        if (gameEngine.consumeItem(item, quantity)) {
-                            val latest = farmRepository.decodeHarvesterDroneState(
-                                farmRepository.getUpgrade(pet.id, FARM_HARVESTING_DRONE_ID),
-                                System.currentTimeMillis()
-                            )
-                            val addedFuel = (latest.fuel + quantity).coerceAtMost(
-                                farmDroneFuelCapacityForUpgradeLevel(latest.fuelUpgradeLevel)
-                            )
-                            farmRepository.saveHarvesterDroneState(
-                                pet.id,
-                                latest.copy(
-                                    fuel = addedFuel,
-                                    lastUpdatedAt = System.currentTimeMillis()
-                                )
-                            )
-                        }
-                    }
+                    submitMaintenance("harvester_fuel", mapOf("itemId" to item.id, "quantity" to quantity.toString()))
                 },
                 onCollectStorage = {
-                    scope.launch {
-                        gameEngine.collectHarvesterDroneStorage()
-                    }
+                    submitMaintenance("harvester_collect")
                 }
             )
         }
@@ -577,23 +443,9 @@ fun FarmScreen(
                 crops = compostableItems,
                 onDismiss = { showComposterCropPickerForSlot = null },
                 onCropSelected = { item ->
-                    scope.launch {
-                        if (gameEngine.consumeItem(item, 1)) {
-                            if (farmRepository.addComposterInput(pet.id, item.id, showComposterCropPickerForSlot)) {
-                                gameEngine.logEvent(
-                                    pet.id,
-                                    EventType.OTHER,
-                                    resources.getString(
-                                        R.string.tama_event_started_composting_crop,
-                                        inventoryItemDisplayName(context, item)
-                                    )
-                                )
-                            } else {
-                                gameEngine.grantItem(item, 1)
-                            }
-                        }
-                        showComposterCropPickerForSlot = null
-                    }
+                    val slot = showComposterCropPickerForSlot ?: return@ComposterCropPickerDialog
+                    submitMaintenance("compost", mapOf("itemId" to item.id, "slot" to slot.toString()))
+                    showComposterCropPickerForSlot = null
                 }
             )
         }
@@ -1986,82 +1838,35 @@ private fun wellTileStatusText(
     }
 }
 
-fun handleTileClick(
+private fun handleTileClick(
     tile: FarmTile,
     tool: InventoryItem?,
     gameEngine: TamaGameEngine,
-    pet: TamaPet,
     scope: kotlinx.coroutines.CoroutineScope,
     context: android.content.Context,
-    onSeedPlantRequest: () -> Unit,
-    onAction: (FarmTile) -> Unit
+    onSeedPlantRequest: () -> Unit
 ) {
-    when (tool?.id) {
-        "hoe_starter", "hoe" -> {
-            if (tile.status == TileStatus.SOIL) {
-                onAction(tile.copy(status = TileStatus.FARMLAND))
-                scope.launch { 
-                    gameEngine.reduceToolDurability(tool, 1)
-                    gameEngine.logEvent(pet.id, EventType.OTHER, context.getString(R.string.tama_event_tilled))
-                }
-            }
+    val action = when {
+        tool?.id == "hoe" || tool?.id?.startsWith("hoe_") == true ->
+            ActionId.TILL_SOIL.takeIf { tile.status == TileStatus.SOIL && tile.crop == null }
+        tool?.id == "watering_can" || tool?.id?.startsWith("watering_can_") == true ->
+            ActionId.WATER.takeIf { canWaterFarmTile(tile) }
+        tool?.id == "water" -> ActionId.POUR_WATER.takeIf { canWaterFarmTile(tile) }
+        tool?.id == "fertilizer" -> ActionId.FERTILIZE.takeIf {
+            tile.crop?.isDecayed == true || (tile.crop != null && tile.crop.stage < 3 && !tile.crop.isFertilized)
         }
-        "watering_can_starter", "watering_can" -> {
-            if (canWaterFarmTile(tile)) {
-                scope.launch {
-                    val waterItem = pet.inventory.find { it.id == "water" && it.quantity > 0 }
-                    if (waterItem != null) {
-                        if (gameEngine.consumeItem(waterItem, 1)) {
-                            onAction(tile.copy(status = TileStatus.WET_FARMLAND, lastWateredTime = System.currentTimeMillis()))
-                            gameEngine.reduceToolDurability(tool, 1)
-                            gameEngine.logEvent(pet.id, EventType.WATERED, context.getString(R.string.tama_event_used_bottled_water))
-                        }
-                    }
-                }
-            }
+        tool == null && tile.crop?.isDecayed == true -> ActionId.REMOVE_DEAD_CROP
+        tool == null && tile.crop?.stage == 3 -> ActionId.HARVEST_CROP
+        tool == null && tile.status == TileStatus.WET_FARMLAND && tile.crop == null -> {
+            onSeedPlantRequest()
+            null
         }
-        "water" -> {
-            // Direct use of water item
-            if (canWaterFarmTile(tile)) {
-                scope.launch {
-                    if (gameEngine.consumeItem(tool, 1)) {
-                        onAction(tile.copy(status = TileStatus.WET_FARMLAND, lastWateredTime = System.currentTimeMillis()))
-                        gameEngine.logEvent(pet.id, EventType.WATERED, context.getString(R.string.tama_event_poured_water))
-                    }
-                }
-            }
-        }
-        "fertilizer" -> {
-            if (tile.crop != null && tile.crop.stage < 3 && !tile.crop.isFertilized) {
-                 scope.launch {
-                    if (gameEngine.consumeItem(tool, 1)) {
-                        onAction(tile.copy(crop = tile.crop.copy(isFertilized = true)))
-                        gameEngine.logEvent(pet.id, EventType.OTHER, context.getString(R.string.tama_event_applied_fertilizer))
-                    }
-                 }
-            } else if (tile.crop?.isDecayed == true) {
-                 scope.launch {
-                    if (gameEngine.consumeItem(tool, 1)) {
-                         onAction(tile.copy(crop = tile.crop.copy(isDecayed = false, lastStageUpdateTime = System.currentTimeMillis())))
-                         gameEngine.logEvent(pet.id, EventType.OTHER, context.getString(R.string.tama_event_revived_plant))
-                    }
-                 }
-            }
-        }
-        null -> {
-            // Hand interaction
-            if (tile.status == TileStatus.WET_FARMLAND && tile.crop == null) {
-                onSeedPlantRequest()
-            } else if (tile.crop?.stage == 3) {
-                val crop = tile.crop!!
-                onAction(tile.copy(crop = null, status = TileStatus.SOIL))
-                scope.launch {
-                    val result = gameEngine.harvestCrop(crop)
-                    if (result.success && result.message.isNotBlank()) {
-                        Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
+        else -> null
+    }
+    action?.let { requested ->
+        scope.launch {
+            val message = WorldFarmActions.request(context, gameEngine, tile.id, requested)
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
         }
     }
 }

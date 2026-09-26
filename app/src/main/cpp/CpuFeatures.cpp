@@ -4,9 +4,17 @@
 #include <android/log.h>
 #include <asm/hwcap.h>
 #include <jni.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <linux/fs.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/auxv.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#include <limits.h>
+#include <string>
 
 #define LOG_TAG "CpuFeatures"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -22,6 +30,14 @@
 
 #ifndef HWCAP2_I8MM
 #define HWCAP2_I8MM (1 << 13) // Int8 matrix multiply
+#endif
+
+#ifndef AT_FDCWD
+#define AT_FDCWD (-100)
+#endif
+
+#ifndef RENAME_NOREPLACE
+#define RENAME_NOREPLACE (1 << 0)
 #endif
 
 // Helper to check /proc/cpuinfo for a flag
@@ -123,5 +139,142 @@ Java_com_example_llamadroid_util_CpuFeatures_getBestTier(JNIEnv *env,
   LOGI("Selected CPU tier: %s (HWCAP2: 0x%lx, SVE2: %d)", tier, hwcap2,
        has_sve2);
   return env->NewStringUTF(tier);
+}
+
+namespace {
+
+// Open a validated absolute directory below an already pinned root. Opening
+// every component with O_NOFOLLOW keeps a concurrent guest rename from
+// redirecting renameat2 through a parent symlink after Kotlin's validation.
+int openPinnedDirectory(int rootFd, const char *rootPath, const char *parentPath) {
+  const size_t rootLength = strlen(rootPath);
+  if (rootLength == 0 || strncmp(parentPath, rootPath, rootLength) != 0) return -EINVAL;
+  if (parentPath[rootLength] == '\0') {
+    const int copy = dup(rootFd);
+    return copy < 0 ? -errno : copy;
+  }
+  if (parentPath[rootLength] != '/') return -EINVAL;
+
+  int current = dup(rootFd);
+  if (current < 0) return -errno;
+  const char *cursor = parentPath + rootLength + 1;
+  while (*cursor != '\0') {
+    const char *slash = strchr(cursor, '/');
+    const size_t length = slash == nullptr ? strlen(cursor) : static_cast<size_t>(slash - cursor);
+    if (length == 0 || length > NAME_MAX) {
+      close(current);
+      return -EINVAL;
+    }
+    char component[NAME_MAX + 1];
+    memcpy(component, cursor, length);
+    component[length] = '\0';
+    if (strcmp(component, ".") == 0 || strcmp(component, "..") == 0) {
+      close(current);
+      return -EINVAL;
+    }
+    const int next = openat(current, component,
+                            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    const int openError = errno;
+    close(current);
+    if (next < 0) return -openError;
+    current = next;
+    if (slash == nullptr) break;
+    cursor = slash + 1;
+  }
+  return current;
+}
+
+bool splitParent(const std::string &path, std::string *parent, std::string *name) {
+  const size_t slash = path.find_last_of('/');
+  if (slash == std::string::npos || slash == 0 || slash + 1 >= path.size()) return false;
+  *parent = path.substr(0, slash);
+  *name = path.substr(slash + 1);
+  return name->find('/') == std::string::npos && name->find('\0') == std::string::npos &&
+         *name != "." && *name != "..";
+}
+
+}  // namespace
+
+// Publish one already-synced staging file without replacing an existing
+// destination. The Android bridge validates the captured project/session
+// scope; this native layer pins both parent directory walks before renaming.
+JNIEXPORT jint JNICALL
+Java_com_example_llamadroid_harness_HarnessAtomicFileNative_nativePublishNoReplace(
+    JNIEnv *env, jclass clazz, jstring root_path, jstring source_path, jstring destination_path) {
+  if (root_path == nullptr || source_path == nullptr || destination_path == nullptr) return EINVAL;
+  const char *root = env->GetStringUTFChars(root_path, nullptr);
+  const char *source = env->GetStringUTFChars(source_path, nullptr);
+  const char *destination = env->GetStringUTFChars(destination_path, nullptr);
+  if (root == nullptr || source == nullptr || destination == nullptr) {
+    if (root != nullptr) env->ReleaseStringUTFChars(root_path, root);
+    if (source != nullptr) env->ReleaseStringUTFChars(source_path, source);
+    if (destination != nullptr) env->ReleaseStringUTFChars(destination_path, destination);
+    return ENOMEM;
+  }
+  int result = EINVAL;
+  if (root[0] == '/' && source[0] == '/' && destination[0] == '/') {
+    const std::string sourceString(source);
+    const std::string destinationString(destination);
+    std::string sourceParent;
+    std::string sourceName;
+    std::string destinationParent;
+    std::string destinationName;
+    if (splitParent(sourceString, &sourceParent, &sourceName) &&
+        splitParent(destinationString, &destinationParent, &destinationName)) {
+      const int rootFd = open(root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+      if (rootFd < 0) {
+        result = errno;
+      } else {
+        const int sourceFd = openPinnedDirectory(rootFd, root, sourceParent.c_str());
+        const int sourceError = sourceFd < 0 ? -sourceFd : 0;
+        const int destinationFd = sourceFd < 0 ? -1 : openPinnedDirectory(rootFd, root, destinationParent.c_str());
+        const int destinationError = destinationFd < 0 ? -destinationFd : 0;
+        if (sourceError != 0) {
+          result = sourceError;
+        } else if (destinationError != 0) {
+          result = destinationError;
+        } else {
+          struct stat sourceStat {};
+          if (fstatat(sourceFd, sourceName.c_str(), &sourceStat, AT_SYMLINK_NOFOLLOW) != 0) {
+            result = errno;
+          } else if (!S_ISREG(sourceStat.st_mode)) {
+            result = EINVAL;
+          } else {
+            struct stat destinationStat {};
+            if (fstatat(destinationFd, destinationName.c_str(), &destinationStat, AT_SYMLINK_NOFOLLOW) == 0) {
+              result = S_ISREG(destinationStat.st_mode) ? EEXIST : EINVAL;
+            } else if (errno != ENOENT) {
+              result = errno;
+            } else {
+#if defined(__NR_renameat2)
+              if (syscall(__NR_renameat2, sourceFd, sourceName.c_str(), destinationFd,
+                          destinationName.c_str(), RENAME_NOREPLACE) == 0) {
+                result = 0;
+              } else {
+                result = errno;
+              }
+#elif defined(SYS_renameat2)
+              if (syscall(SYS_renameat2, sourceFd, sourceName.c_str(), destinationFd,
+                          destinationName.c_str(), RENAME_NOREPLACE) == 0) {
+                result = 0;
+              } else {
+                result = errno;
+              }
+#else
+              result = ENOSYS;
+#endif
+            }
+          }
+        }
+        if (destinationFd >= 0) close(destinationFd);
+        if (sourceFd >= 0) close(sourceFd);
+        close(rootFd);
+      }
+    }
+  }
+  env->ReleaseStringUTFChars(root_path, root);
+  env->ReleaseStringUTFChars(source_path, source);
+  env->ReleaseStringUTFChars(destination_path, destination);
+  return result;
 }
 }

@@ -36,6 +36,7 @@ class AgentForegroundService : Service() {
         const val ACTION_STOP_ALL_RUNTIME = "stop_all_runtime"
         const val ACTION_UPDATE_STATUS = "update_status"
         const val ACTION_RESUME_RUNTIME = "resume_runtime"
+        const val ACTION_START_HARNESS = "start_deepseek_harness_foreground"
         const val EXTRA_RECOVERY_ONLY = "recovery_only"
         
         const val EXTRA_STATUS = "status"
@@ -54,6 +55,7 @@ class AgentForegroundService : Service() {
         private val delayedDirectStartInFlight = AtomicBoolean(false)
         private val recoveryCheckInFlight = AtomicBoolean(false)
         private val runtimeRetainCount = AtomicInteger(0)
+        private val harnessRetained = AtomicBoolean(false)
         private val resumeTriggered = AtomicBoolean(false)
         private val serviceInstanceIds = AtomicInteger(0)
         private val lastIdleReconciledAtMs = AtomicLong(0L)
@@ -231,15 +233,39 @@ class AgentForegroundService : Service() {
             start(context, status, startSource = "retain_runtime")
         }
 
+        /** Keeps the shared Harness alive without constructing or recovering the retired agent loop. */
+        fun retainHarness(context: Context, status: String) {
+            val acquired = harnessRetained.compareAndSet(false, true)
+            if (!acquired && isRunning) return
+            if (acquired) runtimeRetainCount.incrementAndGet()
+            try {
+                val intent = Intent(context, AgentForegroundService::class.java).apply {
+                    action = ACTION_START_HARNESS
+                    putExtra(EXTRA_STATUS, status)
+                }
+                context.startForegroundService(intent)
+            } catch (error: Exception) {
+                if (acquired) {
+                    harnessRetained.set(false)
+                    runtimeRetainCount.updateAndGet { (it - 1).coerceAtLeast(0) }
+                }
+                throw error
+            }
+        }
+
+        fun releaseHarness(context: Context) {
+            if (harnessRetained.compareAndSet(true, false)) releaseRuntime(context)
+        }
+
         fun releaseRuntime(context: Context) {
-            val remaining = runtimeRetainCount.decrementAndGet().coerceAtLeast(0)
-            runtimeRetainCount.set(remaining)
+            val remaining = runtimeRetainCount.updateAndGet { (it - 1).coerceAtLeast(0) }
             if (remaining == 0 && !AgentService.isLoading.value) {
                 stop(context)
             }
         }
 
         fun requestResume(context: Context) {
+            if (com.example.llamadroid.harness.HarnessEngineOwnership.legacyExecutionRetired) return
             val dispatch = resolveAgentResumeDispatch(isRunning)
             recordBreadcrumb(
                 event = "resume_requested",
@@ -345,7 +371,11 @@ class AgentForegroundService : Service() {
                     AiRuntimeJobStore.getRecoverableJobs(appContext)
                         .filter { !AiRuntimeJobStore.isJobStale(it) }
                 }.getOrDefault(emptyList())
-                if (!AgentService.isLoading.value && activeJobs.isEmpty()) {
+                if (
+                    !AgentService.isLoading.value &&
+                    activeJobs.isEmpty() &&
+                    runtimeRetainCount.get() == 0
+                ) {
                     runtimeRetainCount.set(0)
                     lastIdleReconciledAtMs.set(System.currentTimeMillis())
                     recordBreadcrumb(
@@ -406,13 +436,20 @@ class AgentForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder = binder
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_START_AGENT) {
+        if (intent?.action == ACTION_START_AGENT || intent?.action == ACTION_START_HARNESS) {
             startImmediateForeground(
                 status = intent.getStringExtra(EXTRA_STATUS) ?: "AI Agent running...",
                 startSource = intent.getStringExtra(EXTRA_START_SOURCE) ?: "direct"
             )
         }
         when (intent?.action) {
+            ACTION_START_HARNESS -> {
+                startAgentForeground(
+                    status = intent.getStringExtra(EXTRA_STATUS).orEmpty(),
+                    startSource = "deepseek_harness",
+                    requestedAction = ACTION_START_HARNESS
+                )
+            }
             ACTION_START_AGENT -> {
                 val status = intent.getStringExtra(EXTRA_STATUS) ?: "AI Agent running..."
                 val foregroundTaskId = intent.getIntExtra(EXTRA_FOREGROUND_TASK_ID, -1)
@@ -434,14 +471,32 @@ class AgentForegroundService : Service() {
             }
             ACTION_STOP_AGENT -> {
                 startInFlight.set(false)
-                stopAgentForeground()
+                // This is an idle-release intent. Re-check leases when delivered so an old
+                // queued release cannot stop a newly started Harness generation.
+                if (!harnessRetained.get() && runtimeRetainCount.get() == 0 && !AgentService.isLoading.value) stopAgentForeground()
             }
             ACTION_STOP_ALL_RUNTIME -> {
                 startInFlight.set(false)
-                runtimeOllamaManager?.cancelAll()
-                AgentService.stopAllJobs()
-                runtimeRetainCount.set(0)
-                stopAgentForeground()
+                val harness = com.example.llamadroid.harness.HarnessAppRuntime.existing()
+                if (harness != null && harnessRetained.get()) {
+                    harness.scope.launch {
+                        harness.forceStop()
+                        runtimeOllamaManager?.cancelAll()
+                        AgentService.stopAllJobs()
+                        if (harnessRetained.get()) {
+                            runtimeRetainCount.set(1)
+                            updateNotificationStatus(getString(R.string.harness_runtime_cleanup_pending))
+                        } else {
+                            runtimeRetainCount.set(0)
+                            stopAgentForeground()
+                        }
+                    }
+                } else {
+                    runtimeOllamaManager?.cancelAll()
+                    AgentService.stopAllJobs()
+                    runtimeRetainCount.set(0)
+                    stopAgentForeground()
+                }
             }
             ACTION_UPDATE_STATUS -> {
                 val status = intent.getStringExtra(EXTRA_STATUS) ?: "Working..."
@@ -727,6 +782,11 @@ class AgentForegroundService : Service() {
     }
     
     override fun onDestroy() {
+        if (harnessRetained.get()) {
+            com.example.llamadroid.harness.HarnessAppRuntime.existing()?.let { harness ->
+                harness.scope.launch { harness.forceStop() }
+            }
+        }
         super.onDestroy()
         instance = null
         isRunning = false
@@ -743,6 +803,10 @@ class AgentForegroundService : Service() {
             event = "app_task_removed",
             details = "loading=${AgentService.isLoading.value} retain=${runtimeRetainCount.get()}"
         )
+        if (harnessRetained.get()) {
+            super.onTaskRemoved(rootIntent)
+            return
+        }
         runtimeOllamaManager?.cancelAll()
         AgentService.stopAllJobs()
         runtimeRetainCount.set(0)

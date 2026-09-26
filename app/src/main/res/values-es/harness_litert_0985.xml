@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_litert_0985_worker_interrupted">LiteRT se detuvo inesperadamente. La aplicación conservó todas las herramientas; prueba con un contexto o límite de salida menor, o desactiva MTP para este modelo.</string>
+    <string name="harness_litert_0985_retrying">LiteRT se detuvo antes de generar salida. Se reintenta una vez con un perfil CPU acotado y MTP desactivado; los ajustes guardados del modelo no cambian.</string>
+</resources>

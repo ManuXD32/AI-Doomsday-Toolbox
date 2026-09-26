@@ -36,7 +36,9 @@ import com.example.llamadroid.R
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelProvenanceEntity
 import com.example.llamadroid.data.db.ModelSourceEntity
+import com.example.llamadroid.data.db.isStableAudioComponentType
 import com.example.llamadroid.data.model.LiteRtModelEntity
+import com.example.llamadroid.data.model.StableAudioModelSupport
 import com.example.llamadroid.data.model.library.InstalledModelAsset
 import com.example.llamadroid.data.model.library.ModelArtifactReference
 import com.example.llamadroid.data.model.library.ModelFamily
@@ -196,7 +198,12 @@ internal suspend fun attachModelSource(
                 modelKey = asset.stableId
             ),
             role = request.role?.trim()?.takeIf { it.isNotBlank() } ?: asset.role,
-            sizeBytes = sizeBytes
+            sizeBytes = sizeBytes,
+            classificationSource = asset.model?.classificationSource
+                ?: asset.liteRt?.classificationSource
+                ?: "LEGACY",
+            detectedClassificationJson = asset.model?.detectedClassificationJson
+                ?: asset.liteRt?.detectedClassificationJson
         ).getOrThrow()
         Unit
     }
@@ -214,6 +221,7 @@ private fun familyLabel(family: ModelFamily): String = when (family) {
     ModelFamily.ONNX -> stringResource(R.string.model_library_family_onnx)
     ModelFamily.LITERT -> stringResource(R.string.model_library_family_litert)
     ModelFamily.WHISPER -> stringResource(R.string.model_library_family_whisper)
+    ModelFamily.AUDIO -> stringResource(R.string.model_library_family_audio)
 }
 
 /**
@@ -525,6 +533,8 @@ internal fun installedAssetForModel(model: ModelEntity): InstalledModelAsset {
         model.type.name.startsWith("SD_") -> ModelFamily.SD
         model.type.name.startsWith("ONNX_") -> ModelFamily.ONNX
         model.type.name == "WHISPER" -> ModelFamily.WHISPER
+        model.type.name == "LLAMA_TTS" || model.type.name == "LLAMA_TTS_COMPANION" -> ModelFamily.AUDIO
+        model.type.isStableAudioComponentType() -> ModelFamily.LITERT
         else -> ModelFamily.LLM
     }
     val role = when (model.type.name) {
@@ -556,6 +566,12 @@ internal fun installedAssetForModel(model: ModelEntity): InstalledModelAsset {
         "ONNX_IMAGE_UPSCALER" -> "upscaler"
         "ONNX_IMAGE_GEN" -> "image_generation"
         "WHISPER" -> "whisper"
+        "LLAMA_TTS" -> "tts_main"
+        "LLAMA_TTS_COMPANION" -> "tts_mmproj"
+        "LITERT_AUDIO_DIT",
+        "LITERT_AUDIO_COMPONENT" -> model.audioComponentRole
+            ?.takeIf { StableAudioModelSupport.isComponentRole(it) }
+            ?: StableAudioModelSupport.defaultRoleForType(model.type)
         else -> null
     }
     return InstalledModelAsset.fromModel(model, family, role)

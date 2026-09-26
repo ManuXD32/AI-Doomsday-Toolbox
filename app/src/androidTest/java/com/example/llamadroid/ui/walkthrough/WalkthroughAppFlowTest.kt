@@ -179,7 +179,7 @@ class WalkthroughAppFlowTest {
     fun everyChapterReachesEveryLessonRouteThroughFocusedNativeTargets() {
         composeApp()
         assertEquals(10, WalkthroughCatalog.chapters.size)
-        assertEquals(39, WalkthroughCatalog.chapters.sumOf { it.lessons.size })
+        assertEquals(40, WalkthroughCatalog.chapters.sumOf { it.lessons.size })
 
         WalkthroughCatalog.chapters.forEach { chapter ->
             returnToDashboard()

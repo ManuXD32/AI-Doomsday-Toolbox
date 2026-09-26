@@ -1,0 +1,69 @@
+--- a/src/syscall/enter.c
++++ b/src/syscall/enter.c
+@@ -2868,5 +2868,25 @@
+ 	if (status2 < 0)
+ 		status = status2;
+ 
++#if defined(ARCH_X86_64)
++	/* Android's x86_64 application sandbox can reject the legacy
++	 * rename(2) syscall while allowing renameat(2).  Keep the original
++	 * two-argument view through path canonicalization and extensions,
++	 * then publish the same atomic operation through renameat(2).  The
++	 * current-register guard leaves seccomp's existing renameat rewrite
++	 * untouched when that accelerator is enabled. */
++	if (status >= 0
++	    && syscall_number == PR_rename
++	    && get_sysnum(tracee, CURRENT) == PR_rename) {
++		word_t old_path = peek_reg(tracee, CURRENT, SYSARG_1);
++		word_t new_path = peek_reg(tracee, CURRENT, SYSARG_2);
++
++		set_sysnum(tracee, PR_renameat);
++		poke_reg(tracee, SYSARG_4, new_path);
++		poke_reg(tracee, SYSARG_3, AT_FDCWD);
++		poke_reg(tracee, SYSARG_2, old_path);
++		poke_reg(tracee, SYSARG_1, AT_FDCWD);
++	}
++#endif
+ 	return status;
+ }
+--- a/src/syscall/exit.c
++++ b/src/syscall/exit.c
+@@ -267,7 +267,15 @@
+ 		if ((int) syscall_result < 0)
+ 			goto end;
+ 
+-		if (syscall_number == PR_rename) {
++		if (syscall_number == PR_rename
++		    && get_sysnum(tracee, MODIFIED) == PR_renameat) {
++			/* The x86_64 Android compatibility rewrite keeps the guest
++			 * syscall as rename in ORIGINAL but publishes it as
++			 * renameat in MODIFIED. */
++			old_reg = SYSARG_2;
++			new_reg = SYSARG_4;
++		}
++		else if (syscall_number == PR_rename) {
+ 			old_reg = SYSARG_1;
+ 			new_reg = SYSARG_2;
+ 		}
+--- a/src/extension/link2symlink/link2symlink.c
++++ b/src/extension/link2symlink/link2symlink.c
+@@ -269,7 +269,7 @@
+ 		return -1;
+ 
+ 	if (old_dir_fd < 0 && new_dir_fd < 0)
+-		return rename(old_path, new_path);
++		return renameat(AT_FDCWD, old_path, AT_FDCWD, new_path);
+ 
+ 	/* An absolute path with AT_FDCWD is the side that isn't in the
+ 	 * l2s directory -- the file being moved into it, typically.  */
+--- a/src/extension/fake_id0/fake_id0.c
++++ b/src/extension/fake_id0/fake_id0.c
+@@ -1307,7 +1307,7 @@
+ 		if(status < 0)
+ 			return status;
+ 
+-		status = rename(old_meta, new_meta);
++		status = renameat(AT_FDCWD, old_meta, AT_FDCWD, new_meta);
+ 		if(status < 0)
+ 			return status;
+ 

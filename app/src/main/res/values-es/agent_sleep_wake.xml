@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="agent_sleep_wake_message">La alarma solicitada se ha activado. Continúa desde el estado duradero de la tarea y completa la siguiente acción pendiente. Motivo: %1$s</string>
+    <string name="agent_sleep_scheduled_exact">En pausa hasta %1$s. El agente continuará automáticamente.</string>
+    <string name="agent_sleep_scheduled_approximate">En pausa hasta aproximadamente %1$s. Android continuará el agente cuando entregue la alarma.</string>
+</resources>

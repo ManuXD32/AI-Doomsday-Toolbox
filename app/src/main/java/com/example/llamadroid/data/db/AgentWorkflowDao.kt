@@ -10,6 +10,340 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface AgentWorkflowDao {
+    /** Conversation lookup kept here so the re-anchor transaction can own the full workflow boundary. */
+    @Query("SELECT * FROM agent_conversations WHERE id = :conversationId LIMIT 1")
+    suspend fun getConversationForDirectReanchor(conversationId: Long): AgentConversationEntity?
+
+    /**
+     * Archive/cancel only work that can still be resumed by the old runtime.
+     * Terminal history remains available for exports and diagnostics.
+     */
+    @Query(
+        """
+        UPDATE agent_invocations
+        SET status = 'ARCHIVED',
+            errorClass = 'DIRECT_RUNTIME_REANCHOR',
+            errorMessage = :reason,
+            endedAt = COALESCE(endedAt, :updatedAt),
+            updatedAt = :updatedAt
+        WHERE conversationId = :conversationId
+          AND LOWER(agentClass) != 'direct'
+          AND status NOT IN ('COMPLETED', 'FAILED', 'INTERRUPTED', 'CANCELLED', 'ARCHIVED')
+        """
+    )
+    suspend fun archiveStaleSpecialistInvocations(
+        conversationId: Long,
+        reason: String,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_turn_contexts
+        SET status = 'MIGRATED', completedAt = COALESCE(completedAt, :updatedAt)
+        WHERE conversationId = :conversationId AND status = 'ACTIVE' AND completedAt IS NULL
+        """
+    )
+    suspend fun closeStaleTurnContexts(
+        conversationId: Long,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_pending_inputs
+        SET status = 'CANCELLED', cancelledAt = :updatedAt
+        WHERE conversationId = :conversationId AND status = 'QUEUED'
+        """
+    )
+    suspend fun cancelStalePendingInputs(
+        conversationId: Long,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_continuation_outbox
+        SET status = 'CANCELLED', completedAt = :updatedAt, updatedAt = :updatedAt,
+            errorClass = 'DIRECT_RUNTIME_REANCHOR', errorMessage = :reason
+        WHERE conversationId = :conversationId
+          AND status IN ('QUEUED', 'CLAIMED', 'ENQUEUED')
+        """
+    )
+    suspend fun cancelStaleContinuations(
+        conversationId: Long,
+        reason: String,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_pending_questions
+        SET status = 'CANCELLED'
+        WHERE conversationId = :conversationId AND status = 'PENDING'
+        """
+    )
+    suspend fun cancelStalePendingQuestions(conversationId: Long): Int
+
+    @Query(
+        """
+        UPDATE agent_pending_plans
+        SET state = 'CANCELLED',
+            approvalOperationId = NULL,
+            continuationEnqueued = 0,
+            errorMessage = :reason,
+            updatedAt = :updatedAt
+        WHERE conversationId = :conversationId
+          AND state IN ('AWAITING_APPROVAL', 'APPROVING', 'APPROVED', 'STARTING_BUILD', 'BUILDING')
+        """
+    )
+    suspend fun cancelStalePendingPlans(
+        conversationId: Long,
+        reason: String,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    /** Approval cards are chat projections; preserve their text but make them terminal. */
+    @Query(
+        """
+        UPDATE agent_messages
+        SET needsApproval = 0, isApproved = 0
+        WHERE conversationId = :conversationId AND needsApproval = 1 AND isApproved IS NULL
+        """
+    )
+    suspend fun cancelStaleMessageApprovals(conversationId: Long): Int
+
+    @Query(
+        """
+        UPDATE agent_sleep_wakes
+        SET status = 'CANCELLED', completedAt = :updatedAt, updatedAt = :updatedAt
+        WHERE conversationId = :conversationId AND status IN ('PENDING', 'FIRED')
+        """
+    )
+    suspend fun cancelStaleSleepWakes(
+        conversationId: Long,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    /** A stale specialist assignment must not prevent the direct worker from claiming the TODO. */
+    @Query(
+        """
+        UPDATE agent_todos
+        SET status = CASE WHEN status = 'IN_PROGRESS' THEN 'READY' ELSE status END,
+            ownerRole = CASE WHEN status = 'IN_PROGRESS' THEN NULL ELSE ownerRole END,
+            assignedInvocationId = NULL,
+            updatedAt = :updatedAt
+        WHERE conversationId = :conversationId AND assignedInvocationId IS NOT NULL
+        """
+    )
+    suspend fun releaseStaleTodoAssignments(
+        conversationId: Long,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_project_states
+        SET revision = revision + 1,
+            semanticEventCount = semanticEventCount + 1,
+            lastSemanticEvent = 'direct_runtime_reanchor',
+            mode = :mode,
+            currentGoal = CASE
+                WHEN TRIM(currentGoal) != '' THEN currentGoal
+                WHEN :fallbackGoal IS NOT NULL THEN :fallbackGoal
+                ELSE currentGoal
+            END,
+            activePlanVersionId = :activePlanVersionId,
+            currentPhaseId = :currentPhaseId,
+            currentTodoId = :currentTodoId,
+            updatedAt = :updatedAt
+        WHERE conversationId = :conversationId
+        """
+    )
+    suspend fun updateProjectStateForDirectReanchor(
+        conversationId: Long,
+        mode: String,
+        activePlanVersionId: String?,
+        currentPhaseId: String?,
+        currentTodoId: String?,
+        fallbackGoal: String?,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_conversations
+        SET executionProfile = :executionProfile,
+            directRuntimeVersion = :runtimeVersion,
+            directReanchorState = :reanchorState,
+            directReanchorReason = :reason,
+            directReanchoredAt = :reanchoredAt,
+            planningModeEnabled = CASE WHEN :phase = 'PLAN' THEN 1 ELSE 0 END,
+            resumeState = 'PAUSED',
+            lastStopReason = :reason,
+            updatedAt = :reanchoredAt
+        WHERE id = :conversationId
+        """
+    )
+    suspend fun completeDirectReanchor(
+        conversationId: Long,
+        runtimeVersion: Int,
+        reanchorState: String,
+        reason: String,
+        phase: String,
+        reanchoredAt: Long = System.currentTimeMillis(),
+        executionProfile: String = AgentExecutionProfile.DIRECT
+    ): Int
+
+    /**
+     * Atomically moves one conversation from the legacy/specialist workflow to
+     * the direct runtime. Calling this again after completion is a no-op: all
+     * durable project data remains untouched and no continuation is enqueued.
+     */
+    @Transaction
+    suspend fun reanchorConversationToDirect(
+        conversationId: Long,
+        runtimeVersion: Int = AgentDirectRuntime.CURRENT_VERSION,
+        reason: String = "direct_runtime_reanchor"
+    ): AgentDirectReanchorResult {
+        val conversation = getConversationForDirectReanchor(conversationId)
+            ?: error("Conversation $conversationId does not exist")
+        val normalizedReason = reason.trim().take(240).ifBlank {
+            "direct_runtime_reanchor"
+        }
+        if (
+            conversation.directRuntimeVersion >= runtimeVersion &&
+            conversation.directReanchorState == AgentDirectReanchorState.COMPLETE &&
+            conversation.executionProfile == AgentExecutionProfile.DIRECT
+        ) {
+            val state = getProjectState(conversationId)
+                ?: AgentProjectStateEntity(conversationId = conversationId)
+            return AgentDirectReanchorResult(
+                conversationId = conversationId,
+                applied = false,
+                phase = state.mode,
+                activePlanVersionId = state.activePlanVersionId,
+                currentTodoId = state.currentTodoId,
+                cancelledContinuations = 0,
+                cancelledQuestions = 0,
+                cancelledPlans = 0,
+                cancelledApprovals = 0,
+                archivedInvocations = 0
+            )
+        }
+
+        val now = System.currentTimeMillis()
+        val archivedInvocations = archiveStaleSpecialistInvocations(
+            conversationId = conversationId,
+            reason = normalizedReason,
+            updatedAt = now
+        )
+        closeStaleTurnContexts(conversationId, now)
+        cancelStalePendingInputs(conversationId, now)
+        val cancelledContinuations = cancelStaleContinuations(
+            conversationId = conversationId,
+            reason = normalizedReason,
+            updatedAt = now
+        )
+        val cancelledQuestions = cancelStalePendingQuestions(conversationId)
+        val cancelledPlans = cancelStalePendingPlans(
+            conversationId = conversationId,
+            reason = normalizedReason,
+            updatedAt = now
+        )
+        val cancelledApprovals = cancelStaleMessageApprovals(conversationId)
+        cancelStaleSleepWakes(conversationId, now)
+        releaseStaleTodoAssignments(conversationId, now)
+
+        val approvedPlan = getLatestApprovedPlan(conversationId)
+        val todos = approvedPlan?.let {
+            getTodosForPlanVersion(conversationId, it.id)
+        }.orEmpty()
+        val currentTodo = todos.firstOrNull {
+            it.status !in setOf("COMPLETED", "CANCELLED")
+        }
+        val phase = when {
+            approvedPlan == null -> AgentDirectRuntime.MODE_PLAN
+            currentTodo != null -> AgentDirectRuntime.MODE_BUILD
+            else -> AgentDirectRuntime.MODE_VERIFY
+        }
+        val existingState = getProjectState(conversationId)
+        insertProjectStateIfMissing(
+            AgentProjectStateEntity(
+                conversationId = conversationId,
+                mode = phase,
+                currentGoal = existingState?.currentGoal
+                    ?.takeIf { it.isNotBlank() }
+                    ?: approvedPlan?.summary.orEmpty(),
+                activePlanVersionId = approvedPlan?.id,
+                currentPhaseId = currentTodo?.phaseId,
+                currentTodoId = currentTodo?.id
+            )
+        )
+        updateProjectStateForDirectReanchor(
+            conversationId = conversationId,
+            mode = phase,
+            activePlanVersionId = approvedPlan?.id,
+            currentPhaseId = currentTodo?.phaseId,
+            currentTodoId = currentTodo?.id,
+            fallbackGoal = approvedPlan?.summary,
+            updatedAt = now
+        )
+        completeDirectReanchor(
+            conversationId = conversationId,
+            runtimeVersion = runtimeVersion,
+            reanchorState = AgentDirectReanchorState.COMPLETE,
+            reason = normalizedReason,
+            phase = phase,
+            reanchoredAt = now
+        )
+        return AgentDirectReanchorResult(
+            conversationId = conversationId,
+            applied = true,
+            phase = phase,
+            activePlanVersionId = approvedPlan?.id,
+            currentTodoId = currentTodo?.id,
+            cancelledContinuations = cancelledContinuations,
+            cancelledQuestions = cancelledQuestions,
+            cancelledPlans = cancelledPlans,
+            cancelledApprovals = cancelledApprovals,
+            archivedInvocations = archivedInvocations
+        )
+    }
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertSleepWake(wake: AgentSleepWakeEntity)
+
+    @Query("SELECT * FROM agent_sleep_wakes WHERE id = :id LIMIT 1")
+    suspend fun getSleepWake(id: String): AgentSleepWakeEntity?
+
+    @Query("SELECT * FROM agent_sleep_wakes WHERE conversationId = :conversationId LIMIT 1")
+    suspend fun getSleepWakeForConversation(conversationId: Long): AgentSleepWakeEntity?
+
+    @Query("SELECT * FROM agent_sleep_wakes WHERE status = 'PENDING' ORDER BY wakeAtEpochMs ASC")
+    suspend fun getPendingSleepWakes(): List<AgentSleepWakeEntity>
+
+    @Query(
+        "UPDATE agent_sleep_wakes SET status = 'FIRED', firedAt = :firedAt, updatedAt = :firedAt " +
+            "WHERE id = :id AND status = 'PENDING' AND runEpoch = :runEpoch"
+    )
+    suspend fun claimSleepWake(id: String, runEpoch: Long, firedAt: Long = System.currentTimeMillis()): Int
+
+    @Query(
+        "UPDATE agent_sleep_wakes SET status = 'COMPLETED', completedAt = :completedAt, updatedAt = :completedAt " +
+            "WHERE id = :id AND status = 'FIRED'"
+    )
+    suspend fun completeSleepWake(id: String, completedAt: Long = System.currentTimeMillis()): Int
+
+    @Query(
+        "UPDATE agent_sleep_wakes SET status = 'CANCELLED', completedAt = :cancelledAt, updatedAt = :cancelledAt " +
+            "WHERE conversationId = :conversationId AND status IN ('PENDING', 'FIRED')"
+    )
+    suspend fun cancelSleepWakeForConversation(
+        conversationId: Long,
+        cancelledAt: Long = System.currentTimeMillis()
+    ): Int
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertMessagePart(part: AgentMessagePartEntity)
 
@@ -46,6 +380,13 @@ interface AgentWorkflowDao {
     @Query("DELETE FROM agent_message_parts WHERE messageOriginalId = :messageOriginalId")
     suspend fun deleteMessageParts(messageOriginalId: String)
 
+    @Query(
+        "DELETE FROM agent_message_parts WHERE conversationId = :conversationId AND messageOriginalId IN " +
+            "(SELECT originalId FROM agent_messages WHERE conversationId = :conversationId AND " +
+            "(sequenceNumber > :fromSequenceNumber OR (sequenceNumber = :fromSequenceNumber AND id >= :fromMessageId)))"
+    )
+    suspend fun deleteMessagePartsAtOrAfter(conversationId: Long, fromSequenceNumber: Int, fromMessageId: Long)
+
     @Query("DELETE FROM agent_message_parts WHERE conversationId = :conversationId")
     suspend fun deleteMessagePartsForConversation(conversationId: Long)
 
@@ -66,6 +407,25 @@ interface AgentWorkflowDao {
     suspend fun getLatestTurnContext(
         conversationId: Long,
         agentKey: String
+    ): AgentTurnContextEntity?
+
+    /**
+     * Returns the newest turn that has not crossed a durable terminal boundary.
+     * A process can disappear while the conversation row still says IDLE, so
+     * cold recovery must inspect this workflow state independently.
+     */
+    @Query(
+        """
+        SELECT * FROM agent_turn_contexts
+        WHERE conversationId = :conversationId
+          AND status = 'ACTIVE'
+          AND completedAt IS NULL
+        ORDER BY createdAt DESC
+        LIMIT 1
+        """
+    )
+    suspend fun getLatestOpenTurnContext(
+        conversationId: Long
     ): AgentTurnContextEntity?
 
     @Query(
@@ -170,6 +530,31 @@ interface AgentWorkflowDao {
         answeredAt: Long = System.currentTimeMillis()
     ): Int
 
+    /**
+     * Commits the answer-side receipt fields together with the ANSWERED
+     * transition. The canonical message and outbox row are written by the
+     * surrounding Room transaction.
+     */
+    @Query(
+        """
+        UPDATE agent_pending_questions
+        SET answerJson = :answerJson,
+            answerMessageOriginalId = :answerMessageOriginalId,
+            answerReceiptId = :answerReceiptId,
+            status = 'ANSWERED',
+            continuationEnqueued = 1,
+            answeredAt = :answeredAt
+        WHERE id = :id AND status = 'PENDING'
+        """
+    )
+    suspend fun answerQuestionWithReceiptExactlyOnce(
+        id: String,
+        answerJson: String,
+        answerMessageOriginalId: String,
+        answerReceiptId: String,
+        answeredAt: Long = System.currentTimeMillis()
+    ): Int
+
     @Query(
         """
         UPDATE agent_pending_questions
@@ -191,6 +576,42 @@ interface AgentWorkflowDao {
     suspend fun getAnsweredQuestionsAwaitingContinuation(
         conversationId: Long
     ): List<AgentPendingQuestionEntity>
+
+    @Query(
+        """
+        SELECT * FROM agent_pending_questions
+        WHERE conversationId = :conversationId AND status = 'ANSWERED'
+        ORDER BY answeredAt ASC, createdAt ASC
+        """
+    )
+    suspend fun getAnsweredQuestions(
+        conversationId: Long
+    ): List<AgentPendingQuestionEntity>
+
+    @Query(
+        """
+        UPDATE agent_pending_questions
+        SET answerMessageOriginalId = :answerMessageOriginalId,
+            answerReceiptId = COALESCE(:answerReceiptId, answerReceiptId)
+        WHERE id = :id AND status = 'ANSWERED'
+        """
+    )
+    suspend fun attachQuestionAnswerReceipt(
+        id: String,
+        answerMessageOriginalId: String,
+        answerReceiptId: String? = null
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_pending_questions
+        SET status = 'CANCELLED'
+        WHERE conversationId = :conversationId AND status = 'PENDING'
+        """
+    )
+    suspend fun cancelPendingQuestions(
+        conversationId: Long
+    ): Int
 
     @Query(
         """
@@ -800,6 +1221,17 @@ interface AgentWorkflowDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPendingInput(input: AgentPendingInputEntity)
 
+    /**
+     * Idempotent insert for asynchronous queue writers.  A late writer must
+     * never replace a row that Stop already marked CANCELLED (or a delivered
+     * row that has already crossed a model boundary).
+     */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertPendingInputIfMissing(input: AgentPendingInputEntity)
+
+    @Query("SELECT * FROM agent_pending_inputs WHERE id = :id LIMIT 1")
+    suspend fun getPendingInput(id: String): AgentPendingInputEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPendingInputs(inputs: List<AgentPendingInputEntity>)
 
@@ -869,6 +1301,375 @@ interface AgentWorkflowDao {
     )
     suspend fun cancelInvocationPendingInputs(
         invocationId: String,
+        cancelledAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_pending_inputs
+        SET status = 'CANCELLED', cancelledAt = :cancelledAt
+        WHERE conversationId = :conversationId AND status = 'QUEUED'
+        """
+    )
+    suspend fun cancelConversationPendingInputs(
+        conversationId: Long,
+        cancelledAt: Long = System.currentTimeMillis()
+    ): Int
+
+    // ========== Durable project contract and decisions ==========
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertProjectContractIfMissing(
+        contract: AgentProjectContractEntity
+    ): Long
+
+    @Query("SELECT * FROM agent_project_contracts WHERE conversationId = :conversationId LIMIT 1")
+    suspend fun getProjectContract(conversationId: Long): AgentProjectContractEntity?
+
+    @Query(
+        """
+        UPDATE agent_project_contracts
+        SET initialGoal = :initialGoal,
+            initialGoalSource = :initialGoalSource,
+            updatedAt = :updatedAt
+        WHERE conversationId = :conversationId AND TRIM(initialGoal) = ''
+        """
+    )
+    suspend fun setInitialGoalIfBlank(
+        conversationId: Long,
+        initialGoal: String,
+        initialGoalSource: String,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_project_contracts
+        SET noMoreQuestions = :noMoreQuestions, updatedAt = :updatedAt
+        WHERE conversationId = :conversationId
+        """
+    )
+    suspend fun setNoMoreQuestions(
+        conversationId: Long,
+        noMoreQuestions: Boolean,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_project_contracts
+        SET greenfield = :greenfield, updatedAt = :updatedAt
+        WHERE conversationId = :conversationId
+        """
+    )
+    suspend fun setGreenfield(
+        conversationId: Long,
+        greenfield: Boolean,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertDecision(decision: AgentDecisionEntity)
+
+    @Query(
+        """
+        UPDATE agent_decisions
+        SET isLatest = 0,
+            latestCorrectionId = :correctionId,
+            updatedAt = :updatedAt
+        WHERE conversationId = :conversationId
+          AND decisionKey = :decisionKey
+          AND isLatest = 1
+        """
+    )
+    suspend fun supersedeLatestDecision(
+        conversationId: Long,
+        decisionKey: String,
+        correctionId: String,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_decisions
+        SET isLatest = 0,
+            latestCorrectionId = :correctionId,
+            updatedAt = :updatedAt
+        WHERE id = :supersededDecisionId AND conversationId = :conversationId
+        """
+    )
+    suspend fun supersedeDecision(
+        conversationId: Long,
+        supersededDecisionId: String,
+        correctionId: String,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        SELECT * FROM agent_decisions
+        WHERE conversationId = :conversationId AND isLatest = 1
+        ORDER BY createdAt ASC, id ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun getLatestDecisions(
+        conversationId: Long,
+        limit: Int = 20
+    ): List<AgentDecisionEntity>
+
+    @Query(
+        """
+        SELECT * FROM agent_decisions
+        WHERE conversationId = :conversationId AND isLatest = 1
+        ORDER BY createdAt ASC, id ASC
+        """
+    )
+    suspend fun getAllLatestDecisions(
+        conversationId: Long
+    ): List<AgentDecisionEntity>
+
+    @Query("SELECT * FROM agent_decisions WHERE id = :id LIMIT 1")
+    suspend fun getDecision(id: String): AgentDecisionEntity?
+
+    @Query(
+        """
+        SELECT * FROM agent_decisions
+        WHERE conversationId = :conversationId AND decisionKey = :decisionKey
+        ORDER BY createdAt DESC, id DESC
+        """
+    )
+    suspend fun getDecisionsForKey(
+        conversationId: Long,
+        decisionKey: String
+    ): List<AgentDecisionEntity>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertContinuationReceipt(
+        receipt: AgentContinuationOutboxEntity
+    ): Long
+
+    @Query(
+        "SELECT * FROM agent_continuation_outbox WHERE conversationId = :conversationId AND dedupeKey = :dedupeKey LIMIT 1"
+    )
+    suspend fun getContinuationReceipt(
+        conversationId: Long,
+        dedupeKey: String
+    ): AgentContinuationOutboxEntity?
+
+    @Query(
+        "SELECT * FROM agent_continuation_outbox WHERE id = :id LIMIT 1"
+    )
+    suspend fun getContinuationReceiptById(id: String): AgentContinuationOutboxEntity?
+
+    /**
+     * Finds the durable PASS receipt for one verification action. Direct
+     * receipt projection uses the action binding so a pending or failed check
+     * cannot be mistaken for evidence merely because the tool call succeeded.
+     */
+    @Query(
+        """
+        SELECT * FROM agent_continuation_outbox
+        WHERE conversationId = :conversationId
+          AND kind = 'VERIFICATION_PHASE_TRANSITION'
+          AND status = 'COMPLETED'
+          AND payloadJson LIKE '%"receipt_type":"verification_phase"%'
+          AND payloadJson LIKE '%"action_id":"' || :actionId || '"%'
+          AND payloadJson LIKE '%"disposition":"PASS"%'
+          AND payloadJson LIKE '%"plan_version_id":"' || :planVersionId || '"%'
+        ORDER BY createdAt DESC, updatedAt DESC, id DESC
+        LIMIT 1
+        """
+    )
+    suspend fun getCompletedPassVerificationReceiptForAction(
+        conversationId: Long,
+        actionId: String,
+        planVersionId: String
+    ): AgentContinuationOutboxEntity?
+
+    /**
+     * Returns a bounded newest-first view of mutation receipts. The payload
+     * shape is written by actionReceiptPayload, so this avoids spending the
+     * bound on read/check receipts without requiring SQLite JSON1; payload
+     * status is still validated by the store.
+     */
+    @Query(
+        """
+        SELECT * FROM agent_continuation_outbox
+        WHERE conversationId = :conversationId
+          AND kind = 'ACTION_RECEIPT'
+          AND status = 'COMPLETED'
+          AND (
+              payloadJson LIKE '%"tool":"write_file"%'
+              OR payloadJson LIKE '%"tool":"edit_file"%'
+              OR payloadJson LIKE '%"tool":"edit_lines"%'
+              OR payloadJson LIKE '%"tool":"append_file"%'
+              OR payloadJson LIKE '%"tool":"apply_patch"%'
+              OR payloadJson LIKE '%"tool":"delete_file"%'
+          )
+        ORDER BY createdAt DESC, updatedAt DESC, id DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun getLatestCompletedActionReceipts(
+        conversationId: Long,
+        limit: Int
+    ): List<AgentContinuationOutboxEntity>
+
+    /**
+     * Returns the newest completed PASS transition for the active approved
+     * plan. The payload filters are deliberately narrow because the existing
+     * outbox table stores the control-plane receipt kind and JSON metadata
+     * together without a separate verification table.
+     */
+    @Query(
+        """
+        SELECT * FROM agent_continuation_outbox
+        WHERE conversationId = :conversationId
+          AND kind = 'VERIFICATION_PHASE_TRANSITION'
+          AND status = 'COMPLETED'
+          AND payloadJson LIKE '%"receipt_type":"verification_phase"%'
+          AND payloadJson LIKE '%"planning_episode_id":"' || :planningEpisodeId || '"%'
+          AND payloadJson LIKE '%"plan_version_id":"' || :planVersionId || '"%'
+          AND payloadJson LIKE '%"disposition":"PASS"%'
+        ORDER BY createdAt DESC, updatedAt DESC, id DESC
+        LIMIT 1
+        """
+    )
+    suspend fun getLatestCompletedPassVerificationReceipt(
+        conversationId: Long,
+        planningEpisodeId: String,
+        planVersionId: String
+    ): AgentContinuationOutboxEntity?
+
+    /**
+     * Returns a bounded newest-first action receipt window for the active
+     * planning episode. Failed actions are included because a command or patch
+     * can partially change files before reporting an error; the control plane
+     * filters known read-only tools and treats enabled custom actions as
+     * effectful by default.
+     */
+    @Query(
+        """
+        SELECT * FROM agent_continuation_outbox
+        WHERE conversationId = :conversationId
+          AND kind = 'ACTION_RECEIPT'
+          AND status IN ('COMPLETED', 'FAILED')
+          AND payloadJson LIKE '%"receipt_type":"action"%'
+          AND payloadJson LIKE '%"planning_episode_id":"' || :planningEpisodeId || '"%'
+        ORDER BY createdAt DESC, updatedAt DESC, id DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun getLatestActionReceiptsForEpisode(
+        conversationId: Long,
+        planningEpisodeId: String,
+        limit: Int
+    ): List<AgentContinuationOutboxEntity>
+
+    /**
+     * ENQUEUED is the durable handoff state used after a tool result has been
+     * committed. It must remain recoverable after process death until the
+     * continuation worker claims and completes it.
+     */
+    @Query(
+        """
+        SELECT COUNT(*) FROM agent_continuation_outbox
+        WHERE conversationId = :conversationId
+          AND kind = 'TOOL_CONTINUATION'
+          AND status IN ('QUEUED', 'CLAIMED', 'ENQUEUED')
+          AND completedAt IS NULL
+        """
+    )
+    suspend fun countPendingToolContinuations(
+        conversationId: Long
+    ): Int
+
+    @Query(
+        """
+        SELECT * FROM agent_continuation_outbox
+        WHERE conversationId = :conversationId
+          AND kind = 'TOOL_CONTINUATION'
+          AND status IN ('QUEUED', 'CLAIMED', 'ENQUEUED')
+          AND completedAt IS NULL
+        ORDER BY COALESCE(enqueuedAt, updatedAt, createdAt) DESC, id DESC
+        LIMIT 1
+        """
+    )
+    suspend fun getLatestPendingToolContinuation(
+        conversationId: Long
+    ): AgentContinuationOutboxEntity?
+
+    /** Counts durable receipts for one bounded action family in an episode. */
+    @Query(
+        """
+        SELECT COUNT(*) FROM agent_continuation_outbox
+        WHERE conversationId = :conversationId
+          AND kind = :kind
+          AND dedupeKey LIKE :dedupePrefix
+          AND status != 'CANCELLED'
+        """
+    )
+    suspend fun countContinuationReceipts(
+        conversationId: Long,
+        kind: String,
+        dedupePrefix: String
+    ): Int
+
+    @Query(
+        """
+        SELECT * FROM agent_continuation_outbox
+        WHERE conversationId = :conversationId AND status IN ('QUEUED', 'CLAIMED')
+        ORDER BY createdAt ASC, id ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun getPendingContinuations(
+        conversationId: Long,
+        limit: Int = 20
+    ): List<AgentContinuationOutboxEntity>
+
+    @Query(
+        """
+        UPDATE agent_continuation_outbox
+        SET status = 'CLAIMED', attemptCount = attemptCount + 1,
+            claimedAt = :claimedAt, updatedAt = :claimedAt
+        WHERE id = :id AND status = 'QUEUED'
+        """
+    )
+    suspend fun claimContinuation(
+        id: String,
+        claimedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_continuation_outbox
+        SET status = :status, enqueuedAt = COALESCE(:enqueuedAt, enqueuedAt),
+            completedAt = :completedAt, errorClass = :errorClass,
+            errorMessage = :errorMessage, updatedAt = :updatedAt
+        WHERE id = :id AND status IN ('CLAIMED', 'QUEUED', 'ENQUEUED')
+        """
+    )
+    suspend fun finishContinuation(
+        id: String,
+        status: String,
+        enqueuedAt: Long? = null,
+        completedAt: Long? = null,
+        errorClass: String? = null,
+        errorMessage: String? = null,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_continuation_outbox
+        SET status = 'CANCELLED', completedAt = :cancelledAt, updatedAt = :cancelledAt
+        WHERE conversationId = :conversationId AND status IN ('QUEUED', 'CLAIMED', 'ENQUEUED')
+        """
+    )
+    suspend fun cancelConversationContinuations(
+        conversationId: Long,
         cancelledAt: Long = System.currentTimeMillis()
     ): Int
 }

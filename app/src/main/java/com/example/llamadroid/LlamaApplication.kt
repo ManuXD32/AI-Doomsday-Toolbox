@@ -10,6 +10,8 @@ import com.example.llamadroid.data.AppContainer
 import com.example.llamadroid.data.DefaultAppContainer
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.RestoreCoordinator
+import com.example.llamadroid.data.db.RestoreAdmissionContext
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.db.SavedCommandScopes
 import com.example.llamadroid.data.db.launchProfile
@@ -27,6 +29,7 @@ import com.example.llamadroid.data.model.library.PendingArtifactStatus
 import com.example.llamadroid.onnx.OnnxStorage
 import com.example.llamadroid.service.AiRuntimeJobStore
 import com.example.llamadroid.service.GenerationDiagnosticsStore
+import com.example.llamadroid.service.GenerationQueueRepository
 import com.example.llamadroid.service.OrganizerAlarmScheduler
 import com.example.llamadroid.service.LlamaScheduledTaskScheduler
 import com.example.llamadroid.service.LlamaRuntimeStateProjection
@@ -59,6 +62,11 @@ class LlamaApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this  // Safe: Application lives for entire app lifecycle
+        if (RestoreCoordinator.isMaintenance(this)) {
+            // MainActivity owns the isolated restore phase. No settings, Room, or recovery
+            // component may open live data before that phase completes.
+            return
+        }
         container = DefaultAppContainer(this)
         UnifiedNotificationManager.init(this)
         DebugLog.init(this)
@@ -71,6 +79,8 @@ class LlamaApplication : Application() {
         PhoneWearGateway.start(this)
         installCrashBreadcrumbHandler()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            runCatching { GenerationQueueRepository(this@LlamaApplication).recoverOrphanedRun() }
+                .onFailure { DebugLog.log("[GENERATION_QUEUE] recovery failed: ${it.message}") }
             // A process death can leave the keyed OCR child alive.  Reconcile its metadata-only
             // lease before any new OCR request is allowed to start; restoration commands carry
             // the lease token and therefore remain valid across the process boundary.
@@ -141,7 +151,20 @@ class LlamaApplication : Application() {
     }
     
     override fun attachBaseContext(base: Context) {
-        super.attachBaseContext(updateLocale(base))
+        RestoreAdmissionContext.application = base
+        if (RestoreCoordinator.hasPending(base)) RestoreCoordinator.latchMaintenance()
+        if (RestoreCoordinator.isMaintenance(base)) {
+            super.attachBaseContext(base)
+            check(RestoreCoordinator.blockLegacyComponents(this)) {
+                "RESTORE_LEGACY_ADMISSION_BLOCKED"
+            }
+        } else {
+            RestoreCoordinator.acquireNormalAccess(base)
+            super.attachBaseContext(updateLocale(base))
+            check(RestoreCoordinator.restoreLegacyComponents(this)) {
+                "RESTORE_LEGACY_COMPONENT_RECOVERY_BLOCKED"
+            }
+        }
         com.google.android.play.core.splitcompat.SplitCompat.install(this)
     }
     

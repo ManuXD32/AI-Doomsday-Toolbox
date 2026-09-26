@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="model_library_error_response_parsing">No se pudo interpretar la respuesta del repositorio. Reintenta o comprueba si hay una actualización de la app.</string>
+    <string name="model_library_error_internal">El explorador de repositorios encontró un error interno. Reintenta para continuar.</string>
+    <string name="model_library_error_revision_missing">No se encontró esta revisión del repositorio. Comprueba la rama o el commit seleccionado.</string>
+</resources>

@@ -72,7 +72,7 @@ internal object FeatureOtherGuides {
             id = "agent",
             titleRes = R.string.feature_guide_agent_title,
             route = "agent",
-            routeBases = setOf("agent", "agent_workspace", "agent_invocation"),
+            routeBases = setOf("agent", "agent_workspace", "agent_proot_terminal", "agent_invocation"),
             recipes = listOf(
                 otherRecipe(
                     id = "agent.quickstart",

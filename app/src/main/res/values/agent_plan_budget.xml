@@ -1,0 +1,4 @@
+<resources>
+    <string name="agent_harness_plan_too_large">Plan exceeds 500 words or 4,000 characters. One compact repair is allowed; then pause for direction. Preserve every requirement, exact formula, numeric limit, and check.</string>
+    <string name="agent_harness_plan_shorten">Shorten this plan to at most 500 words and 4,000 characters. Preserve every requirement, exact formula, numeric limit, and validation check; remove explanatory prose.</string>
+</resources>

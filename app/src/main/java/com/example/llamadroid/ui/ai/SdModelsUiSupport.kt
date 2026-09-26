@@ -13,6 +13,7 @@ internal fun isAdditionalSdModel(model: ModelEntity): Boolean = model.type in se
     ModelType.SD_MOTION_MODULE,
     ModelType.SD_TEXTUAL_INVERSION,
     ModelType.LLM,
+    ModelType.SD_LLM,
     ModelType.VISION_PROJECTOR,
     ModelType.MMPROJ
 )

@@ -1,0 +1,16 @@
+{
+  "imageId": "debian-trixie-arm64-20260824",
+  "ociReference": "docker.io/library/debian@sha256:7215f78f35ffe58fe13f244fac9c4f21326d55187271fbb3e1a8aa5cc7e387ab",
+  "ociDigest": "sha256:7215f78f35ffe58fe13f244fac9c4f21326d55187271fbb3e1a8aa5cc7e387ab",
+  "ociCreated": "2026-08-24",
+  "architecture": "arm64",
+  "suite": "trixie",
+  "snapshot": "20260824T000000Z",
+  "buildEpoch": "2026-08-24T00:00:00Z",
+  "rootfsSha256": "73899844987f3261f80c0929187f4e6b25832845eec294356f93baf712b71bcf",
+  "builder": "asset_debian/build_debian_pack.sh",
+  "packageInventory": "rootfs.manifest",
+  "licenseIndex": "licenses/package-license-index.tsv",
+  "networkIdentityPolicy": "canonical-guest-v1",
+  "privacyRepackTool": "asset_debian/sanitize_debian_rootfs.py"
+}

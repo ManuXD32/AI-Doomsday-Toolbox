@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
@@ -76,7 +77,8 @@ import kotlin.math.roundToInt
 
 private enum class InpaintMaskTool {
     ADD,
-    ERASE
+    ERASE,
+    CIRCLE
 }
 
 private data class LoadedInpaintEditor(
@@ -247,6 +249,7 @@ private fun InpaintMaskEditorContent(
                             }
 
                             var previousPaintPosition: Offset? = imagePosition(firstDown.position)
+                            var lastGesturePosition = firstDown.position
                             var recordedUndo = false
                             var usedMultiTouch = false
 
@@ -276,6 +279,7 @@ private fun InpaintMaskEditorContent(
                             var keepGoing: Boolean
                             do {
                                 val event = awaitPointerEvent()
+                                event.changes.firstOrNull()?.let { lastGesturePosition = it.position }
                                 val pressed = event.changes.filter { it.pressed }
                                 if (pressed.size >= 2) {
                                     usedMultiTouch = true
@@ -287,15 +291,36 @@ private fun InpaintMaskEditorContent(
                                 } else {
                                     val change = pressed.firstOrNull()
                                     if (change != null) {
-                                        paint(change.position)
+                                        lastGesturePosition = change.position
+                                        if (tool != InpaintMaskTool.CIRCLE) paint(change.position)
                                         change.consume()
-                                    } else if (!recordedUndo && !usedMultiTouch) {
+                                    } else if (!recordedUndo && !usedMultiTouch && tool != InpaintMaskTool.CIRCLE) {
                                         // A tap has no intermediate pressed event; still apply one brush dab.
                                         paint(firstDown.position)
                                     }
                                 }
                                 keepGoing = event.changes.any { it.pressed }
                             } while (keepGoing)
+
+                            if (tool == InpaintMaskTool.CIRCLE && !usedMultiTouch) {
+                                val start = imagePosition(firstDown.position)
+                                val end = imagePosition(lastGesturePosition)
+                                val centerX = (start.x + end.x) / 2f
+                                val centerY = (start.y + end.y) / 2f
+                                if (centerX in 0f..raster.width.toFloat() && centerY in 0f..raster.height.toFloat()) {
+                                    val radius = (maxOf(kotlin.math.abs(end.x - start.x), kotlin.math.abs(end.y - start.y)) / 2f)
+                                        .coerceAtLeast(brushRadius)
+                                    rememberUndo()
+                                    raster.paintCircle(
+                                        centerX = centerX,
+                                        centerY = centerY,
+                                        radius = radius,
+                                        softness = 0f,
+                                        erase = false
+                                    )
+                                    refreshOverlay()
+                                }
+                            }
                         }
                     }
             ) {
@@ -329,14 +354,19 @@ private fun InpaintMaskEditorContent(
                                 selected = tool == item,
                                 onClick = { tool = item },
                                 label = {
-                                    Text(
-                                        stringResource(
-                                            if (item == InpaintMaskTool.ADD) R.string.imagegen_inpaint_editor_add
-                                            else R.string.imagegen_inpaint_editor_erase
-                                        )
-                                    )
+                                    Text(stringResource(when (item) {
+                                        InpaintMaskTool.ADD -> R.string.imagegen_inpaint_editor_add
+                                        InpaintMaskTool.ERASE -> R.string.imagegen_inpaint_editor_erase
+                                        InpaintMaskTool.CIRCLE -> R.string.imagegen_inpaint_editor_circle
+                                    }))
                                 },
-                                leadingIcon = { Icon(Icons.Default.Brush, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                                leadingIcon = {
+                                    Icon(
+                                        if (item == InpaintMaskTool.CIRCLE) Icons.Default.Circle else Icons.Default.Brush,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
                             )
                         }
                         item {

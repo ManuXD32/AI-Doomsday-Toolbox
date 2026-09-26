@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="agent_sleep_wake_message">The requested alarm fired. Resume from the durable task state and complete the next pending action. Reason: %1$s</string>
+    <string name="agent_sleep_scheduled_exact">Sleeping until %1$s. The agent will resume automatically.</string>
+    <string name="agent_sleep_scheduled_approximate">Sleeping until approximately %1$s. Android will resume the agent when the alarm is delivered.</string>
+</resources>

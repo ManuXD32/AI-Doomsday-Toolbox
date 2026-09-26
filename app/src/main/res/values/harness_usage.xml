@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="harness_usage_title">Token usage</string>
+    <string name="harness_usage_total">Total</string>
+    <string name="harness_usage_input">Uncached input</string>
+    <string name="harness_usage_output">Output</string>
+    <string name="harness_usage_cache_read">Cached input</string>
+    <string name="harness_usage_cache_write">Cache write</string>
+    <string name="harness_usage_reasoning">Reasoning</string>
+    <string name="harness_usage_turn" tools:ignore="PluralsCandidate">Turn usage (tokens): %1$d</string>
+    <string name="harness_usage_context_title">Context occupancy</string>
+    <string name="harness_usage_context_pressure">Current prompt pressure</string>
+    <string name="harness_usage_context_projected">Projected next prompt</string>
+    <string name="harness_usage_context_window">Context window</string>
+    <string name="harness_usage_context_occupancy">Occupancy (%)</string>
+    <string name="harness_usage_breakdown_title">Estimated context composition</string>
+    <string name="harness_usage_context_system">System estimate</string>
+    <string name="harness_usage_context_tools">Tools estimate</string>
+    <string name="harness_usage_context_messages">Messages estimate</string>
+    <string name="harness_usage_stats_title">Session statistics</string>
+    <string name="harness_usage_stats_ttft_ms">First-token time (ms)</string>
+    <string name="harness_usage_stats_decode_ms">Decode time (ms)</string>
+    <string name="harness_usage_stats_decode_tokens">Decode tokens</string>
+    <string name="harness_usage_context_compact">Context %1$d%%</string>
+    <string name="harness_usage_cache_compact">Cache %1$d%%</string>
+    <string name="harness_usage_speed_compact">%1$.1f tok/s</string>
+    <string name="harness_usage_total_compact">%1$s tok</string>
+    <string name="harness_usage_details_open">Usage details</string>
+    <string name="harness_usage_details_title">Usage details</string>
+    <string name="harness_usage_close">Close usage details</string>
+    <string name="harness_usage_context_used_window">Tokens: %1$d / %2$d</string>
+    <string name="harness_usage_cache_hit">Cache hit</string>
+    <string name="harness_usage_speed">Generation speed</string>
+</resources>

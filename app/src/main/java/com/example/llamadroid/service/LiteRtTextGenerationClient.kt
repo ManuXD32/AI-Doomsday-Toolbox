@@ -50,6 +50,33 @@ class LiteRtTextGenerationClient(private val context: Context) {
             .takeIf { it > 0 }
             ?: model.defaultLiteRtChatContextTokens()
             ?: 4_000
+        val requestedOutputTokens = (maxTokens ?: resolvedContext).coerceAtLeast(1)
+        val backendResolution = resolveLiteRtBackend(
+            model = model,
+            requestedBackend = backendMode,
+            requestedContextTokens = resolvedContext,
+            requestedOutputTokens = requestedOutputTokens,
+        )
+        val normalizedBackend = normalizeLiteRtBackend(backendMode)
+        val effectiveRequestBackend = if (
+            normalizedBackend == LITERT_BACKEND_AUTO &&
+            backendResolution.effectiveBackend == LITERT_BACKEND_GPU
+        ) {
+            LITERT_BACKEND_AUTO
+        } else {
+            backendResolution.effectiveBackend
+        }
+        if (normalizedBackend == LITERT_BACKEND_GPU && backendResolution.gpuWouldReduceRequest) {
+            onStatus(
+                context.getString(
+                    R.string.harness_litert_0984_forced_gpu_warning,
+                    backendResolution.contextTokens,
+                    backendResolution.outputTokens,
+                )
+            )
+        } else if (backendResolution.autoChoseCpuForCapacity) {
+            onStatus(context.getString(R.string.harness_litert_0984_auto_cpu_capacity))
+        }
         val output = StringBuilder()
         val thinking = StringBuilder()
         val request = LiteRtLmChatRequest(
@@ -60,14 +87,14 @@ class LiteRtTextGenerationClient(private val context: Context) {
                 systemPrompt = systemPrompt
             ),
             history = emptyList(),
-            backendMode = normalizeLiteRtBackend(backendMode),
+            backendMode = effectiveRequestBackend,
             params = mapOf(
                 "temperature" to temperature.toDouble(),
                 "top_k" to 40,
                 "top_p" to 0.95,
                 "enable_thinking" to thinkingEnabled,
                 LITERT_PARAM_MTP_ENABLED to mtpEnabled,
-                LITERT_PARAM_MAX_OUTPUT_TOKENS to (maxTokens ?: resolvedContext)
+                LITERT_PARAM_MAX_OUTPUT_TOKENS to requestedOutputTokens
             ),
             conversationOverride = LiteRtConversationOverride(
                 systemInstruction = systemPrompt,
@@ -77,19 +104,38 @@ class LiteRtTextGenerationClient(private val context: Context) {
                 userAudioPath = userAudioPath
             )
         )
-        val safeResult = streamSafely(
-            model = model,
-            request = request,
-            onStatus = onStatus,
-            onChunk = { chunk ->
-                output.append(chunk)
-                onChunk(chunk)
-            },
-            onThinkingChunk = { chunk ->
-                thinking.append(chunk)
-                onThinkingChunk(chunk)
+        val safeResult = try {
+            streamSafely(
+                model = model,
+                request = request,
+                onStatus = onStatus,
+                onChunk = { chunk ->
+                    output.append(chunk)
+                    onChunk(chunk)
+                },
+                onThinkingChunk = { chunk ->
+                    thinking.append(chunk)
+                    onThinkingChunk(chunk)
+                }
+            )
+        } catch (error: LiteRtPromptOverLimitException) {
+            throw IllegalStateException(
+                context.getString(
+                    R.string.harness_litert_0984_prompt_over_limit,
+                    error.requiredInputTokens,
+                    error.availableInputTokens,
+                ),
+                error
+            )
+        } catch (error: Throwable) {
+            if (error.containsLiteRtPromptOverLimit()) {
+                throw IllegalStateException(
+                    context.getString(R.string.harness_litert_0984_prompt_over_limit_generic),
+                    error,
+                )
             }
-        )
+            throw error
+        }
         val raw = output.toString()
         val cleaned = PDFSummaryLogic.cleanLlamaOutput(raw)
         LiteRtTextGenerationResult(
@@ -134,6 +180,7 @@ class LiteRtTextGenerationClient(private val context: Context) {
             return try {
                 LiteRtSafeStreamResult(runGpuWorker(), 0)
             } catch (error: Throwable) {
+                if (error.containsLiteRtPromptOverLimit()) throw error
                 val detail = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.name
                 LiteRtLmAcceleratorHealth.recordGpuCrash(context, model, detail)
                 throw IllegalStateException(
@@ -147,6 +194,7 @@ class LiteRtTextGenerationClient(private val context: Context) {
             return try {
                 LiteRtSafeStreamResult(runCpuWorker(), 0)
             } catch (error: Throwable) {
+                if (error.containsLiteRtPromptOverLimit()) throw error
                 val detail = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.name
                 throw IllegalStateException(
                     context.getString(R.string.litert_error_explicit_backend_failed, "CPU", detail),
@@ -160,6 +208,7 @@ class LiteRtTextGenerationClient(private val context: Context) {
                 try {
                     return LiteRtSafeStreamResult(runGpuWorker(), 0)
                 } catch (error: Throwable) {
+                    if (error.containsLiteRtPromptOverLimit()) throw error
                     val mtpEnabled = (request.params[LITERT_PARAM_MTP_ENABLED] as? Boolean) ?: false
                     if (mtpEnabled) {
                         DebugLog.log(
@@ -175,6 +224,7 @@ class LiteRtTextGenerationClient(private val context: Context) {
                                 runtimeFallbacks = 1
                             )
                         } catch (retryError: Throwable) {
+                            if (retryError.containsLiteRtPromptOverLimit()) throw retryError
                             val detail = retryError.message?.takeIf { it.isNotBlank() }
                                 ?: retryError.javaClass.name
                             LiteRtLmAcceleratorHealth.recordGpuCrash(context, model, detail)

@@ -11,12 +11,29 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 class SdCliSupportTest {
+
+    @get:Rule val temporaryFolder = TemporaryFolder()
+
+    private val baseImageFlags = setOf(
+        "-M",
+        "-m",
+        "-p",
+        "-W",
+        "-H",
+        "--steps",
+        "--cfg-scale",
+        "--sampling-method",
+        "-s",
+        "-o"
+    )
 
     @Test
     fun `checkpoint txt2img builds without required components`() {
@@ -114,6 +131,10 @@ class SdCliSupportTest {
 
     @Test
     fun `sd tool components resolve by family and selected component id`() {
+        val vae = temporaryFolder.newFile("ae.safetensors")
+        val wrongVae = temporaryFolder.newFile("wrong-vae.safetensors")
+        val clipL = temporaryFolder.newFile("clip_l.safetensors")
+        val t5xxl = temporaryFolder.newFile("t5xxl.gguf")
         val model = sdModel(
             filename = "flux1.gguf",
             path = "/models/flux1.gguf",
@@ -124,25 +145,25 @@ class SdCliSupportTest {
             supportModels = listOf(
                 sdModel(
                     filename = "ae.safetensors",
-                    path = "/models/ae.safetensors",
+                    path = vae.absolutePath,
                     type = ModelType.SD_VAE,
                     compatProfiles = "flux_1"
                 ),
                 sdModel(
                     filename = "wrong-vae.safetensors",
-                    path = "/models/wrong-vae.safetensors",
+                    path = wrongVae.absolutePath,
                     type = ModelType.SD_VAE,
                     compatProfiles = "checkpoint"
                 ),
                 sdModel(
                     filename = "clip_l.safetensors",
-                    path = "/models/clip_l.safetensors",
+                    path = clipL.absolutePath,
                     type = ModelType.SD_CLIP_L,
                     compatProfiles = "flux_1"
                 ),
                 sdModel(
                     filename = "t5xxl.gguf",
-                    path = "/models/t5xxl.gguf",
+                    path = t5xxl.absolutePath,
                     type = ModelType.SD_T5XXL,
                     compatProfiles = "flux_1"
                 )
@@ -155,9 +176,9 @@ class SdCliSupportTest {
             model = model
         )
 
-        assertEquals("/models/ae.safetensors", components.pathForRole(SdComponentRole.VAE))
-        assertEquals("/models/clip_l.safetensors", components.pathForRole(SdComponentRole.CLIP_L))
-        assertEquals("/models/t5xxl.gguf", components.pathForRole(SdComponentRole.T5XXL))
+        assertEquals(vae.absolutePath, components.pathForRole(SdComponentRole.VAE))
+        assertEquals(clipL.absolutePath, components.pathForRole(SdComponentRole.CLIP_L))
+        assertEquals(t5xxl.absolutePath, components.pathForRole(SdComponentRole.T5XXL))
         assertEquals(null, components.taePath)
     }
 
@@ -184,6 +205,69 @@ class SdCliSupportTest {
     }
 
     @Test
+    fun `reference image arguments preserve order and repeat the flag`() {
+        val references = listOf("/tmp/source.png", "/tmp/ref-2.png", "/tmp/ref-3.png")
+        val args = buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.IMG2IMG,
+                modelPath = "/models/flux2.gguf",
+                modelFamily = "flux_2",
+                modelVariant = "dev",
+                prompt = "a lighthouse",
+                outputPath = "/tmp/out.png",
+                initImage = references.first(),
+                referenceImages = references,
+                vaePath = "/models/ae.safetensors",
+                llmPath = "/models/flux2-llm.gguf"
+            ),
+            binaryCapabilities = SdBinaryCapabilities.ALLOW_ALL
+        )
+
+        assertEquals(references, args.windowed(2).filter { it.first() == "-r" }.map { it.last() })
+    }
+
+    @Test
+    fun `reference image arguments are limited to ten paths`() {
+        val references = (1..11).map { "/tmp/ref-$it.png" }
+        val failure = runCatching { buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.IMG2IMG,
+                modelPath = "/models/flux2.gguf",
+                modelFamily = "flux_2",
+                modelVariant = "dev",
+                prompt = "a lighthouse",
+                outputPath = "/tmp/out.png",
+                initImage = references.first(),
+                referenceImages = references,
+                vaePath = "/models/ae.safetensors",
+                llmPath = "/models/flux2-llm.gguf"
+            ),
+            binaryCapabilities = SdBinaryCapabilities.ALLOW_ALL
+        ) }.exceptionOrNull()
+        assertEquals(SdReferenceImageIssue.LIMIT_EXCEEDED, (failure as SdReferenceImageException).issue)
+    }
+
+    @Test
+    fun `blank reference image path has a typed error`() {
+        val failure = runCatching { buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.IMG2IMG,
+                modelPath = "/models/flux2.gguf",
+                modelFamily = "flux_2",
+                modelVariant = "dev",
+                prompt = "a lighthouse",
+                outputPath = "/tmp/out.png",
+                initImage = "/tmp/source.png",
+                referenceImages = listOf("/tmp/source.png", ""),
+                vaePath = "/models/ae.safetensors",
+                llmPath = "/models/flux2-llm.gguf"
+            ),
+            binaryCapabilities = SdBinaryCapabilities.ALLOW_ALL
+        ) }.exceptionOrNull()
+        assertEquals(SdReferenceImageIssue.BLANK_PATH, (failure as SdReferenceImageException).issue)
+    }
+
+    @Test
     fun `qwen image edit 2511 adds zero cond t model arg`() {
         val args = buildSdCommandArgs(
             SDConfig(
@@ -198,7 +282,7 @@ class SdCliSupportTest {
                 qwenImageZeroCondT = true
             ),
             binaryCapabilities = SdBinaryCapabilities(
-                supportedFlags = setOf("--diffusion-model", "--llm", "--model-args", "-r")
+                supportedFlags = baseImageFlags + setOf("--diffusion-model", "--llm", "--model-args", "-r")
             )
         )
 
@@ -222,7 +306,7 @@ class SdCliSupportTest {
                 qwenImageZeroCondT = true
             ),
             binaryCapabilities = SdBinaryCapabilities(
-                supportedFlags = setOf("--diffusion-model", "--llm", "--qwen-image-zero-cond-t", "-r")
+                supportedFlags = baseImageFlags + setOf("--diffusion-model", "--llm", "--qwen-image-zero-cond-t", "-r")
             )
         )
 
@@ -244,7 +328,7 @@ class SdCliSupportTest {
                 chromaDisableDitMask = true
             ),
             binaryCapabilities = SdBinaryCapabilities(
-                supportedFlags = setOf("--diffusion-model", "--model-args")
+                supportedFlags = baseImageFlags + setOf("--diffusion-model", "--vae", "--t5xxl", "--model-args")
             )
         )
 
@@ -266,7 +350,7 @@ class SdCliSupportTest {
                 chromaDisableDitMask = true
             ),
             binaryCapabilities = SdBinaryCapabilities(
-                supportedFlags = setOf("--diffusion-model", "--chroma-disable-dit-mask")
+                supportedFlags = baseImageFlags + setOf("--diffusion-model", "--vae", "--t5xxl", "--chroma-disable-dit-mask")
             )
         )
 
@@ -323,6 +407,7 @@ class SdCliSupportTest {
               --clip_g FILE
               --photo-maker FILE
               --model-args key=value
+              --auto-fit on|off (default: on)
               -r FILE
             """.trimIndent()
         )
@@ -332,10 +417,25 @@ class SdCliSupportTest {
         assertTrue(caps.supports("--clip_g"))
         assertTrue(caps.supports("--photo-maker"))
         assertTrue(caps.supports("--model-args"))
+        assertTrue(caps.supports("--auto-fit"))
+        assertTrue(caps.autoFitRequiresValue)
         assertTrue(caps.supports("-r"))
         assertTrue(caps.supportsMode("adetailer"))
         assertTrue(caps.supportsMode("IMG_GEN"))
         assertFalse(caps.supportsMode("not_a_native_mode"))
+    }
+
+    @Test
+    fun `capability parsing does not borrow auto fit syntax from the next option`() {
+        val caps = parseSdBinaryCapabilities(
+            """
+              --auto-fit legacy boolean placement
+              --type on|off (default: model type)
+            """.trimIndent()
+        )
+
+        assertTrue(caps.supports("--auto-fit"))
+        assertFalse(caps.autoFitRequiresValue)
     }
 
     @Test(expected = SdUnsupportedModesException::class)
@@ -362,7 +462,7 @@ class SdCliSupportTest {
                     adetailer = SdADetailerConfig(modelPath = detector.absolutePath)
                 ),
                 SdBinaryCapabilities(
-                    supportedFlags = setOf("-M", "--ad-model", "--ad-prompt", "--ad-negative-prompt", "--extra-ad-args"),
+                    supportedFlags = baseImageFlags + setOf("--ad-model", "--ad-prompt", "--ad-negative-prompt", "--extra-ad-args"),
                     supportedModes = setOf("img_gen")
                 )
             )
@@ -463,6 +563,7 @@ class SdCliSupportTest {
         assertTrue(args.contains("/tmp/input.png"))
         assertTrue(args.contains("-t"))
         assertTrue(args.contains("4"))
+        assertOption(args, "--auto-fit", "off")
         assertFalse(args.contains("-p"))
     }
 
@@ -481,6 +582,7 @@ class SdCliSupportTest {
         assertFalse(args.contains("--backend"))
         assertFalse(args.contains("--params-backend"))
         assertFalse(args.contains("--max-vram"))
+        assertOption(args, "--auto-fit", "off")
     }
 
     @Test
@@ -501,6 +603,7 @@ class SdCliSupportTest {
         assertOption(args, "--params-backend", "disk")
         assertOption(args, "--backend", "cpu")
         assertOption(args, "--max-vram", "cpu=4")
+        assertOption(args, "--auto-fit", "off")
         assertFalse(args.windowed(2).any { it == listOf("--backend", "disk") })
     }
 
@@ -570,6 +673,7 @@ class SdCliSupportTest {
         assertFalse(args.windowed(2).any { it == listOf("--params-backend", "disk") })
         assertFalse(args.windowed(2).any { it == listOf("--max-vram", "cpu=4") })
         assertTrue(args.contains("--rpc-servers"))
+        assertOption(args, "--auto-fit", "off")
     }
 
     @Test
@@ -586,7 +690,7 @@ class SdCliSupportTest {
                 maxVramCpuGiB = "3"
             ),
             binaryCapabilities = SdBinaryCapabilities(
-                supportedFlags = setOf("-M", "-m", "-p", "-o", "--max-vram")
+                supportedFlags = baseImageFlags + setOf("--max-vram")
             )
         )
 
@@ -611,6 +715,7 @@ class SdCliSupportTest {
         assertOption(args, "--params-backend", "disk")
         assertOption(args, "--backend", "cpu")
         assertOption(args, "--max-vram", "cpu=2.5")
+        assertOption(args, "--auto-fit", "off")
         assertFalse(args.windowed(2).any { it == listOf("--backend", "disk") })
     }
 
@@ -638,6 +743,7 @@ class SdCliSupportTest {
         assertFalse(args.windowed(2).any { it == listOf("--params-backend", "disk") })
         assertFalse(args.windowed(2).any { it == listOf("--max-vram", "cpu=2.5") })
         assertTrue(args.contains("--rpc-servers"))
+        assertOption(args, "--auto-fit", "off")
     }
 
     @Test

@@ -40,4 +40,24 @@ class ModelLibraryRoleMappingTest {
         assertFalse(isCompatibleSourceFamily(ModelFamily.LLM, ModelFamily.SD, null))
         assertTrue(requiresManualRoleSelection(ModelFamily.SD, "motionmodule"))
     }
+
+    @Test
+    fun `audio roles use dedicated native speech component types`() {
+        assertEquals(ModelType.LLAMA_TTS, ModelSourceRepository.runtimeModelTypeFor(ModelFamily.AUDIO, "tts_main"))
+        assertEquals(ModelType.LLAMA_TTS_COMPANION, ModelSourceRepository.runtimeModelTypeFor(ModelFamily.AUDIO, "tts_mmproj"))
+        assertTrue(isCompatibleSourceFamily(ModelFamily.AUDIO, ModelFamily.AUDIO, "tts_main"))
+        assertTrue(isCompatibleSourceFamily(ModelFamily.LLM, ModelFamily.AUDIO, "tts_mmproj"))
+    }
+
+    @Test
+    fun `stable audio roles use dedicated shared library types`() {
+        assertEquals(ModelType.LITERT_AUDIO_DIT,
+            ModelSourceRepository.runtimeModelTypeFor(ModelFamily.LITERT, "dit"))
+        assertEquals(ModelType.LITERT_AUDIO_COMPONENT,
+            ModelSourceRepository.runtimeModelTypeFor(ModelFamily.LITERT, "stable_audio_codec_decoder"))
+        assertTrue(isStableAudioComponentRole("stable-audio-dit"))
+        assertTrue(isStableAudioComponentRole("stable_audio_codec_decoder"))
+        assertFalse(isStableAudioComponentRole("llm"))
+        assertFalse(isCompatibleSourceFamily(ModelFamily.LITERT, ModelFamily.LLM, "stable_audio_dit"))
+    }
 }

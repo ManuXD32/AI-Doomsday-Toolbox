@@ -10,11 +10,31 @@ import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.onnx.OnnxStorage
 import java.io.File
 
+/**
+ * Returns task rows in an order owned by immutable task metadata.
+ *
+ * Download progress updates [DownloadTaskEntity.updatedAt], so that field is
+ * deliberately excluded from the presentation order. The ID tie-breaker
+ * keeps rows deterministic when several tasks are created in one millisecond.
+ */
+fun Iterable<DownloadTaskEntity>.stableDownloadTaskOrder(): List<DownloadTaskEntity> =
+    sortedWith(
+        compareByDescending<DownloadTaskEntity> { it.createdAt }
+            .thenBy { it.id }
+    )
+
+/** Joins a live progress value to the persisted task's exact progress key. */
+fun Map<String, Float>.progressForDownloadTask(task: DownloadTaskEntity): Float? =
+    this[task.progressKey]
+
 fun PendingDownload.toDownloadTaskEntity(
     downloadId: String,
     url: String,
     status: String = DOWNLOAD_TASK_STATUS_ACTIVE
 ): DownloadTaskEntity {
+    require(this.downloadId == null || this.downloadId == downloadId) {
+        "Pending download identity does not match the Room task id"
+    }
     val now = System.currentTimeMillis()
     val partFile = downloadPartFile(destPath)
     return DownloadTaskEntity(
@@ -51,6 +71,8 @@ fun PendingDownload.toDownloadTaskEntity(
         artifactFamily = artifactFamily,
         artifactRole = artifactRole,
         pendingArtifactId = pendingArtifactId,
+        classificationSource = classificationSource,
+        detectedClassificationJson = detectedClassificationJson,
         stageOnly = stageOnly,
         status = status,
         bytesDownloaded = partFile.length().coerceAtLeast(0L),
@@ -63,6 +85,7 @@ fun PendingDownload.toDownloadTaskEntity(
 fun DownloadTaskEntity.toPendingDownload(): PendingDownload {
     val type = runCatching { ModelType.valueOf(modelType) }.getOrDefault(ModelType.LLM)
     return PendingDownload(
+        downloadId = id,
         filename = filename,
         repoId = repoId,
         progressKey = progressKey,
@@ -94,6 +117,8 @@ fun DownloadTaskEntity.toPendingDownload(): PendingDownload {
         artifactFamily = artifactFamily,
         artifactRole = artifactRole,
         pendingArtifactId = pendingArtifactId,
+        classificationSource = classificationSource,
+        detectedClassificationJson = detectedClassificationJson,
         stageOnly = stageOnly
     )
 }
@@ -153,8 +178,13 @@ object DownloadTaskArtifacts {
             .sortedByDescending { it.updatedAt }
     }
 
-    fun deletePartialArtifact(task: DownloadTaskEntity): Boolean =
-        task.partFile().takeIf { it.exists() }?.delete() ?: true
+    fun deletePartialArtifact(task: DownloadTaskEntity): Boolean {
+        val part = task.partFile()
+        val metadata = File(part.parentFile, "${part.name}.resume")
+        val partDeleted = !part.exists() || part.delete()
+        val metadataDeleted = !metadata.exists() || metadata.delete()
+        return partDeleted && metadataDeleted
+    }
 
     fun deleteIncompleteArtifacts(task: DownloadTaskEntity) {
         deletePartialArtifact(task)

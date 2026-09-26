@@ -3470,6 +3470,635 @@ object Migrations {
         }
     }
 
+    /** Persist Audio workspace voice assets and serialized generation jobs. */
+    val MIGRATION_113_114 = object : Migration(113, 114) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 113 -> 114: Audio workspace")
+            if (!columnExists(database, "models", "audioFamily")) {
+                database.execSQL("ALTER TABLE `models` ADD COLUMN `audioFamily` TEXT")
+            }
+            if (!columnExists(database, "models", "audioLanguage")) {
+                database.execSQL("ALTER TABLE `models` ADD COLUMN `audioLanguage` TEXT")
+            }
+            if (!columnExists(database, "models", "audioComponentRole")) {
+                database.execSQL("ALTER TABLE `models` ADD COLUMN `audioComponentRole` TEXT")
+            }
+            if (!columnExists(database, "models", "audioArtifactIdentity")) {
+                database.execSQL("ALTER TABLE `models` ADD COLUMN `audioArtifactIdentity` TEXT")
+            }
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `audio_voice_profiles` (
+                    `id` TEXT NOT NULL,
+                    `name` TEXT NOT NULL,
+                    `language` TEXT NOT NULL,
+                    `originalPath` TEXT NOT NULL,
+                    `normalizedPath` TEXT,
+                    `denoisedPath` TEXT,
+                    `sourceUri` TEXT,
+                    `adapterId` TEXT,
+                    `family` TEXT,
+                    `durationMs` INTEGER NOT NULL,
+                    `sampleRate` INTEGER NOT NULL,
+                    `channels` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    `metadataJson` TEXT NOT NULL DEFAULT '{}',
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent()
+            )
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_voice_profiles_updatedAt` ON `audio_voice_profiles` (`updatedAt`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_voice_profiles_family` ON `audio_voice_profiles` (`family`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_voice_profiles_adapterId` ON `audio_voice_profiles` (`adapterId`)")
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `audio_generation_jobs` (
+                    `id` TEXT NOT NULL,
+                    `adapterId` TEXT NOT NULL,
+                    `family` TEXT NOT NULL,
+                    `modelId` TEXT NOT NULL,
+                    `modelPath` TEXT NOT NULL,
+                    `companionPath` TEXT,
+                    `modelDisplayName` TEXT NOT NULL,
+                    `modelLanguage` TEXT,
+                    `language` TEXT,
+                    `voiceStyle` TEXT,
+                    `voiceProfileId` TEXT,
+                    `referenceAudioPath` TEXT,
+                    `text` TEXT,
+                    `sourceUri` TEXT,
+                    `sourceName` TEXT,
+                    `speed` REAL NOT NULL,
+                    `totalSteps` INTEGER NOT NULL,
+                    `temperature` REAL NOT NULL,
+                    `topP` REAL NOT NULL,
+                    `topK` INTEGER NOT NULL,
+                    `seed` INTEGER,
+                    `maxFrames` INTEGER NOT NULL,
+                    `runtimeThreads` INTEGER NOT NULL,
+                    `batchSize` INTEGER NOT NULL,
+                    `microBatchSize` INTEGER NOT NULL,
+                    `outputFormat` TEXT NOT NULL,
+                    `outputSampleRate` INTEGER NOT NULL,
+                    `chunkSize` INTEGER NOT NULL,
+                    `normalizeReference` INTEGER NOT NULL,
+                    `denoiseReference` INTEGER NOT NULL,
+                    `trimStartMs` INTEGER NOT NULL,
+                    `trimEndMs` INTEGER,
+                    `includeMetadata` INTEGER NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `progress` REAL NOT NULL,
+                    `stageMessage` TEXT NOT NULL,
+                    `completedChunks` INTEGER NOT NULL,
+                    `totalChunks` INTEGER NOT NULL,
+                    `wavPath` TEXT,
+                    `outputPath` TEXT,
+                    `metadataPath` TEXT,
+                    `durationMs` INTEGER NOT NULL,
+                    `sampleRate` INTEGER NOT NULL,
+                    `errorMessage` TEXT,
+                    `retryCount` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    `startedAt` INTEGER,
+                    `completedAt` INTEGER,
+                    `metadataJson` TEXT NOT NULL DEFAULT '{}',
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent()
+            )
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_generation_jobs_status` ON `audio_generation_jobs` (`status`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_generation_jobs_createdAt` ON `audio_generation_jobs` (`createdAt`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_generation_jobs_updatedAt` ON `audio_generation_jobs` (`updatedAt`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_generation_jobs_voiceProfileId` ON `audio_generation_jobs` (`voiceProfileId`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_generation_jobs_modelId` ON `audio_generation_jobs` (`modelId`)")
+            DebugLog.log("[DB] Migration 113 -> 114 complete")
+        }
+    }
+
+    /** Persist logical Audio library organization without moving local or exported files. */
+    val MIGRATION_114_115 = object : Migration(114, 115) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 114 -> 115: Audio library")
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `audio_library_folders` (
+                    `id` TEXT NOT NULL,
+                    `name` TEXT NOT NULL,
+                    `parentId` TEXT,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent()
+            )
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_library_folders_parentId` ON `audio_library_folders` (`parentId`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_library_folders_updatedAt` ON `audio_library_folders` (`updatedAt`)")
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `audio_library_items` (
+                    `id` TEXT NOT NULL,
+                    `originKey` TEXT NOT NULL,
+                    `title` TEXT NOT NULL,
+                    `audioPath` TEXT NOT NULL,
+                    `metadataPath` TEXT,
+                    `mimeType` TEXT NOT NULL,
+                    `durationMs` INTEGER NOT NULL,
+                    `sizeBytes` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    `folderId` TEXT,
+                    `source` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `modelName` TEXT NOT NULL,
+                    `voiceName` TEXT,
+                    `language` TEXT NOT NULL,
+                    `kind` TEXT NOT NULL,
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent()
+            )
+            database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_audio_library_items_originKey` ON `audio_library_items` (`originKey`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_library_items_folderId` ON `audio_library_items` (`folderId`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_library_items_createdAt` ON `audio_library_items` (`createdAt`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_library_items_updatedAt` ON `audio_library_items` (`updatedAt`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_audio_library_items_title` ON `audio_library_items` (`title`)")
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `audio_library_preferences` (
+                    `id` TEXT NOT NULL,
+                    `query` TEXT NOT NULL,
+                    `sort` TEXT NOT NULL,
+                    `folderId` TEXT,
+                    `kind` TEXT,
+                    `legacyMigrationVersion` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent()
+            )
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `model_deletion_journal_operations` (
+                    `operationId` TEXT NOT NULL,
+                    `targetKey` TEXT NOT NULL,
+                    `targetKind` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `previewJson` TEXT NOT NULL,
+                    `resultJson` TEXT,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`operationId`)
+                )
+                """.trimIndent()
+            )
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_model_deletion_journal_operations_status` ON `model_deletion_journal_operations` (`status`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_model_deletion_journal_operations_updatedAt` ON `model_deletion_journal_operations` (`updatedAt`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_model_deletion_journal_operations_targetKey` ON `model_deletion_journal_operations` (`targetKey`)")
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `model_deletion_journal_paths` (
+                    `operationId` TEXT NOT NULL,
+                    `path` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `failureCode` TEXT,
+                    `failureMessage` TEXT,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`operationId`, `path`),
+                    FOREIGN KEY(`operationId`) REFERENCES `model_deletion_journal_operations`(`operationId`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_model_deletion_journal_paths_operationId_status` ON `model_deletion_journal_paths` (`operationId`, `status`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_model_deletion_journal_paths_updatedAt` ON `model_deletion_journal_paths` (`updatedAt`)")
+            DebugLog.log("[DB] Migration 114 -> 115 complete")
+        }
+    }
+
+    /**
+     * Persist the small-model execution contract and the durable continuation
+     * boundary. This migration is additive and keeps all existing chat,
+     * question, project-state, and invocation rows intact.
+     */
+    val MIGRATION_115_116 = object : Migration(115, 116) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 115 -> 116: durable agent contract and continuation outbox")
+
+            if (tableExists(database, "agent_conversations") &&
+                !columnExists(database, "agent_conversations", "executionProfile")
+            ) {
+                database.execSQL(
+                    "ALTER TABLE `agent_conversations` ADD COLUMN `executionProfile` TEXT NOT NULL DEFAULT 'legacy'"
+                )
+            }
+
+            if (tableExists(database, "agent_pending_questions") &&
+                !columnExists(database, "agent_pending_questions", "answerMessageOriginalId")
+            ) {
+                database.execSQL(
+                    "ALTER TABLE `agent_pending_questions` ADD COLUMN `answerMessageOriginalId` TEXT DEFAULT NULL"
+                )
+            }
+            if (tableExists(database, "agent_pending_questions") &&
+                !columnExists(database, "agent_pending_questions", "answerReceiptId")
+            ) {
+                database.execSQL(
+                    "ALTER TABLE `agent_pending_questions` ADD COLUMN `answerReceiptId` TEXT DEFAULT NULL"
+                )
+            }
+
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_project_contracts` (
+                    `conversationId` INTEGER NOT NULL,
+                    `contractVersion` INTEGER NOT NULL,
+                    `initialGoal` TEXT NOT NULL,
+                    `initialGoalSource` TEXT NOT NULL,
+                    `noMoreQuestions` INTEGER NOT NULL,
+                    `greenfield` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`conversationId`),
+                    FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_project_contracts_contractVersion` ON `agent_project_contracts` (`contractVersion`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_project_contracts_greenfield` ON `agent_project_contracts` (`greenfield`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_project_contracts_noMoreQuestions` ON `agent_project_contracts` (`noMoreQuestions`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_project_contracts_updatedAt` ON `agent_project_contracts` (`updatedAt`)")
+
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_decisions` (
+                    `id` TEXT NOT NULL,
+                    `conversationId` INTEGER NOT NULL,
+                    `rootTurnId` TEXT,
+                    `questionId` TEXT,
+                    `decisionKey` TEXT NOT NULL,
+                    `answerJson` TEXT NOT NULL,
+                    `submittedAnswerJson` TEXT NOT NULL,
+                    `selectedOptionsJson` TEXT NOT NULL,
+                    `customAnswer` TEXT,
+                    `specificationJson` TEXT NOT NULL,
+                    `provenanceJson` TEXT NOT NULL,
+                    `supersedesDecisionId` TEXT,
+                    `latestCorrectionId` TEXT,
+                    `isLatest` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_decisions_conversationId` ON `agent_decisions` (`conversationId`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_decisions_rootTurnId` ON `agent_decisions` (`rootTurnId`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_decisions_questionId` ON `agent_decisions` (`questionId`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_decisions_decisionKey` ON `agent_decisions` (`decisionKey`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_decisions_isLatest` ON `agent_decisions` (`isLatest`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_decisions_createdAt` ON `agent_decisions` (`createdAt`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_decisions_conversationId_decisionKey_isLatest` ON `agent_decisions` (`conversationId`, `decisionKey`, `isLatest`)")
+
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_continuation_outbox` (
+                    `id` TEXT NOT NULL,
+                    `conversationId` INTEGER NOT NULL,
+                    `rootTurnId` TEXT,
+                    `kind` TEXT NOT NULL,
+                    `dedupeKey` TEXT NOT NULL,
+                    `payloadJson` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `attemptCount` INTEGER NOT NULL,
+                    `claimedAt` INTEGER,
+                    `enqueuedAt` INTEGER,
+                    `completedAt` INTEGER,
+                    `errorClass` TEXT,
+                    `errorMessage` TEXT,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_continuation_outbox_conversationId` ON `agent_continuation_outbox` (`conversationId`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_continuation_outbox_rootTurnId` ON `agent_continuation_outbox` (`rootTurnId`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_continuation_outbox_status` ON `agent_continuation_outbox` (`status`)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_continuation_outbox_createdAt` ON `agent_continuation_outbox` (`createdAt`)")
+            database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_agent_continuation_outbox_conversationId_dedupeKey` ON `agent_continuation_outbox` (`conversationId`, `dedupeKey`)")
+
+            // Seed the immutable contract from the best durable legacy source.
+            // A state goal is copied once; later packet rendering cannot change it.
+            if (tableExists(database, "agent_conversations")) {
+                database.execSQL(
+                    """
+                    INSERT OR IGNORE INTO `agent_project_contracts`
+                        (`conversationId`, `contractVersion`, `initialGoal`, `initialGoalSource`, `noMoreQuestions`, `greenfield`, `createdAt`, `updatedAt`)
+                    SELECT c.`id`, 1,
+                        COALESCE(
+                            NULLIF(TRIM((
+                                SELECT m.`content`
+                                FROM `agent_messages` m
+                                WHERE m.`conversationId` = c.`id`
+                                  AND LOWER(m.`role`) = 'user'
+                                  AND NULLIF(TRIM(m.`content`), '') IS NOT NULL
+                                  AND COALESCE(m.`isDelegation`, 0) = 0
+                                ORDER BY m.`sequenceNumber`, m.`timestamp`, m.`id`
+                                LIMIT 1
+                            )), ''),
+                            NULLIF(TRIM(s.`currentGoal`), ''),
+                            ''
+                        ),
+                        CASE
+                            WHEN NULLIF(TRIM((
+                                SELECT m.`content`
+                                FROM `agent_messages` m
+                                WHERE m.`conversationId` = c.`id`
+                                  AND LOWER(m.`role`) = 'user'
+                                  AND NULLIF(TRIM(m.`content`), '') IS NOT NULL
+                                  AND COALESCE(m.`isDelegation`, 0) = 0
+                                ORDER BY m.`sequenceNumber`, m.`timestamp`, m.`id`
+                                LIMIT 1
+                            )), '') IS NOT NULL THEN 'USER_MESSAGE'
+                            WHEN NULLIF(TRIM(s.`currentGoal`), '') IS NULL THEN 'MIGRATION'
+                            ELSE 'LEGACY_PROJECT_STATE'
+                        END,
+                        0, 0, c.`createdAt`, c.`updatedAt`
+                    FROM `agent_conversations` c
+                    LEFT JOIN `agent_project_states` s ON s.`conversationId` = c.`id`
+                    """.trimIndent()
+                )
+            }
+
+            // Make legacy answered rows recoverable even if their old enqueue
+            // flag was already set before the canonical message was flushed.
+            if (tableExists(database, "agent_pending_questions")) {
+                database.execSQL(
+                    """
+                    UPDATE `agent_pending_questions`
+                    SET `answerMessageOriginalId` = 'question-answer:' || `id`,
+                        `answerReceiptId` = 'question-continuation:' || `id`
+                    WHERE `status` = 'ANSWERED'
+                      AND `answerMessageOriginalId` IS NULL
+                    """.trimIndent()
+                )
+
+                database.execSQL(
+                    """
+                    INSERT OR IGNORE INTO `agent_decisions`
+                        (`id`, `conversationId`, `rootTurnId`, `questionId`, `decisionKey`, `answerJson`, `submittedAnswerJson`, `selectedOptionsJson`, `customAnswer`, `specificationJson`, `provenanceJson`, `supersedesDecisionId`, `latestCorrectionId`, `isLatest`, `createdAt`, `updatedAt`)
+                    SELECT 'decision-migration-' || `id`, `conversationId`, `rootTurnId`, `id`, 'question:' || `id`,
+                        COALESCE(`answerJson`, '{}'), COALESCE(`answerJson`, '{}'), '[]', NULL,
+                        COALESCE(`specificationJson`, '{}'), '{"source":"migration_116","legacy_question_id":"' || `id` || '"}',
+                        NULL, NULL, 1, COALESCE(`answeredAt`, `createdAt`), COALESCE(`answeredAt`, `createdAt`)
+                    FROM `agent_pending_questions`
+                    WHERE `status` = 'ANSWERED'
+                    """.trimIndent()
+                )
+
+                database.execSQL(
+                    """
+                    INSERT OR IGNORE INTO `agent_continuation_outbox`
+                        (`id`, `conversationId`, `rootTurnId`, `kind`, `dedupeKey`, `payloadJson`, `status`, `attemptCount`, `claimedAt`, `enqueuedAt`, `completedAt`, `errorClass`, `errorMessage`, `createdAt`, `updatedAt`)
+                    SELECT 'question-continuation-' || `id`, `conversationId`, `rootTurnId`, 'QUESTION_CONTINUATION',
+                        'question:' || `id`, '{"question_id":"' || `id` || '","source":"migration_116"}',
+                        CASE WHEN `continuationEnqueued` = 1 THEN 'ENQUEUED' ELSE 'QUEUED' END,
+                        0, NULL,
+                        CASE WHEN `continuationEnqueued` = 1 THEN COALESCE(`answeredAt`, `createdAt`) ELSE NULL END,
+                        NULL, NULL, NULL,
+                        COALESCE(`answeredAt`, `createdAt`), COALESCE(`answeredAt`, `createdAt`)
+                    FROM `agent_pending_questions`
+                    WHERE `status` = 'ANSWERED'
+                    """.trimIndent()
+                )
+            }
+
+            DebugLog.log("[DB] Migration 115 -> 116 complete")
+        }
+    }
+
+    /**
+     * Move every conversation to the single direct runtime and persist the
+     * one-time re-anchor marker. Existing project/chat/workflow data is left
+     * intact; stale work is cancelled by the first explicit Continue through
+     * AgentWorkflowDao.reanchorConversationToDirect().
+     */
+    val MIGRATION_118_119 = object : Migration(118, 119) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 118 -> 119: direct runtime marker")
+            if (!tableExists(database, "agent_conversations")) return
+
+            if (!columnExists(database, "agent_conversations", "directRuntimeVersion")) {
+                database.execSQL(
+                    "ALTER TABLE `agent_conversations` ADD COLUMN `directRuntimeVersion` INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+            if (!columnExists(database, "agent_conversations", "directReanchorState")) {
+                database.execSQL(
+                    "ALTER TABLE `agent_conversations` ADD COLUMN `directReanchorState` TEXT NOT NULL DEFAULT 'PENDING'"
+                )
+            }
+            if (!columnExists(database, "agent_conversations", "directReanchorReason")) {
+                database.execSQL(
+                    "ALTER TABLE `agent_conversations` ADD COLUMN `directReanchorReason` TEXT DEFAULT NULL"
+                )
+            }
+            if (!columnExists(database, "agent_conversations", "directReanchoredAt")) {
+                database.execSQL(
+                    "ALTER TABLE `agent_conversations` ADD COLUMN `directReanchoredAt` INTEGER DEFAULT NULL"
+                )
+            }
+
+            // Keep a rerun of this migration harmless for test fixtures and
+            // backup restore tools while ensuring all old profile ids become
+            // direct aliases on the first pass.
+            database.execSQL(
+                """
+                UPDATE `agent_conversations`
+                SET `executionProfile` = 'direct',
+                    `directRuntimeVersion` = CASE
+                        WHEN `directRuntimeVersion` > 0 THEN `directRuntimeVersion`
+                        ELSE 0
+                    END,
+                    `directReanchorState` = CASE
+                        WHEN `directReanchorState` = 'COMPLETE' THEN 'COMPLETE'
+                        ELSE 'PENDING'
+                    END,
+                    `directReanchorReason` = CASE
+                        WHEN `directReanchorState` = 'COMPLETE' THEN `directReanchorReason`
+                        WHEN NULLIF(TRIM(COALESCE(`directReanchorReason`, '')), '') IS NULL
+                            THEN 'direct_runtime_migration_118'
+                        ELSE `directReanchorReason`
+                    END
+                """.trimIndent()
+            )
+            DebugLog.log("[DB] Migration 118 -> 119 complete")
+        }
+    }
+
+    /**
+     * Persist app-managed Debian/PRoot environments without changing any
+     * existing workspace roots or starting an environment during migration.
+     */
+    val MIGRATION_119_120 = object : Migration(119, 120) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 119 -> 120: Debian environment metadata")
+            if (tableExists(database, "agent_conversations")) {
+                if (!columnExists(database, "agent_conversations", "prootEnvironmentId")) {
+                    database.execSQL(
+                        "ALTER TABLE `agent_conversations` ADD COLUMN `prootEnvironmentId` TEXT DEFAULT NULL"
+                    )
+                }
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_agent_conversations_prootEnvironmentId` " +
+                        "ON `agent_conversations` (`prootEnvironmentId`)"
+                )
+            }
+
+            if (tableExists(database, "agent_project_runs") &&
+                !columnExists(database, "agent_project_runs", "prootEnvironmentId")
+            ) {
+                database.execSQL(
+                    "ALTER TABLE `agent_project_runs` ADD COLUMN `prootEnvironmentId` TEXT DEFAULT NULL"
+                )
+            }
+
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_proot_environments` (
+                    `id` TEXT NOT NULL,
+                    `displayName` TEXT NOT NULL,
+                    `storageKey` TEXT NOT NULL,
+                    `imageId` TEXT NOT NULL,
+                    `imageVersion` TEXT NOT NULL,
+                    `imageDigest` TEXT NOT NULL,
+                    `sharingMode` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `sizeBytes` INTEGER NOT NULL,
+                    `lastUsedAt` INTEGER,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent()
+            )
+            database.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_agent_proot_environments_storageKey` " +
+                    "ON `agent_proot_environments` (`storageKey`)"
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_agent_proot_environments_status` " +
+                    "ON `agent_proot_environments` (`status`)"
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_agent_proot_environments_sharingMode` " +
+                    "ON `agent_proot_environments` (`sharingMode`)"
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_agent_proot_environments_updatedAt` " +
+                    "ON `agent_proot_environments` (`updatedAt`)"
+            )
+
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_proot_runs` (
+                    `id` TEXT NOT NULL,
+                    `conversationId` INTEGER NOT NULL,
+                    `environmentId` TEXT NOT NULL,
+                    `projectFolder` TEXT NOT NULL,
+                    `commandDigest` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `processGeneration` TEXT,
+                    `processId` INTEGER,
+                    `previewUrl` TEXT,
+                    `outputReference` TEXT,
+                    `outputChars` INTEGER NOT NULL,
+                    `errorClass` TEXT,
+                    `errorMessage` TEXT,
+                    `exitCode` INTEGER,
+                    `startedAt` INTEGER,
+                    `endedAt` INTEGER,
+                    `stopRequestedAt` INTEGER,
+                    `forceStopRequestedAt` INTEGER,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
+                    FOREIGN KEY(`environmentId`) REFERENCES `agent_proot_environments`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT
+                )
+                """.trimIndent()
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_agent_proot_runs_conversationId` " +
+                    "ON `agent_proot_runs` (`conversationId`)"
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_agent_proot_runs_environmentId` " +
+                    "ON `agent_proot_runs` (`environmentId`)"
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_agent_proot_runs_status` " +
+                    "ON `agent_proot_runs` (`status`)"
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_agent_proot_runs_updatedAt` " +
+                    "ON `agent_proot_runs` (`updatedAt`)"
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_agent_project_runs_prootEnvironmentId` " +
+                    "ON `agent_project_runs` (`prootEnvironmentId`)"
+            )
+            DebugLog.log("[DB] Migration 119 -> 120 complete")
+        }
+    }
+
+    /** Persist an optional project-specific preview address; null continues to follow run output. */
+    val MIGRATION_120_121 = object : Migration(120, 121) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 120 -> 121: Agent preview address override")
+            if (tableExists(database, "agent_conversations") &&
+                !columnExists(database, "agent_conversations", "previewUrlOverride")
+            ) {
+                database.execSQL(
+                    "ALTER TABLE `agent_conversations` ADD COLUMN `previewUrlOverride` TEXT DEFAULT NULL"
+                )
+            }
+            DebugLog.log("[DB] Migration 120 -> 121 complete")
+        }
+    }
+
+    /** Persist detected evidence separately from the user's effective classification. */
+    val MIGRATION_121_122 = object : Migration(121, 122) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 121 -> 122: model classification provenance")
+            val tables = listOf(
+                "models",
+                "litert_models",
+                "download_tasks",
+                "pending_model_artifacts",
+                "model_provenance"
+            )
+            tables.forEach { table ->
+                if (!tableExists(db, table)) return@forEach
+                if (!columnExists(db, table, "classificationSource")) {
+                    db.execSQL(
+                        "ALTER TABLE `$table` ADD COLUMN `classificationSource` TEXT NOT NULL DEFAULT 'LEGACY'"
+                    )
+                }
+                if (!columnExists(db, table, "detectedClassificationJson")) {
+                    // Keep the explicit nullable default visible to Room's schema validator.
+                    db.execSQL(
+                        "ALTER TABLE `$table` ADD COLUMN `detectedClassificationJson` TEXT DEFAULT (NULL)"
+                    )
+                }
+            }
+            DebugLog.log("[DB] Migration 121 -> 122 complete")
+        }
+    }
+
     val ALL_MIGRATIONS: Array<Migration> = arrayOf(
         MIGRATION_27_28,
         MIGRATION_28_29,
@@ -3556,7 +4185,19 @@ object Migrations {
         MIGRATION_109_110,
         MIGRATION_110_111,
         MIGRATION_111_112,
-        MIGRATION_112_113
+        MIGRATION_112_113,
+        MIGRATION_113_114,
+        MIGRATION_114_115,
+        MIGRATION_115_116,
+        VideoVisionMigration.MIGRATION_116_117,
+        AgentSleepWakeMigration.MIGRATION_117_118,
+        MIGRATION_118_119,
+        MIGRATION_119_120,
+        MIGRATION_120_121,
+        MIGRATION_121_122,
+        HarnessMigration.MIGRATION_122_123,
+        GenerationQueueMigration.MIGRATION_123_124,
+        GenerationQueueMigration.MIGRATION_124_125
     )
     /**
      * Check if a column exists in a table.

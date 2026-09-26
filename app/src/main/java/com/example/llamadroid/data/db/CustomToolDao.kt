@@ -13,6 +13,9 @@ interface CustomToolDao {
     
     @Query("SELECT * FROM custom_tools WHERE isEnabled = 1 ORDER BY name ASC")
     fun getEnabledTools(): Flow<List<CustomToolEntity>>
+
+    @Query("SELECT * FROM custom_tools WHERE isEnabled = 1 ORDER BY name ASC")
+    suspend fun getEnabledToolsOnce(): List<CustomToolEntity>
     
     @Query("SELECT * FROM custom_tools ORDER BY name ASC")
     fun getAllTools(): Flow<List<CustomToolEntity>>

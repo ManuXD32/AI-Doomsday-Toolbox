@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_structured_text">Texto</string>
+    <string name="harness_structured_reasoning">Razonamiento</string>
+    <string name="harness_structured_tool_summary">%1$s · llamada %2$s</string>
+    <string name="harness_structured_status_running">En ejecución</string>
+    <string name="harness_structured_status_completed">Completada</string>
+    <string name="harness_structured_status_error">Error</string>
+    <string name="harness_structured_arguments">Argumentos</string>
+    <string name="harness_structured_no_arguments">Sin argumentos</string>
+    <string name="harness_structured_result">Resultado</string>
+    <string name="harness_structured_error_code">Código de error: %1$s</string>
+    <string name="harness_structured_unknown">Contenido estructurado: %1$s</string>
+    <string name="harness_structured_unknown_label">Contenido estructurado</string>
+    <string name="harness_structured_more_parts">Más elementos de contenido: %1$d</string>
+    <string name="harness_structured_file">Archivo</string>
+    <string name="harness_structured_bytes">Bytes: %1$d</string>
+    <string name="harness_structured_dimensions">%1$d × %2$d px</string>
+    <string name="harness_structured_open_attachment">Abrir</string>
+    <string name="harness_structured_show_details">Mostrar detalles</string>
+    <string name="harness_structured_hide_details">Ocultar detalles</string>
+    <string name="harness_structured_loading_details">Cargando detalles…</string>
+    <string name="harness_structured_details_unavailable">Los detalles aún no están disponibles.</string>
+    <string name="harness_structured_details_error">No se pudieron cargar los detalles: %1$s</string>
+    <string name="harness_structured_previous_page">Anterior</string>
+    <string name="harness_structured_next_page">Siguiente</string>
+</resources>

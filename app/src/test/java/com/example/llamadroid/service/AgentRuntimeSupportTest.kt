@@ -359,7 +359,7 @@ class AgentRuntimeSupportTest {
     }
 
     @Test
-    fun `agent litert context resolves default and clamps to phone safe cap`() {
+    fun `agent litert keeps conservative default while allowing explicit advertised capacity`() {
         val model = LiteRtModelEntity(
             id = 7L,
             displayName = "Gemma 4 E4B",
@@ -369,8 +369,8 @@ class AgentRuntimeSupportTest {
         )
 
         assertEquals(8192, AgentRuntimeSupport.resolveAgentLiteRtContextTokens(-1, model))
-        assertEquals(8192, AgentRuntimeSupport.resolveAgentLiteRtContextTokens(12000, model))
-        assertEquals(8192, AgentRuntimeSupport.resolveAgentLiteRtContextTokens(59384, model))
+        assertEquals(12000, AgentRuntimeSupport.resolveAgentLiteRtContextTokens(12000, model))
+        assertEquals(32768, AgentRuntimeSupport.resolveAgentLiteRtContextTokens(59384, model))
         assertEquals(512, AgentRuntimeSupport.resolveAgentLiteRtContextTokens(128, model))
     }
 
@@ -689,7 +689,7 @@ class AgentRuntimeSupportTest {
     }
 
     @Test
-    fun `compact prompt basis keeps only retained primacy sections and compact state as optional`() {
+    fun `compact prompt basis keeps the fresh control packet as required primacy`() {
         val sections = buildCompactPromptBasisSections(
             systemPrompt = "SYSTEM",
             initialOrder = "Build the feature.",
@@ -701,8 +701,86 @@ class AgentRuntimeSupportTest {
         assertEquals(4, sections.requiredSections.size)
         assertTrue(sections.requiredSections[1].contains("# Initial Order"))
         assertTrue(sections.requiredSections[2].contains("# Plan"))
-        assertTrue(sections.requiredSections[3].contains("# Context Compaction Summary"))
-        assertEquals(listOf("COMPACT STATE SNAPSHOT:\n{}"), sections.optionalSections)
+        assertEquals("COMPACT STATE SNAPSHOT:\n{}", sections.requiredSections[3])
+        assertEquals(
+            listOf("# Context Compaction Summary\n## Tasks Done\n- done"),
+            sections.optionalSections
+        )
+    }
+
+    @Test
+    fun `compact prompt basis omits exactly covered initial order and plan references`() {
+        val initialGoal = "Build the feature with the durable constraints."
+        val plan = """
+            # Approved plan
+            - Implement the first step.
+            ## Tail constraints
+            - Preserve the exact download behavior.
+        """.trimIndent()
+        val packet = buildString {
+            appendLine("# Project Control Packet")
+            appendLine()
+            appendLine("## Durable User Contract")
+            appendLine("- initial_goal: $initialGoal")
+            appendLine()
+            appendLine("## Approved Plan")
+            appendLine("- id: plan-exact")
+            appendLine("- hash: full-plan-hash")
+            appendLine(
+                "- full_plan_json: " +
+                    JSONObject()
+                        .put("id", "plan-exact")
+                        .put("hash", "full-plan-hash")
+                        .put("plan_markdown", plan)
+                        .toString()
+            )
+            appendLine()
+            appendLine("## Permitted Next Actions")
+            appendLine("- continue with the current TODO")
+        }.trim()
+
+        val sections = buildCompactPromptBasisSections(
+            systemPrompt = "SYSTEM",
+            initialOrder = initialGoal,
+            planContent = plan,
+            compactionSummary = "",
+            compactStateSnapshot = packet
+        )
+
+        assertEquals(listOf("SYSTEM", packet), sections.requiredSections)
+        assertTrue(sections.requiredSections.none { it.contains("# Initial Order Reference") })
+        assertTrue(sections.requiredSections.none { it.contains("# Plan Reference") })
+
+        val changedPlan = buildCompactPromptBasisSections(
+            systemPrompt = "SYSTEM",
+            initialOrder = initialGoal,
+            planContent = "$plan\n- This constraint was edited after approval.",
+            compactionSummary = "",
+            compactStateSnapshot = packet
+        )
+        assertTrue(changedPlan.requiredSections.any { it.contains("# Plan Reference") })
+    }
+
+    @Test
+    fun `compact prompt basis keeps full oversized packet without silent tail truncation`() {
+        val oversizedPacket = buildString {
+            appendLine("# Project Control Packet")
+            appendLine("## Permitted Next Actions")
+            appendLine("- preserve-tail-opaque-id")
+            append("x".repeat(13_000))
+        }
+
+        val sections = buildCompactPromptBasisSections(
+            systemPrompt = "SYSTEM",
+            initialOrder = "Build the feature.",
+            planContent = "# Plan\n- Keep every constraint.",
+            compactionSummary = "",
+            compactStateSnapshot = oversizedPacket
+        )
+
+        assertEquals(oversizedPacket, sections.requiredSections.last())
+        assertTrue(sections.requiredSections.last().contains("preserve-tail-opaque-id"))
+        assertEquals(oversizedPacket.length, sections.requiredSections.last().length)
     }
 
     @Test

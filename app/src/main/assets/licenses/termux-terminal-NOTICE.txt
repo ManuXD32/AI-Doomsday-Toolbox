@@ -1,0 +1,20 @@
+Termux terminal libraries
+=========================
+
+This application includes terminal-emulator and terminal-view source artifacts from
+termux/termux-app v0.118.0, pinned to commit
+6e2689f55295fa444be8ac8592c527c2c5ef3253.
+
+Upstream: https://github.com/termux/termux-app
+License: Apache License 2.0 (see termux-terminal-LICENSE.txt)
+
+The Java artifacts are pinned by the SHA-256 digest of their classes.jar content:
+
+* terminal-emulator: 7f8fa017f6add4faa7e2839bc3b1566c7f235b4c053eb8f0178cea9cb8a982c2
+* terminal-view: 9bceb16dc4d35f412aff579a11fcf4498bd5935dbbee85b9adb11c4ea3ec9068
+
+The upstream prebuilt native helper is excluded. The application builds
+app/src/main/cpp/terminal/termux.c locally with NDK 29.0.14206865 and 16 KiB ELF LOAD
+alignment. Local changes add TIOCSCTTY, replace an opaque launch token with the exact active
+PTY slave bind, set a parent-death signal before exec, fix the upstream cwd JNI string release
+pairing, and preserve the PTY subprocess and resize behavior.

@@ -1,0 +1,21 @@
+{
+  "imageId": "debian-trixie-arm64-20260824",
+  "distribution": "Debian",
+  "suite": "trixie",
+  "architecture": "arm64",
+  "source": "https://hub.docker.com/_/debian",
+  "ociReference": "docker.io/library/debian@sha256:7215f78f35ffe58fe13f244fac9c4f21326d55187271fbb3e1a8aa5cc7e387ab",
+  "ociDigest": "sha256:7215f78f35ffe58fe13f244fac9c4f21326d55187271fbb3e1a8aa5cc7e387ab",
+  "ociCreated": "2026-08-24",
+  "snapshot": "20260824T000000Z",
+  "rootfsAsset": "rootfs.tar.xz",
+  "rootfsSha256": "73899844987f3261f80c0929187f4e6b25832845eec294356f93baf712b71bcf",
+  "rootfsKind": "debian-oci-plus-snapshot-developer-packages",
+  "packages": [
+    "bash", "coreutils", "findutils", "grep", "sed", "gawk", "tar", "gzip", "xz-utils",
+    "apt", "ca-certificates", "curl", "git", "python3", "python3-pip", "python3-venv"
+  ],
+  "packageInventory": "rootfs.manifest",
+  "licenses": "licenses/",
+  "notes": "Pinned arm64 Debian Trixie developer rootfs. User apt installs modify only the writable guest copy and never the signed bootstrap asset."
+}

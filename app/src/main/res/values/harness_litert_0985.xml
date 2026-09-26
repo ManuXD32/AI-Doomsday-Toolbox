@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_litert_0985_worker_interrupted">LiteRT stopped unexpectedly. The app kept the full tool set; try a smaller context or output limit, or turn off MTP for this model.</string>
+    <string name="harness_litert_0985_retrying">LiteRT stopped before output. Retrying once with a bounded CPU profile and MTP off; saved model settings remain unchanged.</string>
+</resources>

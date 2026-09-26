@@ -63,9 +63,13 @@ fun appendSdDistributedArgs(
         args.addAll(listOf("--rpc-servers", config.rpcServers.trim()))
     }
 
-    if (config.autoFit || config.placementMode == SdDistributedPlacementMode.AUTO_FIT) {
-        args.add("--auto-fit")
-    } else {
+    val autoFitEnabled = config.autoFit || config.placementMode == SdDistributedPlacementMode.AUTO_FIT
+    appendSdAutoFitArg(
+        args = args,
+        enabled = autoFitEnabled,
+        binaryCapabilities = binaryCapabilities
+    )
+    if (!autoFitEnabled) {
         val backendSpec = config.normalizedBackendSpec()
         if (backendSpec.isNotEmpty()) {
             args.addAll(listOf("--backend", backendSpec))
@@ -73,7 +77,9 @@ fun appendSdDistributedArgs(
     }
 
     val paramsBackendSpec = config.normalizedParamsBackendSpec()
-    if (paramsBackendSpec.isNotEmpty()) {
+    if (paramsBackendSpec.isNotEmpty() &&
+        !(autoFitEnabled && sdAutoFitUsesValueSyntax(binaryCapabilities))
+    ) {
         args.addAll(listOf("--params-backend", paramsBackendSpec))
     }
 
@@ -112,12 +118,20 @@ fun missingSdDistributedFlags(
 
     val requiredFlags = mutableSetOf<String>()
     if (config.hasRpcServers) requiredFlags += "--rpc-servers"
-    if (config.autoFit || config.placementMode == SdDistributedPlacementMode.AUTO_FIT) {
+    val autoFitEnabled = config.autoFit || config.placementMode == SdDistributedPlacementMode.AUTO_FIT
+    if (autoFitEnabled) {
         requiredFlags += "--auto-fit"
     } else if (config.normalizedBackendSpec().isNotEmpty()) {
         requiredFlags += "--backend"
     }
-    if (config.normalizedParamsBackendSpec().isNotEmpty()) requiredFlags += "--params-backend"
+    if (binaryCapabilities.autoFitRequiresValue || binaryCapabilities.allowAll) {
+        requiredFlags += "--auto-fit"
+    }
+    if (config.normalizedParamsBackendSpec().isNotEmpty() &&
+        !(autoFitEnabled && sdAutoFitUsesValueSyntax(binaryCapabilities))
+    ) {
+        requiredFlags += "--params-backend"
+    }
     if (config.normalizedMaxVramSpec().isNotEmpty()) requiredFlags += "--max-vram"
     requiredFlags += "--split-mode"
 

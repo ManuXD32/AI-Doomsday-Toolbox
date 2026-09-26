@@ -25,6 +25,7 @@ import com.example.llamadroid.data.model.liteRtPackageTargetFromText
 import com.example.llamadroid.data.model.liteRtVisionSupportFromText
 import com.example.llamadroid.data.model.normalizeLiteRtBackend
 import com.example.llamadroid.data.model.library.ModelArtifactLifecycle
+import com.example.llamadroid.data.model.library.ModelClassificationSource
 import com.example.llamadroid.service.DownloadService
 import com.example.llamadroid.util.DebugLog
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
@@ -331,7 +332,8 @@ class LiteRtModelRepository(
                 liteRtSupportsVision = entry.supportsVision,
                 liteRtSupportsAudio = entry.supportsAudio,
                 liteRtSupportsEmbedding = entry.supportsEmbedding,
-                liteRtMaxContextTokens = entry.maxContextTokens
+                liteRtMaxContextTokens = entry.maxContextTokens,
+                classificationSource = ModelClassificationSource.CATALOG.storedValue
             )
             DownloadService.startDownload(
                 context = context,
@@ -471,7 +473,9 @@ class LiteRtModelRepository(
             supportsEmbedding = pending.liteRtSupportsEmbedding
                 ?: inferLiteRtEmbeddingSupport(installedPath),
             maxContextTokens = pending.liteRtMaxContextTokens
-                ?: inferLiteRtMaxContextTokens(displayName, installedPath, pending.repoId)
+                ?: inferLiteRtMaxContextTokens(displayName, installedPath, pending.repoId),
+            classificationSource = pending.classificationSource,
+            detectedClassificationJson = pending.detectedClassificationJson
         ).also {
             onProgress(1f, displayName)
         }
@@ -554,7 +558,15 @@ class LiteRtModelRepository(
                     displayName = installedPath.nameWithoutExtension.ifBlank { sourceName },
                     file = installedPath,
                     repoId = null
-                )
+                ),
+                classificationSource = if (
+                    supportsVisionOverride != null || supportsAudioOverride != null ||
+                    supportsEmbeddingOverride != null
+                ) {
+                    ModelClassificationSource.USER_OVERRIDE.storedValue
+                } else {
+                    ModelClassificationSource.AUTO.storedValue
+                }
             )
         }
     }
@@ -662,7 +674,9 @@ class LiteRtModelRepository(
         supportsVision: Boolean,
         supportsAudio: Boolean,
         supportsEmbedding: Boolean,
-        maxContextTokens: Int?
+        maxContextTokens: Int?,
+        classificationSource: String = ModelClassificationSource.LEGACY.storedValue,
+        detectedClassificationJson: String? = null
     ): LiteRtModelEntity {
         val now = System.currentTimeMillis()
         val size = if (path.isDirectory) path.walkTopDown().filter { it.isFile }.sumOf { it.length() } else path.length()
@@ -687,6 +701,11 @@ class LiteRtModelRepository(
                 kbEmbeddingRuntime = compatibility.runtime,
                 kbEmbeddingStatus = compatibility.status,
                 maxContextTokens = maxContextTokens ?: existing.maxContextTokens,
+                classificationSource = if (
+                    classificationSource == ModelClassificationSource.LEGACY.storedValue
+                ) existing.classificationSource else classificationSource,
+                detectedClassificationJson = detectedClassificationJson
+                    ?: existing.detectedClassificationJson,
                 updatedAt = now
             )
             modelDao.update(updated)
@@ -722,6 +741,11 @@ class LiteRtModelRepository(
                 kbEmbeddingRuntime = compatibility.runtime,
                 kbEmbeddingStatus = compatibility.status,
                 maxContextTokens = maxContextTokens ?: existing.maxContextTokens,
+                classificationSource = if (
+                    classificationSource == ModelClassificationSource.LEGACY.storedValue
+                ) existing.classificationSource else classificationSource,
+                detectedClassificationJson = detectedClassificationJson
+                    ?: existing.detectedClassificationJson,
                 updatedAt = now
             )
             modelDao.update(updated)
@@ -745,6 +769,8 @@ class LiteRtModelRepository(
             kbEmbeddingRuntime = compatibility.runtime,
             kbEmbeddingStatus = compatibility.status,
             maxContextTokens = maxContextTokens,
+            classificationSource = classificationSource,
+            detectedClassificationJson = detectedClassificationJson,
             createdAt = now,
             updatedAt = now
         )

@@ -14,6 +14,7 @@ import android.os.Build
 import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.net.toUri
 import com.example.llamadroid.MainActivity
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.R
@@ -22,6 +23,7 @@ import com.example.llamadroid.tama.data.PetSpeciesLine
 import com.example.llamadroid.tama.data.PetSpriteState
 import com.example.llamadroid.tama.data.TamaPet
 import com.example.llamadroid.tama.data.resolvePetSpriteAssetPath
+import com.example.llamadroid.util.DebugLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.ConcurrentHashMap
@@ -32,6 +34,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * Shows grouped notifications with progress tracking.
  */
 object UnifiedNotificationManager {
+    const val EXTRA_EXPECTED_TASK_ID = "com.example.llamadroid.expected_notification_task_id"
     
     private const val CHANNEL_ID = "doomsday_ai_tasks"
     private const val CHANNEL_NAME = "AI Tasks"
@@ -68,6 +71,8 @@ object UnifiedNotificationManager {
         PLAN_APPROVAL_REQUIRED,
         USER_INPUT_REQUIRED
     }
+
+    enum class CancellationOwner { STABLE_DIFFUSION, ONNX_IMAGE, VIDEO }
     
     /**
      * Represents a running task
@@ -82,7 +87,8 @@ object UnifiedNotificationManager {
         val completionAlertPolicy: CompletionAlertPolicy = type.defaultCompletionAlertPolicy,
         val isComplete: Boolean = false,
         val isError: Boolean = false,
-        val errorMessage: String? = null
+        val errorMessage: String? = null,
+        val cancellationOwner: CancellationOwner? = null
     )
     
     enum class TaskType(
@@ -308,7 +314,8 @@ object UnifiedNotificationManager {
     fun startTask(
         type: TaskType,
         title: String,
-        completionAlertPolicy: CompletionAlertPolicy = type.defaultCompletionAlertPolicy
+        completionAlertPolicy: CompletionAlertPolicy = type.defaultCompletionAlertPolicy,
+        cancellationOwner: CancellationOwner? = null
     ): Int {
         val id = nextId.getAndIncrement()
         val task = TaskInfo(
@@ -316,13 +323,22 @@ object UnifiedNotificationManager {
             type = type,
             title = title,
             progress = 0f,
-            progressText = if (::appContext.isInitialized) appContext.getString(R.string.dist_starting) else "Starting...",
-            completionAlertPolicy = completionAlertPolicy
+            progressText = if (::appContext.isInitialized) {
+                runCatching { appContext.getString(R.string.dist_starting) }.getOrDefault("Starting...")
+            } else {
+                "Starting..."
+            },
+            completionAlertPolicy = completionAlertPolicy,
+            cancellationOwner = cancellationOwner
         )
         _activeTasks[id] = task
         updateTasksFlow()
-        showTaskNotification(task)
-        updateSummaryNotification()
+        runCatching {
+            showTaskNotification(task)
+            updateSummaryNotification()
+        }.onFailure { error ->
+            DebugLog.log("[Notifications] Task notification unavailable: ${error.javaClass.simpleName}")
+        }
         return id
     }
     
@@ -333,9 +349,10 @@ object UnifiedNotificationManager {
     fun startTaskForForeground(
         type: TaskType,
         title: String,
-        completionAlertPolicy: CompletionAlertPolicy = type.defaultCompletionAlertPolicy
+        completionAlertPolicy: CompletionAlertPolicy = type.defaultCompletionAlertPolicy,
+        cancellationOwner: CancellationOwner? = null
     ): Pair<Int, android.app.Notification> {
-        val id = startTask(type, title, completionAlertPolicy)
+        val id = startTask(type, title, completionAlertPolicy, cancellationOwner)
         val notification = getForegroundNotification(id) 
             ?: createBasicForegroundNotification(title)
         return Pair(id, notification)
@@ -369,7 +386,8 @@ object UnifiedNotificationManager {
             val updated = task.copy(
                 progress = 1f,
                 progressText = resultText,
-                isComplete = true
+                isComplete = true,
+                cancellationOwner = null
             )
             _activeTasks[taskId] = updated
             updateTasksFlow()
@@ -437,7 +455,8 @@ object UnifiedNotificationManager {
             val updated = task.copy(
                 progressText = "Error: $errorMessage",
                 isError = true,
-                errorMessage = errorMessage
+                errorMessage = errorMessage,
+                cancellationOwner = null
             )
             _activeTasks[taskId] = updated
             updateTasksFlow()
@@ -523,6 +542,54 @@ object UnifiedNotificationManager {
         } catch (e: SecurityException) {
             // Notification permission not granted
         }
+    }
+
+    /** Runtime-owned Harness notices contain no generated/private text and preserve Back history. */
+    fun dismissHarnessAttention(key: String) {
+        if (!::appContext.isInitialized) return
+        NotificationManagerCompat.from(appContext).cancel("harness:$key", 500_000 + (key.hashCode() and 0x0fffffff))
+    }
+
+    fun showHarnessAttention(key: String, kind: String, route: String): Boolean {
+        if (!::appContext.isInitialized) return false
+        val manager = NotificationManagerCompat.from(appContext)
+        if (!manager.areNotificationsEnabled()) return false
+        val pending = kind in setOf("question", "approval", "plan")
+        val title = when (kind) {
+            "question" -> R.string.agent_attention_user_input_title
+            "approval" -> R.string.agent_attention_approval_title
+            "plan" -> R.string.agent_attention_plan_title
+            "completed" -> R.string.harness_attention_completed
+            "stopped" -> R.string.harness_attention_stopped
+            else -> R.string.harness_attention_interrupted
+        }
+        val body = when (kind) {
+            "question" -> R.string.agent_attention_user_input_body
+            "approval" -> R.string.agent_attention_approval_body
+            "plan" -> R.string.agent_attention_plan_body
+            else -> R.string.harness_attention_open_conversation
+        }
+        val intent = Intent(appContext, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            data = "adt-harness://attention/$key".toUri()
+            putExtra(MainActivity.EXTRA_OPEN_ROUTE, route)
+        }
+        val notificationId = 500_000 + (key.hashCode() and 0x0fffffff)
+        val contentIntent = PendingIntent.getActivity(appContext, notificationId, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val notification = NotificationCompat.Builder(appContext, if (pending) AGENT_ATTENTION_CHANNEL_ID else COMPLETION_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle(appContext.getString(title))
+            .setContentText(appContext.getString(body))
+            .setContentIntent(contentIntent)
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setCategory(if (pending) NotificationCompat.CATEGORY_REMINDER else NotificationCompat.CATEGORY_STATUS)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .build()
+        return try { manager.notify("harness:$key", notificationId, notification); true }
+        catch (_: SecurityException) { false }
     }
 
     fun showAiRuntimeRecoveryNotification(

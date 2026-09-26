@@ -98,11 +98,13 @@ internal object ModelArtifactDiscardPolicy {
         database: AppDatabase,
         candidates: List<File>,
         allowedPendingArtifactId: String? = null,
-        allowedTaskId: String? = null
+        allowedTaskId: String? = null,
+        context: Context? = null
     ) {
-        val protectedPaths = buildSet {
+        val runtimeProtectedPaths = buildSet {
             database.modelDao().getAllModels().first().forEach { model ->
                 canonicalPath(model.path)?.let(::add)
+                model.mmprojPath?.let(::canonicalPath)?.let(::add)
             }
             database.liteRtModelDao().getAllOnce().forEach { model ->
                 canonicalPath(model.path)?.let { path ->
@@ -119,6 +121,17 @@ internal object ModelArtifactDiscardPolicy {
                 provenance.localPath?.let(::canonicalPath)?.let(::add)
             }
         }
+        val audioProtectedPaths = if (context == null) {
+            emptySet()
+        } else {
+            activeAudioJobDependencies(context, database)
+                .mapNotNull { dependency -> canonicalPath(dependency.path) }
+                .toSet()
+        }
+        val downloadProtectedPaths = activeDownloadDependencies(database)
+            .mapNotNull { dependency -> canonicalPath(dependency.path) }
+            .toSet()
+        val protectedPaths = runtimeProtectedPaths + audioProtectedPaths + downloadProtectedPaths
         val candidatePaths = candidates.mapNotNull { canonicalPath(it.path) }
         if (candidatePaths.any { candidate ->
                 protectedPaths.any { protected -> candidate.overlaps(protected) }

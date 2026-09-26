@@ -6,6 +6,8 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.llamadroid.util.DebugLog
+import com.example.llamadroid.data.db.RestoreCoordinator
+import com.example.llamadroid.tama.world.persistence.*
 
 /**
  * Room database for Tama virtual pet persistence.
@@ -34,14 +36,27 @@ import com.example.llamadroid.util.DebugLog
         AdventureGateWorldProgressEntity::class,
         AdventureGateBattleStateEntity::class,
         AdventureGateNightArenaRunEntity::class,
-        TamaArtworkEntity::class
+        TamaArtworkEntity::class,
+        TamaWorldEntity::class,
+        TamaWorldActorEntity::class,
+        TamaChunkStateEntity::class,
+        TamaWorldStructureEntity::class,
+        TamaWorldObjectEntity::class,
+        TamaWorldNpcEntity::class,
+        TamaWorldRelationshipEntity::class,
+        TamaWorldEventEntity::class,
+        TamaWorldEpisodeEntity::class,
+        TamaPolicyCheckpointEntity::class,
+        TamaWorldActionReceiptEntity::class
     ],
-    version = 43,
+    version = 44,
     exportSchema = true
 )
 abstract class TamaDatabase : RoomDatabase() {
     abstract fun tamaDao(): TamaDao
     abstract fun farmDao(): FarmDao
+    abstract fun worldDao(): TamaWorldDao
+    abstract fun worldActionReceiptDao(): TamaWorldActionReceiptDao
     
     companion object {
         @Volatile
@@ -49,30 +64,35 @@ abstract class TamaDatabase : RoomDatabase() {
         
         
         fun getInstance(context: Context): TamaDatabase {
+            RestoreCoordinator.requireNormalAccess(context)
             return INSTANCE ?: synchronized(this) {
-                val instance = Room.databaseBuilder(
-                    context.applicationContext,
-                    TamaDatabase::class.java,
-                    "tama_database"
-                )
-                    .addMigrations(*TamaMigrations.ALL_MIGRATIONS)
-                    // Only allow destructive migration from early development versions (1-12)
-                    // From v13 onwards, proper migrations are required to preserve pet data
-                    .fallbackToDestructiveMigrationFrom(*TamaMigrations.DESTRUCTIVE_FALLBACK_VERSIONS)
-                    .addCallback(object : RoomDatabase.Callback() {
-                        override fun onOpen(db: SupportSQLiteDatabase) {
-                            super.onOpen(db)
-                            DebugLog.log("[TamaDB] TamaDatabase opened, version: ${db.version}")
-                        }
-                    })
-                    .build()
-                INSTANCE = instance
-                instance
+                RestoreCoordinator.requireNormalAccess(context)
+                INSTANCE ?: run {
+                    val instance = Room.databaseBuilder(
+                        context.applicationContext,
+                        TamaDatabase::class.java,
+                        "tama_database"
+                    )
+                        .addMigrations(*TamaMigrations.ALL_MIGRATIONS)
+                        // Only allow destructive migration from early development versions (1-12)
+                        // From v13 onwards, proper migrations are required to preserve pet data
+                        .fallbackToDestructiveMigrationFrom(*TamaMigrations.DESTRUCTIVE_FALLBACK_VERSIONS)
+                        .addCallback(object : RoomDatabase.Callback() {
+                            override fun onOpen(db: SupportSQLiteDatabase) {
+                                super.onOpen(db)
+                                DebugLog.log("[TamaDB] TamaDatabase opened, version: ${db.version}")
+                            }
+                        })
+                        .build()
+                    INSTANCE = instance
+                    instance
+                }
             }
         }
         
         /**
-         * Close the database instance. Used before restore to release file locks.
+         * Close under the factory monitor after process quiescence. Callers must not retain a
+         * database reference across restore or use this method as an ordinary cache reset.
          */
         fun closeInstance() {
             synchronized(this) {

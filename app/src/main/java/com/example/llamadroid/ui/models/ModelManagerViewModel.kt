@@ -9,12 +9,19 @@ import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.data.model.FileInfo
 import com.example.llamadroid.data.model.RepoFiles
+import com.example.llamadroid.data.model.library.ModelDeletionPreview
+import com.example.llamadroid.data.model.library.ModelDeletionResult
+import com.example.llamadroid.data.model.library.modelLibraryErrorCode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import com.example.llamadroid.data.model.library.ModelDeletionStatus
+import com.example.llamadroid.data.model.library.ModelLibraryErrorCode
+import com.example.llamadroid.data.model.library.modelLibraryFailureMetadata
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.example.llamadroid.util.DebugLog
@@ -40,7 +47,40 @@ class ModelManagerViewModel(
     
     private val _isSearching = MutableStateFlow(false)
     val isSearching = _isSearching.asStateFlow()
+    private val _searchError = MutableStateFlow<com.example.llamadroid.data.model.library.ModelLibraryErrorCode?>(null)
+    val searchError = _searchError.asStateFlow()
     private var searchRequestId = 0
+
+    private val _deletionPreview = MutableStateFlow<ModelDeletionPreview?>(null)
+    val deletionPreview = _deletionPreview.asStateFlow()
+    private val _deletionResult = MutableStateFlow<ModelDeletionResult?>(null)
+    val deletionResult = _deletionResult.asStateFlow()
+    private val _interruptedDeletions = MutableStateFlow<List<com.example.llamadroid.data.model.library.ModelDeletionJournalSnapshot>>(emptyList())
+    val interruptedDeletions = _interruptedDeletions.asStateFlow()
+
+    init { viewModelScope.launch { refreshInterruptedDeletions() } }
+
+    private suspend fun refreshInterruptedDeletions() {
+        try {
+            _interruptedDeletions.value = repository.recoverableDeletionOperations()
+                .filter { it.preview.targetKind == "model" }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Throwable) { DebugLog.log(modelLibraryFailureMetadata(error, "deletion_recovery")) }
+    }
+
+    fun retryDeletion(operationId: String) {
+        viewModelScope.launch {
+            try {
+                _deletionResult.value = repository.retryDeletion(operationId)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Throwable) {
+                DebugLog.log(modelLibraryFailureMetadata(error, "deletion_retry"))
+                _deletionResult.value = ModelDeletionResult(operationId, "", status = ModelDeletionStatus.RECOVERABLE,
+                    errorCode = ModelLibraryErrorCode.DELETION_RECOVERABLE)
+            } finally { refreshInterruptedDeletions() }
+        }
+    }
+
 
     // For file selection dialog
     private val _selectedRepoId = MutableStateFlow<String?>(null)
@@ -76,6 +116,7 @@ class ModelManagerViewModel(
         val requestId = ++searchRequestId
         viewModelScope.launch {
             _isSearching.value = true
+            _searchError.value = null
             val filter = when {
                 type == ModelType.EMBEDDING -> "bert"
                 type.name.startsWith("SD_") -> "safetensors"
@@ -83,13 +124,14 @@ class ModelManagerViewModel(
                 else -> "gguf" // Default for LLM
             }
             // Pass filter to repo for LLM/GGUF/SD filtering
-            val results = repository.searchModels(normalizedQuery, filter)
+            val result = repository.searchModelsResult(normalizedQuery, filter)
             if (requestId != searchRequestId) return@launch
-            _searchResults.value = results
+            _searchResults.value = result.getOrElse { emptyList() }
+            _searchError.value = result.exceptionOrNull()?.let(::modelLibraryErrorCode)
             _isSearching.value = false
             
             // Asynchronously check each repo for vision support
-            results.forEach { model ->
+            _searchResults.value.forEach { model ->
                 // Only check if not already cached
                 if (!_repoVisionCache.value.containsKey(model.id)) {
                     viewModelScope.launch {
@@ -105,6 +147,7 @@ class ModelManagerViewModel(
         searchRequestId += 1
         _searchResults.value = emptyList()
         _isSearching.value = false
+        _searchError.value = null
     }
     
     private suspend fun checkRepoForVision(repoId: String): Boolean {
@@ -160,6 +203,9 @@ class ModelManagerViewModel(
                     _pendingVisionDownload.value = Pair(repoId, visionFile)
                     _showVisionPrompt.value = true
                 }
+            } catch (cancelled: CancellationException) {
+                // The foreground service retains ownership when this screen closes.
+                throw cancelled
             } catch (e: Exception) {
                 DebugLog.log("Download FAILED: ${e.message}")
                 e.printStackTrace()
@@ -180,6 +226,8 @@ class ModelManagerViewModel(
                     DebugLog.log("Starting vision projector download: $repoId/${fileInfo.filename}")
                     repository.downloadModel(repoId, fileInfo.filename, ModelType.VISION_PROJECTOR)
                     DebugLog.log("Vision projector download complete: ${fileInfo.filename}")
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
                 } catch (e: Exception) {
                     DebugLog.log("Vision projector download FAILED: ${e.message}")
                 }
@@ -193,10 +241,39 @@ class ModelManagerViewModel(
         _pendingVisionDownload.value = null
     }
 
+    fun prepareDelete(model: ModelEntity) {
+        viewModelScope.launch {
+            _deletionPreview.value = null
+            try {
+                _deletionPreview.value = repository.previewDeleteModel(model)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Throwable) { reportDeletionFailure(model, error) }
+        }
+    }
+
+    fun clearDeleteState() {
+        _deletionPreview.value = null
+        _deletionResult.value = null
+    }
+
     fun deleteModel(model: ModelEntity) {
         viewModelScope.launch {
-            repository.deleteModel(model)
+            try {
+                val result = repository.deleteModelWithResult(model)
+                _deletionResult.value = result
+                if (result.status == ModelDeletionStatus.COMPLETED) _deletionPreview.value = null
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Throwable) { reportDeletionFailure(model, error) }
+            finally { refreshInterruptedDeletions() }
         }
+    }
+
+    private fun reportDeletionFailure(model: ModelEntity, error: Throwable) {
+        DebugLog.log(modelLibraryFailureMetadata(error, "model_deletion"))
+        _deletionResult.value = ModelDeletionResult(
+            operationId = java.util.UUID.randomUUID().toString(), targetKey = model.filename,
+            status = ModelDeletionStatus.RECOVERABLE, errorCode = ModelLibraryErrorCode.DELETION_RECOVERABLE
+        )
     }
 
     fun updateVisionSupport(model: ModelEntity, enabled: Boolean) {
@@ -271,7 +348,10 @@ internal fun buildLocalModelEntity(
         isDownloaded = true,
         isVision = effectiveType == ModelType.LLM && hasVision,
         sdCapabilities = sdCapabilities,
-        layerCount = layerCount
+        layerCount = layerCount,
+        // A local import is an explicit user classification, even when the
+        // caller selected the default LLM option.
+        classificationSource = "USER_OVERRIDE"
     )
 }
 

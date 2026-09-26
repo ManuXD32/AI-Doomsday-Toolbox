@@ -2,6 +2,10 @@ package com.example.llamadroid.service
 
 import android.content.Context
 import androidx.room.withTransaction
+import com.example.llamadroid.data.db.AgentExecutionProfile
+import com.example.llamadroid.data.db.AgentDirectRuntime
+import com.example.llamadroid.data.db.AgentContinuationOutboxEntity
+import com.example.llamadroid.data.db.AgentContinuationStatus
 import com.example.llamadroid.data.db.AgentInvocationEntity
 import com.example.llamadroid.data.db.AgentPlanVersionEntity
 import com.example.llamadroid.data.db.AgentProjectStateEntity
@@ -19,6 +23,8 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
 
 internal const val AGENT_CONTROL_PLANE_VERSION = 1
+
+private const val COMPLETION_RECEIPT_SCAN_LIMIT = 64
 
 internal object AgentTodoStatus {
     const val PENDING = "PENDING"
@@ -154,7 +160,110 @@ internal data class AgentCompactionMeasurement(
     val stateRevision: Long
 )
 
+/**
+ * Bounded model-facing projection of the current TODO acceptance criteria.
+ * Durable TODO rows remain the source of truth; this only controls packet
+ * wording for the current request.
+ */
+internal data class AgentTodoPromptCriteriaProjection(
+    val criteria: List<String>,
+    val verificationRequired: Boolean
+)
+
+/** Semantic result of a concrete runtime check used by the optimized root. */
+internal enum class AgentVerificationDisposition {
+    PASS,
+    FAIL,
+    PENDING,
+    NOT_APPLICABLE
+}
+
+internal data class AgentVerificationAssessment(
+    val disposition: AgentVerificationDisposition,
+    val reason: String
+)
+
+internal enum class AgentVerificationTransition {
+    ENTERED_VERIFY,
+    RETURNED_TO_BUILD,
+    RECORDED_IN_VERIFY,
+    RECORDED_IN_BUILD,
+    ALREADY_APPLIED,
+    IGNORED,
+    REJECTED_NO_APPROVED_PLAN
+}
+
+/** Result of one durable, replay-safe verification phase decision. */
+internal data class AgentVerificationTransitionResult(
+    val state: AgentProjectStateEntity,
+    val disposition: AgentVerificationDisposition,
+    val transition: AgentVerificationTransition,
+    val actionId: String,
+    val eventId: String?,
+    val reason: String
+)
+
+/**
+ * Durable evidence used by the optimized root completion gate. A model
+ * supplied validation sentence cannot replace either receipt: the PASS must
+ * belong to the active approved plan and be at or after its newest mutation.
+ */
+internal data class AgentCompletionEvidence(
+    val planVersionId: String,
+    val planningEpisodeId: String,
+    val latestMutationReceipt: AgentContinuationOutboxEntity?,
+    val passVerificationReceipt: AgentContinuationOutboxEntity?,
+    val actionReceiptScanTruncated: Boolean = false,
+    val oldestScannedActionAt: Long? = null
+) {
+    val latestMutationAt: Long? get() = latestMutationReceipt?.createdAt
+    val passVerificationAt: Long? get() = passVerificationReceipt?.createdAt
+
+    /**
+     * A fresh PASS is sufficient for the durable check portion of completion;
+     * the caller still validates changed-artifact and review fields from the
+     * finish_task payload.
+    */
+    val hasFreshPassAfterLatestMutation: Boolean
+        get() {
+            val verificationAt = passVerificationAt ?: return false
+            val mutationAt = latestMutationAt
+            if (
+                actionReceiptScanTruncated &&
+                latestMutationReceipt == null &&
+                (oldestScannedActionAt == null || oldestScannedActionAt > verificationAt)
+            ) return false
+            return mutationAt == null || verificationAt >= mutationAt
+        }
+}
+
+/** Result of an explicit root repair request while VERIFY is active. */
+internal data class AgentRepairTransitionResult(
+    val state: AgentProjectStateEntity,
+    val transition: AgentVerificationTransition,
+    val actionId: String,
+    val eventId: String?,
+    val reason: String
+)
+
+internal data class AgentDirectReceiptTransition(
+    val previousTodoStatus: String?,
+    val currentTodoStatus: String?,
+    val projectMode: String,
+    val changed: Boolean
+)
+
 internal object AgentProjectControlPlane {
+    const val DIRECT_RUNTIME_VERSION = 1
+    const val PROJECT_MODE_PLAN = "PLAN"
+    const val PROJECT_MODE_BUILD = "BUILD"
+    const val PROJECT_MODE_VERIFY = "VERIFY"
+
+    private const val VERIFICATION_PHASE_RECEIPT_KIND =
+        "VERIFICATION_PHASE_TRANSITION"
+    private const val VERIFICATION_REPAIR_RECEIPT_KIND =
+        "VERIFICATION_REPAIR_TRANSITION"
+
     private val stateCache =
         ConcurrentHashMap<Long, AgentProjectStateEntity>()
 
@@ -180,6 +289,7 @@ internal object AgentProjectControlPlane {
         ),
         AgentTodoStatus.READY to setOf(
             AgentTodoStatus.IN_PROGRESS,
+            AgentTodoStatus.VERIFIED,
             AgentTodoStatus.BLOCKED,
             AgentTodoStatus.CANCELLED
         ),
@@ -187,6 +297,7 @@ internal object AgentProjectControlPlane {
             AgentTodoStatus.READY_FOR_REVIEW,
             AgentTodoStatus.NEEDS_FIX,
             AgentTodoStatus.READY_FOR_VERIFICATION,
+            AgentTodoStatus.VERIFIED,
             AgentTodoStatus.COMPLETED,
             AgentTodoStatus.BLOCKED,
             AgentTodoStatus.CANCELLED
@@ -231,26 +342,928 @@ internal object AgentProjectControlPlane {
         }
     }
 
+    /**
+     * Research admission counters stay in planning packets and durable
+     * receipts. Optimized Build/Verify packets omit only the model-facing
+     * budget prose because those phases must not perform research.
+     */
+    internal fun shouldIncludeResearchBudgetInControlPacket(
+        executionProfile: String,
+        mode: String?
+    ): Boolean {
+        val normalizedMode = mode?.trim()?.uppercase(Locale.ROOT)
+        return AgentExecutionProfile.normalize(executionProfile) !=
+            AgentExecutionProfile.DIRECT ||
+            normalizedMode != PROJECT_MODE_BUILD && normalizedMode != PROJECT_MODE_VERIFY
+    }
+
+    /**
+     * Removes only the exact generated verification criterion in an optimized
+     * packet. The durable criterion is represented by an explicit marker,
+     * while every other criterion remains model-visible.
+     */
+    internal fun projectTodoAcceptanceCriteriaForPrompt(
+        todoText: String,
+        criteria: List<String>,
+        optimized: Boolean
+    ): AgentTodoPromptCriteriaProjection {
+        if (!optimized) {
+            return AgentTodoPromptCriteriaProjection(
+                criteria = criteria.take(6),
+                verificationRequired = false
+            )
+        }
+        val generatedVerificationCriterion =
+            "Complete and verify: ${todoText.take(240)}"
+        val generatedCriterionPresent = criteria.any {
+            it == generatedVerificationCriterion
+        }
+        return AgentTodoPromptCriteriaProjection(
+            criteria = criteria.filterNot {
+                it == generatedVerificationCriterion
+            },
+            verificationRequired = generatedCriterionPresent
+        )
+    }
+
+    /** True when a non-Plan hydration request must retain durable VERIFY. */
+    fun preservesVerifyDuringHydration(
+        currentMode: String?,
+        requestedMode: String?
+    ): Boolean = currentMode?.equals(PROJECT_MODE_VERIFY, ignoreCase = true) == true &&
+        requestedMode?.equals(PROJECT_MODE_BUILD, ignoreCase = true) == true
+
+    /**
+     * Classifies only concrete check results. Starting a command, reading a
+     * file, or observing a still-loading process does not pass verification.
+     * A local web RUNNING status only proves that a preview is serving; the
+     * root must inspect the loaded preview separately. Terminal Python
+     * projects pass only after an explicit zero exit code.
+     */
+    fun classifyVerificationCheck(
+        toolName: String,
+        rawResult: String
+    ): AgentVerificationAssessment {
+        val tool = toolName.trim().lowercase(Locale.ROOT)
+        val supported = setOf(
+            "check_project_run",
+            "check_command",
+            "wait_command",
+            "observe_preview"
+        )
+        if (tool !in supported) {
+            return AgentVerificationAssessment(
+                disposition = AgentVerificationDisposition.NOT_APPLICABLE,
+                reason = "Tool $tool is not a verification check."
+            )
+        }
+
+        val fields = verificationFields(rawResult)
+        val status = fields["status"].orEmpty()
+            .trim()
+            .lowercase(Locale.ROOT)
+        val previewUrl = fields["preview_url"]
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: fields["url"]?.trim()?.takeIf { it.isNotBlank() }
+        val exitCode = parseVerificationExitCode(fields, rawResult)
+
+        if (
+            status.contains("fail") ||
+            status.contains("error") ||
+            status.contains("crash") ||
+            status.contains("abort") ||
+            exitCode != null && exitCode != 0
+        ) {
+            return AgentVerificationAssessment(
+                disposition = AgentVerificationDisposition.FAIL,
+                reason = "The check reported a failed status or non-zero exit code."
+            )
+        }
+
+        if (tool == "observe_preview") {
+            if (hasStructuredVerificationError(fields)) {
+                return AgentVerificationAssessment(
+                    disposition = AgentVerificationDisposition.FAIL,
+                    reason = "Preview observation reported a structured error."
+                )
+            }
+            val screenshotPath = fields["screenshot_path"]
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+            val screenshotBytes = fields["screenshot_bytes"]?.toLongOrNull() ?: 0L
+            val loadProgress = fields["load_progress"]?.toIntOrNull() ?: 0
+            val bodyText = fields["body_text"]?.trim().orEmpty()
+            val controls = fields["controls"]?.trim().orEmpty()
+            val hasDomEvidence = bodyText.isNotBlank() ||
+                controls.isNotBlank() && controls != "[]" && controls != "null"
+            val hasVisualEvidence = screenshotPath != null || screenshotBytes > 0L
+            if (loadProgress >= 100 && (hasDomEvidence || hasVisualEvidence)) {
+                return AgentVerificationAssessment(
+                    disposition = AgentVerificationDisposition.PASS,
+                    reason = "Preview evidence was captured."
+                )
+            }
+            return AgentVerificationAssessment(
+                disposition = AgentVerificationDisposition.PENDING,
+                reason = "Preview evidence is not available yet."
+            )
+        }
+
+        val runningStatuses = setOf(
+            "running",
+            "starting",
+            "pending",
+            "queued",
+            "waiting"
+        )
+        if (tool == "check_project_run" && status == "running" && previewUrl != null) {
+            return AgentVerificationAssessment(
+                disposition = AgentVerificationDisposition.PENDING,
+                reason = "The project is serving a preview; inspect it with observe_preview."
+            )
+        }
+        if (status in runningStatuses) {
+            return AgentVerificationAssessment(
+                disposition = AgentVerificationDisposition.PENDING,
+                reason = "The checked process is still running or waiting."
+            )
+        }
+
+        val successfulStatuses = setOf(
+            "success",
+            "successful",
+            "passed",
+            "pass",
+            "complete",
+            "completed",
+            "succeeded",
+            "ok"
+        )
+        if (
+            exitCode == 0 &&
+            (
+                status in successfulStatuses ||
+                    status.contains("finished") ||
+                    status == "stopped"
+                )
+        ) {
+            return AgentVerificationAssessment(
+                disposition = AgentVerificationDisposition.PASS,
+                reason = "The checked process completed with exit code 0."
+            )
+        }
+
+        return AgentVerificationAssessment(
+            disposition = AgentVerificationDisposition.PENDING,
+            reason = "The check does not contain completed passing evidence."
+        )
+    }
+
+    /**
+     * Reads the bounded durable receipts needed by the optimized root's
+     * finish gate. Both reads are scoped to the active plan episode, so a PASS
+     * from an older plan cannot unlock the current one. The existing action
+     * receipt is reused when it already follows the latest mutation; callers
+     * should only schedule another check when this predicate is false.
+     */
+    suspend fun readCompletionEvidence(
+        database: AppDatabase,
+        conversationId: Long,
+        planVersionId: String,
+        planningEpisodeId: String = planVersionId
+    ): AgentCompletionEvidence = database.withTransaction {
+        val normalizedPlanId = planVersionId.trim()
+        val normalizedEpisodeId = planningEpisodeId.trim()
+        if (normalizedPlanId.isBlank() || normalizedEpisodeId.isBlank()) {
+            return@withTransaction AgentCompletionEvidence(
+                planVersionId = normalizedPlanId,
+                planningEpisodeId = normalizedEpisodeId,
+                latestMutationReceipt = null,
+                passVerificationReceipt = null
+            )
+        }
+
+        val dao = database.agentWorkflowDao()
+        val activePlan = dao.getPlanVersionById(normalizedPlanId)
+        val state = dao.getProjectState(conversationId)
+        if (
+            activePlan == null ||
+            activePlan.conversationId != conversationId ||
+            !activePlan.status.equals("APPROVED", ignoreCase = true) ||
+            state?.activePlanVersionId != normalizedPlanId
+        ) {
+            return@withTransaction AgentCompletionEvidence(
+                planVersionId = normalizedPlanId,
+                planningEpisodeId = normalizedEpisodeId,
+                latestMutationReceipt = null,
+                passVerificationReceipt = null
+            )
+        }
+        val actionReceipts = dao.getLatestActionReceiptsForEpisode(
+            conversationId = conversationId,
+            planningEpisodeId = normalizedEpisodeId,
+            limit = COMPLETION_RECEIPT_SCAN_LIMIT + 1
+        )
+        val latestMutation = actionReceipts.firstOrNull { receipt ->
+            isValidMutationReceipt(receipt, normalizedEpisodeId)
+        }
+        val passVerification = dao.getLatestCompletedPassVerificationReceipt(
+            conversationId = conversationId,
+            planningEpisodeId = normalizedEpisodeId,
+            planVersionId = normalizedPlanId
+        )?.takeIf { receipt ->
+            isValidPassVerificationReceipt(
+                receipt = receipt,
+                planningEpisodeId = normalizedEpisodeId,
+                planVersionId = normalizedPlanId
+            )
+        }
+        AgentCompletionEvidence(
+            planVersionId = normalizedPlanId,
+            planningEpisodeId = normalizedEpisodeId,
+            latestMutationReceipt = latestMutation,
+            passVerificationReceipt = passVerification,
+            actionReceiptScanTruncated = actionReceipts.size > COMPLETION_RECEIPT_SCAN_LIMIT,
+            oldestScannedActionAt = actionReceipts.minOfOrNull { it.createdAt }
+        )
+    }
+
+    private fun isValidPassVerificationReceipt(
+        receipt: AgentContinuationOutboxEntity,
+        planningEpisodeId: String,
+        planVersionId: String
+    ): Boolean {
+        if (
+            receipt.kind != VERIFICATION_PHASE_RECEIPT_KIND ||
+            receipt.status != AgentContinuationStatus.COMPLETED
+        ) return false
+        val payload = runCatching { JSONObject(receipt.payloadJson) }.getOrNull()
+            ?: return false
+        return payload.optString("receipt_type") == "verification_phase" &&
+            payload.optString("planning_episode_id") == planningEpisodeId &&
+            payload.optString("plan_version_id") == planVersionId &&
+            payload.optString("disposition").equals("PASS", ignoreCase = true)
+    }
+
+    private fun isValidMutationReceipt(
+        receipt: AgentContinuationOutboxEntity,
+        planningEpisodeId: String
+    ): Boolean {
+        if (
+            receipt.kind != "ACTION_RECEIPT" ||
+            receipt.status !in setOf(
+                AgentContinuationStatus.COMPLETED,
+                AgentContinuationStatus.FAILED
+            )
+        ) return false
+        val payload = runCatching { JSONObject(receipt.payloadJson) }.getOrNull()
+            ?: return false
+        val tool = payload.optString("tool").trim().lowercase(Locale.ROOT)
+        val knownNonMutatingTool = tool in setOf(
+            "agent_report_read",
+            "check_command",
+            "check_project_run",
+            "command_list",
+            "fetch_url",
+            "file_line_count",
+            "get_datetime",
+            "sleep_until",
+            "kb_list_sources",
+            "kb_read_chunk",
+            "kb_search",
+            "kiwix_search",
+            "list_directory",
+            "list_memory",
+            "observe_preview",
+            "plan_read",
+            "project_order_read",
+            "project_state_read",
+            "propose_plan",
+            "question",
+            "read_file",
+            "read_file_lines",
+            "read_memory",
+            "read_skill_resource",
+            "reflection",
+            "report_progress",
+            "run_tools_sequential",
+            "search_code",
+            "skill",
+            "todo_read",
+            "todo_reconcile",
+            "todo_transition",
+            "todo_write",
+            "tool_help",
+            "view_image",
+            "wait_command",
+            "web_search",
+            "write_memory",
+            "rewrite_memory",
+            "delete_memory",
+            "finish_task",
+            "call_agent"
+        )
+        return payload.optString("receipt_type") == "action" &&
+            payload.optString("planning_episode_id") == planningEpisodeId &&
+            tool.isNotBlank() &&
+            !knownNonMutatingTool
+    }
+
+    /**
+     * Applies a concrete verification result to the durable project phase.
+     * The action ID is persisted in a completed outbox receipt, making a
+     * replay a no-op even after another semantic event changed lastSemanticEvent.
+     */
+    suspend fun applyVerificationResult(
+        context: Context,
+        conversationId: Long,
+        toolName: String,
+        actionId: String,
+        rawResult: String,
+        planningEpisodeId: String? = null
+    ): AgentVerificationTransitionResult = withContext(Dispatchers.IO) {
+        applyVerificationResult(
+            database = AppDatabase.getDatabase(context.applicationContext),
+            conversationId = conversationId,
+            toolName = toolName,
+            actionId = actionId,
+            rawResult = rawResult,
+            planningEpisodeId = planningEpisodeId
+        )
+    }
+
+    /** Database overload keeps this transition directly testable with Room. */
+    suspend fun applyVerificationResult(
+        database: AppDatabase,
+        conversationId: Long,
+        toolName: String,
+        actionId: String,
+        rawResult: String,
+        planningEpisodeId: String? = null
+    ): AgentVerificationTransitionResult {
+        val normalizedActionId = actionId.trim()
+        require(normalizedActionId.isNotBlank()) {
+            "A stable action ID is required for verification."
+        }
+        val normalizedTool = toolName.trim().lowercase(Locale.ROOT)
+        require(normalizedTool.isNotBlank()) {
+            "A tool name is required for verification."
+        }
+        val assessment = classifyVerificationCheck(normalizedTool, rawResult)
+        val result = database.withTransaction {
+            val dao = database.agentWorkflowDao()
+            val current = dao.getProjectState(conversationId)
+                ?: error("Project state is required before verification.")
+            val normalizedMode = current.mode.trim().uppercase(Locale.ROOT)
+            val planId = current.activePlanVersionId?.trim()
+                ?.takeIf { it.isNotBlank() }
+            val approvedPlan = planId?.let { dao.getPlanVersionById(it) }
+                ?.takeIf {
+                    it.conversationId == conversationId &&
+                        it.status.equals("APPROVED", ignoreCase = true)
+                }
+
+            if (assessment.disposition !in setOf(
+                    AgentVerificationDisposition.PASS,
+                    AgentVerificationDisposition.FAIL
+                )
+            ) {
+                return@withTransaction AgentVerificationTransitionResult(
+                    state = current,
+                    disposition = assessment.disposition,
+                    transition = AgentVerificationTransition.IGNORED,
+                    actionId = normalizedActionId,
+                    eventId = null,
+                    reason = assessment.reason
+                )
+            }
+
+            if (approvedPlan == null) {
+                return@withTransaction AgentVerificationTransitionResult(
+                    state = current,
+                    disposition = assessment.disposition,
+                    transition = AgentVerificationTransition.REJECTED_NO_APPROVED_PLAN,
+                    actionId = normalizedActionId,
+                    eventId = null,
+                    reason = "Verification requires the active plan to be approved."
+                )
+            }
+
+            val episode = planningEpisodeId?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?: approvedPlan.id
+            val actionKey = sha256(
+                "$conversationId|$episode|${approvedPlan.id}|$normalizedTool|$normalizedActionId"
+            )
+            val eventPrefix = if (
+                assessment.disposition == AgentVerificationDisposition.PASS
+            ) {
+                "verification_passed"
+            } else {
+                "verification_failed"
+            }
+            val eventId = "$eventPrefix:${actionKey.take(32)}"
+            val receiptId = "verification-phase:${actionKey.take(48)}"
+
+            if (current.lastSemanticEvent == eventId) {
+                return@withTransaction AgentVerificationTransitionResult(
+                    state = current,
+                    disposition = assessment.disposition,
+                    transition = AgentVerificationTransition.ALREADY_APPLIED,
+                    actionId = normalizedActionId,
+                    eventId = eventId,
+                    reason = "This verification action was already applied."
+                )
+            }
+            if (dao.getContinuationReceiptById(receiptId) != null) {
+                return@withTransaction AgentVerificationTransitionResult(
+                    state = current,
+                    disposition = assessment.disposition,
+                    transition = AgentVerificationTransition.ALREADY_APPLIED,
+                    actionId = normalizedActionId,
+                    eventId = eventId,
+                    reason = "This verification action was already applied."
+                )
+            }
+
+            val transition = when (assessment.disposition) {
+                AgentVerificationDisposition.PASS -> when (normalizedMode) {
+                    PROJECT_MODE_BUILD -> AgentVerificationTransition.ENTERED_VERIFY
+                    PROJECT_MODE_VERIFY -> AgentVerificationTransition.RECORDED_IN_VERIFY
+                    else -> AgentVerificationTransition.IGNORED
+                }
+
+                AgentVerificationDisposition.FAIL -> when (normalizedMode) {
+                    PROJECT_MODE_VERIFY -> AgentVerificationTransition.RETURNED_TO_BUILD
+                    PROJECT_MODE_BUILD -> AgentVerificationTransition.RECORDED_IN_BUILD
+                    else -> AgentVerificationTransition.IGNORED
+                }
+
+                else -> AgentVerificationTransition.IGNORED
+            }
+            if (transition == AgentVerificationTransition.IGNORED) {
+                return@withTransaction AgentVerificationTransitionResult(
+                    state = current,
+                    disposition = assessment.disposition,
+                    transition = transition,
+                    actionId = normalizedActionId,
+                    eventId = null,
+                    reason = "Verification phase changes are allowed only from BUILD or VERIFY."
+                )
+            }
+
+            val targetMode = if (assessment.disposition ==
+                AgentVerificationDisposition.PASS
+            ) {
+                PROJECT_MODE_VERIFY
+            } else {
+                PROJECT_MODE_BUILD
+            }
+            val now = System.currentTimeMillis()
+            val phaseReceipt = AgentContinuationOutboxEntity(
+                id = receiptId,
+                conversationId = conversationId,
+                kind = VERIFICATION_PHASE_RECEIPT_KIND,
+                dedupeKey = receiptId,
+                payloadJson = JSONObject()
+                    .put("receipt_type", "verification_phase")
+                    .put("tool", normalizedTool)
+                    .put("action_id", normalizedActionId)
+                    .put("planning_episode_id", episode)
+                    .put("plan_version_id", approvedPlan.id)
+                    .put("disposition", assessment.disposition.name)
+                    .put("target_mode", targetMode)
+                    .toString(),
+                status = AgentContinuationStatus.COMPLETED,
+                createdAt = now,
+                updatedAt = now
+            )
+            if (dao.insertContinuationReceipt(phaseReceipt) == 0L) {
+                return@withTransaction AgentVerificationTransitionResult(
+                    state = dao.getProjectState(conversationId) ?: current,
+                    disposition = assessment.disposition,
+                    transition = AgentVerificationTransition.ALREADY_APPLIED,
+                    actionId = normalizedActionId,
+                    eventId = eventId,
+                    reason = "This verification action was already applied."
+                )
+            }
+
+            if (normalizedMode != targetMode) {
+                require(
+                    dao.updateProjectStateBasics(
+                        conversationId = conversationId,
+                        mode = targetMode,
+                        currentGoal = null
+                    ) == 1
+                ) {
+                    "Project state changed while applying verification."
+                }
+            }
+            require(
+                dao.bumpProjectStateRevision(
+                    conversationId = conversationId,
+                    semanticEvent = eventId
+                ) == 1
+            ) {
+                "Project state disappeared while recording verification."
+            }
+            val updated = dao.getProjectState(conversationId)
+                ?: error("Project state missing after verification transition.")
+            AgentVerificationTransitionResult(
+                state = updated,
+                disposition = assessment.disposition,
+                transition = transition,
+                actionId = normalizedActionId,
+                eventId = eventId,
+                reason = assessment.reason
+            )
+        }
+        cacheState(result.state)
+        return result
+    }
+
+    /**
+     * Records an explicit report_progress build repair from VERIFY. This is
+     * separate from runtime-check classification because a model can discover
+     * a UI defect that the run status cannot represent. The repair summary is
+     * returned to the caller but only its hash is kept in durable metadata.
+     */
+    suspend fun applyRepairProgress(
+        context: Context,
+        conversationId: Long,
+        phase: String,
+        actionId: String,
+        summary: String,
+        planningEpisodeId: String? = null
+    ): AgentRepairTransitionResult = withContext(Dispatchers.IO) {
+        applyRepairProgress(
+            database = AppDatabase.getDatabase(context.applicationContext),
+            conversationId = conversationId,
+            phase = phase,
+            actionId = actionId,
+            summary = summary,
+            planningEpisodeId = planningEpisodeId
+        )
+    }
+
+    /**
+     * Projects successful Direct Agent receipts onto runtime-owned TODO state.
+     * The model never needs TODO maintenance tools: the first mutation starts the
+     * current step, verification receipts advance it, and a successful final
+     * receipt completes it. Exact-status updates make replay a no-op.
+     *
+     * This function is intended to run inside the caller's Room transaction,
+     * immediately after the action receipt is committed.
+     */
+    suspend fun applyDirectToolReceipt(
+        database: AppDatabase,
+        conversationId: Long,
+        toolName: String,
+        actionId: String,
+        successful: Boolean,
+        completionStatus: String? = null,
+        /** Explicit PASS from the phase classifier; null falls back to Room evidence. */
+        verificationPassed: Boolean? = null
+    ): AgentDirectReceiptTransition {
+        val dao = database.agentWorkflowDao()
+        val state = dao.getProjectState(conversationId)
+            ?: return AgentDirectReceiptTransition(null, null, PROJECT_MODE_PLAN, false)
+        val todos = dao.getTodos(conversationId)
+        val current = state.currentTodoId?.let { todoId -> dao.getTodoById(todoId) }
+            ?: chooseNextTodo(todos)
+        if (!successful || current == null) {
+            return AgentDirectReceiptTransition(current?.status, current?.status, state.mode, false)
+        }
+
+        val normalizedTool = toolName.trim().lowercase(Locale.ROOT)
+        val mutationTools = setOf(
+            "write_file",
+            "edit_file",
+            "append_file",
+            "edit_lines",
+            "apply_patch",
+            "create_folder",
+            "generate_image",
+            "remove_image_background",
+            "install_python_dependency"
+        )
+        val verificationTools = setOf(
+            "check_project_run",
+            "check_command",
+            "wait_command",
+            "observe_preview",
+            "interact_preview"
+        )
+        val normalizedCompletion = completionStatus
+            ?.trim()
+            ?.uppercase(Locale.ROOT)
+            .orEmpty()
+        val finishSucceeded = normalizedTool == "finish_task" &&
+            normalizedCompletion !in setOf(
+                "FAILED", "FAIL", "ERROR", "BLOCKED", "CANCELLED", "CANCELED", "INTERRUPTED"
+            )
+        val directVerificationPass = if (normalizedTool in verificationTools) {
+            verificationPassed ?: state.activePlanVersionId?.let { planVersionId ->
+                dao.getCompletedPassVerificationReceiptForAction(
+                    conversationId = conversationId,
+                    actionId = actionId,
+                    planVersionId = planVersionId
+                ) != null
+            } ?: false
+        } else {
+            false
+        }
+        val hasUnfinishedOtherTodos = todos.any { todo ->
+            todo.id != current.id && todo.status !in AgentTodoStatus.terminal
+        }
+        val targetStatus = when {
+            normalizedTool in mutationTools && current.status in setOf(
+                AgentTodoStatus.READY,
+                AgentTodoStatus.NEEDS_FIX
+            ) -> AgentTodoStatus.IN_PROGRESS
+
+            normalizedTool in verificationTools &&
+                directVerificationPass &&
+                state.mode.equals(PROJECT_MODE_VERIFY, ignoreCase = true) &&
+                current.status in setOf(
+                    AgentTodoStatus.READY,
+                    AgentTodoStatus.IN_PROGRESS,
+                    AgentTodoStatus.READY_FOR_VERIFICATION
+                ) -> AgentTodoStatus.VERIFIED
+
+            normalizedTool in verificationTools &&
+                current.status == AgentTodoStatus.IN_PROGRESS -> AgentTodoStatus.READY_FOR_VERIFICATION
+
+            finishSucceeded && state.mode.equals(PROJECT_MODE_BUILD, ignoreCase = true) &&
+                hasUnfinishedOtherTodos &&
+                current.status == AgentTodoStatus.IN_PROGRESS -> AgentTodoStatus.COMPLETED
+
+            finishSucceeded && state.mode.equals(PROJECT_MODE_BUILD, ignoreCase = true) &&
+                !hasUnfinishedOtherTodos &&
+                current.status == AgentTodoStatus.IN_PROGRESS -> AgentTodoStatus.READY_FOR_VERIFICATION
+
+            finishSucceeded && state.mode.equals(PROJECT_MODE_VERIFY, ignoreCase = true) &&
+                current.status in setOf(
+                    AgentTodoStatus.IN_PROGRESS,
+                    AgentTodoStatus.READY_FOR_VERIFICATION,
+                    AgentTodoStatus.VERIFIED
+                ) -> AgentTodoStatus.COMPLETED
+
+            else -> null
+        }
+        if (targetStatus == null || targetStatus !in validTodoTransitions[current.status].orEmpty()) {
+            return AgentDirectReceiptTransition(current.status, current.status, state.mode, false)
+        }
+
+        val evidence = runCatching { JSONArray(current.evidenceJson) }
+            .getOrElse { JSONArray() }
+            .put(
+                JSONObject()
+                    .put("source", "DIRECT_TOOL_RECEIPT")
+                    .put("tool", normalizedTool)
+                    .put("action_id", actionId)
+                    .put("status", "SUCCESS")
+            )
+        val changed = dao.transitionTodoExactlyOnce(
+            id = current.id,
+            expectedStatus = current.status,
+            newStatus = targetStatus,
+            ownerRole = null,
+            assignedInvocationId = null,
+            resultSummary = "$normalizedTool completed successfully.",
+            blockReason = null,
+            evidenceJson = evidence.toString(),
+            completedAt = if (targetStatus == AgentTodoStatus.COMPLETED) System.currentTimeMillis() else null
+        ) == 1
+        if (changed) {
+            unlockDependencyReadyTodos(dao, conversationId)
+            val refreshedTodos = dao.getTodos(conversationId)
+            val enteringVerify = finishSucceeded &&
+                state.mode.equals(PROJECT_MODE_BUILD, ignoreCase = true) &&
+                targetStatus == AgentTodoStatus.READY_FOR_VERIFICATION
+            val projectCompleted = finishSucceeded &&
+                state.mode.equals(PROJECT_MODE_VERIFY, ignoreCase = true) &&
+                refreshedTodos.none {
+                it.status !in setOf(AgentTodoStatus.COMPLETED, AgentTodoStatus.CANCELLED)
+            }
+            val next = if (projectCompleted) null else chooseNextTodo(refreshedTodos)
+            val advancingToProjectedVerify = finishSucceeded &&
+                targetStatus == AgentTodoStatus.COMPLETED &&
+                next?.ownerRole.equals("EXECUTOR", ignoreCase = true)
+            if (enteringVerify || advancingToProjectedVerify) {
+                dao.updateProjectStateBasics(
+                    conversationId = conversationId,
+                    mode = PROJECT_MODE_VERIFY,
+                    currentGoal = null
+                )
+            } else if (projectCompleted) {
+                dao.updateProjectStateBasics(
+                    conversationId = conversationId,
+                    mode = AgentDirectRuntime.MODE_COMPLETE,
+                    currentGoal = null
+                )
+            } else if (finishSucceeded && targetStatus == AgentTodoStatus.COMPLETED) {
+                dao.updateProjectStateBasics(
+                    conversationId = conversationId,
+                    mode = PROJECT_MODE_BUILD,
+                    currentGoal = null
+                )
+            }
+            dao.bumpProjectStateRevision(
+                conversationId = conversationId,
+                semanticEvent = "direct_receipt:${current.id}:$targetStatus:${actionId.take(48)}"
+            )
+            dao.setProjectCurrentTodo(conversationId, next?.phaseId, next?.id)
+            cacheState(dao.getProjectState(conversationId))
+        }
+        return AgentDirectReceiptTransition(
+            previousTodoStatus = current.status,
+            currentTodoStatus = if (changed) targetStatus else current.status,
+            projectMode = dao.getProjectState(conversationId)?.mode ?: state.mode,
+            changed = changed
+        )
+    }
+
+    /** Database overload keeps the repair boundary directly testable. */
+    suspend fun applyRepairProgress(
+        database: AppDatabase,
+        conversationId: Long,
+        phase: String,
+        actionId: String,
+        summary: String,
+        planningEpisodeId: String? = null
+    ): AgentRepairTransitionResult {
+        val normalizedPhase = phase.trim().lowercase(Locale.ROOT)
+        require(normalizedPhase == "build") {
+            "Only report_progress phase=build can request a VERIFY repair."
+        }
+        val normalizedActionId = actionId.trim()
+        require(normalizedActionId.isNotBlank()) {
+            "A stable action ID is required for a VERIFY repair."
+        }
+        val normalizedSummary = summary.trim()
+        require(normalizedSummary.isNotBlank()) {
+            "A concrete repair summary is required for a VERIFY repair."
+        }
+        val result = database.withTransaction {
+            val dao = database.agentWorkflowDao()
+            val current = dao.getProjectState(conversationId)
+                ?: error("Project state is required before a VERIFY repair.")
+            val planId = current.activePlanVersionId?.trim()
+                ?.takeIf { it.isNotBlank() }
+            val approvedPlan = planId?.let { dao.getPlanVersionById(it) }
+                ?.takeIf {
+                    it.conversationId == conversationId &&
+                        it.status.equals("APPROVED", ignoreCase = true)
+                }
+            if (approvedPlan == null) {
+                return@withTransaction AgentRepairTransitionResult(
+                    state = current,
+                    transition = AgentVerificationTransition.REJECTED_NO_APPROVED_PLAN,
+                    actionId = normalizedActionId,
+                    eventId = null,
+                    reason = "A VERIFY repair requires the active plan to be approved."
+                )
+            }
+
+            val episode = planningEpisodeId?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?: approvedPlan.id
+            val actionKey = sha256(
+                "$conversationId|repair|$episode|${approvedPlan.id}|$normalizedActionId"
+            )
+            val eventId = "verification_repair:${actionKey.take(32)}"
+            val receiptId = "verification-repair:${actionKey.take(48)}"
+            if (
+                current.lastSemanticEvent == eventId ||
+                dao.getContinuationReceiptById(receiptId) != null
+            ) {
+                return@withTransaction AgentRepairTransitionResult(
+                    state = current,
+                    transition = AgentVerificationTransition.ALREADY_APPLIED,
+                    actionId = normalizedActionId,
+                    eventId = eventId,
+                    reason = "This VERIFY repair request was already applied."
+                )
+            }
+
+            if (!current.mode.equals(PROJECT_MODE_VERIFY, ignoreCase = true)) {
+                return@withTransaction AgentRepairTransitionResult(
+                    state = current,
+                    transition = AgentVerificationTransition.IGNORED,
+                    actionId = normalizedActionId,
+                    eventId = null,
+                    reason = "A VERIFY repair request is only actionable while VERIFY is active."
+                )
+            }
+
+            val now = System.currentTimeMillis()
+            val receipt = AgentContinuationOutboxEntity(
+                id = receiptId,
+                conversationId = conversationId,
+                kind = VERIFICATION_REPAIR_RECEIPT_KIND,
+                dedupeKey = receiptId,
+                payloadJson = JSONObject()
+                    .put("receipt_type", "verification_repair")
+                    .put("phase", normalizedPhase)
+                    .put("action_id", normalizedActionId)
+                    .put("planning_episode_id", episode)
+                    .put("plan_version_id", approvedPlan.id)
+                    .put("summary_hash", sha256(normalizedSummary))
+                    .put("target_mode", PROJECT_MODE_BUILD)
+                    .toString(),
+                status = AgentContinuationStatus.COMPLETED,
+                createdAt = now,
+                updatedAt = now
+            )
+            if (dao.insertContinuationReceipt(receipt) == 0L) {
+                return@withTransaction AgentRepairTransitionResult(
+                    state = dao.getProjectState(conversationId) ?: current,
+                    transition = AgentVerificationTransition.ALREADY_APPLIED,
+                    actionId = normalizedActionId,
+                    eventId = eventId,
+                    reason = "This VERIFY repair request was already applied."
+                )
+            }
+
+            require(
+                dao.updateProjectStateBasics(
+                    conversationId = conversationId,
+                    mode = PROJECT_MODE_BUILD,
+                    currentGoal = null
+                ) == 1
+            ) {
+                "Project state changed while applying the VERIFY repair."
+            }
+            require(
+                dao.bumpProjectStateRevision(
+                    conversationId = conversationId,
+                    semanticEvent = eventId
+                ) == 1
+            ) {
+                "Project state disappeared while recording the VERIFY repair."
+            }
+            val updated = dao.getProjectState(conversationId)
+                ?: error("Project state missing after VERIFY repair.")
+            AgentRepairTransitionResult(
+                state = updated,
+                transition = AgentVerificationTransition.RETURNED_TO_BUILD,
+                actionId = normalizedActionId,
+                eventId = eventId,
+                reason = "Repair requested: ${normalizedSummary.take(240)}"
+            )
+        }
+        cacheState(result.state)
+        return result
+    }
+
     suspend fun ensureState(
         context: Context,
         conversationId: Long,
         goal: String? = null,
         mode: String? = null
     ): AgentProjectStateEntity = withContext(Dispatchers.IO) {
-        val dao = AppDatabase.getDatabase(context.applicationContext)
-            .agentWorkflowDao()
+        val database = AppDatabase.getDatabase(context.applicationContext)
+        val contract = AgentDurableContractStore.ensureContract(
+            database = database,
+            conversationId = conversationId,
+            initialGoal = goal
+        )
+        val dao = database.agentWorkflowDao()
+        val requestedMode = mode?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?.uppercase(Locale.ROOT)
         dao.insertProjectStateIfMissing(
             AgentProjectStateEntity(
                 conversationId = conversationId,
-                mode = mode ?: "PLAN",
-                currentGoal = goal.orEmpty().trim()
+                mode = requestedMode ?: PROJECT_MODE_PLAN,
+                currentGoal = contract.initialGoal
             )
         )
-        if (!goal.isNullOrBlank() || !mode.isNullOrBlank()) {
+        val existingState = dao.getProjectState(conversationId)
+            ?: error("Failed to initialize project control state")
+        // Restore/hydration callers pass BUILD for every non-Plan turn. Keep
+        // a durable VERIFY phase until an explicit verification result moves
+        // it back to BUILD, otherwise a process restart loses the phase.
+        if (
+            requestedMode != null &&
+            !preservesVerifyDuringHydration(existingState.mode, requestedMode)
+        ) {
             dao.updateProjectStateBasics(
                 conversationId = conversationId,
-                mode = mode,
-                currentGoal = goal?.trim()?.takeIf { it.isNotBlank() }
+                mode = requestedMode,
+                currentGoal = null
+            )
+        }
+        val state = dao.getProjectState(conversationId)
+            ?: error("Failed to initialize project control state")
+        if (state.currentGoal.isBlank() && contract.initialGoal.isNotBlank()) {
+            dao.updateProjectStateBasics(
+                conversationId = conversationId,
+                mode = null,
+                currentGoal = contract.initialGoal
             )
         }
         dao.getProjectState(conversationId)
@@ -265,17 +1278,25 @@ internal object AgentProjectControlPlane {
         goal: String? = null
     ): AgentProjectStateEntity = withContext(Dispatchers.IO) {
         val db = AppDatabase.getDatabase(context.applicationContext)
+        val contract = AgentDurableContractStore.ensureContract(
+            database = db,
+            conversationId = conversationId,
+            initialGoal = goal
+        )
         val state = db.withTransaction {
             val dao = db.agentWorkflowDao()
             dao.insertProjectStateIfMissing(
                 AgentProjectStateEntity(
                     conversationId = conversationId,
-                    currentGoal = goal.orEmpty().trim()
+                    currentGoal = contract.initialGoal
                 )
             )
             dao.bumpProjectStateRevision(
                 conversationId = conversationId,
-                currentGoal = goal?.trim()?.takeIf { it.isNotBlank() },
+                // The project state is only a compatibility projection. Keep
+                // its goal aligned with the write-once contract; later user
+                // corrections live in durable decisions.
+                currentGoal = contract.initialGoal.takeIf { it.isNotBlank() },
                 semanticEvent = kind.take(80)
             )
             dao.getProjectState(conversationId)
@@ -284,6 +1305,26 @@ internal object AgentProjectControlPlane {
         cacheState(state)
         state
     }
+
+    suspend fun markNoMoreQuestions(
+        context: Context,
+        conversationId: Long,
+        value: Boolean = true
+    ) = AgentDurableContractStore.markNoMoreQuestions(
+        context = context,
+        conversationId = conversationId,
+        value = value
+    )
+
+    suspend fun markGreenfield(
+        context: Context,
+        conversationId: Long,
+        value: Boolean = true
+    ) = AgentDurableContractStore.markGreenfield(
+        context = context,
+        conversationId = conversationId,
+        value = value
+    )
 
     fun isSequentialWorkerRole(role: String): Boolean =
         role.uppercase(Locale.ROOT) in sequentialWorkerRoles
@@ -321,6 +1362,7 @@ internal object AgentProjectControlPlane {
         return when (roleName) {
             "ORCHESTRATOR" -> commonState + setOf(
                 "question",
+                "sleep_until",
                 "todo_write",
                 "todo_transition",
                 "todo_reconcile",
@@ -350,6 +1392,7 @@ internal object AgentProjectControlPlane {
 
             "CODER" -> commonState + codeRead + memoryRead + setOf(
                 "write_file",
+                "append_file",
                 "edit_lines",
                 "apply_patch",
                 "create_folder",
@@ -757,28 +1800,33 @@ internal object AgentProjectControlPlane {
         conversationId: Long,
         pendingPlanId: String?,
         summary: String,
-        approvedPlan: String
+        approvedPlan: String,
+        executionProfile: String = AgentExecutionProfile.DIRECT
     ): AgentPlanMaterializationResult = withContext(Dispatchers.IO) {
         val parsed = parseApprovedPlan(summary, approvedPlan)
-        val scopedTodoIds = parsed.todos.mapIndexed { index, todo ->
+        // Keep the parser's complete result for the durable plan version. Direct
+        // only collapses the runtime TODO projection; an explicitly legacy
+        // caller keeps the historical one-row-per-action materialization.
+        val runtimePlan = if (
+            executionProfile.trim().equals(AgentExecutionProfile.DIRECT, ignoreCase = true)
+        ) {
+            AgentDirectPlanProjection.project(parsed).asProjectedPlan()
+        } else {
+            parsed
+        }
+        val scopedTodoIds = runtimePlan.todos.mapIndexed { index, todo ->
             todo.id to (
                 "todo-$conversationId-${parsed.planHash.take(8)}-" +
                     (index + 1).toString().padStart(3, '0')
                 )
         }.toMap()
-        val scopedTodos = parsed.todos.map { todo ->
+        val scopedTodos = runtimePlan.todos.map { todo ->
             todo.copy(
                 id = scopedTodoIds.getValue(todo.id),
                 dependencies = todo.dependencies.mapNotNull(scopedTodoIds::get)
             )
         }
-        val scopedPlan = structuredPlan(
-            id = "plan-$conversationId-${parsed.planHash.take(12)}",
-            summary = parsed.summary,
-            markdown = parsed.markdown,
-            planHash = parsed.planHash,
-            todos = scopedTodos
-        )
+        val scopedPlanId = "plan-$conversationId-${parsed.planHash.take(12)}"
         val db = AppDatabase.getDatabase(context.applicationContext)
         val result = db.withTransaction {
             val dao = db.agentWorkflowDao()
@@ -792,18 +1840,21 @@ internal object AgentProjectControlPlane {
 
             val existing = dao.getPlanVersionByHash(
                 conversationId,
-                scopedPlan.planHash
+                parsed.planHash
             )
             val created = existing == null
             val planVersion = existing ?: AgentPlanVersionEntity(
-                id = scopedPlan.id,
+                id = scopedPlanId,
                 conversationId = conversationId,
                 sourcePendingPlanId = pendingPlanId,
                 versionNumber = dao.getNextPlanVersionNumber(conversationId),
-                summary = scopedPlan.summary,
-                planMarkdown = scopedPlan.markdown,
-                structuredJson = scopedPlan.structuredJson,
-                planHash = scopedPlan.planHash,
+                summary = parsed.summary,
+                // planMarkdown and structuredJson are the complete approved
+                // plan. They must not become a lossy projection of runtime
+                // TODOs, because decisions/history can be restored from them.
+                planMarkdown = parsed.markdown,
+                structuredJson = parsed.structuredJson,
+                planHash = parsed.planHash,
                 status = "APPROVED",
                 approvedAt = System.currentTimeMillis()
             ).also { dao.upsertPlanVersion(it) }
@@ -813,8 +1864,8 @@ internal object AgentProjectControlPlane {
                 planVersion.id
             )
             if (todos.isEmpty()) {
-                val knownIds = scopedPlan.todos.map { it.id }.toSet()
-                todos = scopedPlan.todos.mapIndexed { index, todo ->
+                val knownIds = runtimePlan.todos.map { it.id }.toSet()
+                todos = scopedTodos.mapIndexed { index, todo ->
                     val dependencies = todo.dependencies
                         .filter { it in knownIds }
                     AgentTodoEntity(
@@ -848,7 +1899,7 @@ internal object AgentProjectControlPlane {
                 planVersionId = planVersion.id,
                 currentPhaseId = currentTodo?.phaseId,
                 currentTodoId = currentTodo?.id,
-                currentGoal = scopedPlan.summary
+                currentGoal = parsed.summary
             )
             val state = dao.getProjectState(conversationId)
                 ?: error("Project state missing after plan materialization")
@@ -1160,8 +2211,27 @@ internal object AgentProjectControlPlane {
             val dao = db.agentWorkflowDao()
             val invocation = dao.getInvocation(invocationId)
                 ?: error("Invocation no longer exists: $invocationId")
+            invocation.workReportId?.let { existingReportId ->
+                val existingReport = dao.getWorkReport(existingReportId)
+                if (existingReport != null) {
+                    val todo = invocation.todoId?.let { dao.getTodoById(it) }
+                    val state = dao.getProjectState(invocation.conversationId)
+                        ?: error("Project state missing while replaying work report")
+                    return@withTransaction AgentWorkReportTransition(
+                        report = existingReport,
+                        previousTodoStatus = todo?.status,
+                        nextTodoStatus = todo?.status,
+                        nextOwnerRole = todo?.ownerRole,
+                        stateRevision = state.revision
+                    ) to state
+                }
+            }
             val reportId = "report-${UUID.randomUUID()}"
-            val reportStatus = normalizeReportStatus(result.status)
+            val outcome = AgentDurableContractStore.normalizeAgentReportOutcome(
+                result,
+                rawSummary
+            )
+            val reportStatus = outcome.status
             val structuredJson = normalizeStructuredReportJson(
                 rawSummary,
                 reportStatus
@@ -1194,6 +2264,13 @@ internal object AgentProjectControlPlane {
                 invocation.id,
                 report.id
             )
+            dao.finishInvocationExactlyOnce(
+                id = invocation.id,
+                status = reportStatus,
+                resultSummary = report.summary,
+                errorClass = outcome.errorClass,
+                errorMessage = outcome.errorMessage
+            )
 
             var previousTodoStatus: String? = null
             var nextTodoStatus: String? = null
@@ -1202,13 +2279,13 @@ internal object AgentProjectControlPlane {
                 val todo = dao.getTodoById(todoId)
                     ?: error("Invocation TODO disappeared: $todoId")
                 previousTodoStatus = todo.status
-                val outcome = todoOutcomeForReport(
+                val todoOutcome = todoOutcomeForReport(
                     invocation.agentClass,
                     result,
                     reportStatus
                 )
-                nextTodoStatus = outcome.first
-                nextOwnerRole = outcome.second
+                nextTodoStatus = todoOutcome.first
+                nextOwnerRole = todoOutcome.second
                 val transitioned = dao.completeTodoInvocationExactlyOnce(
                     id = todo.id,
                     invocationId = invocation.id,
@@ -1275,16 +2352,35 @@ internal object AgentProjectControlPlane {
         initialOrder: String? = null,
         maxChars: Int = 12_000
     ): String = withContext(Dispatchers.IO) {
-        val dao = AppDatabase.getDatabase(context.applicationContext)
-            .agentWorkflowDao()
+        val database = AppDatabase.getDatabase(context.applicationContext)
+        val dao = database.agentWorkflowDao()
+        val conversation = database.agentChatDao().getConversation(conversationId)
+        val executionProfile = AgentExecutionProfile.normalize(
+            conversation?.executionProfile
+        )
         val state = ensureState(
             context,
             conversationId,
-            goal = initialOrder?.let(::firstMeaningfulLine)
+            goal = initialOrder?.trim()
+        )
+        val contract = dao.getProjectContract(conversationId)
+            ?: AgentDurableContractStore.ensureContract(
+                database = AppDatabase.getDatabase(context.applicationContext),
+                conversationId = conversationId,
+                initialGoal = initialOrder?.trim()
+            )
+        val planningEpisodeId = state.activePlanVersionId
+            ?.takeIf { it.isNotBlank() }
+            ?: "initial-plan"
+        val researchBudget = AgentDurableContractStore.readResearchBudget(
+            database = database,
+            conversationId = conversationId,
+            planningEpisodeId = planningEpisodeId
         )
         val todos = dao.getTodos(conversationId)
         val invocations = dao.getInvocations(conversationId)
         val reports = dao.getRecentWorkReports(conversationId, 6)
+        val decisions = dao.getAllLatestDecisions(conversationId)
         val questions = dao.getPendingQuestions(conversationId)
         val pendingPlan = dao.getPendingPlan(conversationId)
         val activePlan = state.activePlanVersionId?.let {
@@ -1301,35 +2397,127 @@ internal object AgentProjectControlPlane {
             it.status == AgentTodoStatus.BLOCKED
         }
 
-        val sections = mutableListOf<String>()
-        sections += buildString {
+        val controlHeader = buildString {
             appendLine("# Project Control Packet")
             appendLine()
             appendLine("- control_version: $AGENT_CONTROL_PLANE_VERSION")
             appendLine("- state_revision: ${state.revision}")
             appendLine("- mode: ${state.mode}")
-            appendLine(
-                "- goal: ${
-                    state.currentGoal.ifBlank {
-                        initialOrder?.let(::firstMeaningfulLine)
-                            ?: "No active goal recorded."
-                    }.take(600)
-                }"
-            )
+            appendLine("- execution_profile: $executionProfile")
+            appendLine("- goal: durable_contract.initial_goal")
         }.trim()
 
-        activePlan?.let { plan ->
-            sections += buildString {
-                appendLine("## Approved Plan")
-                appendLine("- id: ${plan.id}")
-                appendLine("- version: ${plan.versionNumber}")
-                appendLine("- hash: ${plan.planHash.take(16)}")
-                appendLine("- summary: ${plan.summary.take(500)}")
-                appendLine(
-                    "- full_plan: call plan_read(plan_id=\"${plan.id}\")"
-                )
+        // These sections are durable state. They must be emitted as complete
+        // values so a bounded packet can never silently change the contract.
+        val contractSection = buildString {
+            appendLine("## Durable User Contract")
+            appendLine("- contract_version: ${contract.contractVersion}")
+            appendLine("- initial_goal_source: ${contract.initialGoalSource}")
+            appendLine(
+                "- initial_goal: ${contract.initialGoal.ifBlank { "No initial goal recorded." }}"
+            )
+            appendLine("- no_more_questions: ${contract.noMoreQuestions}")
+            appendLine("- greenfield: ${contract.greenfield}")
+            appendLine("- authority: durable project contract; packet rendering cannot replace initial_goal")
+        }.trim()
+
+        val researchBudgetSection = buildString {
+            appendLine("## Durable Research Budget")
+            appendLine("- planning_episode_id: ${researchBudget.planningEpisodeId}")
+            appendLine(
+                "- web_search: ${researchBudget.searchUsed}/${researchBudget.searchLimit} " +
+                    "used; ${researchBudget.searchRemaining} remaining"
+            )
+            appendLine(
+                "- fetch_url: ${researchBudget.fetchUsed}/${researchBudget.fetchLimit} " +
+                    "used; ${researchBudget.fetchRemaining} remaining"
+            )
+            appendLine("- authority: durable research admission receipts")
+            appendLine("- over_limit_policy: a specific blocker reason is required")
+        }.trim()
+
+        // Exact answer values belong in every packet; verbose provenance and
+        // supersession payloads remain in Room and do not consume model context.
+        val corrections = AgentDurableContractStore.projectUserCorrections(decisions)
+        val decisionsSection = decisions.filterNot(
+            AgentDurableContractStore::isUserCorrectionDecision
+        ).takeIf { it.isNotEmpty() }?.let { values ->
+            buildString {
+                appendLine("## Durable Decisions")
+                values.forEach { decision ->
+                    appendLine("- decision_id: ${decision.id}")
+                    appendLine("  decision_key: ${decision.decisionKey}")
+                    appendLine("  answer: ${decision.answerJson}")
+                    decision.questionId?.let { appendLine("  question_id: $it") }
+                    decision.supersedesDecisionId?.let { appendLine("  supersedes: $it") }
+                }
             }.trim()
         }
+        val correctionsSection = corrections.values.takeIf { it.isNotEmpty() }?.let { values ->
+            buildString {
+                appendLine("## Durable User Corrections")
+                appendLine("- latest_decision_id: ${corrections.latestDecisionId}")
+                values.forEach { correction ->
+                    appendLine("- decision_id: ${correction.decisionId}")
+                    appendLine("  content: ${correction.content}")
+                }
+            }.trim()
+        }
+
+        val sections = mutableListOf<String>().apply {
+            add(controlHeader)
+            add(contractSection)
+            if (shouldIncludeResearchBudgetInControlPacket(executionProfile, state.mode)) {
+                add(researchBudgetSection)
+            }
+            decisionsSection?.let(::add)
+            correctionsSection?.let(::add)
+        }
+
+        activePlan?.let { plan ->
+            sections += renderApprovedPlanControlPacketSection(plan)
+        }
+        val committedArtifactLedger = if (
+            executionProfile == AgentExecutionProfile.DIRECT &&
+            state.mode != PROJECT_MODE_PLAN
+        ) {
+            AgentDurableContractStore.readCommittedArtifactLedger(
+                database,
+                conversationId
+            )
+        } else {
+            null
+        }
+        committedArtifactLedger?.let { sections += it.render() }
+
+        val directBuildStepMissingArtifacts = if (
+            executionProfile == AgentExecutionProfile.DIRECT &&
+            state.mode.equals(PROJECT_MODE_BUILD, ignoreCase = true) &&
+            currentTodo != null
+        ) {
+            committedArtifactLedger?.let {
+                AgentDirectPlanProjection.missingDeclaredBuildArtifacts(
+                    todo = currentTodo,
+                    ledger = it
+                )
+            }.orEmpty()
+        } else {
+            emptyList()
+        }
+        val directBuildStepPartialArtifacts = committedArtifactLedger
+            ?.entries
+            ?.filter { it.operation.equals("partial", ignoreCase = true) }
+            ?.map { it.path }
+            ?.toSet()
+            .orEmpty()
+        val directBuildStepArtifactsComplete =
+            currentTodo?.status == AgentTodoStatus.IN_PROGRESS &&
+                directBuildStepMissingArtifacts.isEmpty() &&
+                currentTodo?.let {
+                    committedArtifactLedger?.let { ledger ->
+                        AgentDirectPlanProjection.buildStepArtifactsAreReadyForFinish(it, ledger)
+                    }
+                } == true
 
         sections += buildString {
             appendLine("## Progress")
@@ -1355,18 +2543,39 @@ internal object AgentProjectControlPlane {
 
         currentTodo?.let { todo ->
             sections += buildString {
+                val optimizedDirectWorkflow =
+                    executionProfile == AgentExecutionProfile.DIRECT
                 appendLine("## Current TODO")
                 appendLine("- id: ${todo.id}")
-                appendLine("- phase: ${todo.phaseId ?: "legacy"}")
+                if (!optimizedDirectWorkflow) {
+                    appendLine("- phase: ${todo.phaseId ?: "legacy"}")
+                }
                 appendLine("- status: ${todo.status}")
-                appendLine("- expected_owner: ${todo.ownerRole ?: "unassigned"}")
+                if (optimizedDirectWorkflow) {
+                    appendLine("- status_scope: planning/verification status, not file existence; consult committed artifacts before choosing the next write")
+                }
+                if (!optimizedDirectWorkflow) {
+                    appendLine("- expected_owner: ${todo.ownerRole ?: "unassigned"}")
+                }
                 appendLine("- task: ${todo.text.take(800)}")
-                val criteria = todo.acceptanceCriteria()
-                if (criteria.isNotEmpty()) {
+                val criteriaProjection = projectTodoAcceptanceCriteriaForPrompt(
+                    todoText = todo.text,
+                    criteria = todo.acceptanceCriteria(),
+                    optimized = optimizedDirectWorkflow
+                )
+                if (criteriaProjection.criteria.isNotEmpty()) {
                     appendLine("- acceptance_criteria:")
-                    criteria.take(6).forEach {
-                        appendLine("  - ${it.take(300)}")
+                    criteriaProjection.criteria.forEach {
+                        val criterion = if (optimizedDirectWorkflow) {
+                            it
+                        } else {
+                            it.take(300)
+                        }
+                        appendLine("  - $criterion")
                     }
+                }
+                if (criteriaProjection.verificationRequired) {
+                    appendLine("- verification_required: true")
                 }
                 val dependencies = todo.dependencies()
                 if (dependencies.isNotEmpty()) {
@@ -1394,20 +2603,6 @@ internal object AgentProjectControlPlane {
             }.trim()
         }
 
-        if (reports.isNotEmpty()) {
-            sections += buildString {
-                appendLine("## Recent Specialist Reports")
-                reports.take(5).forEach { report ->
-                    appendLine(
-                        "- ${report.id}: ${report.agentRole} " +
-                            "${report.status}; " +
-                            "todo=${report.todoId ?: "none"}; " +
-                            "${report.summary.replace(Regex("\\s+"), " ").take(300)}"
-                    )
-                }
-            }.trim()
-        }
-
         if (blockers.isNotEmpty() || questions.isNotEmpty() || pendingPlan != null) {
             sections += buildString {
                 appendLine("## Blocking State")
@@ -1429,19 +2624,121 @@ internal object AgentProjectControlPlane {
                 }
             }.trim()
         }
+        // Everything through the current control/blocking state is required.
+        // Reports remain optional evidence and may be evicted as whole sections.
+        val protectedSectionCount = sections.size
 
-        sections += buildString {
+        if (reports.isNotEmpty()) {
+            sections += buildString {
+                appendLine("## Recent Specialist Reports")
+                reports.take(5).forEach { report ->
+                    appendLine(
+                        "- ${report.id}: ${report.agentRole} " +
+                            "${report.status}; " +
+                            "todo=${report.todoId ?: "none"}; " +
+                            projectAgentReportForControlPacket(
+                                summary = report.summary,
+                                evidenceJson = report.evidenceJson
+                            )
+                    )
+                }
+            }.trim()
+        }
+
+        val actionsSection = buildString {
             appendLine("## Permitted Next Actions")
+            val codebaseDiscoverySuppressed =
+                AgentHarnessPolicy.shouldSuppressCodebaseDiscovery(
+                    greenfield = contract.greenfield,
+                    initialGoal = contract.initialGoal,
+                    corrections = corrections.values.map { it.content }
+                )
             permittedNextActions(
                 state = state,
                 currentTodo = currentTodo,
                 activeInvocations = activeInvocations,
                 pendingQuestionCount = questions.size,
-                pendingPlanPresent = pendingPlan != null
+                pendingPlanPresent = pendingPlan != null,
+                executionProfile = executionProfile,
+                researchBudget = researchBudget,
+                codebaseDiscoverySuppressed = codebaseDiscoverySuppressed,
+                hasCommittedArtifact =
+                    committedArtifactLedger?.let {
+                        it.entries.isNotEmpty() || it.incomplete
+                    } == true,
+                currentBuildStepArtifactsComplete = directBuildStepArtifactsComplete,
+                currentBuildStepMissingArtifacts = directBuildStepMissingArtifacts,
+                currentBuildStepPartialArtifacts = directBuildStepPartialArtifacts
             ).forEach { appendLine("- $it") }
         }.trim()
 
-        boundedSections(sections, maxChars)
+        boundedSectionsWithReservedTail(
+            prefixSections = sections,
+            reservedTail = actionsSection,
+            maxChars = maxChars,
+            protectedSectionCount = protectedSectionCount
+        )
+    }
+
+    /**
+     * Authoritative, request-tail capsule for the single Direct Agent. The
+     * underlying packet renderer already refuses to truncate protected contract,
+     * correction, plan, TODO, and blocking sections. This wrapper makes the
+     * runtime version and one exact next action explicit while retaining the
+     * established packet prefix used by prompt ordering and cache diagnostics.
+     */
+    suspend fun buildDirectControlCapsule(
+        context: Context,
+        conversationId: Long,
+        initialOrder: String? = null,
+        activeHandle: String? = null,
+        latestFailure: String? = null,
+        maxChars: Int = 24_000
+    ): String = withContext(Dispatchers.IO) {
+        val normalizedHandle = activeHandle?.trim()?.takeIf { it.isNotBlank() } ?: "none"
+        val normalizedFailure = latestFailure?.trim()?.takeIf { it.isNotBlank() } ?: "none"
+        val wrapperReserve = 640
+        val packet = buildControlPacket(
+            context = context,
+            conversationId = conversationId,
+            initialOrder = initialOrder,
+            maxChars = (maxChars - wrapperReserve).coerceAtLeast(2_000)
+        )
+        if (isControlPacketCapacityFailure(packet)) return@withContext packet
+        val permittedNextAction = packet
+            .substringAfter("## Permitted Next Actions", missingDelimiterValue = "")
+            .lineSequence()
+            .map(String::trim)
+            .firstOrNull { it.startsWith("- ") }
+            ?.removePrefix("- ")
+            ?.trim()
+        val exactNextAction = directControlCapsuleNextAction(
+            permittedNextAction = permittedNextAction,
+            latestFailure = latestFailure
+        )
+        val capsule = buildString {
+            appendLine("# Project Control Packet — Direct Control Capsule")
+            appendLine()
+            appendLine("- direct_runtime_version: $DIRECT_RUNTIME_VERSION")
+            appendLine("- exact_next_action: $exactNextAction")
+            appendLine("- active_command_or_run: $normalizedHandle")
+            appendLine("- latest_failure: ${normalizedFailure.take(360)}")
+            appendLine("- authority: this tail capsule overrides conflicting historical prose")
+            appendLine()
+            append(packet.substringAfter('\n', missingDelimiterValue = packet).trimStart())
+        }.trim()
+        if (capsule.length <= maxChars) {
+            capsule
+        } else {
+            buildString {
+                appendLine("# Project Control Packet — Direct Control Capsule")
+                appendLine("- control_state_does_not_fit: true")
+                appendLine("- requested_max_chars: $maxChars")
+                appendLine("- required_chars: ${capsule.length}")
+                appendLine("- action: pause with Needs direction before model dispatch")
+                append("- reason: the authoritative Direct capsule is protected from truncation")
+            }
+        }
     }
 
     suspend fun renderCompactionSummary(
@@ -1580,6 +2877,29 @@ internal object AgentProjectControlPlane {
         } else {
             preview.take(maxChars)
         }
+    }
+
+    /**
+     * Renders the approved plan as one parseable canonical field. The full
+     * markdown body is deliberately kept beside its identity and full hash;
+     * a bounded packet returns an explicit capacity marker before this
+     * protected section can be truncated.
+     */
+    internal fun renderApprovedPlanControlPacketSection(
+        plan: AgentPlanVersionEntity
+    ): String {
+        val fullPlan = JSONObject()
+            .put("id", plan.id)
+            .put("version", plan.versionNumber)
+            .put("hash", plan.planHash)
+            .put("plan_markdown", plan.planMarkdown)
+        return buildString {
+            appendLine("## Approved Plan")
+            appendLine("- id: ${plan.id}")
+            appendLine("- version: ${plan.versionNumber}")
+            appendLine("- hash: ${plan.planHash.take(16)}")
+            appendLine("- full_plan_json: ${fullPlan}")
+        }.trim()
     }
 
     fun compactionDecision(
@@ -1891,7 +3211,14 @@ internal object AgentProjectControlPlane {
         currentTodo: AgentTodoEntity?,
         activeInvocations: List<AgentInvocationEntity>,
         pendingQuestionCount: Int,
-        pendingPlanPresent: Boolean
+        pendingPlanPresent: Boolean,
+        executionProfile: String = AgentExecutionProfile.DIRECT,
+        researchBudget: AgentResearchBudget? = null,
+        codebaseDiscoverySuppressed: Boolean = false,
+        hasCommittedArtifact: Boolean = false,
+        currentBuildStepArtifactsComplete: Boolean = false,
+        currentBuildStepMissingArtifacts: List<String> = emptyList(),
+        currentBuildStepPartialArtifacts: Set<String> = emptySet()
     ): List<String> {
         if (pendingPlanPresent) {
             return listOf("wait for the user to resolve the proposed plan")
@@ -1905,7 +3232,41 @@ internal object AgentProjectControlPlane {
                 "read project_state again after it returns"
             )
         }
-        if (state.mode == "PLAN") {
+        if (state.mode.equals(AgentDirectRuntime.MODE_COMPLETE, ignoreCase = true)) {
+            return listOf("wait for a new user task")
+        }
+        if (state.mode.equals(PROJECT_MODE_VERIFY, ignoreCase = true)) {
+            return listOf(
+                "run the focused checks and inspect current runtime or preview evidence",
+                "use check_project_run, check_command, wait_command, or observe_preview as needed",
+                "if a check fails, follow its durable receipt back to BUILD and repair the concrete defect",
+                "call finish_task only after checks pass, with actual artifacts and validation evidence",
+                "do not write files, edit files, apply patches, or install dependencies while VERIFY is active"
+            )
+        }
+        if (state.mode.equals(PROJECT_MODE_PLAN, ignoreCase = true)) {
+            if (executionProfile == AgentExecutionProfile.DIRECT) {
+                if (codebaseDiscoverySuppressed) {
+                    return listOf(
+                        "return one bounded actionable Markdown plan now; the greenfield/no-scout declaration completes inspection, no external research is required, and implementation choices belong to the Direct Agent"
+                    )
+                }
+                val researchAction = researchBudget?.let { budget ->
+                    if (budget.exhausted) {
+                        "use the collected evidence; request additional research only with a specific blocker reason"
+                    } else {
+                        "research only when an external fact is required " +
+                            "(web_search ${budget.searchUsed}/${budget.searchLimit}; " +
+                            "fetch_url ${budget.fetchUsed}/${budget.fetchLimit})"
+                    }
+                } ?: "research only when an external fact is required"
+                return listOf(
+                    "inspect only the project files required to make the plan",
+                    researchAction,
+                    "choose algorithms, libraries, stacks, and tests yourself; ask only for a genuine user-owned blocker",
+                    "return one bounded actionable Markdown plan when it is ready"
+                )
+            }
             return buildList {
                 if (AgentService.isBuiltInAgentEnabled("CODEBASE_SCOUT")) {
                     add("delegate repository discovery to CODEBASE_SCOUT")
@@ -1922,7 +3283,45 @@ internal object AgentProjectControlPlane {
         }
         return when (currentTodo?.status) {
             AgentTodoStatus.READY,
+            AgentTodoStatus.IN_PROGRESS,
             AgentTodoStatus.NEEDS_FIX ->
+                if (executionProfile == AgentExecutionProfile.DIRECT) {
+                    buildList {
+                        if (currentBuildStepPartialArtifacts.isNotEmpty()) {
+                            val nextArtifact = currentBuildStepPartialArtifacts.sorted().first()
+                            add(
+                                "extend the partial artifact with edit_file now: path=$nextArtifact; " +
+                                    "old_text=${AgentHarnessPolicy.DIRECT_EXTEND_ANCHOR}; new_text must stay below 5 KiB and retain exactly one ${AgentHarnessPolicy.DIRECT_EXTEND_ANCHOR} anchor until the file is complete, then remove the anchor in the final edit"
+                            )
+                        } else if (currentBuildStepArtifactsComplete) {
+                            add(
+                                "call finish_task now with the committed artifacts and evidence; this closes BUILD only and still requires VERIFY checks"
+                            )
+                        } else if (currentBuildStepMissingArtifacts.isNotEmpty()) {
+                            val nextArtifact = currentBuildStepMissingArtifacts.first()
+                            add(
+                                "create the next missing approved artifact with write_file: $nextArtifact; " +
+                                    "content must stay below 5 KiB; if incomplete, end with exactly one ${AgentHarnessPolicy.DIRECT_EXTEND_ANCHOR} anchor; " +
+                                    "remaining declared artifacts: " + currentBuildStepMissingArtifacts.joinToString(", ")
+                            )
+                        } else if (
+                            codebaseDiscoverySuppressed &&
+                            !hasCommittedArtifact
+                        ) {
+                            add(
+                                "call write_file now for the first artifact required by the current approved-plan step; greenfield inspection is complete, so do not read, list, or search first"
+                            )
+                        } else {
+                            add(
+                                "complete only the current approved-plan step: ${currentTodo.text.take(320)}"
+                            )
+                        }
+                        add("use committed artifact receipts to preserve completed writes and do not repeat successful mutations")
+                        add("a TODO awaiting verification does not mean its files are missing; do not recreate completed artifacts without a concrete defect")
+                        add("when this step is satisfied, call finish_task with its artifacts and evidence; the runtime will advance to the next approved step")
+                        add("on the final step, run focused checks and preview inspection before finish_task")
+                    }
+                } else
                 if (AgentService.isBuiltInAgentEnabled("CODER")) {
                     listOf(
                         "delegate ${currentTodo.id} to CODER",
@@ -1932,12 +3331,24 @@ internal object AgentProjectControlPlane {
                     listOf("enable CODER in Agent settings or resolve the TODO manually")
                 }
             AgentTodoStatus.READY_FOR_REVIEW ->
+                if (executionProfile == AgentExecutionProfile.DIRECT) {
+                    listOf(
+                        "review the current TODO directly",
+                        "report review findings with finish_task"
+                    )
+                } else
                 if (AgentService.isBuiltInAgentEnabled("REVIEWER")) {
                     listOf("delegate ${currentTodo.id} to REVIEWER")
                 } else {
                     listOf("enable REVIEWER or explicitly accept review being disabled")
                 }
             AgentTodoStatus.READY_FOR_VERIFICATION ->
+                if (executionProfile == AgentExecutionProfile.DIRECT) {
+                    listOf(
+                        "verify the current TODO directly",
+                        "report verification evidence with finish_task"
+                    )
+                } else
                 if (AgentService.isBuiltInAgentEnabled("EXECUTOR")) {
                     listOf("delegate ${currentTodo.id} to EXECUTOR")
                 } else {
@@ -1965,25 +3376,86 @@ internal object AgentProjectControlPlane {
 
     private fun boundedSections(
         sections: List<String>,
-        maxChars: Int
+        maxChars: Int,
+        minimumChars: Int = 1_500
     ): String {
-        val limit = maxChars.coerceAtLeast(1_500)
+        val limit = maxChars.coerceAtLeast(minimumChars)
         val builder = StringBuilder()
         sections.forEach { section ->
             val separator = if (builder.isEmpty()) "" else "\n\n"
             if (builder.length + separator.length + section.length <= limit) {
                 builder.append(separator).append(section)
-            } else if (builder.length < limit) {
-                val remaining = limit - builder.length - separator.length
-                if (remaining > 100) {
-                    builder.append(separator)
-                    builder.append(section.take(remaining))
-                }
-                return@forEach
             }
+            // Optional report sections are atomic: dropping one is safe,
+            // while cutting it can expose a partial opaque ID as a valid one.
         }
-        return builder.toString().take(limit)
+        return builder.toString()
     }
+
+    /** Keeps the action tail visible when optional reports would fill a packet. */
+    internal fun boundedSectionsWithReservedTail(
+        prefixSections: List<String>,
+        reservedTail: String,
+        maxChars: Int,
+        protectedSectionCount: Int = 0
+    ): String {
+        val limit = maxChars.coerceAtLeast(1)
+        val protectedCount = protectedSectionCount.coerceIn(0, prefixSections.size)
+        val protected = joinPacketSections(prefixSections.take(protectedCount))
+        val tail = reservedTail.trim()
+        val required = joinPacketSections(
+            listOf(protected, tail).filter { it.isNotBlank() }
+        )
+
+        // Contract and decisions are authoritative. If they cannot coexist
+        // with the action tail at the requested capacity, return an explicit
+        // state marker instead of silently truncating either one.
+        if (protectedCount > 0 && required.length > limit) {
+            return controlStateDoesNotFit(
+                maxChars = maxChars,
+                requiredChars = required.length,
+                protectedChars = protected.length,
+                actionChars = tail.length
+            )
+        }
+
+        val optional = prefixSections.drop(protectedCount)
+        val optionalBudget = (
+            limit - protected.length - tail.length -
+                if (protected.isNotBlank() && tail.isNotBlank()) 4 else 0
+            ).coerceAtLeast(0)
+        val optionalText = if (optionalBudget > 0) {
+            boundedSections(
+                sections = optional,
+                maxChars = optionalBudget,
+                minimumChars = 1
+            )
+        } else {
+            ""
+        }
+        return joinPacketSections(
+            listOf(protected, optionalText, tail).filter { it.isNotBlank() }
+        ).take(limit)
+    }
+
+    private fun joinPacketSections(sections: List<String>): String =
+        sections.filter { it.isNotBlank() }.joinToString("\n\n")
+
+    private fun controlStateDoesNotFit(
+        maxChars: Int,
+        requiredChars: Int,
+        protectedChars: Int,
+        actionChars: Int
+    ): String = buildString {
+        appendLine("# Project Control Packet")
+        appendLine("- control_state_does_not_fit: true")
+        appendLine("- requested_max_chars: $maxChars")
+        appendLine("- durable_contract_and_decisions_chars: $protectedChars")
+        appendLine("- durable_contract_plus_next_actions_chars: $requiredChars")
+        appendLine("- next_actions_chars: $actionChars")
+        appendLine("- action: increase the control packet capacity before continuing")
+        appendLine("- reason: durable contract and exact user answers are protected from truncation")
+    }.trim()
 
     private fun inferOwnerRole(text: String): String {
         val lower = text.lowercase(Locale.ROOT)
@@ -2037,6 +3509,82 @@ internal object AgentProjectControlPlane {
             "PENDING" -> AgentTodoStatus.PENDING
             else -> AgentTodoStatus.PENDING
         }
+
+    private fun verificationFields(rawResult: String): Map<String, String> {
+        val fields = linkedMapOf<String, String>()
+        rawResult.lineSequence().forEach { line ->
+            val separator = line.indexOf(':')
+            if (separator <= 0) return@forEach
+            val key = line.substring(0, separator)
+                .trim()
+                .lowercase(Locale.ROOT)
+                .replace(' ', '_')
+                .replace('-', '_')
+            val value = line.substring(separator + 1)
+                .trim()
+                .trim('"')
+            if (key.isNotBlank() && value.isNotBlank()) fields[key] = value
+        }
+        runCatching {
+            JSONObject(rawResult.trim())
+        }.onSuccess { json ->
+            listOf(
+                "status",
+                "state",
+                "runtime",
+                "preview_url",
+                "url",
+                "exit_code",
+                "exitCode",
+                "error",
+                "error_message",
+                "error_class",
+                "error_code",
+                "load_progress",
+                "screenshot_path",
+                "screenshot_bytes",
+                "body_text",
+                "controls",
+                "dom_truncated"
+            ).forEach { key ->
+                val value = json.opt(key)
+                if (value != null && value != JSONObject.NULL) {
+                    fields[
+                        key.lowercase(Locale.ROOT).replace('-', '_')
+                    ] = value.toString()
+                }
+            }
+        }
+        if (!fields.containsKey("status") && fields.containsKey("state")) {
+            fields["status"] = fields.getValue("state")
+        }
+        return fields
+    }
+
+    private fun hasStructuredVerificationError(fields: Map<String, String>): Boolean {
+        val clearValues = setOf("", "false", "0", "none", "null", "ok", "success", "no error", "no_error")
+        fun isPresent(key: String): Boolean {
+            val value = fields[key]?.trim()?.lowercase(Locale.ROOT) ?: return false
+            return value !in clearValues
+        }
+        if (isPresent("error") || isPresent("error_message") || isPresent("error_class")) {
+            return true
+        }
+        val errorCode = fields["error_code"]?.trim()?.lowercase(Locale.ROOT)
+        return errorCode != null && errorCode !in clearValues
+    }
+
+    private fun parseVerificationExitCode(
+        fields: Map<String, String>,
+        rawResult: String
+    ): Int? {
+        fields["exit_code"]?.toIntOrNull()?.let { return it }
+        fields["exitcode"]?.toIntOrNull()?.let { return it }
+        return Regex(
+            "exit(?:[_ -]?code)\\s*[:=]\\s*(-?\\d+)",
+            RegexOption.IGNORE_CASE
+        ).find(rawResult)?.groupValues?.getOrNull(1)?.toIntOrNull()
+    }
 
     private fun nonRegressiveTodoStatus(
         existing: String,

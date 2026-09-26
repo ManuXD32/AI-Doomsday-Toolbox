@@ -56,6 +56,28 @@ class AgentToolContractFixTest {
     }
 
     @Test
+    fun `structured coder success requires verification evidence`() {
+        val result = runCatching {
+            AgentRuntimeSupport.resolveFinishTaskPayload(
+                agentLabel = "CODER",
+                arguments = mapOf(
+                    "summary" to JSONObject()
+                        .put("status", "SUCCESS")
+                        .put("summary", "Implemented the change.")
+                        .put("changed_files", listOf("src/Main.kt"))
+                        .put("intent_per_file", mapOf("src/Main.kt" to "Fix parser"))
+                        .put("verification_reads", emptyList<String>())
+                        .put("remaining_risks", emptyList<String>())
+                        .toString()
+                )
+            )
+        }
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("verification_reads"))
+    }
+
+    @Test
     fun `finish task accepts blocked plain report`() {
         val resolved = AgentRuntimeSupport.resolveFinishTaskPayload(
             agentLabel = "REVIEWER",

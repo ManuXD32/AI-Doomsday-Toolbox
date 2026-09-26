@@ -277,7 +277,8 @@ class OllamaService(context: Context) {
         val message: ChatMessage,
         val done: Boolean,
         val toolCalls: List<ToolCall>? = null,
-        val usage: ChatUsage? = null
+        val usage: ChatUsage? = null,
+        val finishReason: String? = null
     )
 
     data class ChatUsage(
@@ -548,7 +549,9 @@ class OllamaService(context: Context) {
             val fullThinking = StringBuilder()
             var toolCalls: MutableList<ToolCall>? = null
             var usage: ChatUsage? = null
+            var finishReason: String? = null
             var insideThinkTag = false
+            val streamBudget = LlamaServerSseResponseBudget(maxOutputTokens)
 
             if (trackedConn.responseCode != 200) {
                 val errorBody = try {
@@ -566,6 +569,8 @@ class OllamaService(context: Context) {
                     val jsonLine = line ?: continue
                     val chunk = JSONObject(jsonLine)
                     parseUsageChunk(chunk)?.let { usage = it }
+                    chunk.optString("done_reason").takeIf { it.isNotBlank() && it != "null" }
+                        ?.let { finishReason = it }
                     val message = chunk.optJSONObject("message") ?: continue
                     val content = message.optString("content", "").takeUnless { it.equals("null", ignoreCase = true) }.orEmpty()
                     val thinkingField = message.optString("thinking", message.optString("reasoning_content", ""))
@@ -573,6 +578,7 @@ class OllamaService(context: Context) {
                         .orEmpty()
 
                     if (thinkingField.isNotEmpty()) {
+                        streamBudget.accountSemanticCharacters(thinkingField.length)
                         fullThinking.append(thinkingField)
                         onChunk(null, thinkingField)
                     }
@@ -585,12 +591,14 @@ class OllamaService(context: Context) {
                                 if (remaining.contains("<think>")) {
                                     val parts = remaining.split("<think>", limit = 2)
                                     if (parts[0].isNotEmpty()) {
+                                        streamBudget.accountSemanticCharacters(parts[0].length)
                                         fullContent.append(parts[0])
                                         onChunk(parts[0], null)
                                     }
                                     insideThinkTag = true
                                     remaining = if (parts.size > 1) parts[1] else ""
                                 } else {
+                                    streamBudget.accountSemanticCharacters(remaining.length)
                                     fullContent.append(remaining)
                                     onChunk(remaining, null)
                                     remaining = ""
@@ -599,12 +607,14 @@ class OllamaService(context: Context) {
                                 if (remaining.contains("</think>")) {
                                     val parts = remaining.split("</think>", limit = 2)
                                     if (parts[0].isNotEmpty()) {
+                                        streamBudget.accountSemanticCharacters(parts[0].length)
                                         fullThinking.append(parts[0])
                                         onChunk(null, parts[0])
                                     }
                                     insideThinkTag = false
                                     remaining = if (parts.size > 1) parts[1] else ""
                                 } else {
+                                    streamBudget.accountSemanticCharacters(remaining.length)
                                     fullThinking.append(remaining)
                                     onChunk(null, remaining)
                                     remaining = ""
@@ -650,7 +660,8 @@ class OllamaService(context: Context) {
                 ),
                 done = true,
                 toolCalls = toolCalls,
-                usage = usage
+                usage = usage,
+                finishReason = finishReason
             )
         }
     }

@@ -2,7 +2,6 @@ package com.example.llamadroid.service
 
 import java.io.File
 import java.math.BigDecimal
-import java.util.concurrent.TimeUnit
 
 private val WHISPER_HELP_FLAG_REGEX =
     Regex("""(?<![A-Za-z0-9_-])(--[A-Za-z0-9][A-Za-z0-9_-]*|-[A-Za-z])(?![A-Za-z0-9_-])""")
@@ -43,11 +42,9 @@ fun parseWhisperBinaryCapabilities(helpText: String): WhisperBinaryCapabilities 
     )
 
 object WhisperBinaryCapabilityCache {
-    private val cache = mutableMapOf<String, WhisperBinaryCapabilities>()
-
     @Synchronized
     fun clear() {
-        cache.clear()
+        NativeCliHelpProbe.clear()
     }
 
     fun capabilitiesFor(
@@ -55,45 +52,33 @@ object WhisperBinaryCapabilityCache {
         workingDirectory: File,
         environment: Map<String, String>
     ): WhisperBinaryCapabilities {
-        val key = listOf(
-            binary.absolutePath,
-            binary.length().toString(),
-            binary.lastModified().toString()
-        ).joinToString("|")
-        synchronized(this) {
-            cache[key]?.let { return it }
-        }
-
-        val processBuilder = ProcessBuilder(binary.absolutePath, "--help")
-            .directory(workingDirectory)
-            .redirectErrorStream(true)
-        processBuilder.environment().putAll(environment)
-        val process = processBuilder.start()
-        val output = StringBuilder()
-        val readerThread = Thread(
-            {
-                process.inputStream.bufferedReader().useLines { lines ->
-                    lines.forEach { line -> output.appendLine(line) }
-                }
-            },
-            "whisper-capability-reader"
-        ).apply { isDaemon = true; start() }
-        if (!process.waitFor(5, TimeUnit.SECONDS)) {
-            process.destroyForcibly()
-            readerThread.join(1_000)
-            throw IllegalStateException("Timed out while reading whisper.cpp capabilities")
-        }
-        readerThread.join()
-        val parsed = parseWhisperBinaryCapabilities(output.toString())
-        if (parsed.supportedFlags.isEmpty()) {
+        val surfaces = NativeCliHelpProbe.probe(
+            binary = binary,
+            workingDirectory = workingDirectory,
+            environment = environment,
+            timeoutMs = WHISPER_HELP_TIMEOUT_MS,
+            maxOutputChars = WHISPER_HELP_OUTPUT_CHARS
+        )
+        if (surfaces.isEmpty()) {
             throw IllegalStateException("whisper.cpp did not expose a readable help surface")
         }
-        synchronized(this) {
-            cache[key] = parsed
+        val parsed = surfaces.map(::parseWhisperBinaryCapabilities)
+            .maxByOrNull { it.supportedFlags.size }
+            ?: throw IllegalStateException("whisper.cpp did not expose a readable help surface")
+        if (parsed.supportedFlags.isEmpty()) {
+            throw IllegalStateException("whisper.cpp did not expose a readable help surface")
         }
         return parsed
     }
 }
+
+internal const val WHISPER_MISSING_MODEL_EXIT_CODE = 3
+
+internal fun whisperExitCodeIndicatesMissingModel(exitCode: Int): Boolean =
+    exitCode == WHISPER_MISSING_MODEL_EXIT_CODE
+
+private const val WHISPER_HELP_TIMEOUT_MS = 5_000L
+private const val WHISPER_HELP_OUTPUT_CHARS = 256 * 1024
 
 fun whisperCpuEnvironment(
     libraryPath: String,

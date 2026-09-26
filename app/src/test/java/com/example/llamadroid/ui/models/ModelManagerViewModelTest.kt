@@ -26,6 +26,7 @@ class ModelManagerViewModelTest {
         assertTrue(model.isVision)
         assertEquals(ModelType.LLM, model.type)
         assertEquals(file.length(), model.sizeBytes)
+        assertEquals("USER_OVERRIDE", model.classificationSource)
     }
 
     @Test
@@ -41,5 +42,6 @@ class ModelManagerViewModelTest {
         assertEquals(ModelType.EMBEDDING, model.type)
         assertTrue(model.isDownloaded)
         assertFalse(model.isVision)
+        assertEquals("USER_OVERRIDE", model.classificationSource)
     }
 }

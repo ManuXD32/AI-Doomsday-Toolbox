@@ -41,6 +41,7 @@ import com.example.llamadroid.service.LlamaSpeculativeMode
 import com.example.llamadroid.service.LlamaLoadMode
 import com.example.llamadroid.service.LlamaLoraSpec
 import com.example.llamadroid.service.LlamaServerLaunchProfile
+import com.example.llamadroid.service.LlamaVideoProfileLimits
 import com.example.llamadroid.service.effectiveSpeculativeDraftPath
 import com.example.llamadroid.service.speculativeDraftModelsFor
 import com.example.llamadroid.ui.components.AppChromeDefaults
@@ -497,6 +498,9 @@ fun LLMSettingsScreen(navController: NavController) {
     val selectedLlmLoraPath by settingsRepo.selectedLlmLoraPath.collectAsState()
     val llamaLoadMode by settingsRepo.llamaLoadMode.collectAsState()
     val enableVision by settingsRepo.enableVision.collectAsState()
+    val videoEnabled by settingsRepo.llamaVideoEnabled.collectAsState()
+    val videoFps by settingsRepo.llamaVideoFps.collectAsState()
+    val videoTimestampIntervalMs by settingsRepo.llamaVideoTimestampIntervalMs.collectAsState()
     val llmNativeBinarySelection by settingsRepo.llmNativeBinarySelection.collectAsState()
     val llamaOpenClCpuTargetGpuDraft by settingsRepo.llamaOpenClCpuTargetGpuDraft.collectAsState()
     val effectiveLlmBinary = remember(llmNativeBinarySelection) {
@@ -2059,6 +2063,74 @@ fun LLMSettingsScreen(navController: NavController) {
                                         Text(if (selectedMmprojPath != null) stringResource(R.string.action_change) else stringResource(R.string.action_select))
                                     }
                                 }
+                            }
+
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        stringResource(R.string.llm_video_settings_title),
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        stringResource(R.string.llm_video_settings_desc),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = videoEnabled,
+                                    onCheckedChange = settingsRepo::setLlamaVideoEnabled
+                                )
+                            }
+
+                            if (videoEnabled) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    stringResource(R.string.llm_video_server_fps, videoFps),
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                                Slider(
+                                    value = videoFps.coerceIn(
+                                        LlamaVideoProfileLimits.MIN_FPS,
+                                        LlamaVideoProfileLimits.MAX_FPS
+                                    ),
+                                    onValueChange = settingsRepo::setLlamaVideoFps,
+                                    valueRange = LlamaVideoProfileLimits.MIN_FPS..
+                                        LlamaVideoProfileLimits.MAX_FPS,
+                                    steps = 18
+                                )
+                                Text(
+                                    stringResource(
+                                        R.string.llm_video_timestamp_interval,
+                                        videoTimestampIntervalMs
+                                    ),
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                                Slider(
+                                    value = videoTimestampIntervalMs.toFloat().coerceIn(
+                                        LlamaVideoProfileLimits.MIN_TIMESTAMP_INTERVAL_MS.toFloat(),
+                                        LlamaVideoProfileLimits.MAX_TIMESTAMP_INTERVAL_MS.toFloat()
+                                    ),
+                                    onValueChange = {
+                                        settingsRepo.setLlamaVideoTimestampIntervalMs(
+                                            (it / LlamaVideoProfileLimits.TIMESTAMP_INTERVAL_STEP_MS)
+                                                .toInt()
+                                                .times(LlamaVideoProfileLimits.TIMESTAMP_INTERVAL_STEP_MS)
+                                        )
+                                    },
+                                    valueRange = LlamaVideoProfileLimits.MIN_TIMESTAMP_INTERVAL_MS.toFloat()..
+                                        LlamaVideoProfileLimits.MAX_TIMESTAMP_INTERVAL_MS.toFloat()
+                                )
+                                Text(
+                                    stringResource(R.string.llm_video_global_policy_hint),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                         }
                     }

@@ -51,6 +51,10 @@ data class DownloadTaskEntity(
     val artifactFamily: String? = null,
     val artifactRole: String? = null,
     val pendingArtifactId: String? = null,
+    /** Classification source for the effective task selection. */
+    @androidx.room.ColumnInfo(defaultValue = "'LEGACY'") val classificationSource: String = "LEGACY",
+    /** Bounded inspector evidence copied when a task is inspected/finalized. */
+    @androidx.room.ColumnInfo(defaultValue = "NULL") val detectedClassificationJson: String? = null,
     @androidx.room.ColumnInfo(defaultValue = "0") val stageOnly: Boolean = false,
     val status: String = DOWNLOAD_TASK_STATUS_ACTIVE,
     val bytesDownloaded: Long = 0L,
@@ -82,15 +86,26 @@ interface DownloadTaskDao {
     @Query("SELECT * FROM download_tasks WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): DownloadTaskEntity?
 
-    @Query("SELECT * FROM download_tasks WHERE filename = :filename LIMIT 1")
-    suspend fun getByFilename(filename: String): DownloadTaskEntity?
+    @Query("SELECT * FROM download_tasks WHERE filename = :filename ORDER BY createdAt DESC")
+    suspend fun getByFilename(filename: String): List<DownloadTaskEntity>
+
+    /** Reuses an in-flight source request instead of allocating a second file name. */
+    @Query(
+        "SELECT * FROM download_tasks WHERE url = :url AND modelType = :modelType " +
+            "AND status IN ('ACTIVE', 'RESUMABLE') ORDER BY updatedAt DESC LIMIT 1"
+    )
+    suspend fun getActiveByUrlAndModelType(
+        url: String,
+        modelType: String
+    ): DownloadTaskEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(task: DownloadTaskEntity)
 
     @Query(
         "UPDATE download_tasks SET status = :status, bytesDownloaded = :bytesDownloaded, " +
-            "totalBytes = :totalBytes, lastError = :lastError, updatedAt = :updatedAt WHERE id = :id"
+            "totalBytes = CASE WHEN :totalBytes IS NULL AND :status != 'ACTIVE' " +
+            "THEN totalBytes ELSE :totalBytes END, lastError = :lastError, updatedAt = :updatedAt WHERE id = :id"
     )
     suspend fun updateState(
         id: String,

@@ -1,0 +1,9 @@
+<resources>
+    <string name="video_bundle_capability">Reconocimiento de vídeo · Solo visual</string>
+    <string name="video_bundle_smol_title">Reconocimiento de vídeo · SmolVLM2 500M</string>
+    <string name="video_bundle_smol_desc">La opción más pequeña para eventos visuales y preguntas básicas sobre vídeos. No comprende la pista de audio.</string>
+    <string name="video_bundle_qwen3_title">Reconocimiento de vídeo · Qwen2.5-VL 3B</string>
+    <string name="video_bundle_qwen3_desc">Equilibrio recomendado para eventos visuales, cronologías y texto visible. No comprende la pista de audio.</string>
+    <string name="video_bundle_qwen7_title">Reconocimiento de vídeo · Qwen2.5-VL 7B</string>
+    <string name="video_bundle_qwen7_desc">Modelo más grande para análisis visual detallado; requiere más memoria. No comprende la pista de audio.</string>
+</resources>

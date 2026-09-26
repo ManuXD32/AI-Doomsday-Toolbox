@@ -1,3 +1,6 @@
+import java.security.MessageDigest
+import java.util.zip.ZipFile
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.jetbrains.kotlin.android)
@@ -10,6 +13,26 @@ plugins {
 val isFatApkBuild = providers.gradleProperty("fatApkBuild")
     .map(String::toBoolean)
     .orElse(false)
+
+// Stable Audio's public C ABI is audited against this AAR, not LiteRT HEAD.
+val stableAudioLiteRtLmVersion = "0.12.0"
+val stableAudioRuntimeAbi by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isTransitive = false
+}
+
+// Explicit emulator carrier. It never changes production release ABIs or packaged assets.
+val isHarnessQaX86 = providers.gradleProperty("adtHarnessQaX86").map(String::toBoolean).orElse(false)
+val isHarnessQaMinified = providers.gradleProperty("adtHarnessQaMinified").map(String::toBoolean).orElse(false)
+require(!isHarnessQaMinified.get() || isHarnessQaX86.get()) {
+    "Minified Harness QA requires the isolated x86 emulator carrier."
+}
+if (isHarnessQaX86.get()) {
+    require(gradle.startParameter.taskNames.none { it.contains("release", ignoreCase = true) }) {
+        "The x86_64 Harness carrier is debug-only; release artifacts must remain ARM64."
+    }
+}
 
 val parquetVersion = "1.15.2"
 val parquetHadoopAndroid by configurations.creating {
@@ -31,6 +54,63 @@ val strippedParquetHadoopJar by tasks.registering(Jar::class) {
         // parquet-column carries the complete shaded fastutil package. Removing the partial
         // copy from parquet-hadoop avoids Android release duplicate-class failures.
         exclude("shaded/parquet/it/unimi/dsi/fastutil/**")
+    }
+}
+
+// The Termux terminal libraries provide the mature Android terminal emulator and view used by
+// Local Debian. Their published v0.118.0 emulator AAR contains a 4 KiB-aligned libtermux.so, so
+// both AARs are pinned by digest and repacked here. The native helper is built from the same tag
+// by this app's NDK 29/CMake toolchain with 16 KiB page alignment.
+val termuxTerminalVersion = "0.118.0"
+val termuxTerminalEmulatorAar by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isTransitive = false
+}
+val termuxTerminalViewAar by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isTransitive = false
+}
+
+fun sha256ZipEntry(file: File, entryName: String): String = ZipFile(file).use { archive ->
+    val entry = requireNotNull(archive.getEntry(entryName)) { "Missing $entryName in ${file.name}" }
+    MessageDigest.getInstance("SHA-256")
+        .digest(archive.getInputStream(entry).use { it.readBytes() })
+        .joinToString("") { "%02x".format(it) }
+}
+
+val strippedTermuxTerminalEmulatorAar by tasks.registering(Zip::class) {
+    archiveBaseName.set("termux-terminal-emulator-pinned")
+    archiveVersion.set(termuxTerminalVersion)
+    archiveExtension.set("aar")
+    destinationDirectory.set(layout.buildDirectory.dir("generated/termux-terminal"))
+    val sourceAar = termuxTerminalEmulatorAar.incoming.files
+    inputs.files(sourceAar)
+    from({ zipTree(sourceAar.singleFile) }) {
+        exclude("jni/**")
+    }
+    doFirst {
+        val source = sourceAar.singleFile
+        require(sha256ZipEntry(source, "classes.jar") == "7f8fa017f6add4faa7e2839bc3b1566c7f235b4c053eb8f0178cea9cb8a982c2") {
+            "Unexpected Termux terminal-emulator v$termuxTerminalVersion classes digest"
+        }
+    }
+}
+
+val pinnedTermuxTerminalViewAar by tasks.registering(Zip::class) {
+    archiveBaseName.set("termux-terminal-view-pinned")
+    archiveVersion.set(termuxTerminalVersion)
+    archiveExtension.set("aar")
+    destinationDirectory.set(layout.buildDirectory.dir("generated/termux-terminal"))
+    val sourceAar = termuxTerminalViewAar.incoming.files
+    inputs.files(sourceAar)
+    from({ zipTree(sourceAar.singleFile) })
+    doFirst {
+        val source = sourceAar.singleFile
+        require(sha256ZipEntry(source, "classes.jar") == "9bceb16dc4d35f412aff579a11fcf4498bd5935dbbee85b9adb11c4ea3ec9068") {
+            "Unexpected Termux terminal-view v$termuxTerminalVersion classes digest"
+        }
     }
 }
 ksp {
@@ -62,12 +142,14 @@ android {
             useSupportLibrary = true
         }
         buildConfigField("boolean", "IS_FAT_APK_BUILD", isFatApkBuild.get().toString())
+        buildConfigField("boolean", "HARNESS_QA_X86", isHarnessQaX86.get().toString())
         manifestPlaceholders["gwpAsanMode"] = "never"
         
         // Limit to arm64 only (CPU features detection uses ARM-specific headers)
         ndk {
-            abiFilters += listOf("arm64-v8a")
+            abiFilters += if (isHarnessQaX86.get()) listOf("x86_64") else listOf("arm64-v8a")
         }
+        externalNativeBuild.cmake.arguments += "-DADT_HARNESS_QA_X86=${if (isHarnessQaX86.get()) "ON" else "OFF"}"
     }
 
     signingConfigs {
@@ -86,6 +168,14 @@ android {
     }
 
     buildTypes {
+        getByName("debug") {
+            if (isHarnessQaX86.get()) applicationIdSuffix = ".harnessqa"
+            if (isHarnessQaMinified.get()) {
+                isMinifyEnabled = true
+                isShrinkResources = true
+                proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            }
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -132,9 +222,17 @@ android {
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.10"
     }
+    androidResources {
+        // Debian and Harness payloads are already XZ-compressed. Avoid a second ZIP
+        // compression pass during packaging and decompression while installing them.
+        noCompress += "xz"
+    }
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            // Dependency inventories are build metadata duplicated by Hadoop and Apache SSHD;
+            // they are not runtime service descriptors and do not belong in the Android bundle.
+            excludes += "META-INF/DEPENDENCIES"
             // Exclude version files that conflict between dynamic feature modules
             excludes += "META-INF/*.version"
             excludes += "META-INF/versions/**"
@@ -162,9 +260,15 @@ android {
         }
     }
     
+    testOptions {
+        // Room integration tests use the canonical resource catalog and world manifests.
+        unitTests.isIncludeAndroidResources = true
+    }
+
     // Asset Packs for on-demand native binary delivery
     assetPacks += setOf(
-        ":asset_upscaler"
+        ":asset_upscaler",
+        ":asset_debian"
     )
     
     // Dynamic Features for native binaries execution (Install-Time/On-Demand)
@@ -203,6 +307,72 @@ val generateTamaDialogCatalog by tasks.registering(Exec::class) {
 
 android.sourceSets["main"].assets.srcDir(tamaDialogGeneratedAssets)
 android.sourceSets["androidTest"].assets.srcDir("$projectDir/schemas")
+if (isHarnessQaX86.get()) {
+    android.sourceSets["debug"].assets.srcDir(rootProject.file("generated/harness-qa/assets"))
+    android.sourceSets["debug"].jniLibs.srcDir(rootProject.file("generated/harness-qa/jniLibs"))
+}
+
+val verifyPackagedProotNative by tasks.registering {
+    val nativeDirectory = file("src/main/jniLibs/arm64-v8a")
+    val requiredArtifacts = listOf(
+        "libproot.so",
+        "libproot_loader.so",
+        "libproot_broker.so",
+        "libandroid-shmem.so",
+        "libtalloc_2.so"
+    ).map(nativeDirectory::resolve)
+    inputs.files(requiredArtifacts)
+    doLast {
+        requiredArtifacts.forEach { artifact ->
+            require(artifact.isFile && artifact.length() > 0L) {
+                "Missing packaged arm64 Debian PRoot artifact: ${artifact.absolutePath}"
+            }
+        }
+        val prootElf = requiredArtifacts.first().readBytes().toString(Charsets.ISO_8859_1)
+        require(prootElf.contains("\$ORIGIN")) {
+            "Packaged PRoot must resolve adjacent signed dependencies through an origin-relative RUNPATH"
+        }
+        require(!prootElf.contains("/data/data/com.termux/files/usr/lib\u0000")) {
+            "Packaged PRoot still contains the non-relocatable Termux RUNPATH"
+        }
+    }
+}
+
+val verifyPackagedMetadataPrivacy by tasks.registering {
+    group = "verification"
+    description = "Reject build-host home paths in shipped JSON metadata."
+    val metadata = fileTree("src/main/assets") { include("**/*.json") }
+    inputs.files(metadata)
+    doLast {
+        val hostHome = Regex("/(?:home|Users)/[^/\\s\"\\\\]+")
+        metadata.files.forEach { file ->
+            require(!hostHome.containsMatchIn(file.readText())) {
+                "Private build-host path in packaged metadata: ${file.name}"
+            }
+        }
+    }
+}
+
+val verifyStableAudioRuntimeAbi by tasks.registering {
+    group = "verification"
+    description = "Require the LiteRT binaries audited for the Stable Audio C ABI."
+    inputs.files(stableAudioRuntimeAbi)
+    doLast {
+        val aar = stableAudioRuntimeAbi.singleFile
+        mapOf(
+            "arm64-v8a" to "011134b7559289f0ce4789e89bb7cf9adf51b9a2e342acf8b41a799767f25650",
+            "x86_64" to "31ab900a5319bdde5f4e95c18c67586d4162e8793293c1ddc9f1e41defde346e"
+        ).forEach { (abi, expected) ->
+            require(sha256ZipEntry(aar, "jni/$abi/libLiteRt.so") == expected) {
+                "LiteRT $abi binary changed: audit Stable Audio ABI and run native graph tests before updating the pin."
+            }
+        }
+    }
+}
+
+tasks.matching { it.name == "preBuild" }.configureEach {
+    dependsOn(verifyPackagedProotNative, verifyPackagedMetadataPrivacy, verifyStableAudioRuntimeAbi)
+}
 
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
     dependsOn(generateTamaDialogCatalog)
@@ -236,6 +406,9 @@ tasks.matching { it.name == "bundleRelease" }.configureEach {
 
 dependencies {
     implementation(project(":wear-protocol"))
+    implementation(project(":tama-world-core"))
+    implementation(project(":tama-world-policy"))
+    implementation(project(":tama-world-training"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -250,6 +423,11 @@ dependencies {
     implementation(libs.androidx.fragment)
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.play.services.wearable)
+
+    add("termuxTerminalEmulatorAar", "com.termux.termux-app:terminal-emulator:$termuxTerminalVersion")
+    add("termuxTerminalViewAar", "com.termux.termux-app:terminal-view:$termuxTerminalVersion")
+    implementation(files(strippedTermuxTerminalEmulatorAar.flatMap { it.archiveFile }))
+    implementation(files(pinnedTermuxTerminalViewAar.flatMap { it.archiveFile }))
     
     // Document file support for SAF
     implementation("androidx.documentfile:documentfile:1.0.1")
@@ -267,6 +445,10 @@ dependencies {
     // DB
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
+    implementation(libs.androidx.room.paging)
+    implementation(libs.androidx.paging.runtime)
+    implementation(libs.androidx.paging.compose)
+    testImplementation(libs.androidx.paging.testing)
     ksp(libs.androidx.room.compiler)
     // Catalog-referenced so it can never drift from the Room runtime/compiler
     // version, which previously had to be kept in step by hand.
@@ -296,7 +478,13 @@ dependencies {
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.26.0")
 
     // LiteRT-LM chat backend for CPU/GPU packaged models
-    runtimeOnly("com.google.ai.edge.litertlm:litertlm-android:0.12.0") {
+    // Keep the audited ABI pin shared by the hash gate and runtime dependency.
+    // Upgrading or moving this pin requires the audited hash/native tests above.
+    //noinspection GradleDependency,UseTomlInstead
+    stableAudioRuntimeAbi("com.google.ai.edge.litertlm:litertlm-android:$stableAudioLiteRtLmVersion")
+    //noinspection GradleDependency,UseTomlInstead
+    runtimeOnly("com.google.ai.edge.litertlm:litertlm-android:$stableAudioLiteRtLmVersion") {
+        version { strictly(stableAudioLiteRtLmVersion) }
         exclude(group = "org.jetbrains.kotlin")
     }
     
@@ -319,6 +507,22 @@ dependencies {
     
     // SSH client (Termux integration)
     implementation("com.jcraft:jsch:0.1.55")
+
+    // Small authenticated SFTP server used only by the explicit Harness recovery export.
+    // The server exposes the managed Debian rootfs and has no shell, exec, forwarding, or
+    // anonymous mode. OpenSSH scp uses SFTP by default; legacy `scp -O` is intentionally refused.
+    implementation("org.apache.sshd:sshd-core:2.19.0") {
+        // The app already carries commons-logging through its HTTP/PDF stack. SSHD's JCL bridge
+        // exports the same org.apache.commons.logging classes and must not enter the AAB twice.
+        exclude(group = "org.slf4j", module = "jcl-over-slf4j")
+    }
+    implementation("org.apache.sshd:sshd-sftp:2.19.0") {
+        exclude(group = "org.slf4j", module = "jcl-over-slf4j")
+    }
+    // Android's built-in provider is also named BC and does not expose secp384r1 consistently.
+    // HarnessSshdPlatform passes this bundled provider by instance to SSHD, without replacing the
+    // process-wide Android provider registry.
+    implementation("org.bouncycastle:bcprov-jdk15to18:1.72")
     
     // Play Feature Delivery for dynamic modules
     implementation("com.google.android.play:feature-delivery:2.1.0")
@@ -327,7 +531,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation("io.mockk:mockk:1.13.11")
     testImplementation("org.json:json:20240303")
-    testImplementation("org.robolectric:robolectric:4.16.1")
+    testImplementation(libs.robolectric)
     testImplementation(libs.androidx.work.testing)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
@@ -337,7 +541,7 @@ dependencies {
     debugImplementation(libs.androidx.ui.test.manifest)
     
     // Retrofit with kotlinx.serialization
-    implementation("com.jakewharton.retrofit:retrofit2-kotlinx-serialization-converter:1.0.0")
+    implementation(libs.retrofit.serialization)
 }
 
 val releaseFeatureSizeLimitBytes = 190L * 1024L * 1024L

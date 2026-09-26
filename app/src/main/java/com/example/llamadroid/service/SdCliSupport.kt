@@ -23,7 +23,9 @@ import java.util.Locale
 data class SdBinaryCapabilities(
     val supportedFlags: Set<String>,
     val supportedModes: Set<String> = emptySet(),
-    val allowAll: Boolean = false
+    val allowAll: Boolean = false,
+    /** New stable-diffusion.cpp parses `--auto-fit` as an `on|off` value. */
+    val autoFitRequiresValue: Boolean = false
 ) {
     fun supports(flag: String): Boolean = allowAll || supportedFlags.contains(flag)
 
@@ -32,7 +34,11 @@ data class SdBinaryCapabilities(
         allowAll || mode.lowercase(Locale.US) in supportedModes
 
     companion object {
-        val ALLOW_ALL = SdBinaryCapabilities(emptySet(), allowAll = true)
+        val ALLOW_ALL = SdBinaryCapabilities(
+            emptySet(),
+            allowAll = true,
+            autoFitRequiresValue = true
+        )
     }
 }
 
@@ -53,14 +59,32 @@ class SdDisallowedDistributedFlagException(
     override val message: String = "Disallowed distributed stable-diffusion.cpp flag: $flag"
 ) : IllegalStateException(message)
 
+enum class SdReferenceImageIssue { LIMIT_EXCEEDED, BLANK_PATH }
+
+class SdReferenceImageException(val issue: SdReferenceImageIssue) : IllegalArgumentException(issue.name)
+
 fun parseSdBinaryCapabilities(helpText: String): SdBinaryCapabilities {
     val flagRegex = Regex("""(?<![A-Za-z0-9_-])(--[A-Za-z0-9][A-Za-z0-9_-]*|-[A-Za-z])(?![A-Za-z0-9_-])""")
     val nativeModeRegex = Regex("""(?i)\b(?:txt2img|img2img|img_gen|upscale|adetailer|txt2vid|img2vid|vid_gen)\b""")
+    val autoFitOption = Regex("(?m)^\\s*--auto-fit\\b").find(helpText)
+    val autoFitHelp = if (autoFitOption != null) {
+        val optionEnd = helpText.indexOf('\n', autoFitOption.range.last)
+            .takeIf { it >= 0 }
+            ?.plus(1)
+            ?: helpText.length
+        val nextOption = Regex("(?m)^\\s*(?:-[^\\s,]+\\s*,\\s*)?--[A-Za-z0-9][A-Za-z0-9_-]*\\b")
+            .find(helpText, optionEnd)
+        helpText.substring(autoFitOption.range.first, nextOption?.range?.first ?: helpText.length)
+    } else {
+        ""
+    }
     return SdBinaryCapabilities(
         supportedFlags = flagRegex.findAll(helpText).map { it.value }.toSet(),
         supportedModes = nativeModeRegex.findAll(helpText)
             .map { it.value.lowercase(Locale.US) }
-            .toSet()
+            .toSet(),
+        autoFitRequiresValue = autoFitHelp.contains("on|off", ignoreCase = true) ||
+            autoFitHelp.contains("on or off", ignoreCase = true)
     )
 }
 
@@ -137,6 +161,7 @@ fun buildSdCommandArgs(
     fun requireMode(mode: String) {
         if (binaryCapabilities != null &&
             binaryCapabilities != SdBinaryCapabilities.ALLOW_ALL &&
+            binaryCapabilities.supportedModes.isNotEmpty() &&
             !binaryCapabilities.supportsMode(mode)
         ) {
             requiredModes += mode
@@ -144,24 +169,52 @@ fun buildSdCommandArgs(
     }
 
     when (config.mode) {
-        SDMode.TXT2IMG, SDMode.IMG2IMG -> args.addAll(listOf("-M", "img_gen"))
+        SDMode.TXT2IMG, SDMode.IMG2IMG -> {
+            requireFlag("-M")
+            requireMode("img_gen")
+            args.addAll(listOf("-M", "img_gen"))
+        }
         SDMode.ADETAILER -> {
             requireFlag("-M")
             requireMode("adetailer")
             args.addAll(listOf("-M", "adetailer"))
         }
-        SDMode.UPSCALE -> args.addAll(listOf("-M", "upscale"))
+        SDMode.UPSCALE -> {
+            requireFlag("-M")
+            requireMode("upscale")
+            args.addAll(listOf("-M", "upscale"))
+        }
     }
 
     if (config.mode == SDMode.UPSCALE) {
+        requireFlag("-o")
         args.addAll(listOf("-o", config.outputPath))
-        config.initImage?.let { args.addAll(listOf("-i", it)) }
-        config.upscaleModel?.let { args.addAll(listOf("--upscale-model", it)) }
+        config.initImage?.let {
+            requireFlag("-i")
+            args.addAll(listOf("-i", it))
+        }
+        config.upscaleModel?.let {
+            requireFlag("--upscale-model")
+            args.addAll(listOf("--upscale-model", it))
+        }
+        requireFlag("--upscale-repeats")
         args.addAll(listOf("--upscale-repeats", config.upscaleRepeats.toString()))
         if (config.threads > 0) {
+            requireFlag("-t")
             args.addAll(listOf("-t", config.threads.toString()))
         }
         if (!config.distributedRuntime.enabled) {
+            appendSdAutoFitArg(
+                args = args,
+                enabled = false,
+                binaryCapabilities = binaryCapabilities,
+                flagSupported = { flag ->
+                    binaryCapabilities == null ||
+                        binaryCapabilities == SdBinaryCapabilities.ALLOW_ALL ||
+                        binaryCapabilities.supports(flag)
+                },
+                onUnsupported = { requiredFlags += "--auto-fit" }
+            )
             appendLocalSdBackendArgs(
                 args = args,
                 paramsBackendSpec = config.sdParamsBackendSpec,
@@ -192,6 +245,12 @@ fun buildSdCommandArgs(
     val family = pipeline.family
         ?: throw SdPipelineValidationException(pipeline)
     val variant = pipeline.variant
+    val dimensionMultiple = requiredSdImageDimensionMultiple(family.storedValue, variant)
+    if (dimensionMultiple > 8 &&
+        !isValidSdImageDimensions(config.width, config.height, dimensionMultiple)
+    ) {
+        throw SdImageDimensionException(config.width, config.height, dimensionMultiple)
+    }
     val spec = pipeline.spec ?: resolveSdFamilySpec(family, variant)
     val adetailerConfig = config.adetailer?.let { raw ->
         val configured = if (config.mode == SDMode.ADETAILER) {
@@ -214,7 +273,10 @@ fun buildSdCommandArgs(
     }
 
     when (pipeline.mainLayout) {
-        SdMainLayout.FULL_MODEL -> args.addAll(listOf("-m", pipeline.mainModelPath))
+        SdMainLayout.FULL_MODEL -> {
+            requireFlag("-m")
+            args.addAll(listOf("-m", pipeline.mainModelPath))
+        }
         SdMainLayout.STANDALONE_DIFFUSION -> {
             requireFlag("--diffusion-model")
             args.addAll(listOf("--diffusion-model", pipeline.mainModelPath))
@@ -222,19 +284,28 @@ fun buildSdCommandArgs(
         else -> throw SdPipelineValidationException(pipeline)
     }
 
-    pipeline.pathForRole(SdComponentRole.VAE)?.let { args.addAll(listOf("--vae", it)) }
+    pipeline.pathForRole(SdComponentRole.VAE)?.let {
+        requireFlag("--vae")
+        args.addAll(listOf("--vae", it))
+    }
     pipeline.pathForRole(SdComponentRole.TAE)?.let {
         // TAESD is a decode-only VAE; TAE/TAEHV remain the family component path.
         val decoderFlag = if (File(it).name.contains("taesd", ignoreCase = true)) "--taesd" else "--tae"
         requireFlag(decoderFlag)
         args.addAll(listOf(decoderFlag, it))
     }
-    pipeline.pathForRole(SdComponentRole.CLIP_L)?.let { args.addAll(listOf("--clip_l", it)) }
+    pipeline.pathForRole(SdComponentRole.CLIP_L)?.let {
+        requireFlag("--clip_l")
+        args.addAll(listOf("--clip_l", it))
+    }
     pipeline.pathForRole(SdComponentRole.CLIP_G)?.let {
         requireFlag("--clip_g")
         args.addAll(listOf("--clip_g", it))
     }
-    pipeline.pathForRole(SdComponentRole.T5XXL)?.let { args.addAll(listOf("--t5xxl", it)) }
+    pipeline.pathForRole(SdComponentRole.T5XXL)?.let {
+        requireFlag("--t5xxl")
+        args.addAll(listOf("--t5xxl", it))
+    }
     pipeline.pathForRole(SdComponentRole.LLM)?.let {
         requireFlag("--llm")
         args.addAll(listOf("--llm", it))
@@ -287,8 +358,10 @@ fun buildSdCommandArgs(
     val effectivePrompt = (promptAdapters + config.prompt)
         .filter { it.isNotBlank() }
         .joinToString(" ")
+    requireFlag("-p")
     args.addAll(listOf("-p", effectivePrompt))
     if (config.negativePrompt.isNotBlank()) {
+        requireFlag("-n")
         args.addAll(listOf("-n", config.negativePrompt))
     }
     config.maskImage?.let {
@@ -321,9 +394,14 @@ fun buildSdCommandArgs(
         )
     }
     if (config.mode != SDMode.ADETAILER || config.adetailerResizeInput) {
+        requireFlag("-W")
+        requireFlag("-H")
         args.addAll(listOf("-W", config.width.toString()))
         args.addAll(listOf("-H", config.height.toString()))
     }
+    requireFlag("--steps")
+    requireFlag("--cfg-scale")
+    requireFlag("--sampling-method")
     args.addAll(listOf("--steps", config.steps.toString()))
     args.addAll(listOf("--cfg-scale", config.cfgScale.toString()))
     args.addAll(listOf("--sampling-method", config.samplingMethod.cliName))
@@ -331,18 +409,30 @@ fun buildSdCommandArgs(
         requireFlag("--scheduler")
         args.addAll(listOf("--scheduler", it.cliName))
     }
+    requireFlag("-s")
     args.addAll(listOf("-s", config.seed.toString()))
 
-    config.cacheMode?.let { args.addAll(listOf("--cache-mode", it.cliName)) }
+    config.cacheMode?.let {
+        requireFlag("--cache-mode")
+        args.addAll(listOf("--cache-mode", it.cliName))
+    }
     if (config.cacheOption.isNotBlank()) {
+        requireFlag("--cache-option")
         args.addAll(listOf("--cache-option", config.cacheOption))
     }
     if (config.scmMask.isNotBlank()) {
+        requireFlag("--scm-mask")
         args.addAll(listOf("--scm-mask", config.scmMask))
     }
-    config.scmPolicy?.let { args.addAll(listOf("--scm-policy", it.cliName)) }
+    config.scmPolicy?.let {
+        requireFlag("--scm-policy")
+        args.addAll(listOf("--scm-policy", it.cliName))
+    }
 
     if (config.controlNetPath != null && config.controlImagePath != null) {
+        requireFlag("--control-net")
+        requireFlag("--control-image")
+        requireFlag("--control-strength")
         args.addAll(listOf("--control-net", config.controlNetPath))
         args.addAll(listOf("--control-image", config.controlImagePath))
         args.addAll(listOf("--control-strength", config.controlStrength.toString()))
@@ -374,6 +464,7 @@ fun buildSdCommandArgs(
     }
 
     if (config.quantizationType.isNotBlank()) {
+        requireFlag("--type")
         args.addAll(listOf("--type", config.quantizationType))
     }
 
@@ -426,6 +517,7 @@ fun buildSdCommandArgs(
         }
     }
 
+    requireFlag("-o")
     args.addAll(listOf("-o", config.outputPath))
 
     if (config.mode == SDMode.IMG2IMG ||
@@ -435,6 +527,8 @@ fun buildSdCommandArgs(
             ?: throw IllegalStateException("Missing input image")
         when (spec.img2imgInputMode) {
             SdImageInputMode.INIT_IMAGE -> {
+                requireFlag("-i")
+                requireFlag("--strength")
                 args.addAll(listOf("-i", input))
                 val effectiveStrength = if (config.mode == SDMode.ADETAILER) {
                     adetailerConfig?.denoisingStrength ?: config.strength
@@ -444,32 +538,59 @@ fun buildSdCommandArgs(
                 args.addAll(listOf("--strength", effectiveStrength.toString()))
             }
             SdImageInputMode.REFERENCE_IMAGE -> {
-                requireFlag("-r")
-                args.addAll(listOf("-r", input))
+                val references = config.referenceImages
+                    .ifEmpty { listOf(input) }
+                if (references.size > 10) {
+                    throw SdReferenceImageException(SdReferenceImageIssue.LIMIT_EXCEEDED)
+                }
+                if (references.any(String::isBlank)) {
+                    throw SdReferenceImageException(SdReferenceImageIssue.BLANK_PATH)
+                }
+                references.forEach { reference ->
+                    requireFlag("-r")
+                    args.addAll(listOf("-r", reference))
+                }
             }
         }
     }
 
     if (config.threads > 0) {
+        requireFlag("-t")
         args.addAll(listOf("-t", config.threads.toString()))
     }
 
     if (config.vaeTiling) {
+        requireFlag("--vae-tiling")
+        requireFlag("--vae-tile-overlap")
         args.add("--vae-tiling")
         args.addAll(listOf("--vae-tile-overlap", config.vaeTileOverlap.toString()))
         if (config.vaeTileSize.isNotBlank()) {
+            requireFlag("--vae-tile-size")
             args.addAll(listOf("--vae-tile-size", config.vaeTileSize))
         }
         if (config.vaeRelativeTileSize.isNotBlank()) {
+            requireFlag("--vae-relative-tile-size")
             args.addAll(listOf("--vae-relative-tile-size", config.vaeRelativeTileSize))
         }
     }
 
     if (config.tensorTypeRules.isNotBlank()) {
+        requireFlag("--tensor-type-rules")
         args.addAll(listOf("--tensor-type-rules", config.tensorTypeRules))
     }
 
     if (!config.distributedRuntime.enabled) {
+        appendSdAutoFitArg(
+            args = args,
+            enabled = false,
+            binaryCapabilities = binaryCapabilities,
+            flagSupported = { flag ->
+                binaryCapabilities == null ||
+                    binaryCapabilities == SdBinaryCapabilities.ALLOW_ALL ||
+                    binaryCapabilities.supports(flag)
+            },
+            onUnsupported = { requiredFlags += "--auto-fit" }
+        )
         appendLocalSdBackendArgs(
             args = args,
             paramsBackendSpec = config.sdParamsBackendSpec,
@@ -531,6 +652,17 @@ fun buildSdUpscaleCommandArgs(
         args.addAll(listOf("-t", config.threads.toString()))
     }
     if (!config.distributedRuntime.enabled) {
+        appendSdAutoFitArg(
+            args = args,
+            enabled = false,
+            binaryCapabilities = binaryCapabilities,
+            flagSupported = { flag ->
+                binaryCapabilities == null ||
+                    binaryCapabilities == SdBinaryCapabilities.ALLOW_ALL ||
+                    binaryCapabilities.supports(flag)
+            },
+            onUnsupported = { requiredFlags += "--auto-fit" }
+        )
         appendLocalSdBackendArgs(
             args = args,
             paramsBackendSpec = config.sdParamsBackendSpec,
@@ -560,6 +692,36 @@ fun appendSdCustomFlags(args: MutableList<String>, customFlags: String) {
         args.addAll(splitShellLikeArgs(customFlags))
     }
 }
+
+/**
+ * Keep the app's pre-refresh default (manual backend placement) across the
+ * stable-diffusion.cpp auto-fit default change. Older binaries exposed this
+ * as a bare boolean flag, while refreshed binaries require `on` or `off`.
+ */
+internal fun appendSdAutoFitArg(
+    args: MutableList<String>,
+    enabled: Boolean,
+    binaryCapabilities: SdBinaryCapabilities?,
+    flagSupported: (String) -> Boolean = { true },
+    onUnsupported: () -> Unit = {}
+) {
+    val requiresValue = sdAutoFitUsesValueSyntax(binaryCapabilities)
+    if (!requiresValue && !enabled) return
+    if (!flagSupported("--auto-fit")) {
+        onUnsupported()
+        return
+    }
+    if (requiresValue) {
+        args.addAll(listOf("--auto-fit", if (enabled) "on" else "off"))
+    } else if (enabled) {
+        args.add("--auto-fit")
+    }
+}
+
+internal fun sdAutoFitUsesValueSyntax(binaryCapabilities: SdBinaryCapabilities?): Boolean =
+    binaryCapabilities == null ||
+        binaryCapabilities.allowAll ||
+        binaryCapabilities.autoFitRequiresValue
 
 fun appendLocalSdBackendArgs(
     args: MutableList<String>,

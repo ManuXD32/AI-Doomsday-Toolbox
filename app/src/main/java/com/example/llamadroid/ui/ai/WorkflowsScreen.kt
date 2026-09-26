@@ -5933,7 +5933,14 @@ private fun Txt2ImgUpscaleWorkflowContent(
     val sdClipVisionModels by db.modelDao().getModelsByType(ModelType.SD_CLIP_VISION).collectAsState(initial = emptyList())
     val sdIpAdapterModels by db.modelDao().getModelsByType(ModelType.SD_IP_ADAPTER).collectAsState(initial = emptyList())
     val sdImageSupportModels by db.modelDao()
-        .getModelsByTypes(listOf(ModelType.LLM, ModelType.VISION_PROJECTOR))
+        .getModelsByTypes(
+            listOf(
+                ModelType.LLM,
+                ModelType.SD_LLM,
+                ModelType.VISION_PROJECTOR,
+                ModelType.MMPROJ
+            )
+        )
         .collectAsState(initial = emptyList())
     val upscalerModels by db.modelDao().getModelsByType(ModelType.SD_UPSCALER).collectAsState(initial = emptyList())
     val allGenerationModels = (sdCheckpoints + fluxDiffusionModels).filter { model ->
@@ -5978,14 +5985,18 @@ private fun Txt2ImgUpscaleWorkflowContent(
     }
     val compatibleLlmModels = remember(sdImageSupportModels, selectedGenerationFamilyEnum, selectedGenerationVariant) {
         filterWorkflowSdComponents(
-            sdImageSupportModels.filter { it.type == ModelType.LLM },
+            sdImageSupportModels.filter {
+                it.type == ModelType.LLM || it.type == ModelType.SD_LLM
+            },
             selectedGenerationFamilyEnum,
             selectedGenerationVariant
         )
     }
     val compatibleLlmVisionModels = remember(sdImageSupportModels, selectedGenerationFamilyEnum, selectedGenerationVariant) {
         filterWorkflowSdComponents(
-            sdImageSupportModels.filter { it.type == ModelType.VISION_PROJECTOR },
+            sdImageSupportModels.filter {
+                it.type == ModelType.VISION_PROJECTOR || it.type == ModelType.MMPROJ
+            },
             selectedGenerationFamilyEnum,
             selectedGenerationVariant
         )

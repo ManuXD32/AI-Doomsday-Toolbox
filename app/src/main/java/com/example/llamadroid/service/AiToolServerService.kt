@@ -292,6 +292,7 @@ class AiToolServerService : Service() {
         private var queueRunner: Job? = null
         private val jobActions = mutableMapOf<String, String>()
         private val activeTaskJobs = mutableMapOf<String, Job>()
+        private val videoSummaryRuns = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
         override fun serve(session: IHTTPSession): Response {
             return runCatching {
@@ -626,7 +627,7 @@ class AiToolServerService : Service() {
             }
             runner?.cancel(CancellationException("Cancelled from AI Servers Hub"))
             if (!wasQueued) {
-                requestNativeCancellation(action)
+                requestNativeCancellation(action, jobId)
             }
             val message = if (wasQueued) "Cancelled before start" else "Cancellation requested"
             val marked = AiServerJobStore.markCancelled(type.id, jobId, message)
@@ -637,7 +638,7 @@ class AiToolServerService : Service() {
         private fun clearFailedJobs(): Response =
             jsonResponse(JSONObject().put("ok", true).put("removed", AiServerJobStore.clearFailed(type.id)))
 
-        private fun requestNativeCancellation(action: String) {
+        private fun requestNativeCancellation(action: String, jobId: String) {
             runCatching {
                 when (type) {
                     AiServerType.IMAGE -> when {
@@ -674,7 +675,9 @@ class AiToolServerService : Service() {
                     AiServerType.VIDEO_UPSCALE -> applicationContext.startService(VideoUpscalerService.createCancelIntent(applicationContext))
                     AiServerType.DOCS_DATASETS -> when (action) {
                         "pdf_summary" -> PDFSummaryService.cancel()
-                        "video_summary" -> VideoSumupService.cancel()
+                        "video_summary" -> videoSummaryRuns.remove(jobId)?.let {
+                            VideoRecognitionSummaryService.cancelIfCurrent(it)
+                        }
                         "pdf_translate_ocr", "pdf_translate_text_layer" -> PDFTranslationJobService.cancel()
                         "dataset_import", "dataset_pipeline" -> DatasetForegroundService.cancelCurrent(applicationContext)
                         else -> Unit
@@ -1201,21 +1204,39 @@ class AiToolServerService : Service() {
                         body,
                         SettingsRepository(applicationContext).videoSummarySettings.snapshot()
                     )
-                    VideoSumupService.startSummarization(
-                        context = applicationContext,
-                        videoPath = body.optString("inputPath"),
-                        videoFileName = body.optString("sourceName").ifBlank { File(body.optString("inputPath")).name },
-                        whisperModelPath = body.optString("whisperModelPath"),
-                        language = body.optString("whisperLanguage", "auto"),
-                        threads = body.optInt("whisperThreads", 4),
-                        vadConfig = SettingsRepository(applicationContext).whisperVadConfigSnapshot(),
-                        saveToNotes = true,
-                        noteType = NoteType.VIDEO_SUMMARY,
-                        settingsOverride = settings
-                    )
                     val job = AiServerJob(jobId, type.id, "Video summary", "RUNNING", 0.05f, "Video summary started", ownerUserId)
                     AiServerJobStore.update(job)
-                    watchVideoSummaryJob(jobId)
+                    launchTracked(jobId) {
+                        var ownedVideoRunId: Long? = null
+                        try {
+                            val videoRunId = VideoRecognitionSummaryService.startConfigured(
+                                context = applicationContext,
+                                sourcePath = body.optString("inputPath"),
+                                sourceName = body.optString("sourceName").ifBlank { File(body.optString("inputPath")).name },
+                                forceAudioFallback = body.optBoolean("audioOnly", false),
+                                audioFallback = VideoRecognitionAudioFallbackRequest(
+                                    whisperModelPath = body.optString("whisperModelPath").takeIf { it.isNotBlank() }
+                                        ?: SettingsRepository(applicationContext).videoSumupWhisperModelPath.value,
+                                    language = body.optString("whisperLanguage", "auto"),
+                                    threads = body.optInt("whisperThreads", 4),
+                                    vadConfig = SettingsRepository(applicationContext).whisperVadConfigSnapshot(),
+                                    saveToNotes = true,
+                                    noteType = NoteType.VIDEO_SUMMARY,
+                                    settingsOverride = settings
+                                )
+                            )
+                            ownedVideoRunId = videoRunId
+                            videoSummaryRuns[jobId] = videoRunId
+                            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                            watchVideoSummaryJob(jobId, videoRunId)
+                        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                            ownedVideoRunId?.let { VideoRecognitionSummaryService.cancelIfCurrent(it) }
+                            videoSummaryRuns.remove(jobId)
+                            throw cancelled
+                        } catch (error: Exception) {
+                            updateJob(jobId, type.id, "FAILED", 0f, error.message ?: "Video summary failed", null)
+                        }
+                    }
                     job
                 }
                 in pdfToolActions -> startPdfToolJob(jobId, action, body, ownerUserId)
@@ -2448,21 +2469,36 @@ class AiToolServerService : Service() {
             }
         }
 
-        private fun watchVideoSummaryJob(jobId: String) {
+        private fun watchVideoSummaryJob(jobId: String, videoRunId: Long) {
             serviceScope.launch {
-                while (isActive) {
-                    if (isJobCancelled(jobId)) return@launch
-                    val error = VideoSummaryStateHolder.error.value
-                    if (!error.isNullOrBlank()) {
-                        updateJob(jobId, type.id, "FAILED", 0f, error, null)
-                        return@launch
+                try {
+                    while (isActive) {
+                        if (isJobCancelled(jobId)) return@launch
+                        val state = VideoRecognitionSummaryService.state.value
+                        if (state.runId != videoRunId) {
+                            updateJob(jobId, type.id, "CANCELLED", 0f,
+                                applicationContext.getString(com.example.llamadroid.R.string.video_recognition_cancelled), null)
+                            return@launch
+                        }
+                        when (state.status) {
+                            VideoRecognitionSummaryStatus.ERROR -> {
+                                updateJob(jobId, type.id, "FAILED", 0f, state.error ?: state.message, null)
+                                return@launch
+                            }
+                            VideoRecognitionSummaryStatus.SUCCESS -> {
+                                updateJob(jobId, type.id, "COMPLETED", 1f, state.message, null)
+                                return@launch
+                            }
+                            VideoRecognitionSummaryStatus.CANCELLED -> {
+                                updateJob(jobId, type.id, "CANCELLED", 0f, state.message, null)
+                                return@launch
+                            }
+                            else -> updateJob(jobId, type.id, "RUNNING", state.progress, state.message, null)
+                        }
+                        delay(1000)
                     }
-                    if (!VideoSummaryStateHolder.isRunning.value && VideoSummaryStateHolder.summary.value.isNotBlank()) {
-                        updateJob(jobId, type.id, "COMPLETED", 1f, "Video summary complete", null)
-                        return@launch
-                    }
-                    updateJob(jobId, type.id, "RUNNING", VideoSummaryStateHolder.progressFraction.value, VideoSummaryStateHolder.progress.value.ifBlank { "Summarizing video" }, null)
-                    delay(1000)
+                } finally {
+                    videoSummaryRuns.remove(jobId, videoRunId)
                 }
             }
         }
@@ -3946,7 +3982,7 @@ class AiToolServerService : Service() {
                             modeJson("pdf_compress", "docs", "Compress PDF", "Comprimir PDF", "Compress images inside a PDF.", "Comprime imagenes dentro de un PDF."),
                             modeJson("pdf_split_size", "docs", "Split by size", "Separar por tamano", "Split a PDF into size-limited parts.", "Divide un PDF en partes por tamano."),
                             modeJson("pdf_summary", "docs", "PDF summary", "Resumen PDF", "Summarize an uploaded PDF.", "Resume un PDF subido."),
-                            modeJson("video_summary", "video_summary", "Video summary", "Resumen de video", "Transcribe and summarize video.", "Transcribe y resume video."),
+                            modeJson("video_summary", "video_summary", "Video summary", "Resumen de video", "Understand video with the configured video model; use speech summarization when none is configured.", "Analiza el vídeo con el modelo configurado; resume el audio si no hay modelo de vídeo."),
                             modeJson("dataset_import", "datasets", "Import dataset source", "Importar fuente dataset", "Import a PDF or text file into a dataset project.", "Importa un PDF o texto a un proyecto dataset."),
                             modeJson("dataset_pipeline", "datasets", "Run dataset queue", "Ejecutar cola dataset", "Queue clean, question, answer, and rating jobs.", "Encola limpieza, preguntas, respuestas y revision."),
                             modeJson("dataset_export", "datasets", "Export dataset", "Exportar dataset", "Download accepted Q&A pairs.", "Descarga pares P/R aceptados.")
@@ -4586,7 +4622,8 @@ class AiToolServerService : Service() {
         private fun videoSummaryFields(): JSONArray = JSONArray(
             listOf(
                 fileField("inputPath", "Video file", "Archivo de video", required = true, accept = "video/*"),
-                modelField("whisperModelPath", "whisper", "Whisper model", "Modelo Whisper", required = true),
+                modelField("whisperModelPath", "whisper", "Whisper model (audio fallback)", "Modelo Whisper (alternativa de audio)", required = false),
+                fieldJson("audioOnly", "checkbox", "Use audio-based summary", "Usar resumen basado en audio", defaultValue = false),
                 fieldJson("whisperLanguage", "text", "Source language", "Idioma origen", defaultValue = "auto"),
                 fieldJson("whisperThreads", "number", "Whisper threads", "Hilos Whisper", defaultValue = 4, min = 1.0, step = 1.0)
             ) + summaryProviderFields(

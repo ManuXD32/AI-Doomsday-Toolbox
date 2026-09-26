@@ -57,6 +57,7 @@ interface LiteRtModelDao {
         SET supportsVision = :supportsVision,
             supportsAudio = :supportsAudio,
             supportsEmbedding = :supportsEmbedding,
+            classificationSource = 'USER_OVERRIDE',
             kbEmbeddingRunnable = 0,
             kbEmbeddingRuntime = NULL,
             kbEmbeddingStatus = 'manual_recheck_required',

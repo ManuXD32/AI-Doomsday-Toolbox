@@ -32,6 +32,8 @@ data class SdCuratedBundleFile(
     val sdFamily: String? = null,
     val sdVariant: String? = null,
     val sdCompatProfiles: String? = null,
+    /** Stable-diffusion.cpp command role (for example diffusion, llm, llm_vision, or vae). */
+    val componentRole: String? = null,
     /** Installed payload name when a converted artifact differs from its upstream source name. */
     val localFilenameOverride: String? = null,
     /** Optional pinned first-party mirror for converted detector payloads. */
@@ -61,7 +63,9 @@ data class SdCuratedBundle(
     @StringRes val titleRes: Int,
     @StringRes val descriptionRes: Int,
     val installPrefix: String,
-    val files: List<SdCuratedBundleFile>
+    val files: List<SdCuratedBundleFile>,
+    /** Binary flag contract for bundles whose launcher needs multiple roles. */
+    val commandContract: SdCommandContract? = null
 ) {
     val totalSizeBytes: Long
         get() = files.sumOf { it.sizeBytes }
@@ -69,6 +73,12 @@ data class SdCuratedBundle(
     val totalSizeIsApproximate: Boolean
         get() = files.any { it.sizeIsApproximate }
 }
+
+data class SdCommandContract(
+    val requiredFlags: Set<String>,
+    val optionalFlags: Set<String> = emptySet(),
+    val supportsCpuOffload: Boolean = false,
+)
 
 data class SdCuratedDownloadHandle(
     val progressKey: String,
@@ -259,6 +269,91 @@ private val LINGBOT_TAEW21 = SdCuratedBundleFile(
     downloadUrlOverride = "https://raw.githubusercontent.com/madebyollin/taehv/a1c8e6a2ba77b91f284ef98935ec5bd21a41d786/safetensors/taew2_1.safetensors"
 )
 
+private val QWEN_IMAGE_21_DIFFUSION_Q4 = SdCuratedBundleFile(
+    id = "qwen-image-21-diffusion-q4",
+    repoId = "leejet/Qwen-Image-2.1-GGUF",
+    remotePath = "qwen_image_2.1-Q4_K.gguf",
+    modelType = ModelType.SD_DIFFUSION,
+    sizeBytes = 4_197_494_816L,
+    sha256 = "29f9c83c249ff0292fb2943fceddfa2319b446601866c82a4f8be062abea72c2",
+    licenseLabel = "Qwen Research License",
+    sdCapabilities = buildSdCapabilities(SD_CAPABILITY_TXT2IMG, SD_CAPABILITY_IMG2IMG),
+    sdFamily = "qwen_image",
+    sdVariant = "2.1",
+    // Compatibility tokens are family:variant. Keep the wire role separate
+    // from this selector token so all four files are offered together.
+    sdCompatProfiles = "qwen_image:2.1",
+    componentRole = "diffusion"
+)
+
+private val QWEN_IMAGE_21_TEXT_Q4 = SdCuratedBundleFile(
+    id = "qwen-image-21-text-q4",
+    repoId = "Qwen/Qwen3-VL-8B-Instruct-GGUF",
+    // The repository currently publishes this file at main. The size is kept
+    // approximate because Hugging Face may replace the Xet object without
+    // changing the human-facing quantization label.
+    remotePath = "Qwen3VL-8B-Instruct-Q4_K_M.gguf",
+    modelType = ModelType.SD_LLM,
+    sizeBytes = 5_030_000_000L,
+    sha256 = "67d1659bfe71b89d50b45a4ad1a9e5b997e5bb16ce5da66a6a6167abd569e9e2",
+    licenseLabel = "Apache-2.0",
+    sizeIsApproximate = true,
+    sdFamily = "qwen_image",
+    sdVariant = "2.1",
+    sdCompatProfiles = "qwen_image:2.1",
+    componentRole = "llm"
+)
+
+private val QWEN_IMAGE_21_VISION_Q8 = SdCuratedBundleFile(
+    id = "qwen-image-21-vision-q8",
+    repoId = "Qwen/Qwen3-VL-8B-Instruct-GGUF",
+    remotePath = "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf",
+    modelType = ModelType.MMPROJ,
+    sizeBytes = 752_289_728L,
+    sha256 = "c6ba85508d82f42590e6eb77d5340369ab6fecf107a7561d809523d8aa5f3bfd",
+    licenseLabel = "Apache-2.0",
+    isVision = true,
+    sdFamily = "qwen_image",
+    sdVariant = "2.1",
+    sdCompatProfiles = "qwen_image:2.1",
+    componentRole = "llm_vision"
+)
+
+/** Official Qwen projector variant preferred for new Qwen Image 2.1 installs. */
+private val QWEN_IMAGE_21_VISION_F16 = SdCuratedBundleFile(
+    id = "qwen-image-21-vision-f16",
+    repoId = "Qwen/Qwen3-VL-8B-Instruct-GGUF",
+    revision = "00e7d63528e65d7b64e80e1293a8360b4af6a594",
+    remotePath = "mmproj-Qwen3VL-8B-Instruct-F16.gguf",
+    modelType = ModelType.MMPROJ,
+    sizeBytes = 1_160_000_000L,
+    sha256 = "ca524100ebf825c9a870db1c580d03879e0da0ab2541697e2458e64891cf9d38",
+    licenseLabel = "Apache-2.0",
+    sizeIsApproximate = true,
+    isVision = true,
+    sdFamily = "qwen_image",
+    sdVariant = "2.1",
+    sdCompatProfiles = "qwen_image:2.1",
+    componentRole = "llm_vision"
+)
+
+/** The former curated Q8 filename remains verifiable and usable by installed rows. */
+private val SD_CURATED_COMPATIBILITY_FILES = listOf(QWEN_IMAGE_21_VISION_Q8)
+
+private val QWEN_IMAGE_21_VAE = SdCuratedBundleFile(
+    id = "qwen-image-21-vae",
+    repoId = "Comfy-Org/Qwen-Image-2.1",
+    remotePath = "vae/qwen_image_2.1_vae_bf16.safetensors",
+    modelType = ModelType.SD_VAE,
+    sizeBytes = 675_509_688L,
+    sha256 = "bb21f7473051e1ac368515dd3f2e15cd44d7a11748ee8823e1ddca3e4876b7c9",
+    licenseLabel = "Qwen Research License",
+    sdFamily = "qwen_image",
+    sdVariant = "2.1",
+    sdCompatProfiles = "qwen_image:2.1",
+    componentRole = "vae"
+)
+
 private val REALESRGAN_PHOTO_2X = SdCuratedBundleFile(
     id = "realesrgan-photo-2x",
     repoId = "leonelhs/realesrgan",
@@ -344,6 +439,23 @@ object SdCuratedBundleCatalog {
             files = listOf(LINGBOT_DENSE_13B, LINGBOT_QWEN3_VL_4B_Q4, LINGBOT_TAEW21)
         ),
         SdCuratedBundle(
+            id = "qwen-image-21-q4-vision",
+            titleRes = R.string.sd_bundle_qwen_image_21_title,
+            descriptionRes = R.string.sd_bundle_qwen_image_21_desc,
+            installPrefix = "Qwen-Image-2.1-Q4",
+            files = listOf(
+                QWEN_IMAGE_21_DIFFUSION_Q4,
+                QWEN_IMAGE_21_TEXT_Q4,
+                QWEN_IMAGE_21_VISION_F16,
+                QWEN_IMAGE_21_VAE
+            ),
+            commandContract = SdCommandContract(
+                requiredFlags = setOf("--diffusion-model", "--llm", "--llm_vision", "--vae"),
+                optionalFlags = setOf("--offload-to-cpu"),
+                supportsCpuOffload = true,
+            )
+        ),
+        SdCuratedBundle(
             id = "photo-upscale-2x",
             titleRes = R.string.sd_bundle_upscale_photo_2x_title,
             descriptionRes = R.string.sd_bundle_upscale_photo_2x_desc,
@@ -373,6 +485,9 @@ object SdCuratedBundleCatalog {
             bundle.files.firstOrNull { file ->
                 file.localFilename(bundle.installPrefix) == filename
             }
+        } ?: SD_CURATED_COMPATIBILITY_FILES.firstOrNull { file ->
+            val qwenBundle = byId("qwen-image-21-q4-vision") ?: return@firstOrNull false
+            file.localFilename(qwenBundle.installPrefix) == filename
         }
 }
 
@@ -528,7 +643,8 @@ fun startSdCuratedBundleFileDownload(
         sdCapabilities = file.sdCapabilities,
         sdFamily = file.sdFamily,
         sdVariant = file.sdVariant,
-        sdCompatProfiles = file.sdCompatProfiles
+        sdCompatProfiles = file.sdCompatProfiles,
+        classificationSource = com.example.llamadroid.data.model.library.ModelClassificationSource.CATALOG.storedValue
     )
     DownloadService.startDownload(
         context = context,

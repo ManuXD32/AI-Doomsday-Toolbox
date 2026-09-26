@@ -3,6 +3,7 @@ package com.example.llamadroid.service
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 
@@ -70,6 +71,48 @@ class LlamaModelMetadataProbeTest {
         assertEquals(listOf("--device", "none"), command.windowed(2).first { it.first() == "--device" })
         assertEquals(listOf("--host", "127.0.0.1"), command.windowed(2).first { it.first() == "--host" })
         assertEquals(false, "--rpc" in command)
+    }
+
+    @Test
+    fun probeCommandFollowsLongOnlyHelpAliases() {
+        val command = LlamaModelMetadataProbe.buildProbeCommand(
+            binary = File("/packaged/llama-server"),
+            model = File("/models/model.gguf"),
+            port = 43210,
+            capabilities = LlamaBinaryCapabilities(
+                supportedFlags = setOf(
+                    "--model",
+                    "--ctx-size",
+                    "--threads",
+                    "--batch-size",
+                    "--device",
+                    "--n-gpu-layers"
+                )
+            )
+        )
+
+        assertEquals("--model", command[1])
+        assertEquals("--ctx-size", command[3])
+        assertEquals("--threads", command[5])
+        assertEquals("--batch-size", command[7])
+        assertEquals("--device", command[10])
+        assertEquals("--n-gpu-layers", command[12])
+    }
+
+    @Test
+    fun llamaCapabilityParserRecognizesMultiLetterShortAliases() {
+        val capabilities = parseLlamaBinaryCapabilities(
+            """
+            -m, --model FILE
+            -c, --ctx-size N
+            -ngl, --n-gpu-layers N
+            -dev, --device DEVICE
+            """.trimIndent()
+        )
+
+        assertTrue(capabilities.supports("-ngl"))
+        assertTrue(capabilities.supports("-dev"))
+        assertEquals("-ngl", capabilities.preferredFlag("--n-gpu-layers", "-ngl"))
     }
 
     @Test

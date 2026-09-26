@@ -7,6 +7,7 @@ qa
 app/lint-baseline.xml
 .agents
 tests
+.codex-pocket-inbox
 
 # Built application files
 *.apk
@@ -87,11 +88,13 @@ build_log*.txt
 .Rhistory*
 
 # Local tooling/workspace files
+__pycache__/
 .codex
 .codex/
 .vscode/
 .gradle-home/
 .agent_build/
+.toolchains/
 tmp/
 Delete/
 

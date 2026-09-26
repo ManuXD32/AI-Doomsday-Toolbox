@@ -9,6 +9,40 @@ import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 
 /**
+ * Shared bounds for the user-controlled video profile settings. These values
+ * are intentionally kept separate from the native launch flags: segmenting,
+ * frame count, and audio fallback are app-side processing policy.
+ */
+object LlamaVideoProfileLimits {
+    const val MIN_SEGMENT_SECONDS: Int = 5
+    const val MAX_SEGMENT_SECONDS: Int = 60
+    /** Kept for decoding old per-server profiles; global video policy wins at request time. */
+    const val DEFAULT_SEGMENT_SECONDS: Int = 12
+    const val LEGACY_SEGMENT_SECONDS: Int = 30
+    const val MIN_MAX_FRAMES: Int = 1
+    const val MAX_MAX_FRAMES: Int = 24
+    const val DEFAULT_MAX_FRAMES: Int = 24
+    const val MIN_FPS: Float = 0.1f
+    const val MAX_FPS: Float = 2.0f
+    const val MIN_MAX_FPS: Float = MIN_FPS
+    const val MAX_MAX_FPS: Float = MAX_FPS
+    const val DEFAULT_MAX_FPS: Float = 2.0f
+    const val MIN_TIMESTAMP_INTERVAL_MS: Int = 250
+    const val MAX_TIMESTAMP_INTERVAL_MS: Int = 60_000
+    const val TIMESTAMP_INTERVAL_STEP_MS: Int = 250
+
+    fun normalizeSegmentSeconds(value: Int): Int =
+        value.coerceIn(MIN_SEGMENT_SECONDS, MAX_SEGMENT_SECONDS)
+
+    fun normalizeMaxFrames(value: Int): Int =
+        value.coerceIn(MIN_MAX_FRAMES, MAX_MAX_FRAMES)
+
+    fun normalizeMaxFps(value: Float): Float =
+        value.takeIf { it.isFinite() }?.coerceIn(MIN_MAX_FPS, MAX_MAX_FPS)
+            ?: DEFAULT_MAX_FPS
+}
+
+/**
  * A durable, app-managed llama.cpp launch snapshot owned by one native-chat
  * server entry.  It intentionally does not alter global LLM settings when a
  * chat starts that server.
@@ -19,6 +53,21 @@ data class LlamaServerLaunchProfile(
     val modelPath: String = "",
     val mmprojPath: String? = null,
     val visionEnabled: Boolean = false,
+    /** Native MTMD video input is opt-in and persisted with the launch snapshot. */
+    val videoEnabled: Boolean = false,
+    val videoFps: Float = NativeLlamaVideoSupport.DEFAULT_VIDEO_FPS,
+    val videoTimestampIntervalMs: Int = NativeLlamaVideoSupport.DEFAULT_TIMESTAMP_INTERVAL_MS,
+    /** Compatibility mirror for persistence; the global video policy controls request segments. */
+    val videoSegmentSeconds: Int = LlamaVideoProfileLimits.LEGACY_SEGMENT_SECONDS,
+    val videoMaxFrames: Int = LlamaVideoProfileLimits.DEFAULT_MAX_FRAMES,
+    val videoMaxFps: Float = LlamaVideoProfileLimits.DEFAULT_MAX_FPS,
+    /** Compatibility mirror; the global video policy controls direct audio at request time. */
+    val videoAudioEnabled: Boolean = true,
+    val videoWhisperParallelEnabled: Boolean = false,
+    /** Session-private MTMD media directory; supplied only in short-lived runtime IPC. */
+    val mediaPath: String? = null,
+    /** Session-private ffmpeg directory; supplied only in short-lived runtime IPC. */
+    val videoFfmpegDir: String? = null,
     val loraPath: String? = null,
     /** Ordered, uncapped LoRA stack; duplicates are retained intentionally. */
     val loras: List<LlamaLoraSpec> = emptyList(),
@@ -116,7 +165,12 @@ data class LlamaServerLaunchProfile(
             port = serverPort,
             temperature = temperature,
             host = host,
-            mmprojPath = mmprojPath.takeIf { visionEnabled },
+            mmprojPath = mmprojPath.takeIf { visionEnabled || videoEnabled },
+            videoEnabled = videoEnabled,
+            videoFps = videoFps,
+            videoTimestampIntervalMs = videoTimestampIntervalMs,
+            mediaPath = mediaPath,
+            videoFfmpegDir = videoFfmpegDir,
             loadMode = resolvedLoadMode().value,
             loraPath = loraPath,
             loras = resolvedLoras(),
@@ -176,13 +230,21 @@ data class LlamaServerLaunchProfile(
             ?: emptyList()
 
     companion object {
-        const val SCHEMA_VERSION: Int = 4
+        const val SCHEMA_VERSION: Int = 6
         private val gson = Gson()
 
         fun capture(settings: SettingsRepository): LlamaServerLaunchProfile = LlamaServerLaunchProfile(
             modelPath = settings.selectedModelPath.value.orEmpty(),
             mmprojPath = settings.selectedMmprojPath.value,
             visionEnabled = settings.enableVision.value,
+            videoEnabled = settings.llamaVideoEnabled.value,
+            videoFps = settings.llamaVideoFps.value,
+            videoTimestampIntervalMs = settings.llamaVideoTimestampIntervalMs.value,
+            videoSegmentSeconds = settings.llamaVideoSegmentSeconds.value,
+            videoMaxFrames = settings.llamaVideoMaxFrames.value,
+            videoMaxFps = settings.llamaVideoMaxFps.value,
+            videoAudioEnabled = settings.llamaVideoAudioEnabled.value,
+            videoWhisperParallelEnabled = settings.llamaVideoWhisperParallelEnabled.value,
             loraPath = settings.selectedLlmLoras.value.firstOrNull()?.path,
             loras = settings.selectedLlmLoras.value,
             host = if (settings.remoteAccess.value) "0.0.0.0" else "127.0.0.1",
@@ -242,23 +304,67 @@ data class LlamaServerLaunchProfile(
             ngramMapK4VMinHits = settings.ngramMapK4VMinHits.value
         )
 
-        fun encode(profile: LlamaServerLaunchProfile): String {
+        /**
+         * Encode the durable profile form.  Runtime directories are request-scoped cache paths,
+         * so neither their typed fields nor matching custom flags may enter saved commands,
+         * owner snapshots, or restart metadata.
+         */
+        fun encode(profile: LlamaServerLaunchProfile): String = encodeCanonical(
+            profile = profile,
+            includeRuntimePaths = false
+        )
+
+        /** Encode the complete launch snapshot for the short-lived service IPC extra. */
+        fun encodeForRuntime(profile: LlamaServerLaunchProfile): String = encodeCanonical(
+            profile = profile,
+            includeRuntimePaths = true
+        )
+
+        private fun encodeCanonical(
+            profile: LlamaServerLaunchProfile,
+            includeRuntimePaths: Boolean
+        ): String {
+            val profileForEncoding = if (includeRuntimePaths) {
+                profile
+            } else {
+                profile.copy(mediaPath = null, videoFfmpegDir = null)
+            }
             val migrated = migrateLegacyLlamaManagedSettings(
-                args = ProcessController().splitCommandLine(profile.customFlags.orEmpty()),
-                configuredLoadMode = profile.resolvedLoadMode(),
-                selectedLoras = profile.resolvedLoras()
+                args = ProcessController().splitCommandLine(profileForEncoding.customFlags.orEmpty()),
+                configuredLoadMode = profileForEncoding.resolvedLoadMode(),
+                selectedLoras = profileForEncoding.resolvedLoras()
             )
-            val canonical = profile.copy(
+            val customFlags = filterManagedLlamaCustomFlags(
+                args = migrated.filteredArgs,
+                config = profileForEncoding.toLlamaConfig(),
+                stripVideoRuntimePaths = !includeRuntimePaths
+            )
+            val canonical = profileForEncoding.copy(
                 schemaVersion = SCHEMA_VERSION,
+                videoFps = NativeLlamaVideoSupport.normalizeFps(profileForEncoding.videoFps),
+                videoTimestampIntervalMs = NativeLlamaVideoSupport
+                    .normalizeTimestampIntervalMs(profileForEncoding.videoTimestampIntervalMs),
+                videoSegmentSeconds = LlamaVideoProfileLimits
+                    .normalizeSegmentSeconds(profileForEncoding.videoSegmentSeconds),
+                videoMaxFrames = LlamaVideoProfileLimits
+                    .normalizeMaxFrames(profileForEncoding.videoMaxFrames),
+                videoMaxFps = LlamaVideoProfileLimits
+                    .normalizeMaxFps(profileForEncoding.videoMaxFps),
                 loadMode = migrated.loadMode.value,
                 noMmap = migrated.loadMode == LlamaLoadMode.NONE,
                 loraPath = migrated.loras.firstOrNull()?.path,
                 loras = migrated.loras,
-                customFlags = ProcessController().buildCommandString(migrated.filteredArgs)
+                customFlags = ProcessController().buildCommandString(customFlags)
                     .takeIf { it.isNotBlank() }
             )
             return gson.toJson(canonical)
         }
+
+        /**
+         * Encode a restart-safe owner snapshot. Session-private MTMD paths point into a cache
+         * directory owned by the current request and must never survive as durable profile data.
+         */
+        fun encodeForPersistence(profile: LlamaServerLaunchProfile): String = encode(profile)
 
         /**
          * Decode through a JSON-tree migration. Gson does not reliably apply Kotlin
@@ -391,6 +497,59 @@ data class LlamaServerLaunchProfile(
             } else {
                 defaults.addProperty("customFlags", filteredCustomFlags)
             }
+            // Video launch and processing policy fields are normalized at the
+            // persistence boundary so every caller receives bounded values.
+            val videoFps = runCatching {
+                defaults.get("videoFps")?.asFloat ?: NativeLlamaVideoSupport.DEFAULT_VIDEO_FPS
+            }.getOrDefault(NativeLlamaVideoSupport.DEFAULT_VIDEO_FPS)
+            defaults.addProperty("videoFps", NativeLlamaVideoSupport.normalizeFps(videoFps))
+            val videoTimestamp = runCatching {
+                defaults.get("videoTimestampIntervalMs")?.asInt
+                    ?: NativeLlamaVideoSupport.DEFAULT_TIMESTAMP_INTERVAL_MS
+            }.getOrDefault(NativeLlamaVideoSupport.DEFAULT_TIMESTAMP_INTERVAL_MS)
+            defaults.addProperty(
+                "videoTimestampIntervalMs",
+                NativeLlamaVideoSupport.normalizeTimestampIntervalMs(videoTimestamp)
+            )
+            val videoSegmentSeconds = runCatching {
+                defaults.get("videoSegmentSeconds")?.asInt
+                    ?: LlamaVideoProfileLimits.LEGACY_SEGMENT_SECONDS
+            }.getOrDefault(LlamaVideoProfileLimits.LEGACY_SEGMENT_SECONDS)
+            defaults.addProperty(
+                "videoSegmentSeconds",
+                LlamaVideoProfileLimits.normalizeSegmentSeconds(videoSegmentSeconds)
+            )
+            val videoMaxFrames = runCatching {
+                defaults.get("videoMaxFrames")?.asInt
+                    ?: LlamaVideoProfileLimits.DEFAULT_MAX_FRAMES
+            }.getOrDefault(LlamaVideoProfileLimits.DEFAULT_MAX_FRAMES)
+            defaults.addProperty(
+                "videoMaxFrames",
+                LlamaVideoProfileLimits.normalizeMaxFrames(videoMaxFrames)
+            )
+            val videoMaxFps = runCatching {
+                defaults.get("videoMaxFps")?.asFloat
+                    ?: LlamaVideoProfileLimits.DEFAULT_MAX_FPS
+            }.getOrDefault(LlamaVideoProfileLimits.DEFAULT_MAX_FPS)
+            defaults.addProperty(
+                "videoMaxFps",
+                LlamaVideoProfileLimits.normalizeMaxFps(videoMaxFps)
+            )
+            // A missing audio preference belongs to a pre-audio profile. Keep
+            // those profiles safe and opt-in; newly captured settings explicitly
+            // write true when the user has not disabled audio.
+            val videoAudio = root.get("videoAudioEnabled")
+                ?.takeUnless { it.isJsonNull }
+                ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }
+                ?.asBoolean
+                ?: false
+            defaults.addProperty("videoAudioEnabled", videoAudio)
+            val videoWhisperParallel = root.get("videoWhisperParallelEnabled")
+                ?.takeUnless { it.isJsonNull }
+                ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }
+                ?.asBoolean
+                ?: false
+            defaults.addProperty("videoWhisperParallelEnabled", videoWhisperParallel)
             return defaults
         }
 
@@ -399,6 +558,14 @@ data class LlamaServerLaunchProfile(
             settings.setSelectedModelPath(profile.modelPath)
             settings.setSelectedMmprojPath(profile.mmprojPath)
             settings.setEnableVision(profile.visionEnabled)
+            settings.setLlamaVideoEnabled(profile.videoEnabled)
+            settings.setLlamaVideoFps(profile.videoFps)
+            settings.setLlamaVideoTimestampIntervalMs(profile.videoTimestampIntervalMs)
+            settings.setLlamaVideoSegmentSeconds(profile.videoSegmentSeconds)
+            settings.setLlamaVideoMaxFrames(profile.videoMaxFrames)
+            settings.setLlamaVideoMaxFps(profile.videoMaxFps)
+            settings.setLlamaVideoAudioEnabled(profile.videoAudioEnabled)
+            settings.setLlamaVideoWhisperParallelEnabled(profile.videoWhisperParallelEnabled)
             settings.setSelectedLlmLoras(profile.resolvedLoras())
             settings.setRemoteAccess(profile.host == "0.0.0.0")
             settings.setServerPort(profile.serverPort)

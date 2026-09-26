@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="llm_video_settings_title">Video input</string>
+    <string name="llm_video_settings_desc">Enable video input for this vision-capable model.</string>
+    <string name="llm_video_global_policy_hint">Segmenting, frame limits, direct audio, and Native Chat Whisper are controlled by the global video policy in Video Summary.</string>
+    <string name="llm_video_server_fps">Server video FPS: %1$.1f</string>
+    <string name="llm_video_timestamp_interval">Timestamp interval: %1$d ms</string>
+    <string name="llm_video_segment_seconds">Long-video segment length: %1$d seconds</string>
+    <string name="llm_video_segment_recommendation">Recommended for small phones: %1$d seconds keeps each request bounded.</string>
+    <string name="llm_video_max_frames">Maximum frames per segment: %1$d</string>
+    <string name="llm_video_max_fps">Maximum extraction FPS: %1$.1f</string>
+    <string name="llm_video_audio_title">Include video audio</string>
+    <string name="llm_video_audio_desc">Send the audio track when the selected server supports direct audio.</string>
+    <string name="llm_video_whisper_parallel_title">Process audio with Whisper in parallel</string>
+    <string name="llm_video_whisper_parallel_desc">Use Whisper alongside visual processing when a Whisper model is configured.</string>
+    <string name="llm_video_low_end_warning">Longer segments, more frames, and parallel audio use more memory on small phones.</string>
+    <string name="video_profile_fps">Sampling rate: %1$.1f FPS</string>
+    <string name="video_profile_timestamp">Timestamp interval: %1$d ms</string>
+    <string name="video_profile_sampling_hint">Saved with this local server. Long videos may use a lower rate to stay within frame and context limits.</string>
+</resources>

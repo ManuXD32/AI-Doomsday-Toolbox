@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="audio_bundle_shared_title">Componentes de audio compartidos</string>
+    <string name="audio_bundle_shared_description">Estos componentes se descargan una vez y se reutilizan para Música y Efectos de sonido.</string>
+    <string name="audio_bundle_shared_status">%1$d de %2$d componentes compartidos listos · %3$d%%</string>
+    <string name="audio_bundle_picker_empty">Todavía no hay un paquete verificado para esta familia de audio.</string>
+    <string name="audio_bundle_picker_components">%1$d de %2$d componentes instalados</string>
+    <string name="audio_bundle_picker_selected">Paquete seleccionado</string>
+    <string name="audio_bundle_picker_use">Usar este paquete</string>
+    <string name="audio_bundle_picker_download">Descargar paquete</string>
+    <string name="audio_bundle_picker_downloading">Descarga en curso</string>
+    <string name="audio_bundle_picker_download_progress">Descarga del paquete: %1$d%%</string>
+    <string name="audio_bundle_download_start_error">No se pudo iniciar la descarga del paquete. Inténtalo de nuevo.</string>
+</resources>

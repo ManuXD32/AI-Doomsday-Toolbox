@@ -64,20 +64,32 @@ object LlamaModelMetadataProbe {
         val probeDir = File(probeRoot, fingerprint.hashCode().toUInt().toString())
             .apply { mkdirs() }
         val probePort = ServerSocket(0).use { it.localPort }
+        val libraryPath = BinaryRepository(context.applicationContext).getLibraryDir()
+        val probeEnvironment = mapOf(
+            "LD_LIBRARY_PATH" to libraryPath,
+            "HOME" to probeDir.absolutePath,
+            "PWD" to probeDir.absolutePath,
+            "TMPDIR" to probeDir.absolutePath
+        )
         var process: Process? = null
         var readerThread: Thread? = null
         val observedLines = AtomicInteger(0)
         try {
             require(timeoutMs > 0L) { "Probe timeout must be positive" }
-            val command = buildProbeCommand(binary, model, probePort)
+            val command = buildProbeCommand(
+                binary = binary,
+                model = model,
+                port = probePort,
+                capabilities = LlamaBinaryCapabilityCache.capabilitiesOrNull(
+                    binary = binary,
+                    workingDirectory = probeDir,
+                    environment = probeEnvironment
+                )
+            )
             val builder = ProcessBuilder(command)
                 .directory(probeDir)
                 .redirectErrorStream(true)
-            val libraryPath = BinaryRepository(context.applicationContext).getLibraryDir()
-            builder.environment()["LD_LIBRARY_PATH"] = libraryPath
-            builder.environment()["HOME"] = probeDir.absolutePath
-            builder.environment()["PWD"] = probeDir.absolutePath
-            builder.environment()["TMPDIR"] = probeDir.absolutePath
+            builder.environment().putAll(probeEnvironment)
             process = builder.start()
             DebugLog.log("[LlamaModelMetadataProbe] Started bounded metadata check (${timeoutMs}ms)")
 
@@ -194,19 +206,29 @@ object LlamaModelMetadataProbe {
         )
     }
 
-    internal fun buildProbeCommand(binary: File, model: File, port: Int): List<String> = listOf(
-        binary.absolutePath,
-        "--model", model.absolutePath,
-        "--ctx-size", "8",
-        "--threads", "1",
-        "--batch-size", "8",
-        "--no-warmup",
-        "--device", "none",
-        "--n-gpu-layers", "0",
-        "--host", "127.0.0.1",
-        "--port", port.toString(),
-        "--verbose"
-    )
+    internal fun buildProbeCommand(
+        binary: File,
+        model: File,
+        port: Int,
+        capabilities: LlamaBinaryCapabilities? = null
+    ): List<String> {
+        fun flag(longFlag: String, shortFlag: String): String =
+            capabilities?.preferredFlag(longFlag, shortFlag) ?: longFlag
+
+        return listOf(
+            binary.absolutePath,
+            flag("--model", "-m"), model.absolutePath,
+            flag("--ctx-size", "-c"), "8",
+            flag("--threads", "-t"), "1",
+            flag("--batch-size", "-b"), "8",
+            "--no-warmup",
+            flag("--device", "-dev"), "none",
+            flag("--n-gpu-layers", "-ngl"), "0",
+            "--host", "127.0.0.1",
+            "--port", port.toString(),
+            "--verbose"
+        )
+    }
 
     internal fun fingerprint(model: File, binary: File): String = listOf(
         model.absolutePath,

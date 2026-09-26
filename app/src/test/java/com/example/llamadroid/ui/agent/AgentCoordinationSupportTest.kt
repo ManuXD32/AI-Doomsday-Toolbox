@@ -2,6 +2,7 @@ package com.example.llamadroid.ui.agent
 
 import com.example.llamadroid.data.db.AiRuntimeJobEntity
 import com.example.llamadroid.service.AgentWorkspaceBackendType
+import com.example.llamadroid.service.AgentService
 import com.example.llamadroid.service.AiRuntimeJobStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -60,6 +61,203 @@ class AgentCoordinationSupportTest {
                 liveMessagesEmpty = true
             )
         )
+    }
+
+    @Test
+    fun `cold restore surfaces stale idle conversation with an enqueued continuation`() {
+        assertTrue(
+            shouldSurfaceColdRecovery(
+                hasLiveOwner = false,
+                hasOpenTurnContext = true,
+                hasPendingToolContinuation = true,
+                latestBoundaryEventType = "generation_finished",
+                latestBoundaryStatus = "tool_calls"
+            )
+        )
+    }
+
+    @Test
+    fun `cold restore ignores an old open context after a terminal boundary`() {
+        assertFalse(
+            shouldSurfaceColdRecovery(
+                hasLiveOwner = false,
+                hasOpenTurnContext = true,
+                hasPendingToolContinuation = true,
+                latestBoundaryEventType = "generation_finished",
+                latestBoundaryStatus = "stop",
+                latestBoundaryTimestamp = 200L,
+                pendingContinuationTimestamp = 100L
+            )
+        )
+    }
+
+    @Test
+    fun `cold restore ignores stale continuation after a terminal session boundary`() {
+        assertFalse(
+            shouldSurfaceColdRecovery(
+                hasLiveOwner = false,
+                hasOpenTurnContext = true,
+                hasPendingToolContinuation = true,
+                latestBoundaryEventType = "agent_session_end",
+                latestBoundaryStatus = "SUCCESS",
+                latestBoundaryTimestamp = 200L,
+                pendingContinuationTimestamp = 100L
+            )
+        )
+    }
+
+    @Test
+    fun `cold restore keeps an unfinished tool result recoverable`() {
+        assertTrue(
+            shouldSurfaceColdRecovery(
+                hasLiveOwner = false,
+                hasOpenTurnContext = false,
+                hasPendingToolContinuation = true,
+                latestBoundaryEventType = "tool_result",
+                latestBoundaryStatus = "ERROR",
+                latestBoundaryTimestamp = 200L,
+                pendingContinuationTimestamp = 150L
+            )
+        )
+    }
+
+    @Test
+    fun `cold restore ignores stale continuation after successful finish task`() {
+        assertFalse(
+            shouldSurfaceColdRecovery(
+                hasLiveOwner = false,
+                hasOpenTurnContext = true,
+                hasPendingToolContinuation = true,
+                latestBoundaryEventType = "tool_output_prepared",
+                latestBoundaryStatus = "OK",
+                latestBoundaryToolName = "finish_task",
+                latestBoundaryTimestamp = 200L,
+                pendingContinuationTimestamp = 100L
+            )
+        )
+    }
+
+    @Test
+    fun `cold restore recognizes a tool call boundary still awaiting execution`() {
+        assertTrue(
+            shouldSurfaceColdRecovery(
+                hasLiveOwner = false,
+                hasOpenTurnContext = true,
+                hasPendingToolContinuation = false,
+                latestBoundaryEventType = "tool_call",
+                latestBoundaryStatus = "OK"
+            )
+        )
+    }
+
+    @Test
+    fun `cold restore keeps a newer continuation after a terminal model boundary`() {
+        assertTrue(
+            shouldSurfaceColdRecovery(
+                hasLiveOwner = false,
+                hasOpenTurnContext = true,
+                hasPendingToolContinuation = true,
+                latestBoundaryEventType = "generation_finished",
+                latestBoundaryStatus = "stop",
+                latestBoundaryTimestamp = 100L,
+                pendingContinuationTimestamp = 200L
+            )
+        )
+    }
+
+    @Test
+    fun `cold restore recognizes an assistant generation with no terminal boundary`() {
+        assertTrue(
+            shouldSurfaceColdRecovery(
+                hasLiveOwner = false,
+                hasOpenTurnContext = true,
+                hasPendingToolContinuation = false,
+                latestBoundaryEventType = "chat_message_assistant",
+                latestBoundaryStatus = "RUNNING"
+            )
+        )
+    }
+
+    @Test
+    fun `cold restore never interrupts a conversation still owned by the service`() {
+        assertFalse(
+            shouldSurfaceColdRecovery(
+                hasLiveOwner = true,
+                hasOpenTurnContext = true,
+                hasPendingToolContinuation = true,
+                latestBoundaryEventType = "chat_message_assistant",
+                latestBoundaryStatus = "RUNNING"
+            )
+        )
+    }
+
+    @Test
+    fun `selected interrupted conversation exposes explicit recovery only when idle`() {
+        assertTrue(
+            shouldShowSelectedConversationRecovery(
+                selectedConversationId = 9L,
+                conversationId = 9L,
+                resumeState = "INTERRUPTED",
+                isWorking = false,
+                hasLiveOwner = false
+            )
+        )
+        assertFalse(
+            shouldShowSelectedConversationRecovery(
+                selectedConversationId = 9L,
+                conversationId = 9L,
+                resumeState = AgentService.RESUME_STATE_IDLE,
+                isWorking = false,
+                hasLiveOwner = false
+            )
+        )
+        assertFalse(
+            shouldShowSelectedConversationRecovery(
+                selectedConversationId = 9L,
+                conversationId = 9L,
+                resumeState = "INTERRUPTED",
+                isWorking = true,
+                hasLiveOwner = false
+            )
+        )
+        assertFalse(
+            shouldShowSelectedConversationRecovery(
+                selectedConversationId = 9L,
+                conversationId = 9L,
+                resumeState = "INTERRUPTED",
+                isWorking = false,
+                hasLiveOwner = true
+            )
+        )
+    }
+
+    @Test
+    fun `explicit failure pause exposes Continue after ownership is released`() {
+        assertTrue(shouldShowSelectedConversationRecovery(
+            selectedConversationId = 10L,
+            conversationId = 10L,
+            resumeState = AgentService.RESUME_STATE_NEEDS_DIRECTION,
+            isWorking = false,
+            hasLiveOwner = false
+        ))
+        assertFalse(shouldShowSelectedConversationRecovery(
+            selectedConversationId = 10L,
+            conversationId = 10L,
+            resumeState = AgentService.RESUME_STATE_NEEDS_DIRECTION,
+            isWorking = true,
+            hasLiveOwner = false
+        ))
+    }
+
+    @Test
+    fun `pending user answers do not expose a generic continuation shortcut`() {
+        assertFalse(shouldShowSelectedConversationRecovery(
+            selectedConversationId = 9L,
+            conversationId = 9L,
+            resumeState = AgentService.RESUME_STATE_WAITING_FOR_USER,
+            isWorking = false,
+            hasLiveOwner = false
+        ))
     }
 
     @Test
@@ -168,6 +366,117 @@ class AgentCoordinationSupportTest {
                 activeConversationId = 9L,
                 showConversationLoading = true,
                 liveMessagesEmpty = false
+            )
+        )
+    }
+
+    @Test
+    fun `same process checkpoint does not replace matching live conversation`() {
+        assertTrue(
+            shouldSkipSameProcessRuntimeRestore(
+                selectedConversationId = 9L,
+                liveConversationId = 9L,
+                jobConversationId = 9L,
+                liveMessagesEmpty = false,
+                checkpointProcessGeneration = "process-a",
+                currentProcessGeneration = "process-a",
+                checkpointConversationId = 9L
+            )
+        )
+    }
+
+    @Test
+    fun `different process checkpoint remains eligible for restore`() {
+        assertFalse(
+            shouldSkipSameProcessRuntimeRestore(
+                selectedConversationId = 9L,
+                liveConversationId = 9L,
+                jobConversationId = 9L,
+                liveMessagesEmpty = false,
+                checkpointProcessGeneration = "process-a",
+                currentProcessGeneration = "process-b"
+            )
+        )
+    }
+
+    @Test
+    fun `missing or blank process generation remains eligible for restore`() {
+        assertFalse(
+            shouldSkipSameProcessRuntimeRestore(
+                selectedConversationId = 9L,
+                liveConversationId = 9L,
+                jobConversationId = 9L,
+                liveMessagesEmpty = false,
+                checkpointProcessGeneration = null,
+                currentProcessGeneration = "process-a"
+            )
+        )
+        assertFalse(
+            shouldSkipSameProcessRuntimeRestore(
+                selectedConversationId = 9L,
+                liveConversationId = 9L,
+                jobConversationId = 9L,
+                liveMessagesEmpty = false,
+                checkpointProcessGeneration = " ",
+                currentProcessGeneration = "process-a"
+            )
+        )
+    }
+
+    @Test
+    fun `empty live messages remain eligible for restore`() {
+        assertFalse(
+            shouldSkipSameProcessRuntimeRestore(
+                selectedConversationId = 9L,
+                liveConversationId = 9L,
+                jobConversationId = 9L,
+                liveMessagesEmpty = true,
+                checkpointProcessGeneration = "process-a",
+                currentProcessGeneration = "process-a"
+            )
+        )
+    }
+
+    @Test
+    fun `mismatched conversation identities remain eligible for restore`() {
+        val base = shouldSkipSameProcessRuntimeRestore(
+            selectedConversationId = 9L,
+            liveConversationId = 9L,
+            jobConversationId = 9L,
+            liveMessagesEmpty = false,
+            checkpointProcessGeneration = "process-a",
+            currentProcessGeneration = "process-a"
+        )
+        assertTrue(base)
+        assertFalse(
+            shouldSkipSameProcessRuntimeRestore(
+                selectedConversationId = 9L,
+                liveConversationId = 8L,
+                jobConversationId = 9L,
+                liveMessagesEmpty = false,
+                checkpointProcessGeneration = "process-a",
+                currentProcessGeneration = "process-a"
+            )
+        )
+        assertFalse(
+            shouldSkipSameProcessRuntimeRestore(
+                selectedConversationId = 9L,
+                liveConversationId = 9L,
+                jobConversationId = 8L,
+                liveMessagesEmpty = false,
+                checkpointProcessGeneration = "process-a",
+                currentProcessGeneration = "process-a"
+            )
+        )
+        assertFalse(
+            shouldSkipSameProcessRuntimeRestore(
+                selectedConversationId = 9L,
+                liveConversationId = 9L,
+                jobConversationId = 9L,
+                liveMessagesEmpty = false,
+                checkpointProcessGeneration = "process-a",
+                currentProcessGeneration = "process-a",
+                checkpointConversationId = 8L
             )
         )
     }

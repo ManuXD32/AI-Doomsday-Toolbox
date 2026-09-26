@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_classic_map_simulated_world_title">Simulated World — Development</string>
+    <string name="tama_classic_map_development_badge">Development</string>
+    <string name="tama_classic_map_simulated_world_description">Optional living-world simulation. Your classic Tama map stays the default.</string>
+    <string name="tama_classic_map_return_home">Return home</string>
+    <string name="tama_classic_map_open_shop">Open shop</string>
+    <string name="tama_classic_map_open_farm">Open farm</string>
+    <string name="tama_classic_map_open_dungeon">Open dungeon</string>
+</resources>

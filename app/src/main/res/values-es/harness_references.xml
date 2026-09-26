@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_references_title">Añadir una referencia</string>
+    <string name="harness_references_search">Buscar un archivo, carpeta o sesión</string>
+    <string name="harness_references_root">Raíz del espacio de trabajo</string>
+    <string name="harness_references_parent">Carpeta superior</string>
+    <string name="harness_references_failed">No se pudieron cargar algunas referencias. Reintenta para reconectar.</string>
+    <string name="harness_references_empty">No hay referencias coincidentes</string>
+    <string name="harness_references_session">Sesión</string>
+    <string name="harness_references_folder">Carpeta</string>
+    <string name="harness_references_file">Archivo</string>
+    <string name="harness_references_insert">Insertar referencia</string>
+    <string name="harness_references_browse">Explorar carpeta</string>
+    <string name="harness_references_preview">Vista previa</string>
+</resources>

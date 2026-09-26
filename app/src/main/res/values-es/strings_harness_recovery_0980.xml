@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="agent_proot_terminal_process_exited">El proceso del terminal Debian se detuvo inesperadamente.</string>
+</resources>

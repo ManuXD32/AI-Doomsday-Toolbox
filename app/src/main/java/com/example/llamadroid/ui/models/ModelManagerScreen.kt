@@ -45,10 +45,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_ACTIVE
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.DownloadProgressHolder
+import com.example.llamadroid.data.model.progressForDownloadTask
+import com.example.llamadroid.data.model.stableDownloadTaskOrder
 import com.example.llamadroid.data.model.ModelLibraryManager
+import com.example.llamadroid.data.model.ModelManagerModelTypes
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.data.model.library.ModelFamily
 import com.example.llamadroid.data.model.library.ModelSourceDraft
@@ -74,26 +78,6 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import java.io.File
 
-private fun editableModelTypeOptions(): List<ModelType> = listOf(
-    ModelType.LLM,
-    ModelType.LLM_DRAFT,
-    ModelType.LORA,
-    ModelType.EMBEDDING,
-    ModelType.VISION_PROJECTOR
-)
-
-@Composable
-private fun modelTypeLabel(type: ModelType): String = when (type) {
-    ModelType.LLM,
-    ModelType.VISION -> stringResource(R.string.models_type_llm)
-    ModelType.LLM_DRAFT -> stringResource(R.string.models_type_mtp)
-    ModelType.LORA -> stringResource(R.string.models_type_lora)
-    ModelType.EMBEDDING -> stringResource(R.string.models_type_embedding)
-    ModelType.VISION_PROJECTOR,
-    ModelType.MMPROJ -> stringResource(R.string.models_type_vision_projector)
-    else -> type.name
-}
-
 private data class ModelManagerCategory(
     @StringRes val labelRes: Int,
     val modelTypes: Set<ModelType>
@@ -107,6 +91,13 @@ private val MODEL_MANAGER_CATEGORIES = listOf(
     ModelManagerCategory(
         R.string.models_category_vision_projectors,
         setOf(ModelType.VISION_PROJECTOR, ModelType.MMPROJ)
+    ),
+    ModelManagerCategory(
+        R.string.models_category_audio,
+        setOf(
+            ModelType.LLAMA_TTS,
+            ModelType.LLAMA_TTS_COMPANION
+        )
     )
 )
 
@@ -128,28 +119,18 @@ fun ModelManagerScreen(navController: NavController) {
         stringResource(R.string.models_tab_discover)
     )
     
-    val progressMap by viewModel.downloadProgress.collectAsStateWithLifecycle()
     val installedModelCount by viewModel.installedModels.collectAsStateWithLifecycle()
     val managerDownloadTypeNames = remember {
-        listOf(
-            ModelType.LLM,
-            ModelType.LLM_DRAFT,
-            ModelType.LORA,
-            ModelType.EMBEDDING,
-            ModelType.VISION,
-            ModelType.VISION_PROJECTOR,
-            ModelType.MMPROJ
-        ).map { it.name }
+        ModelManagerModelTypes.llama.map { it.name }
     }
     val managerDownloadTasks by db.downloadTaskDao()
         .observeByModelTypes(managerDownloadTypeNames)
         .collectAsStateWithLifecycle(initialValue = emptyList())
-    val managerProgressKeys = remember(managerDownloadTasks) {
-        managerDownloadTasks.map { it.progressKey }.toSet()
-    }
-    val activeDownloads = progressMap.count {
-        it.key in managerProgressKeys &&
-            (it.value == DownloadProgressHolder.INDETERMINATE || it.value in 0f..0.999f)
+    val activeDownloads = managerDownloadTasks.count {
+        it.status == DOWNLOAD_TASK_STATUS_ACTIVE &&
+            it.liteRtDisplayName == null &&
+            it.artifactFamily != ModelFamily.LITERT.storedValue &&
+            !it.progressKey.startsWith("litert:")
     }
 
     AppScreenScaffold(
@@ -249,6 +230,9 @@ fun InstalledTab(
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val models by viewModel.installedModels.collectAsStateWithLifecycle()
+    val deletionPreview by viewModel.deletionPreview.collectAsStateWithLifecycle()
+    val deletionResult by viewModel.deletionResult.collectAsStateWithLifecycle()
+    val interruptedDeletions by viewModel.interruptedDeletions.collectAsStateWithLifecycle()
     val storageSnapshot = rememberModelStorageInventory()
     val sourceRepository = rememberModelSourceRepository(context)
     val savedSources by sourceRepository.sources.collectAsStateWithLifecycle(initialValue = emptyList())
@@ -282,6 +266,7 @@ fun InstalledTab(
     var editedModelType by remember { mutableStateOf(ModelType.LLM) }
     var editedVisionSupport by remember { mutableStateOf(false) }
     var useForKnowledgeEmbedding by remember { mutableStateOf(false) }
+    var resetClassificationToDetected by remember { mutableStateOf(false) }
     
     // Export picker launcher
     val exportPicker = rememberLauncherForActivityResult(
@@ -389,7 +374,9 @@ fun InstalledTab(
                         ModelType.LLM_DRAFT to stringResource(R.string.models_type_mtp),
                         ModelType.LORA to stringResource(R.string.models_type_lora),
                         ModelType.EMBEDDING to stringResource(R.string.models_type_embedding),
-                        ModelType.VISION_PROJECTOR to stringResource(R.string.models_type_vision_projector)
+                        ModelType.VISION_PROJECTOR to stringResource(R.string.models_type_vision_projector),
+                        ModelType.LLAMA_TTS to stringResource(R.string.model_promote_audio_tts),
+                        ModelType.LLAMA_TTS_COMPANION to stringResource(R.string.model_promote_audio_tts_companion)
                     )
                     
                     modelTypes.forEach { (type, label) ->
@@ -617,6 +604,36 @@ fun InstalledTab(
             contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            deletionResult?.let { result ->
+                item(key = "model-deletion-result-${result.operationId}") {
+                    val successful = result.status == com.example.llamadroid.data.model.library.ModelDeletionStatus.COMPLETED
+                    AppSectionCard {
+                        Text(
+                            text = if (successful) {
+                                stringResource(
+                                    R.string.models_delete_result_completed,
+                                    FormatUtils.formatFileSize(result.reclaimedBytes)
+                                )
+                            } else if (result.errorCode != null) {
+                                modelLibraryErrorText(result.errorCode)
+                            } else {
+                                stringResource(R.string.models_delete_result_retry)
+                            },
+                            color = if (successful) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
+            items(interruptedDeletions, key = { "deletion-recovery-${it.operationId}" }) { operation ->
+                AppSectionCard {
+                    Text(stringResource(R.string.models_delete_interrupted), style = MaterialTheme.typography.titleSmall)
+                    Text(operation.preview.targetLabel, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    TextButton(onClick = { viewModel.retryDeletion(operation.operationId) }) {
+                        Text(stringResource(R.string.action_retry))
+                    }
+                }
+            }
             item {
                 ModelStorageOverviewCard(storageSnapshot, "llm")
             }
@@ -690,7 +707,10 @@ fun InstalledTab(
                                 details = modelCardDetails(model),
                                 actionIcon = Icons.Default.Delete,
                                 actionColor = MaterialTheme.colorScheme.error,
-                                onAction = { pendingDeleteModel = model },
+                                onAction = {
+                                    pendingDeleteModel = model
+                                    viewModel.prepareDelete(model)
+                                },
                                 onExport = { exportModel(model) },
                                 onSource = { sourceAsset = installedAssetForModel(model) },
                                 onRename = {
@@ -703,6 +723,7 @@ fun InstalledTab(
                                     }
                                     editedVisionSupport = model.isVision || model.type == ModelType.VISION
                                     useForKnowledgeEmbedding = model.type == ModelType.EMBEDDING
+                                    resetClassificationToDetected = false
                                     showRenameDialog = true
                                 }
                             )
@@ -744,59 +765,23 @@ fun InstalledTab(
                                 modifier = Modifier.padding(top = 4.dp)
                             )
                         }
-                        Text(stringResource(R.string.models_import_type_label), style = MaterialTheme.typography.labelMedium)
-                        editableModelTypeOptions().forEach { type ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .selectable(
-                                        selected = editedModelType == type,
-                                        onClick = {
-                                            editedModelType = type
-                                            useForKnowledgeEmbedding = type == ModelType.EMBEDDING && useForKnowledgeEmbedding
-                                        }
-                                    )
-                                    .padding(vertical = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                RadioButton(
-                                    selected = editedModelType == type,
-                                    onClick = {
-                                        editedModelType = type
-                                        useForKnowledgeEmbedding = type == ModelType.EMBEDDING && useForKnowledgeEmbedding
-                                    }
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(modelTypeLabel(type))
+                        InstalledModelClassificationControls(
+                            model = modelToRename!!,
+                            editedModelType = editedModelType,
+                            editedVisionSupport = editedVisionSupport,
+                            useForKnowledgeEmbedding = useForKnowledgeEmbedding,
+                            onTypeChange = { type ->
+                                editedModelType = type
+                                useForKnowledgeEmbedding = type == ModelType.EMBEDDING && useForKnowledgeEmbedding
+                            },
+                            onVisionChange = { editedVisionSupport = it },
+                            onEmbeddingChange = { useForKnowledgeEmbedding = it },
+                            onResetToDetected = { type, isVision ->
+                                editedModelType = type
+                                editedVisionSupport = isVision
+                                resetClassificationToDetected = true
                             }
-                        }
-                        if (editedModelType == ModelType.EMBEDDING) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(
-                                    checked = useForKnowledgeEmbedding,
-                                    onCheckedChange = { useForKnowledgeEmbedding = it }
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(stringResource(R.string.models_use_for_kb_embedding))
-                            }
-                        }
-                        if (editedModelType == ModelType.LLM) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Switch(
-                                    checked = editedVisionSupport,
-                                    onCheckedChange = { editedVisionSupport = it }
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(stringResource(R.string.models_vision_toggle_title))
-                                    Text(
-                                        stringResource(R.string.models_vision_toggle_desc),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
+                        )
                     }
                 },
                 confirmButton = {
@@ -806,9 +791,19 @@ fun InstalledTab(
                             val extension = model.filename.substringAfterLast(".", "")
                             val fullNewName = if (extension.isNotEmpty()) "$newModelName.$extension" else newModelName
                             val cleanNewName = fullNewName.trim()
-                            val typeChanged = editedModelType != model.type
+                            val currentEditableType = when (model.type) {
+                                ModelType.VISION -> ModelType.LLM
+                                ModelType.MMPROJ -> ModelType.VISION_PROJECTOR
+                                else -> model.type
+                            }
+                            val typeChanged = editedModelType != currentEditableType
                             val finalVisionSupport = editedModelType == ModelType.LLM && editedVisionSupport
                             val visionChanged = finalVisionSupport != model.isVision
+                            val classificationSource = when {
+                                resetClassificationToDetected -> "AUTO"
+                                typeChanged || visionChanged -> "USER_OVERRIDE"
+                                else -> null
+                            }
                             
                             if (cleanNewName.isNotBlank()) {
                                 scope.launch(Dispatchers.IO) {
@@ -828,13 +823,14 @@ fun InstalledTab(
                                             model.path
                                         }
 
-                                        if (renamed || typeChanged || visionChanged) {
+                                        if (renamed || typeChanged || visionChanged || resetClassificationToDetected) {
                                             db.modelDao().updateMetadata(
                                                 oldFilename = model.filename,
                                                 newFilename = cleanNewName,
                                                 newPath = finalPath,
                                                 newType = editedModelType,
-                                                isVision = finalVisionSupport
+                                                isVision = finalVisionSupport,
+                                                classificationSource = classificationSource
                                             )
                                         }
 
@@ -888,15 +884,43 @@ fun InstalledTab(
 
         pendingDeleteModel?.let { model ->
             AlertDialog(
-                onDismissRequest = { pendingDeleteModel = null },
+                onDismissRequest = {
+                    pendingDeleteModel = null
+                    viewModel.clearDeleteState()
+                },
                 title = { Text(stringResource(R.string.models_delete)) },
-                text = { Text(stringResource(R.string.models_delete_confirm)) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(stringResource(R.string.models_delete_confirm))
+                        val preview = deletionPreview?.takeIf { it.targetKey == model.filename }
+                        if (preview == null) {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        } else {
+                            Text(
+                                stringResource(
+                                    R.string.models_delete_preview,
+                                    preview.files.size,
+                                    preview.protectedPaths.size
+                                ),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            if (preview.dependencies.isNotEmpty()) {
+                                Text(
+                                    stringResource(R.string.models_delete_preview_dependency),
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
+                },
                 confirmButton = {
                     TextButton(
                         onClick = {
                             pendingDeleteModel = null
                             viewModel.deleteModel(model)
                         },
+                        enabled = deletionPreview?.targetKey == model.filename && deletionPreview?.canDelete == true,
                         colors = ButtonDefaults.textButtonColors(
                             contentColor = MaterialTheme.colorScheme.error
                         )
@@ -905,7 +929,10 @@ fun InstalledTab(
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { pendingDeleteModel = null }) {
+                    TextButton(onClick = {
+                        pendingDeleteModel = null
+                        viewModel.clearDeleteState()
+                    }) {
                         Text(stringResource(R.string.action_cancel))
                     }
                 }
@@ -1102,27 +1129,23 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
     val context = LocalContext.current
     val db = remember { AppDatabase.getDatabase(context) }
     val progressMap by viewModel.downloadProgress.collectAsStateWithLifecycle()
-    val modelTypes = remember {
-        listOf(
-            ModelType.LLM,
-            ModelType.LLM_DRAFT,
-            ModelType.LORA,
-            ModelType.EMBEDDING,
-            ModelType.VISION,
-            ModelType.VISION_PROJECTOR,
-            ModelType.MMPROJ
-        )
-    }
+    val modelTypes = ModelManagerModelTypes.llama
     val managerDownloadTypeNames = remember(modelTypes) { modelTypes.map { it.name } }
     val storedManagerTasks by db.downloadTaskDao()
         .observeByModelTypes(managerDownloadTypeNames)
         .collectAsStateWithLifecycle(initialValue = emptyList())
-    val managerProgressKeys = remember(storedManagerTasks) {
-        storedManagerTasks.map { it.progressKey }.toSet()
-    }
-    val activeDownloads = progressMap.filter {
-        it.key in managerProgressKeys &&
-            (it.value == DownloadProgressHolder.INDETERMINATE || it.value in 0f..0.999f)
+    // Room is the source of row identity. The in-memory holder is only a live
+    // progress overlay; using its map key as the Compose identity lets rows
+    // exchange labels when several files share a repository or filename.
+    val activeDownloads = remember(storedManagerTasks) {
+        storedManagerTasks
+            .filter {
+                it.status == DOWNLOAD_TASK_STATUS_ACTIVE &&
+                    it.liteRtDisplayName == null &&
+                    it.artifactFamily != ModelFamily.LITERT.storedValue &&
+                    !it.progressKey.startsWith("litert:")
+            }
+            .stableDownloadTaskOrder()
     }
 
     LazyColumn(
@@ -1134,8 +1157,13 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
                 // The exact model-type query keeps Whisper and its separate VAD
                 // assets out without relying on task-id naming conventions.
                 modelTypes = modelTypes,
-                artifactFamily = com.example.llamadroid.data.model.library.ModelFamily.LLM,
-                includeTask = { task -> task.modelType in modelTypes.map { it.name } }
+                includeTask = { task ->
+                    task.status != DOWNLOAD_TASK_STATUS_ACTIVE &&
+                        task.modelType in modelTypes.map { it.name } &&
+                        task.liteRtDisplayName == null &&
+                        task.artifactFamily != ModelFamily.LITERT.storedValue &&
+                        !task.progressKey.startsWith("litert:")
+                }
             )
         }
 
@@ -1169,7 +1197,12 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
                 }
             }
         } else {
-            items(activeDownloads.toList()) { (repoId, progress) ->
+            items(activeDownloads, key = { it.id }) { task ->
+                val progress = progressMap.progressForDownloadTask(task)
+                    ?: task.totalBytes?.takeIf { it > 0L }?.let {
+                        (task.bytesDownloaded.toFloat() / it.toFloat()).coerceIn(0f, 0.999f)
+                    }
+                    ?: DownloadProgressHolder.INDETERMINATE
                 val isIndeterminate = progress == DownloadProgressHolder.INDETERMINATE
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -1185,13 +1218,13 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    repoId.substringAfterLast("/"),
+                                    task.filename,
                                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    repoId.substringBeforeLast("/", ""),
+                                    task.repoId.ifBlank { task.url.substringBeforeLast("/", "") },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 2,
@@ -1219,11 +1252,7 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
                             // long repository name never squeezes the cancel affordance.
                             IconButton(
                                 onClick = {
-                                    val filename = DownloadProgressHolder.getFilename(repoId)
-                                    if (filename != null) {
-                                        DownloadService.cancelDownload(context, filename, repoId)
-                                    }
-                                    DownloadProgressHolder.removeProgress(repoId)
+                                    DownloadService.cancelDownload(context, task.filename, task.id)
                                 }
                             ) {
                                 Icon(
@@ -1268,6 +1297,7 @@ fun DiscoverTab(viewModel: ModelManagerViewModel) {
     var query by rememberSaveable { mutableStateOf("") }
     val results by viewModel.searchResults.collectAsStateWithLifecycle()
     val isSearching by viewModel.isSearching.collectAsStateWithLifecycle()
+    val searchError by viewModel.searchError.collectAsStateWithLifecycle()
     val progressMap by viewModel.downloadProgress.collectAsStateWithLifecycle()
     val repoVisionCache by viewModel.repoVisionCache.collectAsStateWithLifecycle()
     
@@ -1592,7 +1622,15 @@ fun DiscoverTab(viewModel: ModelManagerViewModel) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 16.dp)
-                    .clip(RoundedCornerShape(4.dp))
+                .clip(RoundedCornerShape(4.dp))
+            )
+        }
+        searchError?.let { code ->
+            Text(
+                text = modelLibraryErrorText(code),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 8.dp)
             )
         }
         
@@ -1605,10 +1643,7 @@ fun DiscoverTab(viewModel: ModelManagerViewModel) {
                 item(key = "phase_c_llama_curated_bundles") {
                     val context = LocalContext.current
                     val settings = remember { com.example.llamadroid.data.SettingsRepository(context) }
-                    com.example.llamadroid.ui.components.CuratedModelBundleSection(
-                        title = stringResource(R.string.phase_c_llama_bundles_title),
-                        description = stringResource(R.string.llama_bundles_desc),
-                        bundles = com.example.llamadroid.data.model.LlamaCuratedBundleCatalog.bundles,
+                    com.example.llamadroid.ui.components.LlamaBundleFolders(
                         onUseBundle = { _, models, _ ->
                             models.firstOrNull { it.type == ModelType.LLM }?.let { settings.setSelectedModelPath(it.path) }
                             models.firstOrNull { it.type == ModelType.VISION_PROJECTOR }?.let {
@@ -1865,6 +1900,9 @@ fun ModelCard(
 @Composable
 private fun modelCardDetails(model: ModelEntity): List<String> = buildList {
     add(stringResource(R.string.models_metadata_type, modelTypeLabel(model.type)))
+    if (model.classificationSource.equals("USER_OVERRIDE", ignoreCase = true)) {
+        add(stringResource(R.string.model_library_manual_override))
+    }
 
     if (model.type == ModelType.LLM || model.type == ModelType.VISION) {
         add(

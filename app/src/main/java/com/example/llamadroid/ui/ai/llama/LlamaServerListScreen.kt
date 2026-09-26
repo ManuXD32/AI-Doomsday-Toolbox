@@ -40,6 +40,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -83,6 +84,8 @@ import com.example.llamadroid.data.repository.LlamaRepository
 import com.example.llamadroid.data.repository.LiteRtModelRepository
 import com.example.llamadroid.service.NativeChatToolConfig
 import com.example.llamadroid.service.LlamaServerLaunchProfile
+import com.example.llamadroid.service.LlamaVideoProfileLimits
+import com.example.llamadroid.service.VideoRecognitionSettingsRepository
 import com.example.llamadroid.service.WhisperLanguages
 import com.example.llamadroid.service.isNativeChatLoopbackHost
 import com.example.llamadroid.ui.components.DraftIntTextField
@@ -214,11 +217,13 @@ private fun LlamaServerDialog(
     onDismiss: () -> Unit,
     onSave: (LlamaServerEntity) -> Unit,
     onLoadOllamaModels: (String, Int, (Result<List<OllamaModel>>) -> Unit) -> Unit,
-    onLoadOllamaCapabilities: (String, Int, String, (Result<Pair<Boolean, Boolean>>) -> Unit) -> Unit,
+    onLoadOllamaCapabilities: (String, Int, String, (Result<Triple<Boolean, Boolean, Boolean>>) -> Unit) -> Unit,
     onLoadLlamaSwapModels: (String, Int, (Result<List<String>>) -> Unit) -> Unit
 ) {
     val dialogKey = initialServer?.id ?: -1L
     val scrollState = rememberScrollState()
+    val context = LocalContext.current
+    val globalVideoSettings = remember(context) { VideoRecognitionSettingsRepository(context) }
 
     var name by remember(dialogKey) { mutableStateOf(initialServer?.name ?: "") }
     var host by remember(dialogKey) { mutableStateOf(initialServer?.host ?: "") }
@@ -228,6 +233,13 @@ private fun LlamaServerDialog(
     }
     var supportsVision by remember(dialogKey) { mutableStateOf(initialServer?.supportsVision ?: false) }
     var supportsAudio by remember(dialogKey) { mutableStateOf(initialServer?.supportsAudio ?: false) }
+    var supportsVideo by remember(dialogKey) {
+        mutableStateOf(
+            initialServer?.takeIf {
+                it.isLlamaServerEngine() || it.isLlamaSwapEngine()
+            }?.supportsVideo == true
+        )
+    }
     var whisperModelPath by remember(dialogKey) { mutableStateOf(initialServer?.whisperModelPath.orEmpty()) }
     var whisperLanguage by remember(dialogKey) {
         mutableStateOf(initialServer?.whisperLanguage?.ifBlank { LlamaServerEntity.DEFAULT_WHISPER_LANGUAGE }
@@ -238,6 +250,18 @@ private fun LlamaServerDialog(
     }
     var saveLocalLaunchProfile by remember(dialogKey) {
         mutableStateOf(initialServer?.localLaunchProfileJson != null)
+    }
+    val savedLaunchProfile = remember(dialogKey) {
+        LlamaServerLaunchProfile.decode(initialServer?.localLaunchProfileJson)
+    }
+    var videoFps by remember(dialogKey) {
+        mutableStateOf(savedLaunchProfile?.videoFps ?: 2f)
+    }
+    var videoTimestampIntervalMs by remember(dialogKey) {
+        mutableStateOf(savedLaunchProfile?.videoTimestampIntervalMs ?: 5_000)
+    }
+    var videoEnabled by remember(dialogKey) {
+        mutableStateOf(savedLaunchProfile?.videoEnabled ?: settingsRepository.llamaVideoEnabled.value)
     }
     var liteRtModelId by remember(dialogKey) { mutableStateOf(initialServer?.liteRtModelId) }
     var liteRtBackend by remember(dialogKey) {
@@ -312,6 +336,7 @@ private fun LlamaServerDialog(
         if (engine == LlamaServerEntity.ENGINE_LITERT_LM) {
             supportsVision = selectedLiteRtModel?.supportsLiteRtVision() == true
             supportsAudio = selectedLiteRtModel?.supportsLiteRtAudio() == true
+            supportsVideo = false
         }
     }
     val canSave = name.isNotBlank() && when (engine) {
@@ -361,18 +386,21 @@ private fun LlamaServerDialog(
         if (host.isBlank() || ollamaModelName.isBlank()) {
             supportsVision = false
             supportsAudio = false
+            supportsVideo = false
             return
         }
         isLoadingOllamaCapabilities = true
         statusMessage = null
         onLoadOllamaCapabilities(host, portInt, ollamaModelName.trim()) { result ->
             isLoadingOllamaCapabilities = false
-            result.onSuccess { (vision, audio) ->
+            result.onSuccess { (vision, audio, video) ->
                 supportsVision = vision
                 supportsAudio = audio
+                supportsVideo = video
             }.onFailure {
                 supportsVision = false
                 supportsAudio = false
+                supportsVideo = false
                 statusMessage = it.message
             }
         }
@@ -423,6 +451,7 @@ private fun LlamaServerDialog(
                             if (engine == LlamaServerEntity.ENGINE_OLLAMA) {
                                 supportsVision = false
                                 supportsAudio = false
+                                supportsVideo = false
                             }
                             if (engine == LlamaServerEntity.ENGINE_LLAMA_SWAP) {
                                 availableOllamaModels = emptyList()
@@ -440,6 +469,7 @@ private fun LlamaServerDialog(
                             if (engine == LlamaServerEntity.ENGINE_OLLAMA) {
                                 supportsVision = false
                                 supportsAudio = false
+                                supportsVideo = false
                             }
                             if (engine == LlamaServerEntity.ENGINE_LLAMA_SWAP) {
                                 availableOllamaModels = emptyList()
@@ -480,6 +510,11 @@ private fun LlamaServerDialog(
                             } else {
                                 false
                             }
+                            supportsVideo = if (initialServer?.isLlamaServerEngine() == true) {
+                                initialServer.supportsVideo
+                            } else {
+                                false
+                            }
                             statusMessage = null
                         },
                         label = { Text(stringResource(R.string.llama_engine_llama_server)) }
@@ -502,6 +537,7 @@ private fun LlamaServerDialog(
                             } else {
                                 false
                             }
+                            supportsVideo = false
                             statusMessage = null
                         },
                         label = { Text(stringResource(R.string.llama_engine_ollama)) }
@@ -527,6 +563,11 @@ private fun LlamaServerDialog(
                             } else {
                                 false
                             }
+                            supportsVideo = if (initialServer?.isLlamaSwapEngine() == true) {
+                                initialServer.supportsVideo
+                            } else {
+                                false
+                            }
                             statusMessage = null
                         },
                         label = { Text(stringResource(R.string.llama_engine_llama_swap)) }
@@ -539,6 +580,7 @@ private fun LlamaServerDialog(
                             port = "0"
                             supportsVision = selectedLiteRtModel?.supportsLiteRtVision() == true
                             supportsAudio = selectedLiteRtModel?.supportsLiteRtAudio() == true
+                            supportsVideo = false
                             if (liteRtModelId == null) {
                                 liteRtModelId = liteRtModels.firstOrNull()?.id
                             }
@@ -617,6 +659,86 @@ private fun LlamaServerDialog(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    if (engine == LlamaServerEntity.ENGINE_LLAMA_SERVER ||
+                        engine == LlamaServerEntity.ENGINE_LLAMA_SWAP
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = stringResource(R.string.llama_video_mode),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Switch(
+                                checked = supportsVideo,
+                                onCheckedChange = { supportsVideo = it }
+                            )
+                        }
+                        Text(
+                            text = stringResource(R.string.llama_video_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    if (isLocalLlamaServer && supportsVideo && saveLocalLaunchProfile) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    stringResource(R.string.llm_video_settings_title),
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    stringResource(R.string.llm_video_settings_desc),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = videoEnabled,
+                                onCheckedChange = { videoEnabled = it }
+                            )
+                        }
+                        if (videoEnabled) {
+                        Text(
+                            stringResource(R.string.video_profile_fps, videoFps),
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                        Slider(
+                            value = videoFps.coerceIn(0.1f, 2f),
+                            onValueChange = { videoFps = it },
+                            valueRange = 0.1f..2f,
+                            steps = 18
+                        )
+                        Text(
+                            stringResource(R.string.video_profile_timestamp, videoTimestampIntervalMs),
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                        Slider(
+                            value = videoTimestampIntervalMs.toFloat().coerceIn(250f, 60_000f),
+                            onValueChange = {
+                                videoTimestampIntervalMs = ((it / 250f).toInt() * 250).coerceIn(250, 60_000)
+                            },
+                            valueRange = 250f..60_000f
+                        )
+                        Text(
+                            stringResource(R.string.video_profile_sampling_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            stringResource(R.string.llm_video_global_policy_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        }
+                    }
 
                     if (engine == LlamaServerEntity.ENGINE_LLAMA_SWAP) {
                         Text(
@@ -775,6 +897,7 @@ private fun LlamaServerDialog(
                                 ollamaModelName = it
                                 supportsVision = false
                                 supportsAudio = false
+                                supportsVideo = false
                                 statusMessage = null
                             },
                             label = { Text(stringResource(R.string.llama_ollama_model_label)) },
@@ -857,6 +980,13 @@ private fun LlamaServerDialog(
                         if (supportsAudio) {
                             LlamaServerBadge(
                                 label = stringResource(R.string.llama_badge_audio),
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+                        if (supportsVideo) {
+                            LlamaServerBadge(
+                                label = stringResource(R.string.llama_video_mode),
                                 containerColor = MaterialTheme.colorScheme.secondaryContainer,
                                 contentColor = MaterialTheme.colorScheme.onSecondaryContainer
                             )
@@ -1059,6 +1189,10 @@ private fun LlamaServerDialog(
                             engine = engine,
                             supportsVision = if (isLiteRtEngine) selectedLiteRtModel?.supportsLiteRtVision() == true else supportsVision,
                             supportsAudio = if (isLiteRtEngine) selectedLiteRtModel?.supportsLiteRtAudio() == true else supportsAudio,
+                            supportsVideo = if (
+                                engine == LlamaServerEntity.ENGINE_LLAMA_SERVER ||
+                                engine == LlamaServerEntity.ENGINE_LLAMA_SWAP
+                            ) supportsVideo else false,
                             modelName = when (engine) {
                                 LlamaServerEntity.ENGINE_OLLAMA,
                                 LlamaServerEntity.ENGINE_LLAMA_SWAP -> ollamaModelName.trim().ifBlank { null }
@@ -1095,7 +1229,22 @@ private fun LlamaServerDialog(
                                 maxToolRounds = defaultMaxToolRounds
                             ),
                             localLaunchProfileJson = if (isLocalLlamaServer && saveLocalLaunchProfile) {
-                                LlamaServerLaunchProfile.encode(LlamaServerLaunchProfile.capture(settingsRepository))
+                                val globalVideoPolicy = globalVideoSettings.snapshot().processingPolicy
+                                LlamaServerLaunchProfile.encode(
+                                    (savedLaunchProfile ?: LlamaServerLaunchProfile.capture(settingsRepository)).copy(
+                                        // supportsVideo describes server capability;
+                                        // the saved profile keeps the user's
+                                        // independent video preference.
+                                        videoEnabled = videoEnabled,
+                                        videoFps = videoFps,
+                                        videoTimestampIntervalMs = videoTimestampIntervalMs,
+                                        videoSegmentSeconds = globalVideoPolicy.segmentSeconds,
+                                        videoMaxFrames = globalVideoPolicy.maxFrames,
+                                        videoMaxFps = globalVideoPolicy.maxFps,
+                                        videoAudioEnabled = globalVideoPolicy.directAudioEnabled,
+                                        videoWhisperParallelEnabled = globalVideoPolicy.nativeChatParallelWhisperEnabled
+                                    )
+                                )
                             } else {
                                 null
                             }
@@ -1566,6 +1715,15 @@ fun LlamaServerCard(
                 if (server.supportsAudio) {
                     LlamaServerBadge(
                         label = stringResource(R.string.llama_badge_audio),
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                }
+                if (server.supportsVideo &&
+                    (server.isLlamaServerEngine() || server.isLlamaSwapEngine())
+                ) {
+                    LlamaServerBadge(
+                        label = stringResource(R.string.llama_video_mode),
                         containerColor = MaterialTheme.colorScheme.secondaryContainer,
                         contentColor = MaterialTheme.colorScheme.onSecondaryContainer
                     )

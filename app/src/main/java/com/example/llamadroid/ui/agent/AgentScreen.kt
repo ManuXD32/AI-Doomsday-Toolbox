@@ -69,20 +69,35 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.llamadroid.data.db.AiRuntimeJobEntity
 import com.example.llamadroid.data.db.AgentConversationEntity
+import com.example.llamadroid.data.db.AgentExecutionProfile
+import com.example.llamadroid.data.db.AgentDirectReanchorState
+import com.example.llamadroid.data.db.AgentDirectRuntime
 import com.example.llamadroid.data.db.AgentMessageEntity
+import com.example.llamadroid.data.db.AGENT_CONVERSATION_HISTORY_PAGE_SIZE
 import com.example.llamadroid.data.db.AgentProjectFolderEntity
-import com.example.llamadroid.data.db.AgentRuntimeProfile
+import com.example.llamadroid.data.db.AgentProotEnvironmentEntity
+import com.example.llamadroid.data.db.AgentProotEnvironmentSharingMode
+import com.example.llamadroid.data.db.AgentProotEnvironmentStatus
+import com.example.llamadroid.data.db.AgentProotRunEntity
+import com.example.llamadroid.data.db.AgentProotRunStatus
 import com.example.llamadroid.data.db.KnowledgeBaseEntity
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.repository.KnowledgeBaseRepository
 import com.example.llamadroid.service.AgentForegroundService
+import com.example.llamadroid.service.AgentDirectBackend
 import com.example.llamadroid.service.AgentLocalRuntimeCapabilities
 import com.example.llamadroid.service.AgentLocalWorkspaceSupport
+import com.example.llamadroid.service.AgentProjectControlPlane
+import com.example.llamadroid.service.AgentRuntimeSupport
 import com.example.llamadroid.service.AiRuntimeJobStore
 import com.example.llamadroid.service.AgentWorkspaceBackendType
+import com.example.llamadroid.data.proot.AgentProotEnvironmentManager
+import com.example.llamadroid.data.proot.AgentProotEnvironmentSpec
 import com.example.llamadroid.service.AgentSkillRepository
 import com.example.llamadroid.service.AgentService
+import com.example.llamadroid.service.AgentToolSchemaPolicy
+import com.example.llamadroid.service.AgentSleepWakeScheduler
 import com.example.llamadroid.service.GenerationDiagnosticsStore
 import com.example.llamadroid.service.OllamaService
 import com.example.llamadroid.service.StagedFileCache
@@ -92,6 +107,8 @@ import com.example.llamadroid.sd.isSdImageMainModel
 import com.example.llamadroid.service.supportsSdTxt2Img
 import com.example.llamadroid.ui.components.ApprovalQueueDialog
 import com.example.llamadroid.ui.components.AppPageBackground
+import com.example.llamadroid.ui.components.AppStateKind
+import com.example.llamadroid.ui.components.AppStatePanel
 import com.example.llamadroid.ui.navigation.Screen
 import java.io.File
 import java.text.SimpleDateFormat
@@ -128,7 +145,7 @@ private fun formatAgentString(template: String, vararg args: Any?): String =
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AgentScreen(
+private fun RetiredAgentScreen(
     navController: NavController,
     initialConversationId: Long? = null
 ) {
@@ -149,6 +166,7 @@ fun AgentScreen(
     val resumeSystemNoteFormat = stringResource(R.string.agent_resume_system_note)
     val projectDefaultPrefixText = stringResource(R.string.agent_project_default_prefix)
     val readyMessageFormat = stringResource(R.string.agent_ready_msg)
+    val localReadyMessageFormat = stringResource(R.string.agent_harness_local_ready)
     val compactionRequestedText = stringResource(R.string.agent_compaction_requested)
     val retryDebugStartFormat = stringResource(R.string.agent_retry_debug_start)
     val retryDebugSshFormat = stringResource(R.string.agent_retry_debug_ssh)
@@ -160,6 +178,8 @@ fun AgentScreen(
     val blankPlanText = stringResource(R.string.soft_studio_conversations_plan_blank)
     val wrongPlanProjectText = stringResource(R.string.soft_studio_conversations_plan_wrong_project)
     val defaultProjectName = stringResource(R.string.soft_studio_conversations_default_project)
+    val remoteProjectErrorFormat = stringResource(R.string.agent_project_create_remote_error)
+    val projectCreateErrorFormat = stringResource(R.string.agent_project_create_error)
     val scope = rememberCoroutineScope()
 
     // Services
@@ -207,18 +227,19 @@ fun AgentScreen(
     val currentProjectFolder by AgentService.currentProjectFolder.collectAsStateWithLifecycle()
     val currentWorkspaceBackend by AgentService.currentWorkspaceBackend.collectAsStateWithLifecycle()
     val currentPlanningModeEnabled by AgentService.currentPlanningModeEnabled.collectAsStateWithLifecycle()
+    val promptContextSnapshot by AgentService.promptContextSnapshot.collectAsStateWithLifecycle()
+    val lastFinishReason by AgentService.lastFinishReason.collectAsStateWithLifecycle()
+    val lastDirectNextAction by AgentService.lastDirectNextAction.collectAsStateWithLifecycle()
+    val lastGenerationUsage by AgentService.lastGenerationUsage.collectAsStateWithLifecycle()
 
     // UI Local state
     var inputText by rememberSaveable { mutableStateOf("") }
     var attachedImagePath by remember { mutableStateOf<String?>(null) }
     var imagePreviewPath by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
-    val agentBackend by settingsRepository.agentBackend.collectAsStateWithLifecycle()
     val ollamaUrl by ollamaService.baseUrl.collectAsStateWithLifecycle()
     val globalRuntimeOverride by settingsRepository.agentGlobalRuntimeOverride.collectAsStateWithLifecycle()
-    val runtimeProfiles by remember(runtimeProfileStore) {
-        runtimeProfileStore.observeProfiles()
-    }.collectAsState(initial = emptyList())
+    val directRuntimeDefaults by settingsRepository.agentDirectRuntimeDefaults.collectAsStateWithLifecycle()
     val runtimeEndpointConfigs by remember(runtimeProfileStore) {
         runtimeProfileStore.observeEndpointConfigs()
     }.collectAsState(initial = emptyList())
@@ -228,26 +249,16 @@ fun AgentScreen(
             customAgentName = activeCustomAgent?.name
         )
     }
-    val currentRuntimeProfile = runtimeProfiles.firstOrNull {
-        it.agentKey == activeRuntimeProfileKey
-    }
     val effectiveRuntimeProfile = remember(
-        currentRuntimeProfile,
         activeRuntimeProfileKey,
-        globalRuntimeOverride
+        globalRuntimeOverride,
+        directRuntimeDefaults
     ) {
-        when {
-            currentRuntimeProfile != null -> globalRuntimeOverride.applyTo(currentRuntimeProfile)
-            globalRuntimeOverride.enabled -> AgentRuntimeProfile(
-                agentKey = activeRuntimeProfileKey,
-                backend = globalRuntimeOverride.backend,
-                model = globalRuntimeOverride.model,
-                endpointConfigId = globalRuntimeOverride.endpointConfigId,
-                managedLlamaServerId = globalRuntimeOverride.managedLlamaServerId,
-                liteRtModelId = globalRuntimeOverride.liteRtModelId
-            ).normalized()
-            else -> null
-        }
+        directAgentRuntimeProfileForUi(
+            agentKey = activeRuntimeProfileKey,
+            globalOverride = globalRuntimeOverride,
+            directDefaults = directRuntimeDefaults
+        )
     }
     val activeRuntime = remember(
         effectiveRuntimeProfile,
@@ -262,7 +273,7 @@ fun AgentScreen(
     }
     val activeManagedRuntimeServer = activeRuntime.managedServer
     val hasNamedRuntimeEndpoint = activeRuntime.hasNamedEndpoint
-    val effectiveAgentBackend = activeRuntime.backendId ?: agentBackend
+    val effectiveAgentBackend = activeRuntime.backendId ?: directRuntimeDefaults.backend
     val isAgentLlamaServer = SettingsRepository.isLlamaServerBackend(effectiveAgentBackend)
     val isAgentLlamaSwap = SettingsRepository.isLlamaSwapBackend(effectiveAgentBackend)
     val isAgentGlobalLlamaServer = isAgentLlamaServer && activeRuntime.usesGlobalLlamaServer
@@ -332,25 +343,17 @@ fun AgentScreen(
             retestActiveAgentEndpoint()
             return
         }
-        val storedProfile = runtimeProfiles.firstOrNull { it.agentKey == agentKey }
-        val profile = when {
-            storedProfile != null -> globalRuntimeOverride.applyTo(storedProfile)
-            globalRuntimeOverride.enabled -> AgentRuntimeProfile(
-                agentKey = agentKey,
-                backend = globalRuntimeOverride.backend,
-                model = globalRuntimeOverride.model,
-                endpointConfigId = globalRuntimeOverride.endpointConfigId,
-                managedLlamaServerId = globalRuntimeOverride.managedLlamaServerId,
-                liteRtModelId = globalRuntimeOverride.liteRtModelId
-            ).normalized()
-            else -> null
-        }
+        val profile = directAgentRuntimeProfileForUi(
+            agentKey = agentKey,
+            globalOverride = globalRuntimeOverride,
+            directDefaults = directRuntimeDefaults
+        )
         val runtime = resolveAgentRuntimeUi(
             profile = profile,
             endpointConfigs = runtimeEndpointConfigs,
             managedServers = managedRuntimeServers
         )
-        val backend = runtime.backendId ?: agentBackend
+        val backend = runtime.backendId ?: directRuntimeDefaults.backend
         val baseUrl = when {
             runtime.endpointConfig != null -> runtime.endpointConfig.baseUrl
             runtime.managedServer != null -> runtime.managedServer.baseUrl
@@ -477,18 +480,24 @@ fun AgentScreen(
         }
     }
     var showNewProjectDialog by rememberSaveable { mutableStateOf(false) } // New project name dialog
+    var showProotEnvironmentManager by rememberSaveable { mutableStateOf(false) }
     var showCustomTools by remember { mutableStateOf(false) } // Custom Tools screen
     var showCustomAgents by remember { mutableStateOf(false) } // Custom Agents screen
     var showSkillManager by remember { mutableStateOf(false) }
+    var showDetails by rememberSaveable { mutableStateOf(false) }
+    var detailsProjectId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var pendingProotEnvironmentChange by remember { mutableStateOf<Pair<Long, String?>?>(null) }
     var showCommands by remember { mutableStateOf(false) }
     var showTodos by rememberSaveable { mutableStateOf(false) }
-    var showBuildSwitchOffer by remember { mutableStateOf(false) }
     var showProjectManagement by remember { mutableStateOf(false) } // Project Management screen
     var showDeleteConfirmation by remember { mutableStateOf<Long?>(null) } // Delete confirmation dialog
     var pendingDeleteFolder by remember { mutableStateOf<String?>(null) } // Folder to delete
     var pendingDeleteProject by remember { mutableStateOf<AgentConversationEntity?>(null) }
     var newProjectName by rememberSaveable { mutableStateOf("") }
-    var newProjectBackend by rememberSaveable { mutableStateOf(AgentWorkspaceBackendType.REMOTE_SSH) }
+    var newProjectBackend by rememberSaveable { mutableStateOf(AgentWorkspaceBackendType.LOCAL_SANDBOX) }
+    var newProjectProotEnvironmentId by rememberSaveable { mutableStateOf<String?>(null) }
+    var newProjectError by remember { mutableStateOf<String?>(null) }
+    var isCreatingProject by remember { mutableStateOf(false) }
     var targetFolderForNewProject by rememberSaveable { mutableStateOf<Long?>(null) }
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var newFolderName by remember { mutableStateOf("") }
@@ -539,17 +548,68 @@ fun AgentScreen(
     
     // Database and conversation management
     val conversations by db.agentChatDao().getAllConversations().collectAsState(initial = emptyList())
+    val prootEnvironments by db.agentProotEnvironmentDao().observeAll().collectAsState(initial = emptyList())
+    val prootRuns by db.agentProotRunDao().observeAll().collectAsState(initial = emptyList())
     val projectFolders by db.agentChatDao().getProjectFolders().collectAsState(initial = emptyList())
     val knowledgeBases by knowledgeBaseRepository.observeKnowledgeBases().collectAsState(initial = emptyList())
     val activeRuntimeJobs by db.aiRuntimeJobDao().observeActiveJobs().collectAsState(initial = emptyList())
     val localProjectRunStates by agentService.localProjectRunStates.collectAsStateWithLifecycle()
-    val selectedConversationMessageFlow = remember(selectedConversationId) {
-        selectedConversationId?.let { db.agentChatDao().getMessagesForConversation(it) }
+    val historyPager = remember(db) { AgentHistoryPager(db.agentChatDao()) }
+    val selectedConversationRecentMessageFlow = remember(selectedConversationId) {
+        selectedConversationId?.let {
+            db.agentChatDao().getRecentMessagesForConversation(
+                it,
+                AGENT_CONVERSATION_HISTORY_PAGE_SIZE + 1
+            )
+        }
             ?: flowOf(emptyList<AgentMessageEntity>())
     }
-    val selectedConversationEntities by selectedConversationMessageFlow.collectAsState(initial = emptyList())
+    val selectedConversationRecentEntities by selectedConversationRecentMessageFlow.collectAsState(initial = emptyList())
+    var selectedHistoryPage by remember(selectedConversationId) {
+        mutableStateOf<AgentHistoryPage?>(null)
+    }
+    var isLoadingHistory by remember(selectedConversationId) { mutableStateOf(false) }
+    LaunchedEffect(selectedConversationId, selectedConversationRecentEntities) {
+        if (selectedHistoryPage == null || selectedHistoryPage?.atNewest == true) {
+            selectedHistoryPage = AgentHistoryPage.newest(
+                selectedConversationRecentEntities,
+                AGENT_CONVERSATION_HISTORY_PAGE_SIZE
+            )
+        }
+    }
+    val selectedConversationEntities = selectedHistoryPage?.messages.orEmpty()
     val selectedConversationMessages = remember(selectedConversationEntities) {
         selectedConversationEntities.map { AgentService.chatMessageFromEntity(it) }
+    }
+
+    fun loadSelectedHistoryPage(loadOlder: Boolean) {
+        val conversationId = selectedConversationId ?: return
+        val currentPage = selectedHistoryPage ?: return
+        if (isLoadingHistory) return
+        if (loadOlder && !currentPage.hasOlder) return
+        if (!loadOlder && !currentPage.hasNewer) return
+
+        isLoadingHistory = true
+        scope.launch {
+            val result = runCatching {
+                if (loadOlder) {
+                    historyPager.older(conversationId, currentPage)
+                } else {
+                    historyPager.newer(conversationId, currentPage)
+                }
+            }
+            if (selectedConversationId == conversationId) {
+                result.onSuccess { selectedHistoryPage = it }
+                    .onFailure {
+                        Toast.makeText(
+                            context,
+                            R.string.agent_harness_history_load_failed,
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                isLoadingHistory = false
+            }
+        }
     }
 
     val customTools by db.customToolDao().getEnabledTools().collectAsState(initial = emptyList())
@@ -581,7 +641,9 @@ fun AgentScreen(
                 ModelType.SD_CLIP_G,
                 ModelType.SD_T5XXL,
                 ModelType.LLM,
+                ModelType.SD_LLM,
                 ModelType.VISION_PROJECTOR,
+                ModelType.MMPROJ,
                 ModelType.SD_PHOTOMAKER
             )
         )
@@ -661,11 +723,16 @@ fun AgentScreen(
     
 
     suspend fun loadStoredConversationMessages(
-        conversationId: Long?
+        conversationId: Long?,
+        recentOnly: Boolean = false
     ): List<AgentService.Companion.ChatMessage> {
         if (conversationId == null) return emptyList()
-        return db.agentChatDao()
-            .getMessagesForConversationSync(conversationId)
+        val entities = if (recentOnly) {
+            historyPager.newest(conversationId).messages
+        } else {
+            db.agentChatDao().getMessagesForConversationSync(conversationId)
+        }
+        return entities
             .map { AgentService.chatMessageFromEntity(it) }
     }
 
@@ -807,6 +874,9 @@ fun AgentScreen(
             AgentLocalRuntimeCapabilities.fromJson(conversation.runtimeCapabilitiesJson)
         )
         AgentService.setCurrentPlanningModeEnabled(conversation.planningModeEnabled)
+        AgentService.setExecutionProfile(
+            AgentExecutionProfile.normalize(conversation.executionProfile)
+        )
     }
 
     suspend fun activateConversationRuntime(
@@ -820,6 +890,7 @@ fun AgentScreen(
         workspaceBackend: AgentWorkspaceBackendType = AgentWorkspaceBackendType.REMOTE_SSH,
         runtimeCapabilities: AgentLocalRuntimeCapabilities = AgentLocalRuntimeCapabilities(),
         planningModeEnabled: Boolean = true,
+        executionProfile: String = AgentExecutionProfile.DIRECT,
         dismissPicker: Boolean,
         token: Int? = null
     ) {
@@ -865,6 +936,7 @@ fun AgentScreen(
         AgentService.setCurrentProjectFolder(projectFolder)
         AgentService.setCurrentRuntimeCapabilities(runtimeCapabilities)
         AgentService.setCurrentPlanningModeEnabled(planningModeEnabled)
+        AgentService.setExecutionProfile(AgentExecutionProfile.normalize(executionProfile))
         AgentService.clearPlanningImplementationUnlock()
         AgentService.setCurrentAgent(restoredRole)
         AgentService.setCurrentTask(restoredTask)
@@ -878,14 +950,69 @@ fun AgentScreen(
         }
     }
 
+    /**
+     * Reconcile a process-death boundary from Room before relying on the
+     * conversation's resume projection. A runtime job can be gone after the
+     * process dies, while its turn context and tool continuation remain
+     * durable. This only exposes Continue; it never dispatches a new turn.
+     */
+    suspend fun reconcileColdRecoveryState() {
+        val liveConversationId = AgentService.activeConversationId.value
+        val conversationsSnapshot = conversations
+        withContext(Dispatchers.IO) {
+            for (conversation in conversationsSnapshot) {
+                val hasLiveOwner = liveConversationId == conversation.id &&
+                    AgentService.ownsLiveConversation(conversation.id)
+                if (hasLiveOwner || conversation.resumeState != AgentService.RESUME_STATE_IDLE) {
+                    continue
+                }
+                val workflow = db.agentWorkflowDao()
+                val openTurn = workflow.getLatestOpenTurnContext(conversation.id)
+                val pendingContinuation = workflow.getLatestPendingToolContinuation(conversation.id)
+                val hasPendingToolContinuation = pendingContinuation != null
+                if (openTurn == null && !hasPendingToolContinuation) continue
+                val boundary = db.agentChatDao().getLatestAgentTurnBoundaryEvent(conversation.id)
+                if (!shouldSurfaceColdRecovery(
+                        hasLiveOwner = hasLiveOwner,
+                        hasOpenTurnContext = openTurn != null,
+                        hasPendingToolContinuation = hasPendingToolContinuation,
+                        latestBoundaryEventType = boundary?.eventType,
+                        latestBoundaryStatus = boundary?.status,
+                        latestBoundaryToolName = boundary?.toolName,
+                        latestBoundaryTimestamp = boundary?.timestamp,
+                        pendingContinuationTimestamp = pendingContinuation?.enqueuedAt
+                            ?: pendingContinuation?.updatedAt
+                            ?: pendingContinuation?.createdAt
+                    )
+                ) {
+                    continue
+                }
+                // The service can acquire ownership while the Room reads above are in flight.
+                // Recheck immediately before publishing the interruption projection so a live
+                // generation cannot be marked recoverable by this cold-start scan.
+                if (AgentService.activeConversationId.value == conversation.id &&
+                    AgentService.ownsLiveConversation(conversation.id)
+                ) {
+                    continue
+                }
+                db.agentChatDao().updateResumeStateIfIdle(
+                    id = conversation.id,
+                    resumeState = AgentService.RESUME_STATE_INTERRUPTED,
+                    reason = resumeReasonInterruptedText
+                )
+            }
+        }
+    }
+
     suspend fun reconcileRuntimeUiState(triggerResume: Boolean = false) {
-        if (selectedConversationId == null) return
+        val selectedAtStart = selectedConversationId ?: return
         if (triggerResume) {
             AgentForegroundService.requestResume(context)
         }
 
         val liveConversationId = AgentService.activeConversationId.value
         val liveMessages = AgentService.messages.value
+        if (AgentService.ownsLiveConversation(selectedConversationId) && liveConversationId == selectedConversationId) return
         if (shouldAdoptLiveRuntimeConversation(
                 selectedConversationId = selectedConversationId,
                 liveConversationId = liveConversationId,
@@ -907,6 +1034,24 @@ fun AgentScreen(
 
         val activeJob = resolveRelevantAgentJob() ?: return
         val jobConversationId = activeJob.conversationId
+        val checkpointIdentity = withContext(Dispatchers.IO) {
+            runCatching {
+                val checkpoint = JSONObject(activeJob.checkpointJson.orEmpty())
+                checkpoint.optString("processGeneration").takeIf { it.isNotBlank() } to
+                    AgentRuntimeSupport.readOptionalLong(checkpoint, "activeConversationId")
+            }.getOrNull()
+        }
+        if (selectedConversationId != selectedAtStart ||
+            AgentService.activeConversationId.value != liveConversationId) return
+        if (shouldSkipSameProcessRuntimeRestore(
+                selectedConversationId = selectedConversationId,
+                liveConversationId = liveConversationId,
+                jobConversationId = jobConversationId,
+                liveMessagesEmpty = liveMessages.isEmpty(),
+                checkpointProcessGeneration = checkpointIdentity?.first,
+                currentProcessGeneration = AgentService.currentProcessGeneration,
+                checkpointConversationId = checkpointIdentity?.second
+            )) return
         if (jobConversationId != null &&
             shouldAdoptLiveRuntimeConversation(
                 selectedConversationId = selectedConversationId,
@@ -963,7 +1108,10 @@ fun AgentScreen(
             if (token != restoreToken) return
             val restoredRole = AgentService.Companion.AgentRole.values().find { it.name == conv.lastAgentRole }
                 ?: AgentService.Companion.AgentRole.ORCHESTRATOR
-            val restoredMessages = loadStoredConversationMessages(conversationId)
+            val restoredMessages = loadStoredConversationMessages(
+                conversationId,
+                recentOnly = true
+            )
             if (token != restoreToken) return
             activateConversationRuntime(
                 conversationId = conversationId,
@@ -976,6 +1124,7 @@ fun AgentScreen(
                 workspaceBackend = AgentWorkspaceBackendType.fromStored(conv.workspaceBackend),
                 runtimeCapabilities = AgentLocalRuntimeCapabilities.fromJson(conv.runtimeCapabilitiesJson),
                 planningModeEnabled = conv.planningModeEnabled,
+                executionProfile = conv.executionProfile,
                 dismissPicker = dismissPicker,
                 token = token
             )
@@ -1048,7 +1197,8 @@ fun AgentScreen(
         }
     }
 
-    LaunchedEffect(activeRuntimeJobs, runtimeActiveConversationId) {
+    LaunchedEffect(conversations, activeRuntimeJobs, runtimeActiveConversationId) {
+        reconcileColdRecoveryState()
         if (selectedConversationId == null) return@LaunchedEffect
         val activeJob = resolveRelevantAgentJob() ?: return@LaunchedEffect
         val shouldRestoreFromRuntime = activeJob.type == AiRuntimeJobStore.TYPE_AGENT_CHAT &&
@@ -1062,7 +1212,6 @@ fun AgentScreen(
     // tool boundaries and made long remote runs substantially more fragile.
     
     val currentStatusText by AgentService.statusText.collectAsStateWithLifecycle()
-    val promptContextSnapshot by AgentService.promptContextSnapshot.collectAsStateWithLifecycle()
     val lastOrchestratorPromptSnapshot by AgentService.lastOrchestratorPromptSnapshot.collectAsStateWithLifecycle()
     fun triggerAgent(isRedo: Boolean = false) {
         AgentService.sendMessage(
@@ -1101,6 +1250,14 @@ fun AgentScreen(
         }
     }
 
+    fun handleAgentBack() {
+        performAgentBackNavigationFromProject(
+            hasActiveProject = selectedConversationId != null || runtimeConversationId != null,
+            returnToProjectDashboard = { returnToProjectDashboard() },
+            navigateBackToPreviousPage = { navController.navigateAgentBackToPreviousPage() }
+        )
+    }
+
     // Route Back is deliberately independent from the Projects dashboard action above. The
     // dashboard action changes the selected project; leaving this route must preserve that
     // selection and any active runtime continuation so re-entry can resume in place.
@@ -1112,9 +1269,9 @@ fun AgentScreen(
         showCustomTools ||
         showCustomAgents ||
         showSkillManager ||
+        showDetails ||
         showCommands ||
         showTodos ||
-        showBuildSwitchOffer ||
         showProjectManagement ||
         showDeleteConfirmation != null ||
         showNewFolderDialog ||
@@ -1135,7 +1292,7 @@ fun AgentScreen(
             hasEditor = hasAgentEditor
         )
     ) {
-        navController.navigateAgentBackToPreviousPage()
+        handleAgentBack()
     }
 
     fun handleApproval(approved: Boolean, msg: AgentService.Companion.ChatMessage, denyReason: String = "") {
@@ -1193,17 +1350,9 @@ fun AgentScreen(
                 }
             }
         } else if (approved) {
-            AgentService.updateMessage(msg.id) { it.copy(needsApproval = false, isApproved = true) }
-            com.example.llamadroid.service.UnifiedNotificationManager.dismissAgentAttention()
-            val toolCall = msg.pendingToolCall ?: com.example.llamadroid.service.OllamaService.ToolCall(
-                name = msg.toolName ?: "",
-                arguments = msg.toolArgs ?: emptyMap(),
-                id = null
+            AgentService.approvePendingTool(
+                context, ollamaService, settingsRepository, agentService, msg.id
             )
-            scope.launch {
-                agentService.persistVisibleRuntimeStateNow("Tool approval granted for ${msg.toolName.orEmpty()}.")
-            }
-            AgentService.executeToolCall(context, ollamaService, settingsRepository, agentService, toolCall, isForced = true)
         } else {
             AgentService.updateMessage(msg.id) { it.copy(needsApproval = false, isApproved = false) }
             com.example.llamadroid.service.UnifiedNotificationManager.dismissAgentAttention()
@@ -1234,6 +1383,14 @@ fun AgentScreen(
 
     fun continueConversation(conv: AgentConversationEntity) {
         scope.launch {
+            // Re-anchor legacy/specialist state only at the user's explicit
+            // Continue boundary. The DAO operation is idempotent and preserves
+            // files, chat, decisions, approved plans, TODO completion, and
+            // artifact history while cancelling stale worker rows. Ordinary
+            // restore/load paths never perform this migration or call a model.
+            withContext(Dispatchers.IO) {
+                db.agentWorkflowDao().reanchorConversationToDirect(conv.id)
+            }
             beginConversationRestore(conv.id, dismissPicker = true)
             val reason = conv.lastStopReason?.takeIf { it.isNotBlank() }
                 ?: when (conv.resumeState) {
@@ -1255,67 +1412,134 @@ fun AgentScreen(
 
     fun createNewConversation(
         projectName: String = projectDefaultPrefixText + System.currentTimeMillis(),
-        backend: AgentWorkspaceBackendType = AgentWorkspaceBackendType.REMOTE_SSH,
-        parentFolderId: Long? = null
+        backend: AgentWorkspaceBackendType = AgentWorkspaceBackendType.LOCAL_SANDBOX,
+        prootEnvironmentId: String? = null,
+        parentFolderId: Long? = null,
+        onCreated: () -> Unit = {},
+        onFailed: (Throwable) -> Unit = {}
     ) {
         scope.launch {
-            val safeName = projectName.trim().replace(Regex("[^a-zA-Z0-9_-]"), "_").take(50).ifBlank { projectDefaultPrefixText + System.currentTimeMillis() }
-            val sortOrder = (conversations.filter { it.projectFolderId == parentFolderId }.maxOfOrNull { it.sortOrder } ?: -1) + 1
-            val newId = db.agentChatDao().insertConversation(
-                AgentConversationEntity(
-                    title = projectName,
-                    projectFolder = safeName,
-                    projectFolderId = parentFolderId,
-                    sortOrder = sortOrder,
-                    planningModeEnabled = true,
-                    workspaceBackend = backend.name
-                )
-            )
-            restoreToken += 1
-            runtimeConversationId = newId
-            selectedConversationId = newId
-            AgentService.setPreferredConversationId(newId)
-            isConversationRestoring = false
-            initialConversationRestorePending = false
-            hydratingConversationTitle = projectName
-            AgentService.setActiveCustomAgent(null)
-            AgentService.setCurrentWorkspaceBackend(backend)
-            AgentService.setCurrentRuntimeCapabilities(AgentLocalRuntimeCapabilities())
-            AgentService.setCurrentPlanningModeEnabled(true)
-            
-            if (backend == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
-                withContext(Dispatchers.IO) {
-                    AgentLocalWorkspaceSupport.rootForProject(context.applicationContext, safeName)
-                    AgentLocalWorkspaceSupport.resolvePath(context.applicationContext, safeName, "brain")
-                        .mkdirs()
+            try {
+                val safeName = projectName.trim()
+                    .replace(Regex("[^a-zA-Z0-9_-]"), "_")
+                    .take(50)
+                    .ifBlank { projectDefaultPrefixText + System.currentTimeMillis() }
+
+                // Environment creation is a durable metadata operation only. The
+                // packaged image is installed lazily by the PRoot runner after the
+                // project exists, so project creation never starts a process.
+                val resolvedProotEnvironmentId = if (backend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                    withContext(Dispatchers.IO) {
+                        if (prootEnvironmentId != null) {
+                            val existing = db.agentProotEnvironmentDao().getById(prootEnvironmentId)
+                                ?: throw IllegalArgumentException("PROOT_ENVIRONMENT_NOT_FOUND")
+                            require(existing.status != AgentProotEnvironmentStatus.DELETING) {
+                                "PROOT_ENVIRONMENT_UNAVAILABLE"
+                            }
+                            existing.id
+                        } else {
+                            val environment = AgentProotEnvironmentEntity(
+                                displayName = projectName.trim().ifBlank {
+                                    context.getString(R.string.agent_proot_default_name)
+                                },
+                                sharingMode = AgentProotEnvironmentSharingMode.ISOLATED,
+                                status = AgentProotEnvironmentStatus.NOT_INSTALLED
+                            )
+                            db.agentProotEnvironmentDao().insert(environment)
+                            environment.id
+                        }
+                    }
+                } else {
+                    null
                 }
-            } else {
-                if (!AgentService.isConnected.value) agentService.connect()
-            }
-            if (backend == AgentWorkspaceBackendType.REMOTE_SSH && AgentService.isConnected.value) {
-                agentService.executeRawCommand("mkdir -p /workspace/$safeName/brain")
-            }
-            
-            val initialMessages = listOf(
-                AgentService.Companion.ChatMessage(
-                    role = "system",
-                    content = formatAgentString(readyMessageFormat, projectName, safeName)
+
+                // A remote project can only bind to an SSH environment the user already
+                // connected. Project creation never starts or guesses a connection.
+                if (backend == AgentWorkspaceBackendType.REMOTE_SSH) {
+                    val previousBackend = AgentService.currentWorkspaceBackend.value
+                    if (!AgentService.isConnected.value) {
+                        throw IllegalStateException("SSH_CONNECTION_REQUIRED")
+                    }
+                    AgentService.setCurrentWorkspaceBackend(AgentWorkspaceBackendType.REMOTE_SSH)
+                    val connectionResult = agentService.executeRawCommand("true").map { Unit }
+                    if (connectionResult.isFailure || !AgentService.isConnected.value) {
+                        AgentService.setCurrentWorkspaceBackend(previousBackend)
+                        throw IllegalStateException(
+                            "SSH_CONNECTION_REQUIRED",
+                            connectionResult.exceptionOrNull()
+                        )
+                    }
+                }
+
+                val sortOrder = (conversations.filter { it.projectFolderId == parentFolderId }
+                    .maxOfOrNull { it.sortOrder } ?: -1) + 1
+                val newId = db.agentChatDao().insertConversation(
+                    AgentConversationEntity(
+                        title = projectName,
+                        projectFolder = safeName,
+                        projectFolderId = parentFolderId,
+                        sortOrder = sortOrder,
+                        planningModeEnabled = true,
+                        workspaceBackend = backend.name,
+                        prootEnvironmentId = resolvedProotEnvironmentId,
+                        executionProfile = AgentExecutionProfile.DIRECT,
+                        directRuntimeVersion = AgentDirectRuntime.CURRENT_VERSION,
+                        directReanchorState = AgentDirectReanchorState.COMPLETE,
+                        directReanchorReason = "created_direct",
+                        directReanchoredAt = System.currentTimeMillis()
+                    )
                 )
-            )
-            activateConversationRuntime(
-                conversationId = newId,
-                projectFolder = safeName,
-                conversationTitle = projectName,
-                restoredRole = AgentService.Companion.AgentRole.ORCHESTRATOR,
-                restoredTask = null,
-                restoredMessages = initialMessages,
-                workspaceBackend = backend,
-                runtimeCapabilities = AgentLocalRuntimeCapabilities(),
-                planningModeEnabled = true,
-                dismissPicker = true
-            )
-            agentService.persistVisibleRuntimeStateNow("Created new project conversation $safeName.")
-            showConversations = false
+                restoreToken += 1
+                runtimeConversationId = newId
+                selectedConversationId = newId
+                AgentService.setPreferredConversationId(newId)
+                isConversationRestoring = false
+                initialConversationRestorePending = false
+                hydratingConversationTitle = projectName
+                AgentService.setActiveCustomAgent(null)
+                AgentService.setCurrentWorkspaceBackend(backend)
+                AgentService.setCurrentRuntimeCapabilities(AgentLocalRuntimeCapabilities())
+                AgentService.setCurrentPlanningModeEnabled(true)
+
+                if (backend == AgentWorkspaceBackendType.LOCAL_SANDBOX ||
+                    backend == AgentWorkspaceBackendType.LOCAL_PROOT
+                ) {
+                    withContext(Dispatchers.IO) {
+                        AgentLocalWorkspaceSupport.rootForProject(context.applicationContext, safeName)
+                    }
+                }
+
+                val initialMessages = listOf(
+                    AgentService.Companion.ChatMessage(
+                        role = "system",
+                        content = if (backend == AgentWorkspaceBackendType.LOCAL_SANDBOX ||
+                            backend == AgentWorkspaceBackendType.LOCAL_PROOT
+                        ) {
+                            formatAgentString(localReadyMessageFormat, projectName)
+                        } else {
+                            formatAgentString(readyMessageFormat, projectName, safeName)
+                        }
+                    )
+                )
+                activateConversationRuntime(
+                    conversationId = newId,
+                    projectFolder = safeName,
+                    conversationTitle = projectName,
+                    restoredRole = AgentService.Companion.AgentRole.ORCHESTRATOR,
+                    restoredTask = null,
+                    restoredMessages = initialMessages,
+                    workspaceBackend = backend,
+                    runtimeCapabilities = AgentLocalRuntimeCapabilities(),
+                    planningModeEnabled = true,
+                    executionProfile = AgentExecutionProfile.DIRECT,
+                    dismissPicker = true
+                )
+                agentService.persistVisibleRuntimeStateNow("Created new project conversation $safeName.")
+                showConversations = false
+                onCreated()
+            } catch (error: Throwable) {
+                onFailed(error)
+            }
         }
     }
 
@@ -1327,15 +1551,49 @@ fun AgentScreen(
                 selectedConversationId == convId ||
                 AgentService.activeConversationId.value == convId
             val deleteBackend = AgentWorkspaceBackendType.fromStored(conversationToDelete?.workspaceBackend)
+            val prootEnvironmentToDelete = if (
+                deleteBackend == AgentWorkspaceBackendType.LOCAL_PROOT &&
+                conversationToDelete?.prootEnvironmentId != null
+            ) {
+                db.agentProotEnvironmentDao().getById(conversationToDelete.prootEnvironmentId)
+            } else {
+                null
+            }
             if (deletingActiveConversation) {
                 AgentService.stopAllJobs()
-                if (deleteBackend == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
+                if (deleteBackend == AgentWorkspaceBackendType.LOCAL_SANDBOX ||
+                    deleteBackend == AgentWorkspaceBackendType.LOCAL_PROOT
+                ) {
                     agentService.stopLocalProjectRun(force = true)
                 }
             }
+            AgentSleepWakeScheduler.cancelConversation(context.applicationContext, convId)
             AiRuntimeJobStore.deleteByConversationId(context.applicationContext, convId)
             db.agentChatDao().deleteProjectRuns(convId)
             db.agentChatDao().deleteConversationById(convId)
+            if (prootEnvironmentToDelete?.sharingMode == AgentProotEnvironmentSharingMode.ISOLATED) {
+                val environmentDao = db.agentProotEnvironmentDao()
+                if (environmentDao.countProjectReferences(prootEnvironmentToDelete.id) == 0 &&
+                    environmentDao.countActiveRuns(prootEnvironmentToDelete.id) == 0
+                ) {
+                    val storageDelete = withContext(Dispatchers.IO) {
+                        AgentProotEnvironmentManager(context.applicationContext).delete(
+                            prootEnvironmentToDelete.id
+                        )
+                    }
+                    if (storageDelete.isSuccess) {
+                        db.agentProotRunDao().deleteForEnvironment(prootEnvironmentToDelete.id)
+                        environmentDao.deleteById(prootEnvironmentToDelete.id)
+                    } else {
+                        environmentDao.update(
+                            prootEnvironmentToDelete.copy(
+                                status = AgentProotEnvironmentStatus.BROKEN,
+                                updatedAt = System.currentTimeMillis()
+                            )
+                        )
+                    }
+                }
+            }
             if (deletingActiveConversation) {
                 if (fallbackConversationId != null) {
                     beginConversationRestore(fallbackConversationId, dismissPicker = false)
@@ -1356,7 +1614,9 @@ fun AgentScreen(
             }
             if (projectFolder != null && projectFolder.isNotBlank()) {
                 val safeName = AgentLocalWorkspaceSupport.sanitizeProjectFolder(projectFolder)
-                if (deleteBackend == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
+                if (deleteBackend == AgentWorkspaceBackendType.LOCAL_SANDBOX ||
+                    deleteBackend == AgentWorkspaceBackendType.LOCAL_PROOT
+                ) {
                     withContext(Dispatchers.IO) {
                         AgentLocalWorkspaceSupport.deleteProjectRoot(context.applicationContext, safeName)
                     }
@@ -1472,7 +1732,9 @@ fun AgentScreen(
                 ?: runtimeActiveConversationId?.takeIf { it == selectedId }
                 ?: selectedId
         }
-        val activeMessages = if (
+        val activeMessages = if (selectedHistoryPage?.atNewest == false) {
+            selectedConversationMessages
+        } else if (
             shouldPreferLiveRuntimeMessages(
                 selectedConversationId = selectedConversationId,
                 runtimeConversationId = runtimeConversationId,
@@ -1529,6 +1791,10 @@ fun AgentScreen(
         return when (command) {
             "/details" -> {
                 showAllOutput = true
+                detailsProjectId = selectedConversationId
+                    ?: runtimeConversationId
+                    ?: runtimeActiveConversationId
+                showDetails = true
                 clearDraftIfRequested()
                 true
             }
@@ -1568,6 +1834,11 @@ fun AgentScreen(
     }
 
     fun sendMessage() {
+        val immediateCommand = inputText.trim().substringBefore(' ').lowercase()
+        // View commands are available from the project dashboard as well as an active chat.
+        // Handle them before conversation/loading guards because they do not start a model turn.
+        if (inputText.isNotBlank() && handleImmediateViewCommand(immediateCommand, clearDraft = true)) return
+
         val currentConversation = selectedConversationId?.let { selectedId ->
             runtimeConversationId?.takeIf { it == selectedId }
                 ?: runtimeActiveConversationId?.takeIf { it == selectedId }
@@ -1577,14 +1848,15 @@ fun AgentScreen(
         var outgoingText = inputText.trim()
         val command = outgoingText.substringBefore(' ').lowercase()
         val commandRemainder = outgoingText.substringAfter(' ', "").trim()
-        // View commands are intentionally handled before approval/loading gates.
-        // They never alter the active model turn and remain useful while it runs.
-        if (handleImmediateViewCommand(command, clearDraft = true)) return
         if (AgentService.hasPendingPlanApproval()) {
             Toast.makeText(context, R.string.agent_status_awaiting_approval, Toast.LENGTH_SHORT).show()
             return
         }
-        if (isLoading && command in setOf("/plan", "/build", "/compact")) {
+        if (command in setOf("/plan", "/build")) {
+            Toast.makeText(context, R.string.agent_direct_phase_managed, Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (isLoading && command == "/compact") {
             AgentService.queueWorkflowControl(command, commandRemainder)
             inputText = ""
             attachedImagePath = null
@@ -1593,20 +1865,6 @@ fun AgentScreen(
             return
         }
         when (command) {
-            "/plan" -> {
-                AgentService.setCurrentPlanningModeEnabled(true)
-                scope.launch { db.agentChatDao().updatePlanningMode(currentConversation, true) }
-                inputText = commandRemainder
-                if (commandRemainder.isBlank()) return
-                outgoingText = commandRemainder
-            }
-            "/build" -> {
-                AgentService.setCurrentPlanningModeEnabled(false)
-                scope.launch { db.agentChatDao().updatePlanningMode(currentConversation, false) }
-                inputText = commandRemainder
-                if (commandRemainder.isBlank()) return
-                outgoingText = commandRemainder
-            }
             "/compact" -> {
                 AgentService.requestManualCompaction(commandRemainder.takeIf { it.isNotBlank() })
                 AgentService.addMessage(
@@ -1699,6 +1957,7 @@ fun AgentScreen(
         } ?: flowOf(emptyList())
     }
     val queuedOrchestratorInputs by queuedOrchestratorInputsFlow.collectAsState(initial = emptyList())
+    val historyBrowsingActive = selectedHistoryPage?.atNewest == false
     val renderedMessages = remember(
         messages,
         selectedConversationMessages,
@@ -1706,9 +1965,10 @@ fun AgentScreen(
         selectedConversationId,
         runtimeConversationId,
         runtimeActiveConversationId,
-        showConversationLoading
+        showConversationLoading,
+        historyBrowsingActive
     ) {
-        val selectedMessages = if (shouldPreferLiveRuntimeMessages(
+        val selectedMessages = if (!historyBrowsingActive && shouldPreferLiveRuntimeMessages(
                 selectedConversationId = selectedConversationId,
                 runtimeConversationId = runtimeConversationId,
                 activeConversationId = runtimeActiveConversationId,
@@ -1717,12 +1977,14 @@ fun AgentScreen(
             )
         ) {
             messages
-        } else if (shouldUseSelectedConversationPreview(
-                selectedConversationId = selectedConversationId,
-                runtimeConversationId = runtimeConversationId,
-                activeConversationId = activeUiConversationId,
-                showConversationLoading = showConversationLoading
-            )
+        } else if (
+            historyBrowsingActive ||
+                shouldUseSelectedConversationPreview(
+                    selectedConversationId = selectedConversationId,
+                    runtimeConversationId = runtimeConversationId,
+                    activeConversationId = activeUiConversationId,
+                    showConversationLoading = showConversationLoading
+                ) || (messages.isEmpty() && selectedConversationMessages.isNotEmpty())
         ) {
             selectedConversationMessages
         } else {
@@ -1817,6 +2079,66 @@ fun AgentScreen(
     val activeProjectConversation = conversations.firstOrNull { conv ->
         conv.id == (activeUiConversationId ?: selectedConversationId)
     }
+    val selectedConversationRecovery = activeProjectConversation?.takeIf { conversation ->
+        shouldShowSelectedConversationRecovery(
+            selectedConversationId = activeUiConversationId ?: selectedConversationId,
+            conversationId = conversation.id,
+            resumeState = conversation.resumeState,
+            // A stale persisted RUNNING row must not hide recovery after a terminal pause.
+            // Only a live generation attached to this project suppresses Continue here.
+            isWorking = liveGenerationBelongsToSelectedProject,
+            hasLiveOwner = AgentService.ownsLiveConversation(conversation.id)
+        )
+    }
+    val selectedProjectStatusText = when (selectedConversationRecovery?.resumeState) {
+        AgentService.RESUME_STATE_INTERRUPTED -> stringResource(R.string.agent_status_interrupted)
+        AgentService.RESUME_STATE_NEEDS_DIRECTION -> stringResource(R.string.agent_status_needs_direction)
+        AgentService.RESUME_STATE_WAITING_FOR_USER -> stringResource(R.string.agent_status_waiting_for_answer)
+        AgentService.RESUME_STATE_STOPPED_BY_USER -> resumeReasonStoppedByUserText
+        null -> visibleStatusText
+        else -> stringResource(R.string.agent_recovery_waiting_continue)
+    }
+    val directStatusConversationId = activeUiConversationId ?: selectedConversationId
+    val directPhase = directStatusConversationId
+        ?.let(AgentProjectControlPlane::cachedState)
+        ?.mode
+        ?: AgentService.currentHarnessPhase().name
+    val directPhaseLabel = when (directPhase.uppercase(Locale.ROOT)) {
+        "PLAN" -> stringResource(R.string.agent_direct_phase_plan)
+        "BUILD" -> stringResource(R.string.agent_direct_phase_build)
+        "VERIFY" -> stringResource(R.string.agent_direct_phase_verify)
+        "COMPLETE" -> stringResource(R.string.agent_direct_phase_complete)
+        else -> directPhase
+    }
+    val directRuntimeStatus = AgentDirectRuntimeStatus(
+            phase = directPhaseLabel,
+            nextAction = lastDirectNextAction
+                ?.takeIf { it.first == directStatusConversationId }
+                ?.second
+                ?: projectTodos
+                .sortedBy { it.position }
+                .firstOrNull { it.status !in setOf("COMPLETED", "CANCELLED") }
+                ?.text
+                ?: selectedProjectStatusText,
+            promptTokens = selectedContextSnapshot?.actualPromptTokens
+                ?: selectedContextSnapshot?.calibratedRequestTokens
+                ?: selectedContextSnapshot?.packedEstimatedTokens,
+            inputTokens = selectedContextSnapshot?.actualPromptTokens,
+            outputTokens = selectedContextSnapshot?.actualCompletionTokens,
+            // Provider cache counts are optional; keep the row explicit until
+            // the backend reports an actual cached-token value.
+            cachedTokens = selectedContextSnapshot?.actualCachedTokens,
+            lastCacheInvalidation = selectedContextSnapshot?.lastCacheInvalidation,
+            compactionHistory = selectedContextSnapshot?.recentCompactions.orEmpty().take(4).map { event ->
+                AgentDirectCompactionStatus(
+                    timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+                        .format(Date(event.timestamp)),
+                    inputTokens = event.rawEstimatedTokens,
+                    retainedTokens = event.packedEstimatedTokens,
+                    reason = null
+                )
+            }
+        )
     val activeProjectBackend = activeProjectConversation
         ?.let { AgentWorkspaceBackendType.fromStored(it.workspaceBackend) }
         ?: if (activeUiConversationId != null) currentWorkspaceBackend else null
@@ -1832,12 +2154,14 @@ fun AgentScreen(
             AgentForegroundService.reconcileIdleState(context)
         }
     }
-    val selectedProjectNeedsSsh = hasSelectedProject && activeProjectBackend != AgentWorkspaceBackendType.LOCAL_SANDBOX
+    val selectedProjectNeedsSsh = hasSelectedProject && activeProjectBackend == AgentWorkspaceBackendType.REMOTE_SSH
     val activeProjectTitle = activeProjectConversation?.title ?: hydratingConversationTitle
     val activeProjectFolderName = activeProjectConversation?.projectFolder
         ?: currentProjectFolder.takeIf { hasSelectedProject }
     val activeProjectPath = activeProjectFolderName?.let { folderName ->
-        if (activeProjectBackend == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
+        if (activeProjectBackend == AgentWorkspaceBackendType.LOCAL_SANDBOX ||
+            activeProjectBackend == AgentWorkspaceBackendType.LOCAL_PROOT
+        ) {
             AgentLocalWorkspaceSupport.displayRoot(folderName)
         } else {
             "/workspace/$folderName"
@@ -1851,11 +2175,7 @@ fun AgentScreen(
         else -> stringResource(R.string.agent_console_backend_ollama)
     }
     val modelLabel = activeRuntime.model
-        ?: if (currentRuntimeProfile == null) {
-            selectedModel.takeIf { it.isNotBlank() }
-        } else {
-            null
-        }
+        ?: selectedModel.takeIf { it.isNotBlank() }
         ?: stringResource(R.string.agent_console_model_unknown)
     val consoleConnected = hasSelectedProject &&
         (!selectedProjectNeedsSsh || isAgentConnected) &&
@@ -1968,12 +2288,16 @@ fun AgentScreen(
         contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
         topBar = {
             AgentTopBar(
-                onNavigateBack = { navController.navigateAgentBackToPreviousPage() },
+                onNavigateBack = { handleAgentBack() },
                 onShowAgentSettings = { showAgentSettings = true },
                 onShowToolSettings = { showToolSettings = true },
                 onShowSettings = { showConnectionSettings = true },
                 onShowSetupInfo = { showSetupInfo = true },
                 onShowProjectManagement = { showProjectManagement = true },
+                onShowDetails = {
+                    detailsProjectId = activeUiConversationId ?: selectedConversationId
+                    showDetails = true
+                },
                 onShowCustomTools = { showCustomTools = true },
                 onShowCustomAgents = { showCustomAgents = true },
                 onShowSkills = { showSkillManager = true },
@@ -2103,28 +2427,40 @@ fun AgentScreen(
                     connectionLabel = connectionLabel,
                     isConnected = consoleConnected,
                     isRunning = hasSelectedProject && visibleAgentIsWorking,
-                    statusText = visibleStatusText,
+                    statusText = selectedProjectStatusText,
+                    idleStatusText = selectedConversationRecovery?.let { selectedProjectStatusText },
                     contextSnapshot = selectedContextSnapshot,
+                    directRuntimeStatus = directRuntimeStatus,
                     lastSavedAt = relevantRuntimeJob?.updatedAt,
                     planningModeEnabled = currentPlanningModeEnabled,
                     onShowDashboard = { returnToProjectDashboard() },
                     onNavigateToWorkspace = { navController.navigate(Screen.AgentWorkspace.route) },
                     onStopAll = { stopGeneration() },
-                    onPlanningModeChanged = { enabled ->
-                        val conversationId = activeUiConversationId ?: selectedConversationId ?: return@AgentWorkspaceConsoleHeader
-                        AgentService.setCurrentPlanningModeEnabled(enabled)
-                        scope.launch {
-                            db.agentChatDao().updatePlanningMode(conversationId, enabled)
-                        }
-                    },
                     onShowAgentSettings = { showAgentSettings = true },
                     onShowKnowledgeBases = { navController.navigate(Screen.KnowledgeBase.route) }
                 )
 
                 AgentActivityBanner(
-                    statusText = visibleStatusText,
+                    statusText = selectedProjectStatusText,
                     isVisible = hasSelectedProject && visibleAgentIsWorking
                 )
+
+                selectedConversationRecovery?.let { conversation ->
+                    AppStatePanel(
+                        kind = if (conversation.resumeState == AgentService.RESUME_STATE_NEEDS_DIRECTION) {
+                            AppStateKind.Blocked
+                        } else AppStateKind.Interrupted,
+                        title = stringResource(R.string.agent_recovery_waiting_continue),
+                        message = conversation.lastStopReason,
+
+                        actionLabel = stringResource(R.string.action_continue),
+                        onAction = { continueConversation(conversation) },
+                        modifier = Modifier
+                            .padding(horizontal = 12.dp, vertical = 4.dp)
+                            .heightIn(max = 160.dp)
+                            .verticalScroll(rememberScrollState())
+                    )
+                }
 
                 if (showConnectionWarnings) {
                     ConnectionStatusBar(
@@ -2257,9 +2593,16 @@ fun AgentScreen(
                         agentIsLoading = visibleAgentIsWorking,
                         onOpenProject = { loadConversation(it.id) },
                         onContinueProject = { continueConversation(it) },
+                        onShowProjectDetails = { project ->
+                            detailsProjectId = project.id
+                            showDetails = true
+                        },
                         onCreateProject = { parentId ->
                             newProjectName = ""
-                            newProjectBackend = AgentWorkspaceBackendType.REMOTE_SSH
+                            newProjectBackend = AgentWorkspaceBackendType.LOCAL_SANDBOX
+                            newProjectProotEnvironmentId = null
+                            newProjectError = null
+                            isCreatingProject = false
                             targetFolderForNewProject = parentId
                             showNewProjectDialog = true
                         },
@@ -2345,6 +2688,14 @@ fun AgentScreen(
                             // before dispatching the new request.
                             triggerAgent()
                         },
+                        historyPagingEnabled = selectedHistoryPage != null &&
+                            (selectedHistoryPage?.hasOlder == true || selectedHistoryPage?.hasNewer == true),
+                        hasOlderMessages = selectedHistoryPage?.hasOlder == true,
+                        hasNewerMessages = selectedHistoryPage?.hasNewer == true,
+                        isLoadingHistory = isLoadingHistory,
+                        onLoadOlderMessages = { loadSelectedHistoryPage(loadOlder = true) },
+                        onLoadNewerMessages = { loadSelectedHistoryPage(loadOlder = false) },
+                        readOnly = historyBrowsingActive,
                         modifier = Modifier
                             .weight(1f)
                     )
@@ -2437,31 +2788,177 @@ fun AgentScreen(
             }
         )
     }
-    if (showBuildSwitchOffer) {
+    if (showDetails) {
+        val detailsProject = detailsProjectId?.let { id ->
+            conversations.firstOrNull { it.id == id }
+        } ?: activeProjectConversation
+        val detailsBackend = detailsProject?.let {
+            AgentWorkspaceBackendType.fromStored(it.workspaceBackend)
+        }
+        val detailsPath = detailsProject?.projectFolder?.let { folder ->
+            if (detailsBackend == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
+                AgentLocalWorkspaceSupport.displayRoot(folder)
+            } else {
+                "/workspace/$folder"
+            }
+        }
+        val detailsKnowledgeBaseCount = detailsProject?.knowledgeBaseIds
+            ?.split(',')
+            ?.count { it.trim().toLongOrNull()?.let { id -> id > 0L } == true }
+            ?: selectedKnowledgeBaseIds.size
+        val detailsPlanningMode = detailsProject?.planningModeEnabled
+            ?: currentPlanningModeEnabled
+        val detailAgentName = activeCustomAgent?.name ?: currentAgent.name
+        val detailProfile = AgentExecutionProfile.DIRECT
+        val detailPhase = AgentService.currentHarnessPhase()
+        val detailContextLimit = settingsRepository.resolveAgentHarnessContext(
+            detailProfile,
+            detailAgentName
+        )
+        val detailOutputLimit = settingsRepository.resolveAgentHarnessOutputTokens(
+            detailProfile,
+            detailAgentName,
+            when (detailPhase) {
+                com.example.llamadroid.service.AgentHarnessPhase.PLAN -> com.example.llamadroid.service.AgentHarnessStage.CONTROL
+                com.example.llamadroid.service.AgentHarnessPhase.BUILD -> com.example.llamadroid.service.AgentHarnessStage.BUILD
+                com.example.llamadroid.service.AgentHarnessPhase.VERIFY -> com.example.llamadroid.service.AgentHarnessStage.CONTROL
+            },
+            settingsRepository.getAgentMaxOutputTokensForRole(detailAgentName)
+        )
+        val detailToolNames = AgentToolSchemaPolicy.selectDirectToolPalette(
+            tools = AgentService.getAgentTools(currentAgent, activeCustomAgent, settingsRepository),
+            backend = when (detailsBackend) {
+                AgentWorkspaceBackendType.LOCAL_SANDBOX -> AgentDirectBackend.LOCAL
+                AgentWorkspaceBackendType.LOCAL_PROOT -> AgentDirectBackend.PROOT
+                else -> AgentDirectBackend.REMOTE
+            }
+        )
+            .map { it.name }
+            .distinct()
+            .sorted()
+        val detailSkillIds = AgentService.currentLoadedSkillIds()
+        AgentProjectDetailsDialog(
+            title = stringResource(R.string.agent_details_title),
+            scopeDescription = detailsProject?.let {
+                stringResource(R.string.agent_details_project_scope, it.id, detailAgentName)
+            } ?: stringResource(R.string.agent_details_global_scope),
+            projectFields = listOf(
+                stringResource(R.string.agent_details_project_name) to
+                    (detailsProject?.title ?: stringResource(R.string.agent_details_no_project)),
+                stringResource(R.string.agent_details_project_id) to
+                    (detailsProject?.id?.toString() ?: stringResource(R.string.agent_details_no_value)),
+                stringResource(R.string.agent_details_workspace_type) to when (detailsBackend) {
+                    AgentWorkspaceBackendType.LOCAL_SANDBOX -> stringResource(R.string.agent_project_backend_local)
+                    AgentWorkspaceBackendType.LOCAL_PROOT -> stringResource(R.string.agent_proot_backend_label)
+                    AgentWorkspaceBackendType.REMOTE_SSH -> stringResource(R.string.agent_project_backend_remote)
+                    null -> stringResource(R.string.agent_details_no_value)
+                },
+                stringResource(R.string.agent_details_project_path) to
+                    (detailsPath ?: stringResource(R.string.agent_details_no_value)),
+                stringResource(R.string.agent_details_resume_state) to
+                    (detailsProject?.resumeState ?: stringResource(R.string.agent_details_no_value))
+            ),
+            runtimeFields = listOf(
+                stringResource(R.string.agent_details_backend) to backendLabel,
+                stringResource(R.string.agent_details_model) to modelLabel,
+                stringResource(R.string.agent_details_endpoint) to
+                    (activeEndpointBaseUrl?.takeIf { it.isNotBlank() }
+                        ?: stringResource(R.string.agent_details_no_value)),
+                stringResource(R.string.agent_details_connection) to connectionLabel,
+                stringResource(R.string.agent_details_agent) to detailAgentName,
+                stringResource(R.string.agent_details_execution_profile) to
+                    detailProfile,
+                stringResource(R.string.agent_details_phase) to detailPhase.name,
+                stringResource(R.string.agent_details_finish_reason) to
+                    (lastFinishReason ?: stringResource(R.string.agent_details_no_value))
+            ),
+            settingsFields = listOf(
+                stringResource(R.string.agent_details_planning_mode) to
+                    stringResource(if (detailsPlanningMode) R.string.agent_details_plan else R.string.agent_details_build),
+                stringResource(R.string.agent_details_knowledge_bases) to
+                    detailsKnowledgeBaseCount.toString(),
+                stringResource(R.string.agent_details_extra_output) to
+                    stringResource(if (showAllOutput) R.string.agent_details_enabled else R.string.agent_details_disabled),
+                stringResource(R.string.agent_details_context_limit) to detailContextLimit.toString(),
+                stringResource(R.string.agent_details_output_limit) to detailOutputLimit.toString(),
+                stringResource(R.string.agent_details_token_usage) to lastGenerationUsage?.let { usage ->
+                    "${usage.promptTokens ?: 0} / ${usage.completionTokens ?: 0} / ${usage.totalTokens ?: 0}"
+                }.orEmpty().ifBlank { stringResource(R.string.agent_details_no_value) },
+                stringResource(R.string.agent_details_cache_packet) to promptContextSnapshot?.let { snapshot ->
+                    "${snapshot.rawEstimatedTokens} → ${snapshot.packedEstimatedTokens}; ${snapshot.countSource.orEmpty()}"
+                }.orEmpty().ifBlank { stringResource(R.string.agent_details_no_value) },
+                stringResource(R.string.agent_details_active_tools) to
+                    detailToolNames.joinToString(", ").ifBlank { stringResource(R.string.agent_details_no_value) },
+                stringResource(R.string.agent_details_active_skills) to
+                    detailSkillIds.joinToString(", ").ifBlank { stringResource(R.string.agent_details_no_value) }
+            ),
+            prootEnvironments = if (detailsBackend == AgentWorkspaceBackendType.LOCAL_PROOT) prootEnvironments else emptyList(),
+            selectedProotEnvironmentId = detailsProject
+                ?.takeIf { detailsBackend == AgentWorkspaceBackendType.LOCAL_PROOT }
+                ?.prootEnvironmentId,
+            onProotEnvironmentChange = { environmentId ->
+                detailsProject?.id?.let { projectId ->
+                    pendingProotEnvironmentChange = projectId to environmentId
+                }
+            },
+            onManageProotEnvironments = { showProotEnvironmentManager = true },
+            directRuntimeStatus = directRuntimeStatus,
+            onDismiss = {
+                showDetails = false
+                detailsProjectId = null
+            }
+        )
+    }
+    pendingProotEnvironmentChange?.let { (projectId, environmentId) ->
+        val targetEnvironment = environmentId?.let { id -> prootEnvironments.firstOrNull { it.id == id } }
         AlertDialog(
-            onDismissRequest = { showBuildSwitchOffer = false },
-            title = { Text(stringResource(R.string.agent_plan_approved_switch_build)) },
-            text = { Text(stringResource(R.string.agent_mode_build_description)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showBuildSwitchOffer = false
-                        val conversationId = activeUiConversationId
-                        AgentService.setCurrentPlanningModeEnabled(false)
-                        scope.launch {
-                            if (conversationId != null) {
-                                db.agentChatDao().updatePlanningMode(conversationId, false)
-                            }
-                            triggerAgent()
-                        }
-                    }
+            onDismissRequest = { pendingProotEnvironmentChange = null },
+            title = { Text(stringResource(R.string.agent_proot_reassign_title)) },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(stringResource(R.string.agent_switch_to_build))
+                    Text(stringResource(R.string.agent_proot_reassign_message))
+                    targetEnvironment?.let {
+                        Text(
+                            it.displayName,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val selectedId = environmentId
+                        pendingProotEnvironmentChange = null
+                        scope.launch(Dispatchers.IO) {
+                            val conversation = db.agentChatDao().getConversation(projectId)
+                            val oldEnvironmentId = conversation?.prootEnvironmentId
+                            val oldEnvironmentBusy = oldEnvironmentId?.let {
+                                db.agentProotEnvironmentDao().countActiveRuns(it) > 0
+                            } == true
+                            if (conversation != null &&
+                                conversation.workspaceBackend.equals(AgentWorkspaceBackendType.LOCAL_PROOT.name, ignoreCase = true) &&
+                                !oldEnvironmentBusy &&
+                                selectedId != null &&
+                                db.agentProotEnvironmentDao().getById(selectedId) != null
+                            ) {
+                                db.agentProotEnvironmentDao().assignEnvironment(projectId, selectedId)
+                            }
+                        }
+                    },
+                    enabled = targetEnvironment != null
+                ) {
+                    Text(stringResource(R.string.agent_proot_reassign_confirm))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showBuildSwitchOffer = false }) {
-                    Text(stringResource(R.string.agent_mode_plan))
+                TextButton(onClick = { pendingProotEnvironmentChange = null }) {
+                    Text(stringResource(R.string.action_cancel))
                 }
             }
         )
@@ -2574,12 +3071,29 @@ fun AgentScreen(
             availableBackgroundRemovalModels = availableBackgroundRemovalModels,
             onKnowledgeBaseSelectionChange = { updateActiveKnowledgeBases(it) },
             onManageKnowledgeBases = { navController.navigate(Screen.KnowledgeBase.route) },
+            onManageProotEnvironments = { showProotEnvironmentManager = true },
             section = AgentSettingsSection.AGENTS,
             onDismiss = { showAgentSettings = false },
             runtimeProfileStore = runtimeProfileStore,
             managedLlamaServers = managedRuntimeServers,
             onRuntimeContinue = { action ->
                 scope.launch { retestConfiguredAgentEndpoint(action.agentKey) }
+            },
+            currentProfile = activeProjectConversation?.executionProfile,
+            onProfileChange = { profileId ->
+                val conversationId = activeProjectConversation?.id
+                if (conversationId != null) {
+                    val normalizedProfile = AgentExecutionProfile.normalize(profileId)
+                    if (AgentService.activeConversationId.value == conversationId) {
+                        AgentService.setExecutionProfile(normalizedProfile)
+                    }
+                    scope.launch {
+                        db.agentChatDao().updateExecutionProfile(
+                            id = conversationId,
+                            executionProfile = normalizedProfile
+                        )
+                    }
+                }
             }
         )
     }
@@ -2695,19 +3209,95 @@ fun AgentScreen(
             onNameChange = { newProjectName = it },
             backend = newProjectBackend,
             onBackendChange = { newProjectBackend = it },
+            prootEnvironments = prootEnvironments,
+            selectedProotEnvironmentId = newProjectProotEnvironmentId,
+            onProotEnvironmentChange = { newProjectProotEnvironmentId = it },
+            onManageProotEnvironments = { showProotEnvironmentManager = true },
             onCreate = {
+                newProjectError = null
+                isCreatingProject = true
                 createNewConversation(
                     projectName = newProjectName.trim().ifBlank { defaultProjectName },
                     backend = newProjectBackend,
-                    parentFolderId = targetFolderForNewProject
+                    prootEnvironmentId = newProjectProotEnvironmentId,
+                    parentFolderId = targetFolderForNewProject,
+                    onCreated = {
+                        isCreatingProject = false
+                        showNewProjectDialog = false
+                        targetFolderForNewProject = null
+                        newProjectProotEnvironmentId = null
+                    },
+                    onFailed = { error ->
+                        isCreatingProject = false
+                        val detail = error.message
+                            ?.trim()
+                            ?.takeUnless { it == "SSH_CONNECTION_REQUIRED" }
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { "\n\n${it.take(220)}" }
+                            .orEmpty()
+                        newProjectError = formatAgentString(
+                            if (newProjectBackend == AgentWorkspaceBackendType.REMOTE_SSH) {
+                                remoteProjectErrorFormat
+                            } else {
+                                projectCreateErrorFormat
+                            },
+                            detail
+                        )
+                    }
                 )
-                showNewProjectDialog = false
-                targetFolderForNewProject = null
             },
             onDismiss = {
-                showNewProjectDialog = false
-                targetFolderForNewProject = null
-            }
+                if (!isCreatingProject) {
+                    showNewProjectDialog = false
+                    targetFolderForNewProject = null
+                    newProjectProotEnvironmentId = null
+                    newProjectError = null
+                }
+            },
+            errorMessage = newProjectError,
+            isCreating = isCreatingProject
+        )
+    }
+
+    if (showProotEnvironmentManager) {
+        AgentProotEnvironmentManagerDialog(
+            environments = prootEnvironments,
+            projects = conversations,
+            runs = prootRuns,
+            onCreate = { displayName, sharingMode ->
+                scope.launch(Dispatchers.IO) {
+                    db.agentProotEnvironmentDao().insert(
+                        AgentProotEnvironmentEntity(
+                            displayName = displayName,
+                            sharingMode = sharingMode,
+                            status = AgentProotEnvironmentStatus.NOT_INSTALLED
+                        )
+                    )
+                }
+            },
+            onDelete = { environment ->
+                scope.launch(Dispatchers.IO) {
+                    val environmentDao = db.agentProotEnvironmentDao()
+                    val canDelete = environmentDao.countProjectReferences(environment.id) == 0 &&
+                        environmentDao.countActiveRuns(environment.id) == 0
+                    if (canDelete) {
+                        val storageDelete = AgentProotEnvironmentManager(context.applicationContext)
+                            .delete(environment.id)
+                        if (storageDelete.isSuccess) {
+                            db.agentProotRunDao().deleteForEnvironment(environment.id)
+                            environmentDao.deleteById(environment.id)
+                        } else {
+                            environmentDao.update(
+                                environment.copy(
+                                    status = AgentProotEnvironmentStatus.BROKEN,
+                                    updatedAt = System.currentTimeMillis()
+                                )
+                            )
+                        }
+                    }
+                }
+            },
+            onDismiss = { showProotEnvironmentManager = false }
         )
     }
 
@@ -2908,9 +3498,17 @@ fun AgentScreen(
                         showConversations = false
                         continueConversation(conv)
                     },
+                    onShowProjectDetails = { project ->
+                        showConversations = false
+                        detailsProjectId = project.id
+                        showDetails = true
+                    },
                     onCreateProject = { parentId ->
                         newProjectName = ""
-                        newProjectBackend = AgentWorkspaceBackendType.REMOTE_SSH
+                        newProjectBackend = AgentWorkspaceBackendType.LOCAL_SANDBOX
+                        newProjectProotEnvironmentId = null
+                        newProjectError = null
+                        isCreatingProject = false
                         targetFolderForNewProject = parentId
                         showConversations = false
                         showNewProjectDialog = true
@@ -3020,7 +3618,9 @@ fun AgentScreen(
                     if (!deleteFolderName.isNullOrBlank()) {
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            if (deleteBackend == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
+                            if (deleteBackend == AgentWorkspaceBackendType.LOCAL_SANDBOX ||
+                                deleteBackend == AgentWorkspaceBackendType.LOCAL_PROOT
+                            ) {
                                 stringResource(R.string.agent_delete_local_files_warning)
                             } else {
                                 stringResource(R.string.agent_delete_remote_files_warning)
@@ -3035,7 +3635,9 @@ fun AgentScreen(
                             modifier = Modifier.padding(top = 4.dp)
                         ) {
                             Text(
-                                if (deleteBackend == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
+                                if (deleteBackend == AgentWorkspaceBackendType.LOCAL_SANDBOX ||
+                                    deleteBackend == AgentWorkspaceBackendType.LOCAL_PROOT
+                                ) {
                                     AgentLocalWorkspaceSupport.displayRoot(deleteFolderName)
                                 } else {
                                     "/workspace/$deleteFolderName"
@@ -3121,6 +3723,7 @@ private fun AgentProjectDashboard(
     agentIsLoading: Boolean,
     onOpenProject: (AgentConversationEntity) -> Unit,
     onContinueProject: (AgentConversationEntity) -> Unit,
+    onShowProjectDetails: (AgentConversationEntity) -> Unit,
     onCreateProject: (Long?) -> Unit,
     onCreateFolder: (Long?) -> Unit,
     onToggleFolder: (AgentProjectFolderEntity) -> Unit,
@@ -3311,7 +3914,8 @@ private fun AgentProjectDashboard(
                 AgentDashboardFolderRow(
                     folder = folder,
                     onOpen = { currentFolderId = folder.id },
-                    onLongPress = { actionTarget = AgentDashboardActionTarget(folder = folder) }
+                    onLongPress = { actionTarget = AgentDashboardActionTarget(folder = folder) },
+                    onMoreOptions = { actionTarget = AgentDashboardActionTarget(folder = folder) }
                 )
             }
             items(childProjects, key = { project -> "project-${project.id}" }) { project ->
@@ -3344,6 +3948,11 @@ private fun AgentProjectDashboard(
                         if (selectionMode) {
                             selectedProjectIds = (selectedProjectIds + project.id).distinct()
                         } else {
+                            actionTarget = AgentDashboardActionTarget(project = project)
+                        }
+                    },
+                    onMoreOptions = {
+                        if (!selectionMode) {
                             actionTarget = AgentDashboardActionTarget(project = project)
                         }
                     }
@@ -3408,6 +4017,10 @@ private fun AgentProjectDashboard(
                     actionTarget = null
                     walkthroughTargets?.recordEvent("agent.project")
                     onOpenProject(project)
+                }
+                AgentDashboardActionItem(Icons.Default.Info, R.string.agent_details_title) {
+                    actionTarget = null
+                    onShowProjectDetails(project)
                 }
                 if (resumable) {
                     AgentDashboardActionItem(
@@ -3498,7 +4111,8 @@ private fun AgentDashboardActionItem(
 private fun AgentDashboardFolderRow(
     folder: AgentProjectFolderEntity,
     onOpen: () -> Unit,
-    onLongPress: () -> Unit
+    onLongPress: () -> Unit,
+    onMoreOptions: () -> Unit
 ) {
     Card(
         modifier = Modifier
@@ -3517,7 +4131,13 @@ private fun AgentDashboardFolderRow(
         ) {
             Icon(Icons.Default.Folder, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(36.dp))
             Text(folder.name, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
-            Icon(Icons.Default.MoreVert, stringResource(R.string.agent_dashboard_item_options), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            IconButton(onClick = onMoreOptions) {
+                Icon(
+                    Icons.Default.MoreVert,
+                    contentDescription = stringResource(R.string.agent_dashboard_item_options),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
@@ -3531,7 +4151,8 @@ private fun AgentDashboardProjectRow(
     selectionMode: Boolean,
     selected: Boolean,
     onOpen: () -> Unit,
-    onLongPress: () -> Unit
+    onLongPress: () -> Unit,
+    onMoreOptions: () -> Unit
 ) {
     Card(
         modifier = Modifier
@@ -3554,6 +4175,8 @@ private fun AgentDashboardProjectRow(
                 Text(
                     if (project.workspaceBackend == AgentWorkspaceBackendType.LOCAL_SANDBOX.name) {
                         stringResource(R.string.agent_project_backend_local)
+                    } else if (project.workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT.name) {
+                        stringResource(R.string.agent_proot_backend_label)
                     } else {
                         stringResource(R.string.agent_project_backend_remote)
                     },
@@ -3565,7 +4188,16 @@ private fun AgentDashboardProjectRow(
             }
             if (localRunning) AgentStatusPill(stringResource(R.string.agent_dashboard_running), MaterialTheme.colorScheme.primary)
             if (llmWorking) AgentStatusPill(stringResource(R.string.agent_dashboard_llm_working), MaterialTheme.colorScheme.tertiary)
-            Icon(Icons.Default.MoreVert, stringResource(R.string.agent_dashboard_item_options), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            IconButton(
+                onClick = onMoreOptions,
+                enabled = !selectionMode
+            ) {
+                Icon(
+                    Icons.Default.MoreVert,
+                    contentDescription = stringResource(R.string.agent_dashboard_item_options),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
@@ -3776,6 +4408,149 @@ fun AgentKnowledgeBaseSelector(
                                 Text(kb.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Bounded, selectable project/runtime details used by both the chat and project dashboard. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AgentProjectDetailsDialog(
+    title: String,
+    scopeDescription: String,
+    projectFields: List<Pair<String, String>>,
+    runtimeFields: List<Pair<String, String>>,
+    settingsFields: List<Pair<String, String>>,
+    prootEnvironments: List<AgentProotEnvironmentEntity> = emptyList(),
+    selectedProotEnvironmentId: String? = null,
+    onProotEnvironmentChange: (String?) -> Unit = {},
+    onManageProotEnvironments: () -> Unit = {},
+    directRuntimeStatus: AgentDirectRuntimeStatus,
+    onDismiss: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.96f)
+                .fillMaxHeight(0.9f),
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surface
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                TopAppBar(
+                    title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    navigationIcon = {
+                        IconButton(onClick = onDismiss) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = stringResource(R.string.action_close)
+                            )
+                        }
+                    },
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() }
+                )
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    item {
+                        Text(
+                            scopeDescription,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    item {
+                        AgentDirectRuntimeStatusCard(status = directRuntimeStatus)
+                    }
+                    item {
+                        AgentDetailsSection(
+                            title = stringResource(R.string.agent_details_project_section),
+                            fields = projectFields
+                        )
+                    }
+                    item {
+                        AgentDetailsSection(
+                            title = stringResource(R.string.agent_details_runtime_section),
+                            fields = runtimeFields
+                        )
+                    }
+                    item {
+                        AgentDetailsSection(
+                            title = stringResource(R.string.agent_details_settings_section),
+                            fields = settingsFields
+                        )
+                    }
+                    if (prootEnvironments.isNotEmpty() || selectedProotEnvironmentId != null) {
+                        item {
+                            Card {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    AgentProotEnvironmentPicker(
+                                        environments = prootEnvironments,
+                                        selectedEnvironmentId = selectedProotEnvironmentId,
+                                        onSelectionChange = onProotEnvironmentChange,
+                                        allowCreateIsolated = false
+                                    )
+                                    OutlinedButton(
+                                        onClick = onManageProotEnvironments,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(stringResource(R.string.agent_proot_manage_action))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .align(Alignment.End)
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Text(stringResource(R.string.action_close))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentDetailsSection(
+    title: String,
+    fields: List<Pair<String, String>>
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            fields.forEach { (label, value) ->
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    SelectionContainer {
+                        Text(value, style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }

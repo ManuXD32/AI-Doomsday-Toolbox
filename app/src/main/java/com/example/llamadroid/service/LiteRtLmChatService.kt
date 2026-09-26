@@ -69,7 +69,9 @@ data class LiteRtToolDefinition(
     val name: String,
     val description: String,
     val parameters: Map<String, String>,
-    val requiredParams: List<String> = emptyList()
+    val requiredParams: List<String> = emptyList(),
+    /** Original function.parameters JSON, retained when the caller supplies a full schema. */
+    val parameterSchemaJson: String? = null
 )
 
 data class LiteRtToolCallSpec(
@@ -88,16 +90,44 @@ data class LiteRtLmChatStats(
 
 const val LITERT_PARAM_MTP_ENABLED = "litert_mtp_enabled"
 const val LITERT_PARAM_MAX_OUTPUT_TOKENS = "litert_max_output_tokens"
+const val LITERT_PARAM_ENGINE_OWNER = "litert_engine_owner"
 
 private const val LITERT_EXTRA_CONTEXT_ENABLE_THINKING = "enable_thinking"
 private const val LITERT_DEFAULT_CONTEXT_TOKENS = 4000
-private const val LITERT_GPU_SAFE_CONTEXT_TOKENS = 4096
-private const val LITERT_GPU_SAFE_MAX_OUTPUT_TOKENS = 1024
 private const val LITERT_PROMPT_RESERVE_TOKENS = 128
-private const val LITERT_PROMPT_CONTEXT_SAFETY_PERCENT = 90
-private const val LITERT_MIN_PROMPT_CONTEXT_TOKENS = 256
-private const val LITERT_TRUNCATED_MARKER = "[Earlier conversation omitted to fit this LiteRT model context.]"
-private const val LITERT_TRUNCATED_CONTENT_MARKER = "\n[...truncated for LiteRT context...]\n"
+private const val LITERT_PROMPT_MAX_RESERVE_TOKENS = 1_024
+private const val LITERT_PROMPT_ESTIMATE_OVERHEAD_TOKENS = 64
+private const val LITERT_TOOL_DESCRIPTION_MAX_CHARS = 180
+private const val LITERT_TOOL_PARAMETER_DESCRIPTION_MAX_CHARS = 96
+
+private val liteRtProcessGenerationMutex = Mutex()
+
+internal suspend fun <T> withLiteRtProcessGenerationLock(block: suspend () -> T): T =
+    liteRtProcessGenerationMutex.withLock { block() }
+
+internal class LiteRtPromptOverLimitException(
+    val requiredInputTokens: Int,
+    val availableInputTokens: Int,
+) : IllegalStateException(CODE) {
+    companion object {
+        const val CODE = "LITERT_PROMPT_OVER_LIMIT"
+    }
+}
+
+internal fun Throwable.containsLiteRtPromptOverLimit(): Boolean {
+    val seen = java.util.Collections.newSetFromMap(
+        java.util.IdentityHashMap<Throwable, Boolean>()
+    )
+    var current: Throwable? = this
+    while (current != null && seen.add(current)) {
+        if (
+            current is LiteRtPromptOverLimitException ||
+            current.message == LiteRtPromptOverLimitException.CODE
+        ) return true
+        current = current.cause
+    }
+    return false
+}
 
 internal fun effectiveLiteRtEngineMaxTokens(
     model: LiteRtModelEntity,
@@ -153,7 +183,18 @@ private data class LiteRtConversationInput(
     val userImagePath: String? = null,
     val userAudioPath: String? = null,
     val tools: List<LiteRtToolDefinition> = emptyList(),
-    val wasTruncated: Boolean = false
+    val wasTruncated: Boolean = false,
+    val droppedHistoryCount: Int = 0,
+    val droppedToolCount: Int = 0,
+)
+
+private fun LiteRtConversationOverride.toLiteRtConversationInput() = LiteRtConversationInput(
+    systemInstruction = systemInstruction,
+    initialMessages = initialMessages,
+    userMessage = userMessage,
+    userImagePath = userImagePath,
+    userAudioPath = userAudioPath,
+    tools = tools,
 )
 
 class LiteRtLmChatService(
@@ -161,6 +202,9 @@ class LiteRtLmChatService(
     private val allowGpuBackend: Boolean = false,
     private val onDiagnostic: ((String) -> Unit)? = null
 ) {
+    suspend fun releaseOwnedEngines(owner: String): Int =
+        if (owner.isBlank()) 0 else LiteRtLmReflectionBridge(context).releaseOwnedEngines(owner)
+
     fun isEngineLoaded(
         model: LiteRtModelEntity,
         backendMode: String,
@@ -216,11 +260,9 @@ class LiteRtLmChatService(
                 thinkingEnabled = thinkingEnabled
             )
         val input = rawInput.fitLiteRtContext(request)
-        if (input.wasTruncated) {
-            diagnostic("LiteRT prompt trimmed to fit contextSize=${request.chat.contextSize} model=${request.model.displayName}")
-        }
+        reportPromptReductions(input, request, onStatus)
         val promptForTokenEstimate = input.renderLiteRtPromptForEstimate()
-        val promptTokens = estimateNativeChatTextTokens(promptForTokenEstimate)
+        val promptTokens = estimateLiteRtPromptTokens(promptForTokenEstimate)
         val bridge = LiteRtLmReflectionBridge(context)
 
         onStatus(context.getString(R.string.litert_status_starting_backend, "GPU"))
@@ -275,9 +317,7 @@ class LiteRtLmChatService(
                 thinkingEnabled = thinkingEnabled
             )
         val input = rawInput.fitLiteRtContext(request)
-        if (input.wasTruncated) {
-            diagnostic("LiteRT prompt trimmed to fit contextSize=${request.chat.contextSize} model=${request.model.displayName}")
-        }
+        reportPromptReductions(input, request, onStatus)
         val promptForTokenEstimate = input.renderLiteRtPromptForEstimate()
         val backendMode = normalizeLiteRtBackend(request.backendMode)
         val mtpEnabled = (request.params[LITERT_PARAM_MTP_ENABLED] as? Boolean) ?: false
@@ -290,7 +330,7 @@ class LiteRtLmChatService(
         if (backendCandidates.isEmpty()) {
             throw IllegalStateException(context.getString(R.string.litert_error_runtime_unavailable))
         }
-        val promptTokens = estimateNativeChatTextTokens(promptForTokenEstimate)
+        val promptTokens = estimateLiteRtPromptTokens(promptForTokenEstimate)
         var lastFailure: Throwable? = null
 
         backendCandidates.forEach { candidate ->
@@ -462,30 +502,34 @@ class LiteRtLmChatService(
                 "mtp=$mtpEnabled thinking=${(request.params[LITERT_EXTRA_CONTEXT_ENABLE_THINKING] as? Boolean) ?: true} " +
                 "promptTokens=$promptTokens"
         )
-        val generated = try {
-            bridge.generate(
-                modelPath = modelPath,
-                backend = backend,
-                backendLabel = backendLabel,
-                maxTokens = engineMaxTokens,
-                maxOutputTokens = maxOutputTokens,
-                cacheDir = cacheDir,
-                input = input,
-                thinkingEnabled = (request.params["enable_thinking"] as? Boolean) ?: true,
-                speculativeDecodingEnabled = mtpEnabled,
-                topK = (request.params["top_k"] as? Number)?.toInt() ?: 40,
-                topP = (request.params["top_p"] as? Number)?.toDouble() ?: 0.95,
-                temperature = (request.params["temperature"] as? Number)?.toDouble() ?: 0.7,
-                seed = (request.params["seed"] as? Number)?.toInt() ?: 0,
-                holdGpuEglContext = false,
-                onDiagnostic = ::diagnostic,
-                onChunk = onChunk,
-                onThinkingChunk = onThinkingChunk
-            )
-        } finally {
-            // LiteRT-LM's experimental flags are process-wide. Reset after each generation so
-            // one chat's speed setting does not leak into another retained engine request.
-            bridge.resetSpeculativeDecoding(::diagnostic)
+        val generated = withLiteRtProcessGenerationLock {
+            try {
+                bridge.generate(
+                    modelPath = modelPath,
+                    backend = backend,
+                    backendLabel = backendLabel,
+                    maxTokens = engineMaxTokens,
+                    maxOutputTokens = maxOutputTokens,
+                    cacheDir = cacheDir,
+                    input = input,
+                    thinkingEnabled = (request.params["enable_thinking"] as? Boolean) ?: true,
+                    speculativeDecodingEnabled = mtpEnabled,
+                    topK = (request.params["top_k"] as? Number)?.toInt() ?: 40,
+                    topP = (request.params["top_p"] as? Number)?.toDouble() ?: 0.95,
+                    temperature = (request.params["temperature"] as? Number)?.toDouble() ?: 0.7,
+                    seed = (request.params["seed"] as? Number)?.toInt() ?: 0,
+                    holdGpuEglContext = false,
+                    engineOwner = request.params[LITERT_PARAM_ENGINE_OWNER] as? String,
+                    onDiagnostic = ::diagnostic,
+                    onChunk = onChunk,
+                    onThinkingChunk = onThinkingChunk
+                )
+            } finally {
+                // ExperimentalFlags is process-wide. Keep the reset in the same serialized
+                // critical section as setSpeculativeDecodingEnabled and generation, including
+                // cancellation, so a new request cannot change MTP under an active conversation.
+                bridge.resetSpeculativeDecoding(::diagnostic)
+            }
         }
         if (backendLabel == "GPU" && generated.visibleText.hasLiteRtCorruptOutputSignature()) {
             throw IllegalStateException(
@@ -641,14 +685,64 @@ class LiteRtLmChatService(
             requestedMaxTokens = request.chat.contextSize.takeIf { it > 0 },
             backendLabel = fitBackendLabel
         ) ?: LITERT_DEFAULT_CONTEXT_TOKENS
-        val promptBudget = liteRtPromptContextBudget(engineMaxTokens)
-        return fitLiteRtConversationInputToBudget(promptBudget)
+        val requestedOutputTokens = (request.params[LITERT_PARAM_MAX_OUTPUT_TOKENS] as? Number)
+            ?.toInt()
+            ?.takeIf { it > 0 }
+        val outputTokens = effectiveLiteRtMaxOutputTokensForBackend(
+            requestedMaxOutputTokens = requestedOutputTokens,
+            backendLabel = fitBackendLabel,
+            engineMaxTokens = engineMaxTokens
+        )
+        val promptBudget = liteRtPromptContextBudget(engineMaxTokens, outputTokens)
+        return try {
+            val fitted = fitLiteRtConversationInputToBudget(promptBudget)
+            diagnostic(
+                liteRtPromptBudgetDiagnostics(
+                    prompt = fitted.renderLiteRtPromptForEstimate(),
+                    tools = fitted.tools,
+                    engineMaxTokens = engineMaxTokens,
+                    requestedOutputTokens = outputTokens,
+                ).toSafeDiagnosticLine("ready")
+            )
+            fitted
+        } catch (failure: LiteRtPromptOverLimitException) {
+            diagnostic(
+                liteRtPromptBudgetDiagnostics(
+                    prompt = renderLiteRtPromptForEstimate(),
+                    tools = tools,
+                    engineMaxTokens = engineMaxTokens,
+                    requestedOutputTokens = outputTokens,
+                    requiredInputTokensOverride = failure.requiredInputTokens,
+                ).toSafeDiagnosticLine("over_limit")
+            )
+            throw failure
+        }
     }
 
     private fun diagnostic(message: String) {
         val line = "LiteRtLmChatService: $message"
         DebugLog.log(line)
         onDiagnostic?.invoke(message)
+    }
+
+    private suspend fun reportPromptReductions(
+        input: LiteRtConversationInput,
+        request: LiteRtLmChatRequest,
+        onStatus: suspend (String) -> Unit,
+    ) {
+        if (!input.wasTruncated) return
+        diagnostic(
+            "LiteRT prompt reduced for contextSize=${request.chat.contextSize} " +
+                "droppedHistory=${input.droppedHistoryCount} " +
+                "droppedTools=${input.droppedToolCount} model=${request.model.displayName}"
+        )
+        onStatus(
+            context.getString(
+                R.string.harness_litert_0984_prompt_reduced,
+                input.droppedHistoryCount,
+                input.droppedToolCount,
+            )
+        )
     }
 
     private data class BackendCandidate(
@@ -662,42 +756,173 @@ class LiteRtLmChatService(
     }
 }
 
-private fun liteRtPromptContextBudget(engineMaxTokens: Int): Int {
+internal fun liteRtPromptContextBudget(engineMaxTokens: Int, requestedOutputTokens: Int?): Int {
     val safeMaxTokens = engineMaxTokens.coerceAtLeast(1)
-    val percentBudget = (safeMaxTokens * LITERT_PROMPT_CONTEXT_SAFETY_PERCENT) / 100
-    val reservedBudget = (safeMaxTokens - LITERT_PROMPT_RESERVE_TOKENS).coerceAtLeast(1)
-    val minimumBudget = LITERT_MIN_PROMPT_CONTEXT_TOKENS.coerceAtMost(safeMaxTokens)
-    return minOf(percentBudget, reservedBudget, safeMaxTokens)
-        .coerceAtLeast(minimumBudget)
+    val outputReserve = liteRtPromptOutputReserve(safeMaxTokens, requestedOutputTokens)
+    val promptSafetyReserve = (safeMaxTokens / 16)
+        .coerceIn(LITERT_PROMPT_RESERVE_TOKENS, LITERT_PROMPT_MAX_RESERVE_TOKENS)
+    return (safeMaxTokens - outputReserve - promptSafetyReserve).coerceAtLeast(0)
+}
+
+internal fun liteRtPromptOutputReserve(engineMaxTokens: Int, requestedOutputTokens: Int?): Int {
+    val safeMaxTokens = engineMaxTokens.coerceAtLeast(1)
+    val defaultOutputReserve = minOf(2_048, (safeMaxTokens / 4).coerceAtLeast(1))
+    return (requestedOutputTokens?.takeIf { it > 0 } ?: defaultOutputReserve)
+        .coerceAtMost(safeMaxTokens)
+}
+
+internal fun estimateLiteRtPromptTokens(prompt: String): Int {
+    if (prompt.isBlank()) return 0
+    val utf8Bytes = prompt.toByteArray(Charsets.UTF_8).size
+    val byteBasedEstimate = (utf8Bytes + 1) / 2 + LITERT_PROMPT_ESTIMATE_OVERHEAD_TOKENS
+    return maxOf(estimateNativeChatTextTokens(prompt), byteBasedEstimate)
+}
+
+internal data class LiteRtPromptBudgetDiagnostics(
+    val engineMaxTokens: Int,
+    val outputReserveTokens: Int,
+    val availableInputTokens: Int,
+    val requiredInputTokens: Int,
+    val compactToolCount: Int,
+    val compactToolSchemaUtf8Bytes: Int,
+) {
+    val fits: Boolean
+        get() = requiredInputTokens <= availableInputTokens
+
+    fun toSafeDiagnosticLine(phase: String): String =
+        "LiteRT preflight phase=$phase contextTokens=$engineMaxTokens " +
+            "outputReserveTokens=$outputReserveTokens inputBudgetTokens=$availableInputTokens " +
+            "promptEstimateTokens=$requiredInputTokens compactToolCount=$compactToolCount " +
+            "compactToolSchemaUtf8Bytes=$compactToolSchemaUtf8Bytes " +
+            "result=${if (fits) "fits" else "over_limit"}"
+}
+
+internal fun liteRtPromptBudgetDiagnostics(
+    prompt: String,
+    tools: List<LiteRtToolDefinition>,
+    engineMaxTokens: Int,
+    requestedOutputTokens: Int?,
+    requiredInputTokensOverride: Int? = null,
+): LiteRtPromptBudgetDiagnostics {
+    val schemaBytes = tools.sumOf { tool ->
+        JSONObject(tool.toLiteRtOpenApiToolJson())
+            .getJSONObject("parameters")
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+            .size
+    }
+    val safeMaxTokens = engineMaxTokens.coerceAtLeast(1)
+    val outputReserve = liteRtPromptOutputReserve(safeMaxTokens, requestedOutputTokens)
+    return LiteRtPromptBudgetDiagnostics(
+        engineMaxTokens = safeMaxTokens,
+        outputReserveTokens = outputReserve,
+        availableInputTokens = liteRtPromptContextBudget(safeMaxTokens, requestedOutputTokens),
+        requiredInputTokens = requiredInputTokensOverride ?: estimateLiteRtPromptTokens(prompt),
+        compactToolCount = tools.size,
+        compactToolSchemaUtf8Bytes = schemaBytes,
+    )
+}
+
+private fun compactLiteRtSchemaDescription(value: String, maxChars: Int): String {
+    val trimmed = value.trim()
+    if (trimmed.length <= maxChars) return trimmed
+    return trimmed.take((maxChars - 1).coerceAtLeast(1)).trimEnd() + "…"
+}
+
+private fun compactLiteRtSchemaValue(
+    value: Any,
+    removeDescriptions: Boolean = false,
+): Any? = when (value) {
+    is JSONObject -> JSONObject().apply {
+        val removableKeys = buildSet {
+            addAll(setOf("title", "default", "example", "examples", "deprecated", "\$comment"))
+            if (removeDescriptions) add("description")
+        }
+        val keys = value.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            if (key in removableKeys || key.startsWith("x-")) continue
+            val child = value.opt(key)
+            val compacted = if (!removeDescriptions && key == "description" && child is String) {
+                compactLiteRtSchemaDescription(child, LITERT_TOOL_PARAMETER_DESCRIPTION_MAX_CHARS)
+                    .takeIf { it.isNotBlank() }
+            } else {
+                compactLiteRtSchemaValue(child, removeDescriptions)
+            }
+            if (compacted != null && compacted !== JSONObject.NULL) put(key, compacted)
+        }
+    }
+    is JSONArray -> JSONArray().apply {
+        for (index in 0 until value.length()) {
+            val compacted = compactLiteRtSchemaValue(value.opt(index), removeDescriptions)
+            if (compacted == null) put(JSONObject.NULL) else put(compacted)
+        }
+    }
+    JSONObject.NULL -> JSONObject.NULL
+    else -> value
+}
+
+internal fun compactLiteRtToolParameterSchemaJson(
+    parameterSchemaJson: String,
+    removeDescriptions: Boolean = false,
+): String? {
+    val parsed = runCatching { JSONObject(parameterSchemaJson) }.getOrNull() ?: return null
+    return compactLiteRtSchemaValue(parsed, removeDescriptions)?.toString()
+}
+
+/**
+ * Shrinks a large Harness tool set for a bounded retry while retaining every
+ * tool and its structural contract. Descriptions are optional model guidance;
+ * names, types, enums, nesting, and required fields remain in the JSON schema.
+ */
+internal fun compactLiteRtToolDefinitionsForCapacity(
+    tools: List<LiteRtToolDefinition>,
+): List<LiteRtToolDefinition> = tools.map { tool ->
+    tool.copy(
+        description = compactLiteRtSchemaDescription(tool.description, maxChars = 72),
+        parameters = tool.parameters.mapValues { "" },
+        parameterSchemaJson = tool.parameterSchemaJson?.let {
+            compactLiteRtToolParameterSchemaJson(it, removeDescriptions = true)
+        },
+    )
 }
 
 internal fun LiteRtToolDefinition.toLiteRtOpenApiToolJson(): String =
     JSONObject().apply {
         put("name", name)
-        put("description", description)
+        put("description", compactLiteRtSchemaDescription(description, LITERT_TOOL_DESCRIPTION_MAX_CHARS))
         put(
             "parameters",
-            JSONObject().apply {
-                put("type", "object")
-                put(
-                    "properties",
-                    JSONObject().apply {
-                        parameters.forEach { (parameterName, parameterDescription) ->
-                            put(
-                                parameterName,
-                                JSONObject().apply {
-                                    put("type", "string")
-                                    put("description", parameterDescription)
-                                }
-                            )
+            parameterSchemaJson
+                ?.let(::compactLiteRtToolParameterSchemaJson)
+                ?.let { compacted -> runCatching { JSONObject(compacted) }.getOrNull() }
+                ?: JSONObject().apply {
+                    put("type", "object")
+                    put(
+                        "properties",
+                        JSONObject().apply {
+                            parameters.forEach { (parameterName, parameterDescription) ->
+                                put(
+                                    parameterName,
+                                    JSONObject().apply {
+                                        put("type", "string")
+                                        put(
+                                            "description",
+                                            compactLiteRtSchemaDescription(
+                                                parameterDescription,
+                                                LITERT_TOOL_PARAMETER_DESCRIPTION_MAX_CHARS,
+                                            ),
+                                        )
+                                    }
+                                )
+                            }
                         }
-                    }
-                )
-                put(
-                    "required",
-                    JSONArray().apply { requiredParams.forEach { put(it) } }
-                )
-            }
+                    )
+                    put(
+                        "required",
+                        JSONArray().apply { requiredParams.forEach { put(it) } }
+                    )
+                }
         )
     }.toString()
 
@@ -707,9 +932,9 @@ private fun LiteRtConversationInput.renderLiteRtPromptForEstimate(): String =
         if (tools.isNotEmpty()) {
             append("\n\nTools:\n")
             tools.forEach { tool ->
-                append(tool.name)
-                append(": ")
-                append(tool.description)
+                // The runtime receives these definitions as structured tools; estimate that
+                // compact payload once instead of charging for a duplicate prose copy.
+                append(tool.toLiteRtOpenApiToolJson())
                 append('\n')
             }
         }
@@ -722,6 +947,9 @@ private fun LiteRtConversationInput.renderLiteRtPromptForEstimate(): String =
         append("\n\nUser:\n")
         append(userMessage)
     }
+
+internal fun renderLiteRtPromptForEstimate(conversation: LiteRtConversationOverride): String =
+    conversation.toLiteRtConversationInput().renderLiteRtPromptForEstimate()
 
 private fun LiteRtConversationInput.maxImageCount(): Int {
     var count = 0
@@ -739,151 +967,100 @@ private fun LiteRtConversationInput.hasAudio(): Boolean =
 private fun LiteRtConversationInput.fitLiteRtConversationInputToBudget(
     tokenBudget: Int
 ): LiteRtConversationInput {
-    if (estimateNativeChatTextTokens(renderLiteRtPromptForEstimate()) <= tokenBudget) {
+    val requiredTokens = estimateLiteRtPromptTokens(renderLiteRtPromptForEstimate())
+    if (requiredTokens <= tokenBudget) {
         return this
     }
-    promptOverride?.let { prompt ->
-        return copy(
-            promptOverride = prompt.ellipsizeLiteRtTextToTokenBudget(tokenBudget, preferTail = true),
-            wasTruncated = true
+    if (promptOverride != null) {
+        throw LiteRtPromptOverLimitException(
+            requiredInputTokens = requiredTokens,
+            availableInputTokens = tokenBudget,
         )
     }
 
-    val systemBudget = (tokenBudget / 4).coerceIn(64, 768)
-    var fittedSystem = systemInstruction.ellipsizeLiteRtTextToTokenBudget(systemBudget)
-    var fittedUser = userMessage
-    var fitted = copy(
-        systemInstruction = fittedSystem,
-        initialMessages = emptyList(),
-        userMessage = fittedUser,
-        wasTruncated = true
+    var keepFrom = 0
+    var fitted = copy(initialMessages = initialMessages)
+    while (
+        keepFrom < initialMessages.size &&
+        estimateLiteRtPromptTokens(fitted.renderLiteRtPromptForEstimate()) > tokenBudget
+    ) {
+        keepFrom += 1
+        fitted = copy(initialMessages = initialMessages.drop(keepFrom))
+    }
+
+    val fittedTokens = estimateLiteRtPromptTokens(fitted.renderLiteRtPromptForEstimate())
+    if (fittedTokens > tokenBudget) {
+        throw LiteRtPromptOverLimitException(
+            requiredInputTokens = fittedTokens,
+            availableInputTokens = tokenBudget,
+        )
+    }
+
+    while (keepFrom > 0) {
+        val candidate = fitted.copy(initialMessages = initialMessages.drop(keepFrom - 1))
+        if (estimateLiteRtPromptTokens(candidate.renderLiteRtPromptForEstimate()) > tokenBudget) break
+        keepFrom -= 1
+        fitted = candidate
+    }
+    return copy(
+        initialMessages = fitted.initialMessages,
+        tools = tools,
+        wasTruncated = keepFrom > 0,
+        droppedHistoryCount = keepFrom,
+        droppedToolCount = 0,
     )
-    if (estimateNativeChatTextTokens(fitted.renderLiteRtPromptForEstimate()) > tokenBudget) {
-        val userBudget = (tokenBudget - estimateNativeChatTextTokens(fittedSystem) - 32)
-            .coerceAtLeast(64)
-        fittedUser = fittedUser.ellipsizeLiteRtTextToTokenBudget(userBudget, preferTail = true)
-        fitted = fitted.copy(userMessage = fittedUser)
-    }
-    if (estimateNativeChatTextTokens(fitted.renderLiteRtPromptForEstimate()) > tokenBudget) {
-        fittedSystem = fittedSystem.ellipsizeLiteRtTextToTokenBudget(tokenBudget / 6)
-        val userBudget = (tokenBudget - estimateNativeChatTextTokens(fittedSystem) - 32)
-            .coerceAtLeast(32)
-        fitted = fitted.copy(
-            systemInstruction = fittedSystem,
-            userMessage = fittedUser.ellipsizeLiteRtTextToTokenBudget(userBudget, preferTail = true)
-        )
-    }
-
-    val selected = mutableListOf<LiteRtConversationMessage>()
-    var omitted = initialMessages.isNotEmpty()
-    for (message in initialMessages.asReversed()) {
-        val candidate = fitted.copy(initialMessages = listOf(message) + selected)
-        if (estimateNativeChatTextTokens(candidate.renderLiteRtPromptForEstimate()) <= tokenBudget) {
-            selected.add(0, message)
-            omitted = selected.size < initialMessages.size
-            continue
-        }
-
-        val remainingBudget = tokenBudget -
-            estimateNativeChatTextTokens(
-                fitted.copy(initialMessages = selected).renderLiteRtPromptForEstimate()
-            )
-        if (selected.isEmpty() && remainingBudget > 80) {
-            val trimmedMessage = message.copy(
-                content = message.content.ellipsizeLiteRtTextToTokenBudget(remainingBudget - 16, preferTail = true)
-            )
-            val trimmedCandidate = fitted.copy(initialMessages = listOf(trimmedMessage))
-            if (estimateNativeChatTextTokens(trimmedCandidate.renderLiteRtPromptForEstimate()) <= tokenBudget) {
-                selected.add(trimmedMessage)
-            }
-        }
-        omitted = true
-        break
-    }
-
-    fitted = fitted.copy(initialMessages = selected)
-    if (omitted && !fitted.systemInstruction.contains(LITERT_TRUNCATED_MARKER)) {
-        val withMarker = fitted.copy(
-            systemInstruction = buildString {
-                append(fitted.systemInstruction)
-                appendLine()
-                appendLine()
-                append(LITERT_TRUNCATED_MARKER)
-            }
-        )
-        fitted = if (estimateNativeChatTextTokens(withMarker.renderLiteRtPromptForEstimate()) <= tokenBudget) {
-            withMarker
-        } else {
-            fitted
-        }
-    }
-    return fitted
-}
-
-private fun String.ellipsizeLiteRtTextToTokenBudget(
-    tokenBudget: Int,
-    preferTail: Boolean = false
-): String {
-    if (isBlank() || estimateNativeChatTextTokens(this) <= tokenBudget) return this
-    val safeBudget = tokenBudget.coerceAtLeast(1)
-    var low = 1
-    var high = length
-    var best = take(1)
-    while (low <= high) {
-        val mid = (low + high) / 2
-        val candidate = ellipsizeLiteRtTextToChars(mid, preferTail)
-        if (estimateNativeChatTextTokens(candidate) <= safeBudget) {
-            best = candidate
-            low = mid + 1
-        } else {
-            high = mid - 1
-        }
-    }
-    return best
-}
-
-private fun String.ellipsizeLiteRtTextToChars(
-    maxChars: Int,
-    preferTail: Boolean
-): String {
-    if (length <= maxChars) return this
-    if (maxChars <= LITERT_TRUNCATED_CONTENT_MARKER.length + 2) {
-        return if (preferTail) takeLast(maxChars) else take(maxChars)
-    }
-    val available = maxChars - LITERT_TRUNCATED_CONTENT_MARKER.length
-    val head = if (preferTail) {
-        (available * 0.35f).toInt().coerceAtLeast(1)
-    } else {
-        (available * 0.7f).toInt().coerceAtLeast(1)
-    }
-    val tail = (available - head).coerceAtLeast(1)
-    return take(head).trimEnd() + LITERT_TRUNCATED_CONTENT_MARKER + takeLast(tail).trimStart()
 }
 
 internal fun fitLiteRtConversationOverrideForContext(
     conversation: LiteRtConversationOverride,
     model: LiteRtModelEntity,
-    contextSize: Int
-): LiteRtConversationOverride {
-    val engineMaxTokens = effectiveLiteRtEngineMaxTokens(
-        model = model,
-        requestedMaxTokens = contextSize.takeIf { it > 0 }
-    ) ?: LITERT_DEFAULT_CONTEXT_TOKENS
-    val fitted = LiteRtConversationInput(
-        systemInstruction = conversation.systemInstruction,
-        initialMessages = conversation.initialMessages,
-        userMessage = conversation.userMessage,
-        userImagePath = conversation.userImagePath,
-        userAudioPath = conversation.userAudioPath,
-        tools = conversation.tools
-    ).fitLiteRtConversationInputToBudget(liteRtPromptContextBudget(engineMaxTokens))
-    return conversation.copy(
-        systemInstruction = fitted.systemInstruction,
-        initialMessages = fitted.initialMessages,
-        userMessage = fitted.userMessage,
-        userImagePath = fitted.userImagePath,
-        userAudioPath = fitted.userAudioPath,
-        tools = fitted.tools
+    contextSize: Int,
+    maxOutputTokens: Int? = null,
+): LiteRtConversationOverride = fitLiteRtConversationOverrideForContextWithSummary(
+    conversation = conversation,
+    model = model,
+    contextSize = contextSize,
+    maxOutputTokens = maxOutputTokens,
+).conversation
+
+internal data class LiteRtConversationFitSummary(
+    val conversation: LiteRtConversationOverride,
+    val droppedHistoryCount: Int,
+    val droppedToolCount: Int,
+)
+
+internal fun fitLiteRtConversationOverrideForContextWithSummary(
+    conversation: LiteRtConversationOverride,
+    model: LiteRtModelEntity,
+    contextSize: Int,
+    maxOutputTokens: Int? = null,
+    backendMode: String? = null,
+): LiteRtConversationFitSummary {
+    val engineMaxTokens = if (backendMode == null) {
+        effectiveLiteRtEngineMaxTokens(
+            model = model,
+            requestedMaxTokens = contextSize.takeIf { it > 0 }
+        )
+    } else {
+        effectiveLiteRtEngineMaxTokensForBackend(
+            model = model,
+            requestedMaxTokens = contextSize.takeIf { it > 0 },
+            backendLabel = if (normalizeLiteRtBackend(backendMode) == LITERT_BACKEND_CPU) "CPU" else "GPU",
+        )
+    } ?: LITERT_DEFAULT_CONTEXT_TOKENS
+    val fitted = conversation.toLiteRtConversationInput()
+        .fitLiteRtConversationInputToBudget(liteRtPromptContextBudget(engineMaxTokens, maxOutputTokens))
+    return LiteRtConversationFitSummary(
+        conversation = conversation.copy(
+            systemInstruction = fitted.systemInstruction,
+            initialMessages = fitted.initialMessages,
+            userMessage = fitted.userMessage,
+            userImagePath = fitted.userImagePath,
+            userAudioPath = fitted.userAudioPath,
+            tools = fitted.tools,
+        ),
+        droppedHistoryCount = fitted.droppedHistoryCount,
+        droppedToolCount = fitted.droppedToolCount,
     )
 }
 
@@ -945,6 +1122,29 @@ private class LiteRtLmReflectionBridge(private val context: Context) {
                 }
         }
         return cached.size
+    }
+
+    /** Wait for the owner's conversations to close before releasing only that owner's engines. */
+    suspend fun releaseOwnedEngines(owner: String): Int {
+        val owned = synchronized(engineCacheLock) { engineCache.values.filter { it.key.owner == owner } }
+        var released = 0
+        owned.forEach { cached -> cached.mutex.withLock {
+            val shouldClose = synchronized(engineCacheLock) {
+                if (engineCache[cached.key] === cached) {
+                    cached.closeJob?.cancel()
+                    true
+                } else false
+            }
+            if (shouldClose) {
+                cached.engineClass.getMethod("close").invoke(cached.engine)
+                // Retain a failed close for the owner's explicit cleanup retry.
+                synchronized(engineCacheLock) {
+                    if (engineCache[cached.key] === cached) engineCache.remove(cached.key)
+                }
+                released++
+            }
+        } }
+        return released
     }
 
     fun runtimeDiagnosticLines(backend: Any): List<String> = buildList {
@@ -1091,6 +1291,7 @@ private class LiteRtLmReflectionBridge(private val context: Context) {
         temperature: Double,
         seed: Int,
         holdGpuEglContext: Boolean,
+        engineOwner: String?,
         onDiagnostic: (String) -> Unit,
         onChunk: suspend (String) -> Unit,
         onThinkingChunk: suspend (String) -> Unit
@@ -1116,6 +1317,7 @@ private class LiteRtLmReflectionBridge(private val context: Context) {
             cacheDir = cacheDir,
             holdGpuEglContext = holdGpuEglContext,
             speculativeDecodingEnabled = speculativeDecodingEnabled,
+            engineOwner = engineOwner,
             onDiagnostic = onDiagnostic
         )
         try {
@@ -1150,6 +1352,15 @@ private class LiteRtLmReflectionBridge(private val context: Context) {
                     }
                 }
                 val toolProviders = createToolProviders(input.tools, onDiagnostic)
+                if (toolProviders.size != input.tools.size) {
+                    onDiagnostic(
+                        "LiteRT stopped before generation because only ${toolProviders.size} " +
+                            "of ${input.tools.size} requested tools could be exposed"
+                    )
+                    throw IllegalStateException(
+                        context.getString(R.string.litert_error_tools_unavailable)
+                    )
+                }
                 val conversationConfig = conversationConfigClass
                     .getConstructor(
                         contentsClass,
@@ -1208,6 +1419,7 @@ private class LiteRtLmReflectionBridge(private val context: Context) {
         cacheDir: File?,
         holdGpuEglContext: Boolean,
         speculativeDecodingEnabled: Boolean,
+        engineOwner: String?,
         onDiagnostic: (String) -> Unit
     ): CachedEngine {
         val key = EngineCacheKey(
@@ -1217,7 +1429,8 @@ private class LiteRtLmReflectionBridge(private val context: Context) {
             maxImages = maxImages,
             audioEnabled = audioEnabled,
             cacheDir = cacheDir?.absolutePath,
-            speculativeDecodingEnabled = speculativeDecodingEnabled
+            speculativeDecodingEnabled = speculativeDecodingEnabled,
+            owner = engineOwner
         )
         synchronized(engineCacheLock) {
             engineCache[key]?.let { cached ->
@@ -1780,7 +1993,8 @@ private class LiteRtLmReflectionBridge(private val context: Context) {
         val maxImages: Int?,
         val audioEnabled: Boolean,
         val cacheDir: String?,
-        val speculativeDecodingEnabled: Boolean
+        val speculativeDecodingEnabled: Boolean,
+        val owner: String?
     )
 
     private class CachedEngine(
@@ -1806,6 +2020,7 @@ private class LiteRtLmReflectionBridge(private val context: Context) {
             contextSize: Int,
             mtpEnabled: Boolean
         ): Boolean {
+            if (owner != null) return false
             val requestedFile = File(model.path)
             val cachedFile = File(modelPath)
             val modelMatches = modelPath == requestedFile.absolutePath ||

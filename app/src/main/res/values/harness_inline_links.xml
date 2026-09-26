@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_inline_file_title">File preview</string>
+    <string name="harness_inline_file_scope">Opened in this conversation’s workspace. Use the workspace explorer to edit project files.</string>
+    <string name="harness_inline_open_document">Open or save document</string>
+    <string name="harness_inline_open_skill">Open skill source</string>
+    <string name="harness_inline_preview_failed">The preview could not be loaded. Try again, or open the document to view images and other file types.</string>
+    <string name="harness_inline_lines">Lines %1$d–%2$d</string>
+    <string name="harness_inline_empty">This page is empty.</string>
+</resources>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="custom_tool_wizard_intro">Complete the numbered sections. Place parameters in {braces}; the validator checks the schema before enabling Save.</string>
+    <string name="custom_tool_step_identity">1. Name and purpose</string>
+    <string name="custom_tool_step_execution">2. API or command template</string>
+    <string name="custom_tool_step_schema">3. Parameters and example</string>
+    <string name="custom_tool_step_permission">4. Approval and enablement</string>
+    <string name="custom_tool_native_ready">Ready for Native Chat when its Custom API tools toggle is enabled.</string>
+    <string name="custom_tool_native_requirements">Native Chat requires a curl-style template and “Needs approval” off. Other templates remain available to connected Remote SSH Agent projects.</string>
+    <string name="custom_tool_enable_after_save">Enable after saving</string>
+    <string name="custom_tool_step_preview">5. Preview and test</string>
+    <string name="custom_tool_preview_empty">The execution preview will appear here.</string>
+    <string name="custom_tool_test_definition">Test definition</string>
+    <string name="custom_tool_definition_valid">Definition is valid and can be saved.</string>
+    <string name="custom_tool_definition_invalid">Definition is incomplete or invalid. Check the name, schema, required fields, placeholders, and example.</string>
+</resources>

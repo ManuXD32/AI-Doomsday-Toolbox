@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="audio_models_prefix_invalid">Elige un prefijo no vacío con letras, números, puntos, guiones o guiones bajos.</string>
+    <string name="audio_models_bundle_use_error">No se pudo activar el bundle de voz</string>
+    <string name="audio_models_bundle_use_error_hint">No se pudieron enlazar el modelo principal y su acompañante verificados. Comprueba los metadatos de los artefactos instalados e inténtalo de nuevo.</string>
+    <string name="models_delete_interrupted">La eliminación del modelo requiere recuperación</string>
+</resources>

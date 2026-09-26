@@ -32,7 +32,9 @@ class ExternalRouteResolverTest {
             Screen.Tama.route,
             Screen.NotesManager.route,
             Screen.LlamaScheduler.route,
-            Screen.Dataset.route
+            Screen.Dataset.route,
+            Screen.GenerationQueue.route,
+            Screen.GenerationQueueHistory.route
         ).forEach { route ->
             assertEquals(route, ExternalRouteResolver.resolveRoute(route))
         }
@@ -56,6 +58,20 @@ class ExternalRouteResolverTest {
             val route = Screen.ImageGen.createRoute(mode)
             assertEquals(route, ExternalRouteResolver.resolveRoute(route))
         }
+        assertEquals(
+            Screen.OnnxModels.createRoute("catalog"),
+            ExternalRouteResolver.resolveRoute(Screen.OnnxModels.createRoute("catalog"))
+        )
+    }
+
+    @Test
+    fun `routes harness attention to the captured session destination`() {
+        listOf("conversation", "requests", "plan").forEach { tab ->
+            val route = Screen.Agent.createRoute(42, tab)
+            assertEquals(route, ExternalRouteResolver.resolveRoute(route))
+        }
+        assertNull(ExternalRouteResolver.resolveRoute("agent?conversationId=0&harnessTab=requests"))
+        assertNull(ExternalRouteResolver.resolveRoute("agent?conversationId=42&harnessTab=unknown"))
     }
 
     @Test
@@ -73,6 +89,8 @@ class ExternalRouteResolverTest {
             "chat?port=abc",
             "image_gen?startMode=5",
             "image_gen?startMode=",
+            "onnx_models?tab=unknown",
+            "onnx_models?tab=catalog&tab=installed",
             "dataset_project",
             "dataset_project/0",
             "dataset_project/-1",

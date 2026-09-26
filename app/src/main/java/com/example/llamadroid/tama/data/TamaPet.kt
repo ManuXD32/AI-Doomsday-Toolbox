@@ -163,10 +163,13 @@ data class PetStats(
     val happiness: Float = 100f,
     val health: Float = 100f,
     val energy: Float = 100f,
-    val hygiene: Float = 100f
+    val hygiene: Float = 100f,
+    val hydration: Float = 100f,
+    val social: Float = 100f,
+    val curiosity: Float = 100f
 ) {
-    fun needsAttention(): Boolean = hunger < 30f || happiness < 30f || health < 30f || hygiene < 30f
-    fun critical(): Boolean = hunger < 10f || health < 10f
+    fun needsAttention(): Boolean = hunger < 30f || hydration < 30f || happiness < 30f || health < 30f || hygiene < 30f || social < 30f
+    fun critical(): Boolean = hunger < 10f || hydration < 10f || health < 10f
 }
 
 

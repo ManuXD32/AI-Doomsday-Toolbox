@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_preset_files_title">Archivos del perfil: %1$s</string>
+    <string name="harness_preset_files_description">Edita los archivos de este perfil de usuario. Las sesiones existentes mantienen su composición actual; inicia una sesión nueva o reinicia el harness para usar una composición nueva.</string>
+    <string name="harness_preset_files_parent">Carpeta superior</string>
+    <string name="harness_preset_files_refresh">Actualizar archivos</string>
+    <string name="harness_preset_files_new">Nuevo archivo</string>
+    <string name="harness_preset_files_new_directory">Nueva carpeta</string>
+    <string name="harness_preset_files_rename">Renombrar</string>
+    <string name="harness_preset_files_name">Nombre del archivo o carpeta</string>
+    <string name="harness_preset_files_delete">¿Eliminar %1$s? Las carpetas deben estar vacías.</string>
+    <string name="harness_preset_files_conflict">Este archivo cambió desde que lo abriste. No se ha guardado tu edición. Vuelve a abrirlo para revisar la versión actual.</string>
+    <string name="harness_preset_files_text_limit">El editor admite archivos de texto UTF-8 de hasta 256 KiB.</string>
+    <string name="harness_preset_files_failure">No se pudo completar la operación. Revisa el nombre, el contenido de la carpeta y el acceso al archivo, e inténtalo de nuevo.</string>
+</resources>

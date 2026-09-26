@@ -135,28 +135,26 @@ object SdPipelineResolver {
         val filenameHint = inferSdFamily(inferredType, "", config.modelPath)
         val detectedFamily = inspection?.detectedFamily
 
-        // Structural evidence wins when it is high-confidence.  Low/unknown
-        // evidence remains a visible warning but does not erase an explicit
-        // manual choice made for an ambiguous artifact.
+        // A configured family is an explicit user choice and is authoritative
+        // for runtime resolution. Structural evidence remains visible as a
+        // conflict warning, but detection must never silently replace the
+        // selected pipeline family.
         val family = when {
-            detectedFamily != null && configuredFamily != null &&
-                inspection?.confidence != SdInspectionConfidence.HIGH -> configuredFamily
-            detectedFamily != null -> detectedFamily
             configuredFamily != null -> configuredFamily
+            detectedFamily != null -> detectedFamily
             else -> filenameHint.first
         }
         val variant = config.modelVariant?.trim()?.ifBlank { null }?.lowercase()
             ?: filenameHint.second
 
         if (configuredFamily != null && detectedFamily != null && configuredFamily != detectedFamily) {
-            val highConfidence = inspection?.confidence == SdInspectionConfidence.HIGH
             val issue = SdPipelineIssue(
                 code = SdPipelineIssueCode.DETECTED_FAMILY_CONFLICT,
                 message = "Configured family ${configuredFamily.storedValue} contradicts detected family ${detectedFamily.storedValue}.",
-                blocking = highConfidence,
+                blocking = false,
                 evidence = "configured=${configuredFamily.storedValue},detected=${detectedFamily.storedValue}"
             )
-            if (highConfidence) errors += issue else warnings += issue
+            warnings += issue
         }
 
         val configuredLayout = config.modelLayout
@@ -177,14 +175,13 @@ object SdPipelineResolver {
             configuredLayout != SdMainLayout.COMPONENT && detectedLayout != null &&
             configuredLayout != detectedLayout
         ) {
-            val highConfidence = inspection?.confidence == SdInspectionConfidence.HIGH
             val issue = SdPipelineIssue(
                 code = SdPipelineIssueCode.DETECTED_LAYOUT_CONFLICT,
                 message = "Configured model layout ${configuredLayout.storedValue} contradicts detected layout ${detectedLayout.storedValue}.",
-                blocking = highConfidence,
+                blocking = false,
                 evidence = "configured=${configuredLayout.storedValue},detected=${detectedLayout.storedValue}"
             )
-            if (highConfidence) errors += issue else warnings += issue
+            warnings += issue
         }
 
         if (family == null) {
@@ -209,11 +206,12 @@ object SdPipelineResolver {
                 SdArtifactRole.FULL_MODEL,
                 SdArtifactRole.MAIN_MODEL,
                 SdArtifactRole.STANDALONE_DIFFUSION
-            ) && inspection?.confidence == SdInspectionConfidence.HIGH
+            ) && inspection.confidence == SdInspectionConfidence.HIGH
         ) {
-            errors += SdPipelineIssue(
+            warnings += SdPipelineIssue(
                 code = SdPipelineIssueCode.UNSUPPORTED_LAYOUT,
                 message = "The selected artifact is a ${detectedRole.storedValue} component, not a runnable main model.",
+                blocking = false,
                 evidence = "detectedRole=${detectedRole.storedValue}"
             )
         }
@@ -223,13 +221,13 @@ object SdPipelineResolver {
             family = family,
             layout = layout,
             spec = spec,
-            inspection = inspection
+            inspection = inspection,
+            mode = config.mode
         )
         val optional = optionalExternalRoles(
             family = family,
             layout = layout,
-            spec = spec,
-            inspection = inspection
+            spec = spec
         )
         val components = config.componentPaths()
 
@@ -288,7 +286,8 @@ object SdPipelineResolver {
         family: SdModelFamily?,
         layout: SdMainLayout,
         spec: SdModelFamilySpec?,
-        inspection: SdArtifactInspection?
+        inspection: SdArtifactInspection?,
+        mode: com.example.llamadroid.service.SDMode
     ): Set<SdComponentRole> {
         if (family == null || layout == SdMainLayout.UNKNOWN || layout == SdMainLayout.COMPONENT) {
             return emptySet()
@@ -313,7 +312,13 @@ object SdPipelineResolver {
             }
         }
         return if (layout == SdMainLayout.STANDALONE_DIFFUSION) {
-            spec?.requiredRoles.orEmpty()
+            spec?.requiredRoles.orEmpty().toMutableSet().apply {
+                if (mode == com.example.llamadroid.service.SDMode.IMG2IMG &&
+                    spec?.requiresVisionForImg2Img == true
+                ) {
+                    add(SdComponentRole.LLM_VISION)
+                }
+            }
         } else {
             emptySet()
         }
@@ -322,8 +327,7 @@ object SdPipelineResolver {
     private fun optionalExternalRoles(
         family: SdModelFamily?,
         layout: SdMainLayout,
-        spec: SdModelFamilySpec?,
-        inspection: SdArtifactInspection?
+        spec: SdModelFamilySpec?
     ): Set<SdComponentRole> {
         if (family == SdModelFamily.SD3 && layout == SdMainLayout.FULL_MODEL) {
             return linkedSetOf(SdComponentRole.VAE, SdComponentRole.LORA)

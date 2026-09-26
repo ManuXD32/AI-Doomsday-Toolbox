@@ -102,7 +102,7 @@ object ToolCatalog {
             routePatterns = listOf(Screen.Chat.route, "${Screen.Chat.route}?port={serverPort}"),
             settingsAction = ToolSettingsAction.Navigate("settings_llm"), keywords = listOf("chat", "conversation", "llm")),
         tool("agent", ToolCategory.CONVERSATION, Icons.Default.SmartToy, R.string.hub_agent, R.string.hub_agent_desc, Screen.Agent.route,
-            routePatterns = listOf(Screen.Agent.route, "${Screen.Agent.route}?conversationId={conversationId}", Screen.AgentWorkspace.route, Screen.AgentInvocation.route),
+            routePatterns = listOf(Screen.Agent.route, "${Screen.Agent.route}?conversationId={conversationId}", Screen.AgentWorkspace.route, Screen.AgentProotTerminal.route, Screen.AgentInvocation.route),
             keywords = listOf("agent", "coding", "workspace", "project")),
         tool("native_llama", ToolCategory.CONVERSATION, Icons.Default.Memory, R.string.llama_client_title, R.string.llama_client_desc, Screen.LlamaServerList.route,
             routePatterns = listOf(Screen.LlamaServerList.route, Screen.LlamaChatList.route, Screen.LlamaChatList.folderRoute, Screen.LlamaScheduler.route, Screen.LlamaChat.route),
@@ -130,6 +130,12 @@ object ToolCatalog {
         tool("onnx_tts", ToolCategory.VOICE, Icons.Default.GraphicEq, R.string.ai_onnx_tts, R.string.ai_onnx_tts_desc, Screen.OnnxTts.route,
             routePatterns = listOf(Screen.OnnxTts.route, Screen.OnnxTtsGallery.route),
             settingsAction = ToolSettingsAction.Navigate(Screen.OnnxModels.route), keywords = listOf("onnx", "tts", "voice", "audio")),
+        tool("audio_workspace", ToolCategory.VOICE, Icons.Default.GraphicEq, R.string.audio_workspace_title, R.string.audio_workspace_subtitle, Screen.AudioWorkspace.route,
+            routePatterns = listOf(
+                Screen.AudioWorkspace.route,
+                "${Screen.AudioWorkspace.route}?section={section}"
+            ),
+            settingsAction = ToolSettingsAction.Navigate(Screen.AudioModels.route), keywords = listOf("audio", "tts", "speech", "voice", "clone", "qwen", "pocket", "supertonic")),
         tool("live_translator", ToolCategory.VOICE, Icons.Default.Translate, R.string.live_translator_title, R.string.live_translator_hub_desc, Screen.LiveTranslator.route,
             keywords = listOf("translate", "voice", "call", "bilingual")),
         tool("transcription", ToolCategory.VOICE, Icons.Default.Mic, R.string.ai_transcription, R.string.ai_transcription_desc, Screen.AudioTranscription.route,

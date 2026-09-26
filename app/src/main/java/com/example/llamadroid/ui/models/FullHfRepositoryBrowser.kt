@@ -106,6 +106,9 @@ internal fun FullHfRepositoryBrowser(repositoryId: String, family: ModelFamily, 
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
+            com.example.llamadroid.util.DebugLog.log("[HF browser] " +
+                com.example.llamadroid.data.model.library.modelLibraryFailureMetadata(error,
+                    if (requestedRevision == null) "revision" else "folder"))
             if (epoch == requestEpoch.get()) failure = hfBrowserError(error)
         } finally {
             if (epoch == requestEpoch.get()) loading = false
@@ -154,7 +157,7 @@ internal fun FullHfRepositoryBrowser(repositoryId: String, family: ModelFamily, 
                     item { Text(stringResource(R.string.hf_full_explanation), style = MaterialTheme.typography.bodySmall) }
                     failure?.let { code -> item {
                         Text(modelLibraryErrorText(code), color = MaterialTheme.colorScheme.error)
-                        TextButton(onClick = { retry++ }, enabled = !loading) { Text(stringResource(R.string.tour_retry)) }
+                        TextButton(onClick = { retry++ }, enabled = !loading) { Text(stringResource(R.string.action_retry)) }
                     } }
                     if (queued > 0) item { Text(stringResource(R.string.hf_full_queued, queued)) }
                     if (!loading && listing?.items?.isEmpty() == true) item {
@@ -239,10 +242,5 @@ internal fun FullHfRepositoryBrowser(repositoryId: String, family: ModelFamily, 
     }
 }
 
-private fun hfBrowserError(error: Throwable): ModelLibraryErrorCode = when (error) {
-    is ModelLibraryException -> error.code
-    is HuggingFaceHttpException -> error.errorCode
-    is java.net.SocketTimeoutException -> ModelLibraryErrorCode.REQUEST_TIMEOUT
-    is java.io.IOException -> ModelLibraryErrorCode.NETWORK_FAILURE
-    else -> ModelLibraryErrorCode.INVALID_URL
-}
+private fun hfBrowserError(error: Throwable): ModelLibraryErrorCode =
+    com.example.llamadroid.data.model.library.modelLibraryErrorCode(error)

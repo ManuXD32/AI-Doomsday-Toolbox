@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
@@ -46,6 +47,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
@@ -79,9 +81,24 @@ import com.example.llamadroid.R
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_ACTIVE
+import com.example.llamadroid.data.db.DownloadTaskEntity
+import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.data.db.isStableAudioComponentType
 import com.example.llamadroid.data.model.DownloadProgressHolder
+import com.example.llamadroid.data.model.progressForDownloadTask
+import com.example.llamadroid.data.model.stableDownloadTaskOrder
 import com.example.llamadroid.data.model.LiteRtModelEntity
+import com.example.llamadroid.data.model.ModelRepository
+import com.example.llamadroid.data.model.PendingDownload
+import com.example.llamadroid.data.model.PendingDownloadHolder
+import com.example.llamadroid.data.model.StableAudioModelSupport
+import com.example.llamadroid.audio.music.StableAudio3ComponentHealth
+import com.example.llamadroid.audio.music.StableAudio3ModelDoctor
+import com.example.llamadroid.audio.music.StableAudio3ModelDoctorReport
+import com.example.llamadroid.audio.music.StableAudio3Kind
+import com.example.llamadroid.data.model.StableAudioCuratedBundleCatalog
 import com.example.llamadroid.data.model.currentLiteRtDeviceTargetInfo
 import com.example.llamadroid.data.model.defaultLiteRtEngineMaxTokens
 import com.example.llamadroid.data.model.liteRtAudioSupportFromText
@@ -107,6 +124,7 @@ import com.example.llamadroid.ui.components.AppScrollableTabRow
 import com.example.llamadroid.ui.components.DownloadTaskSection
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 private const val LITERT_PROGRESS_PREFIX = "litert:"
@@ -114,9 +132,32 @@ private const val LITERT_CONTEXT_USER_MIN = 512
 private const val LITERT_CONTEXT_USER_MAX = 131_072
 private val LiteRtEmbeddingBlue = Color(0xFF2F80ED)
 
+private val STABLE_AUDIO_MODEL_TYPES = com.example.llamadroid.data.model.ModelManagerModelTypes.liteRtAudio.toSet()
+
+private fun isLiteRtDownloadTask(task: com.example.llamadroid.data.db.DownloadTaskEntity): Boolean {
+    if (task.id.startsWith(LITERT_PROGRESS_PREFIX) || task.progressKey.startsWith(LITERT_PROGRESS_PREFIX)) return true
+    val modelType = runCatching { ModelType.valueOf(task.modelType) }.getOrNull()
+    return modelType in STABLE_AUDIO_MODEL_TYPES
+}
+
+private fun stableAudioKind(family: String?): String? = when (family) {
+    StableAudioModelSupport.FAMILY_SFX -> "sfx"
+    StableAudioModelSupport.FAMILY_MUSIC,
+    StableAudioModelSupport.FAMILY_SHARED -> "music"
+    else -> null
+}
+
+private fun stableAudioKind(model: ModelEntity): String =
+    stableAudioKind(model.audioFamily) ?: "music"
+
+private fun stableAudioKind(
+    task: com.example.llamadroid.data.db.DownloadTaskEntity?,
+    pending: PendingDownload?
+): String? = stableAudioKind(task?.artifactFamily ?: pending?.artifactFamily)
+
 @Composable
 @Suppress("UNUSED_PARAMETER")
-fun LiteRtModelsScreen(navController: NavController) {
+fun LiteRtModelsScreen(navController: NavController, initialTab: String? = null) {
     val context = LocalContext.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
@@ -127,6 +168,17 @@ fun LiteRtModelsScreen(navController: NavController) {
             modelDao = db.liteRtModelDao()
         )
     }
+    val modelRepository = remember { ModelRepository(context, db.modelDao()) }
+    val managedModelsFlow = remember(modelRepository) { modelRepository.getLiteRtAudioModels() }
+    val managedModels by managedModelsFlow.collectAsState(initial = emptyList())
+    val stableAudioModels = remember(managedModels) {
+        managedModels.filter { model ->
+            model.type.isStableAudioComponentType() &&
+                model.isDownloaded
+        }
+    }
+    val downloadTasksFlow = remember(db) { db.downloadTaskDao().observeAll() }
+    val downloadTasks by downloadTasksFlow.collectAsState(initial = emptyList())
     val sourceRepository = rememberModelSourceRepository(context)
     val savedSources by sourceRepository.sources.collectAsState(initial = emptyList())
     val sourceProvenance by sourceRepository.provenance.collectAsState(initial = emptyList())
@@ -134,7 +186,7 @@ fun LiteRtModelsScreen(navController: NavController) {
     val progress by DownloadProgressHolder.progress.collectAsState()
     val statuses by DownloadProgressHolder.status.collectAsState()
     val managedRoot = remember(repository) { repository.managedRoot() }
-    var selectedTab by remember { mutableIntStateOf(0) }
+    var selectedTab by remember(initialTab) { mutableIntStateOf(when (initialTab) { "catalog" -> 2; "downloading" -> 1; else -> 0 }) }
     var pendingRename by remember { mutableStateOf<LiteRtModelEntity?>(null) }
     var renameValue by remember { mutableStateOf("") }
     var pendingContextModel by remember { mutableStateOf<LiteRtModelEntity?>(null) }
@@ -153,10 +205,15 @@ fun LiteRtModelsScreen(navController: NavController) {
     var importSourceError by remember { mutableStateOf<String?>(null) }
     var sourceAsset by remember { mutableStateOf<com.example.llamadroid.data.model.library.InstalledModelAsset?>(null) }
     var pendingDelete by remember { mutableStateOf<LiteRtModelEntity?>(null) }
+    var pendingAudioDelete by remember { mutableStateOf<ModelEntity?>(null) }
+    var pendingAudioRepair by remember { mutableStateOf<ModelEntity?>(null) }
     var pendingExport by remember { mutableStateOf<LiteRtModelEntity?>(null) }
     var doctorDetails by remember { mutableStateOf<LiteRtBackendDoctorResult?>(null) }
+    var stableDoctorDetails by remember { mutableStateOf<StableAudio3ModelDoctorReport?>(null) }
     var huggingFaceToken by remember { mutableStateOf(repository.huggingFaceToken()) }
     val doctorResults = remember { mutableStateMapOf<Long, List<LiteRtBackendDoctorResult>>() }
+    val stableDoctorResults = remember { mutableStateMapOf<String, StableAudio3ModelDoctorReport>() }
+    val stableDoctorBusy = remember { mutableStateMapOf<String, Boolean>() }
 
     LaunchedEffect(models) {
         models.forEach { model ->
@@ -216,10 +273,12 @@ fun LiteRtModelsScreen(navController: NavController) {
         }
     }
 
-    val activeDownloads = progress.count { (key, value) ->
-        key.startsWith(LITERT_PROGRESS_PREFIX) &&
-            (value == DownloadProgressHolder.INDETERMINATE || value in 0f..0.999f)
+    val activeDownloadTasks = remember(downloadTasks) {
+        downloadTasks
+            .filter { it.status == DOWNLOAD_TASK_STATUS_ACTIVE && isLiteRtDownloadTask(it) }
+            .stableDownloadTaskOrder()
     }
+    val activeDownloads = activeDownloadTasks.size
     val tabs = listOf(
         stringResource(R.string.models_tab_installed),
         stringResource(R.string.models_tab_downloading),
@@ -273,13 +332,13 @@ fun LiteRtModelsScreen(navController: NavController) {
                                                 Text(activeDownloads.toString())
                                             }
                                         }
-                                        if (index == 0 && models.isNotEmpty()) {
+                                        if (index == 0 && (models.isNotEmpty() || stableAudioModels.isNotEmpty())) {
                                             Spacer(modifier = Modifier.width(4.dp))
                                             Badge(
                                                 containerColor = MaterialTheme.colorScheme.secondaryContainer,
                                                 contentColor = MaterialTheme.colorScheme.onSecondaryContainer
                                             ) {
-                                                Text(models.size.toString())
+                                                Text((models.size + stableAudioModels.size).toString())
                                             }
                                         }
                                     }
@@ -298,6 +357,7 @@ fun LiteRtModelsScreen(navController: NavController) {
                 when (selectedTab) {
                     0 -> LiteRtInstalledTab(
                         models = models,
+                        stableAudioModels = stableAudioModels,
                         managedRoot = managedRoot,
                         doctorResults = doctorResults,
                         onRename = {
@@ -320,14 +380,46 @@ fun LiteRtModelsScreen(navController: NavController) {
                         },
                         onSource = { sourceAsset = installedAssetForLiteRtModel(it) },
                         onRemove = { pendingDelete = it },
-                        onDoctorDetails = { doctorDetails = it }
+                        onRemoveAudio = { pendingAudioDelete = it },
+                        onSourceAudio = { sourceAsset = installedAssetForModel(it) },
+                        onOpenAudio = { kind ->
+                            navController.navigate(Screen.AudioWorkspace.createRoute(kind))
+                        },
+                        onDoctorDetails = { doctorDetails = it },
+                        stableDoctorResults = stableDoctorResults,
+                        stableDoctorBusy = stableDoctorBusy,
+                        onInspectAudio = { model ->
+                            if (stableDoctorBusy[model.filename] != true) {
+                                stableDoctorBusy[model.filename] = true
+                                scope.launch {
+                                    val report = runCatching {
+                                        withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                            StableAudio3ModelDoctor.inspectInstalled(context, model)
+                                        }
+                                    }
+                                    report.getOrNull()?.let {
+                                        stableDoctorResults[model.filename] = it
+                                        stableDoctorDetails = it
+                                    }
+                                    report.exceptionOrNull()?.let { error ->
+                                        toast(error.message ?: resources.getString(R.string.audio_music_error_model_stale))
+                                    }
+                                    stableDoctorBusy.remove(model.filename)
+                                }
+                            }
+                        },
+                        onRepairAudio = {
+                            stableDoctorResults.remove(it.filename)
+                            stableDoctorBusy.remove(it.filename)
+                            pendingAudioRepair = it
+                        }
                     )
                     1 -> LiteRtDownloadingTab(
                         progress = progress,
                         statuses = statuses,
-                        onCancel = { key ->
-                            val filename = DownloadProgressHolder.getFilename(key) ?: return@LiteRtDownloadingTab
-                            DownloadService.cancelDownload(context, filename, key)
+                        downloadTasks = activeDownloadTasks,
+                        onOpenAudio = { kind ->
+                            navController.navigate(Screen.AudioWorkspace.createRoute(kind))
                         }
                     )
                     else -> LiteRtCatalogTab(
@@ -338,7 +430,8 @@ fun LiteRtModelsScreen(navController: NavController) {
                             repository.saveHuggingFaceToken(token)
                         },
                         repository = repository,
-                        onDownload = ::download
+                        onDownload = ::download,
+                        onOpenAudio = { kind -> navController.navigate(Screen.AudioWorkspace.createRoute(kind)) }
                     )
                 }
 
@@ -662,6 +755,110 @@ fun LiteRtModelsScreen(navController: NavController) {
         )
     }
 
+    pendingAudioDelete?.let { model ->
+        AlertDialog(
+            onDismissRequest = { pendingAudioDelete = null },
+            title = { Text(stringResource(R.string.litert_models_remove)) },
+            text = { Text(stringResource(R.string.litert_models_remove_confirm, model.filename)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val target = model
+                        pendingAudioDelete = null
+                        scope.launch {
+                            try {
+                                val result = modelRepository.deleteModelWithResult(target)
+                                val message = if (
+                                    result.status == com.example.llamadroid.data.model.library.ModelDeletionStatus.COMPLETED
+                                ) {
+                                    resources.getString(
+                                        R.string.models_delete_result_completed,
+                                        FormatUtils.formatFileSize(result.reclaimedBytes)
+                                    )
+                                } else if (result.errorCode != null) {
+                                    resources.getString(modelLibraryErrorResource(result.errorCode))
+                                } else {
+                                    resources.getString(R.string.models_delete_result_retry)
+                                }
+                                toast(message)
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                toast(resources.getString(R.string.models_delete_result_retry))
+                            }
+                        }
+                    }
+                ) { Text(stringResource(R.string.action_remove)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingAudioDelete = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+
+    pendingAudioRepair?.let { model ->
+        AlertDialog(
+            onDismissRequest = { pendingAudioRepair = null },
+            title = { Text(stringResource(R.string.audio_stable_doctor_redownload)) },
+            text = { Text(stringResource(R.string.audio_stable_doctor_redownload_confirm, model.filename)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val target = model
+                        pendingAudioRepair = null
+                        scope.launch {
+                            val result = runCatching {
+                                val kind = if (target.audioFamily == StableAudioModelSupport.FAMILY_SFX) {
+                                    StableAudio3Kind.SFX
+                                } else {
+                                    StableAudio3Kind.MUSIC
+                                }
+                                val role = StableAudioModelSupport.canonicalRole(target.audioComponentRole)
+                                    ?: error(resources.getString(R.string.audio_music_error_model_stale))
+                                val bundle = StableAudioCuratedBundleCatalog.bundles(context)
+                                    .firstOrNull { candidate ->
+                                        candidate.files.any { file ->
+                                            file.componentRole == role &&
+                                                (role != StableAudioModelSupport.ROLE_DIT ||
+                                                    file.audioFamily == kind.family)
+                                        }
+                                    } ?: error(resources.getString(R.string.audio_music_error_model_stale))
+                                val file = bundle.files.first { it.componentRole == role }
+                                val deleted = modelRepository.deleteModelWithResult(target)
+                                check(deleted.status == com.example.llamadroid.data.model.library.ModelDeletionStatus.COMPLETED) {
+                                    deleted.errorMessage ?: resources.getString(R.string.models_delete_result_retry)
+                                }
+                                modelRepository.startDownloadAsync(
+                                    repoId = file.repoId,
+                                    filename = file.remotePath,
+                                    type = file.type,
+                                    downloadUrlOverride = file.downloadUrl,
+                                    localFilenameOverride = file.installedFilename(bundle.defaultPrefix),
+                                    artifactFamily = file.audioFamily,
+                                    artifactRole = file.componentRole,
+                                    classificationSource = com.example.llamadroid.data.model.library.ModelClassificationSource.CATALOG
+                                )
+                            }
+                            toast(
+                                result.fold(
+                                    onSuccess = { resources.getString(R.string.audio_stable_doctor_redownload_started) },
+                                    onFailure = { it.message ?: resources.getString(R.string.audio_music_error_model_stale) }
+                                )
+                            )
+                        }
+                    }
+                ) { Text(stringResource(R.string.audio_stable_doctor_redownload)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingAudioRepair = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+
     doctorDetails?.let { result ->
         AlertDialog(
             onDismissRequest = { doctorDetails = null },
@@ -693,11 +890,61 @@ fun LiteRtModelsScreen(navController: NavController) {
             }
         )
     }
+
+    stableDoctorDetails?.let { report ->
+        val check = report.check
+        AlertDialog(
+            onDismissRequest = { stableDoctorDetails = null },
+            title = { Text(stringResource(R.string.audio_stable_doctor_title)) },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(stringResource(R.string.audio_stable_doctor_status, stableDoctorHealthLabel(check.health)))
+                    Text(stringResource(R.string.audio_stable_doctor_role, stableDoctorRoleName(report.role)))
+                    Text(stringResource(R.string.audio_stable_doctor_readable, if (check.readable) {
+                        stringResource(R.string.audio_stable_doctor_yes)
+                    } else {
+                        stringResource(R.string.audio_stable_doctor_no)
+                    }))
+                    Text(stringResource(R.string.audio_stable_doctor_parent, if (check.parentDirectoryAvailable) {
+                        stringResource(R.string.audio_stable_doctor_yes)
+                    } else {
+                        stringResource(R.string.audio_stable_doctor_no)
+                    }))
+                    Text(
+                        stringResource(
+                            R.string.audio_stable_doctor_size,
+                            check.actualSizeBytes?.let(FormatUtils::formatFileSize)
+                                ?: stringResource(R.string.audio_stable_doctor_unknown),
+                            FormatUtils.formatFileSize(check.expectedSizeBytes)
+                        )
+                    )
+                    Text(
+                        stringResource(
+                            R.string.audio_stable_doctor_digest,
+                            check.actualSha256?.take(12)
+                                ?: stringResource(R.string.audio_stable_doctor_unknown),
+                            check.expectedSha256.take(12)
+                        )
+                    )
+                    Text(stringResource(R.string.audio_stable_doctor_expected_file, check.expectedFilename))
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { stableDoctorDetails = null }) {
+                    Text(stringResource(R.string.action_ok))
+                }
+            }
+        )
+    }
 }
 
 @Composable
 private fun LiteRtInstalledTab(
     models: List<LiteRtModelEntity>,
+    stableAudioModels: List<ModelEntity>,
     managedRoot: File,
     doctorResults: Map<Long, List<LiteRtBackendDoctorResult>>,
     onRename: (LiteRtModelEntity) -> Unit,
@@ -706,7 +953,14 @@ private fun LiteRtInstalledTab(
     onEditModalities: (LiteRtModelEntity) -> Unit,
     onSource: (LiteRtModelEntity) -> Unit,
     onRemove: (LiteRtModelEntity) -> Unit,
-    onDoctorDetails: (LiteRtBackendDoctorResult) -> Unit
+    onRemoveAudio: (ModelEntity) -> Unit,
+    onSourceAudio: (ModelEntity) -> Unit,
+    onOpenAudio: (String) -> Unit,
+    onDoctorDetails: (LiteRtBackendDoctorResult) -> Unit,
+    stableDoctorResults: Map<String, StableAudio3ModelDoctorReport>,
+    stableDoctorBusy: Map<String, Boolean>,
+    onInspectAudio: (ModelEntity) -> Unit,
+    onRepairAudio: (ModelEntity) -> Unit
 ) {
     val storageSnapshot = com.example.llamadroid.ui.components.rememberModelStorageInventory()
 
@@ -717,13 +971,16 @@ private fun LiteRtInstalledTab(
         item { com.example.llamadroid.ui.components.ModelStorageOverviewCard(storageSnapshot, "litert") }
         item {
             Text(
-                stringResource(R.string.litert_models_installed_title, models.size),
+                stringResource(
+                    R.string.litert_models_installed_title,
+                    models.size + stableAudioModels.size
+                ),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold
             )
         }
 
-        if (models.isEmpty()) {
+        if (models.isEmpty() && stableAudioModels.isEmpty()) {
             item {
                 EmptyModelState(
                     title = stringResource(R.string.litert_models_empty),
@@ -763,6 +1020,54 @@ private fun LiteRtInstalledTab(
                     onDoctorDetails = onDoctorDetails
                 )
             }
+
+            if (stableAudioModels.isNotEmpty()) {
+                item(key = "stable-audio-installed-header") {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            stringResource(R.string.audio_music_bundle_section),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            stringResource(R.string.audio_music_bundle_description),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                stableAudioModels
+                    .groupBy { model -> model.audioFamily ?: StableAudioModelSupport.FAMILY_SHARED }
+                    .toSortedMap()
+                    .forEach { (family, familyModels) ->
+                        item(key = "stable-audio-group-$family") {
+                            Text(
+                                stableAudioFamilyTitle(family),
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        items(
+                            familyModels,
+                            key = { model -> "stable-audio-${model.filename}" }
+                        ) { model ->
+                            StableAudioInstalledModelCard(
+                                model = model,
+                                onRemove = { onRemoveAudio(model) },
+                                onOpenAudio = { onOpenAudio(stableAudioKind(model)) },
+                                onSource = { onSourceAudio(model) },
+                                report = stableDoctorResults[model.filename],
+                                checking = stableDoctorBusy[model.filename] == true,
+                                onInspect = { onInspectAudio(model) },
+                                onRepair = { onRepairAudio(model) }
+                            )
+                        }
+                    }
+            }
         }
 
         item { Spacer(modifier = Modifier.height(88.dp)) }
@@ -770,18 +1075,125 @@ private fun LiteRtInstalledTab(
 }
 
 @Composable
+private fun stableAudioFamilyTitle(family: String): String = when (family) {
+    StableAudioModelSupport.FAMILY_MUSIC -> stringResource(R.string.audio_music_bundle_music)
+    StableAudioModelSupport.FAMILY_SFX -> stringResource(R.string.audio_music_bundle_sfx)
+    else -> stringResource(R.string.audio_music_components)
+}
+
+@Composable
+private fun stableAudioRoleLabel(model: ModelEntity): String = when (
+    StableAudioModelSupport.canonicalRole(model.audioComponentRole)
+) {
+    StableAudioModelSupport.ROLE_DIT -> stringResource(R.string.model_library_role_stable_audio_dit)
+    StableAudioModelSupport.ROLE_TEXT_ENCODER -> stringResource(R.string.model_library_role_stable_audio_text_encoder)
+    StableAudioModelSupport.ROLE_TOKENIZER -> stringResource(R.string.model_library_role_stable_audio_tokenizer)
+    StableAudioModelSupport.ROLE_CODEC_ENCODER -> stringResource(R.string.model_library_role_stable_audio_codec_encoder)
+    StableAudioModelSupport.ROLE_CODEC_DECODER -> stringResource(R.string.model_library_role_stable_audio_codec_decoder)
+    StableAudioModelSupport.ROLE_LORA -> stringResource(R.string.model_library_role_stable_audio_lora)
+    else -> stringResource(R.string.model_library_role_stable_audio_component)
+}
+
+@Composable
+private fun StableAudioInstalledModelCard(
+    model: ModelEntity,
+    onRemove: () -> Unit,
+    onSource: () -> Unit,
+    onOpenAudio: () -> Unit,
+    report: StableAudio3ModelDoctorReport?,
+    checking: Boolean,
+    onInspect: () -> Unit,
+    onRepair: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        ModelCard(
+            title = model.filename,
+            subtitle = model.repoId,
+            sizeText = FormatUtils.formatFileSize(model.sizeBytes),
+            details = listOf(stableAudioRoleLabel(model)),
+            actionIcon = Icons.Default.Delete,
+            actionColor = MaterialTheme.colorScheme.error,
+            onAction = onRemove,
+            onSource = onSource
+        )
+        report?.let { result ->
+            val statusColor = if (result.ready) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.error
+            }
+            Text(
+                stringResource(
+                    R.string.audio_stable_doctor_status,
+                    stableDoctorHealthLabel(result.check.health)
+                ),
+                color = statusColor,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(onClick = onInspect, enabled = !checking, modifier = Modifier.weight(1f)) {
+                Text(
+                    stringResource(
+                        if (checking) R.string.audio_stable_doctor_checking
+                        else R.string.audio_stable_doctor_check
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            TextButton(onClick = onRepair, modifier = Modifier.weight(1f)) {
+                Text(
+                    stringResource(R.string.audio_stable_doctor_redownload),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        OutlinedButton(
+            onClick = onOpenAudio,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.AudioFile, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(stringResource(R.string.audio_music_open_workspace))
+        }
+    }
+}
+
+@Composable
+private fun stableDoctorHealthLabel(health: StableAudio3ComponentHealth): String = when (health) {
+    StableAudio3ComponentHealth.READY -> stringResource(R.string.audio_stable_doctor_status_ready)
+    StableAudio3ComponentHealth.ROLE_MISMATCH -> stringResource(R.string.audio_stable_doctor_role_bad)
+    StableAudio3ComponentHealth.NON_CANONICAL -> stringResource(R.string.audio_stable_doctor_status_path)
+    StableAudio3ComponentHealth.MISSING -> stringResource(R.string.audio_stable_doctor_status_missing)
+    StableAudio3ComponentHealth.PARENT_UNAVAILABLE -> stringResource(R.string.audio_stable_doctor_status_parent)
+    StableAudio3ComponentHealth.UNREADABLE -> stringResource(R.string.audio_stable_doctor_status_unreadable)
+    StableAudio3ComponentHealth.SIZE_MISMATCH -> stringResource(R.string.audio_stable_doctor_status_size)
+    StableAudio3ComponentHealth.DIGEST_MISMATCH -> stringResource(R.string.audio_stable_doctor_status_digest)
+}
+
+@Composable
+private fun stableDoctorRoleName(role: String?): String = when (role) {
+    StableAudioModelSupport.ROLE_DIT -> stringResource(R.string.model_library_role_stable_audio_dit)
+    StableAudioModelSupport.ROLE_TEXT_ENCODER -> stringResource(R.string.model_library_role_stable_audio_text_encoder)
+    StableAudioModelSupport.ROLE_TOKENIZER -> stringResource(R.string.model_library_role_stable_audio_tokenizer)
+    StableAudioModelSupport.ROLE_CODEC_ENCODER -> stringResource(R.string.model_library_role_stable_audio_codec_encoder)
+    StableAudioModelSupport.ROLE_CODEC_DECODER -> stringResource(R.string.model_library_role_stable_audio_codec_decoder)
+    else -> stringResource(R.string.audio_stable_doctor_role_bad)
+}
+
+@Composable
 private fun LiteRtDownloadingTab(
     progress: Map<String, Float>,
     statuses: Map<String, String>,
-    onCancel: (String) -> Unit
+    downloadTasks: List<DownloadTaskEntity>,
+    onOpenAudio: (String) -> Unit
 ) {
     val context = LocalContext.current
-    val active = progress
-        .filter { (key, value) ->
-            key.startsWith(LITERT_PROGRESS_PREFIX) &&
-                (value == DownloadProgressHolder.INDETERMINATE || value in 0f..0.999f)
-        }
-        .toSortedMap()
 
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
@@ -797,14 +1209,17 @@ private fun LiteRtDownloadingTab(
 
         item {
             DownloadTaskSection(
-                modelTypes = listOf(ModelType.LLM),
-                includeTask = { it.id.startsWith(LITERT_PROGRESS_PREFIX) },
-                staleRoots = listOf(File(context.noBackupFilesDir, "litert_models")),
-                artifactFamily = com.example.llamadroid.data.model.library.ModelFamily.LITERT
+                modelTypes = listOf(ModelType.LLM) + STABLE_AUDIO_MODEL_TYPES,
+                includeTask = { task -> task.status != DOWNLOAD_TASK_STATUS_ACTIVE && isLiteRtDownloadTask(task) },
+                staleRoots = listOf(
+                    File(context.noBackupFilesDir, "litert_models"),
+                    File(context.filesDir, "models/audio/stable")
+                ),
+                artifactFamily = null
             )
         }
 
-        if (active.isEmpty()) {
+        if (downloadTasks.isEmpty()) {
             item {
                 EmptyModelState(
                     title = stringResource(R.string.litert_models_downloading_empty),
@@ -812,13 +1227,24 @@ private fun LiteRtDownloadingTab(
                 )
             }
         } else {
-            items(active.entries.toList(), key = { it.key }) { entry ->
+            items(downloadTasks, key = { it.id }) { task ->
+                val pending = PendingDownloadHolder.getPending(task.id)
+                val kind = stableAudioKind(task, pending)
+                val taskProgress = progress.progressForDownloadTask(task)
+                val value = taskProgress
+                    ?: task.totalBytes?.takeIf { it > 0L }?.let {
+                        (task.bytesDownloaded.toFloat() / it.toFloat()).coerceIn(0f, 0.999f)
+                    }
+                    ?: DownloadProgressHolder.INDETERMINATE
                 LiteRtDownloadProgressCard(
-                    repoId = entry.key.removePrefix(LITERT_PROGRESS_PREFIX),
-                    filename = DownloadProgressHolder.getFilename(entry.key),
-                    progress = entry.value,
-                    status = statuses[entry.key],
-                    onCancel = { onCancel(entry.key) }
+                    repoId = task.repoId,
+                    filename = task.filename,
+                    progress = value,
+                    status = statuses[task.progressKey] ?: task.liteRtDisplayName ?: pending?.liteRtDisplayName,
+                    onCancel = {
+                        DownloadService.cancelDownload(context, task.filename, task.id)
+                    },
+                    onOpenAudio = kind?.let { { onOpenAudio(it) } }
                 )
             }
         }
@@ -833,7 +1259,8 @@ private fun LiteRtCatalogTab(
     huggingFaceToken: String,
     onHuggingFaceTokenChange: (String) -> Unit,
     repository: LiteRtModelRepository,
-    onDownload: (LiteRtCatalogEntry) -> Unit
+    onDownload: (LiteRtCatalogEntry) -> Unit,
+    onOpenAudio: (String) -> Unit
 ) {
     var query by remember { mutableStateOf("") }
     var liveResults by remember { mutableStateOf<List<LiteRtCatalogEntry>>(emptyList()) }
@@ -842,6 +1269,10 @@ private fun LiteRtCatalogTab(
     val scope = rememberCoroutineScope()
     val normalizedQuery = query.trim()
     val deviceInfo = remember { currentLiteRtDeviceTargetInfo() }
+    val context = LocalContext.current
+    val audioBundles = remember(context) {
+        com.example.llamadroid.data.model.StableAudioCuratedBundleCatalog.bundles(context)
+    }
     fun searchLiveCatalog() {
         if (normalizedQuery.length < 2) return
         isLiveSearching = true
@@ -949,6 +1380,42 @@ private fun LiteRtCatalogTab(
                         )
                     }
                 }
+            }
+        }
+
+        val matchingAudioBundles = audioBundles.filter { bundle ->
+            normalizedQuery.isBlank() || context.getString(bundle.titleRes).contains(normalizedQuery, ignoreCase = true)
+        }
+        if (matchingAudioBundles.isNotEmpty()) {
+            item(key = "stable_audio_bundles") {
+                com.example.llamadroid.ui.components.CuratedModelBundleSection(
+                    title = stringResource(R.string.audio_music_bundle_section),
+                    description = stringResource(R.string.audio_music_bundle_description),
+                    bundles = matchingAudioBundles,
+                    onUseBundle = { bundle, installed, _ ->
+                        scope.launch {
+                            try {
+                                val kind = if (bundle.id.contains("sfx")) "sfx" else "music"
+                                val store = com.example.llamadroid.ui.audio.music.MusicWorkspaceDraftStore.get(context, kind)
+                                val draft = store.load()
+                                val components = bundle.files.mapNotNull { component ->
+                                    installed.firstOrNull { model -> model.audioArtifactIdentity == component.artifactIdentity }
+                                        ?.let { model -> requireNotNull(component.componentRole) to model.path }
+                                }.toMap()
+                                require(components.size == bundle.files.size)
+                                store.save(draft.copy(components = components)
+                                    .withValue("ditPrecision", "fp32")
+                                    .withValue("decoderPrecision", "w8a8")
+                                    .withValue("encoderPrecision", "w8a8"))
+                                onOpenAudio(kind)
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                android.widget.Toast.makeText(context, R.string.audio_music_draft_error, android.widget.Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                )
             }
         }
 
@@ -1323,7 +1790,8 @@ private fun LiteRtDownloadProgressCard(
     filename: String?,
     progress: Float,
     status: String?,
-    onCancel: () -> Unit
+    onCancel: () -> Unit,
+    onOpenAudio: (() -> Unit)? = null
 ) {
     val isIndeterminate = progress == DownloadProgressHolder.INDETERMINATE
     Card(
@@ -1352,6 +1820,13 @@ private fun LiteRtDownloadProgressCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End
             ) {
+                onOpenAudio?.let { openAudio ->
+                    OutlinedButton(onClick = openAudio) {
+                        Icon(Icons.Default.AudioFile, contentDescription = null)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(stringResource(R.string.audio_music_open_workspace))
+                    }
+                }
                 IconButton(onClick = onCancel) {
                     Icon(
                         Icons.Default.Close,

@@ -129,6 +129,84 @@ internal object ModelArtifactLifecycle {
         return deleted.toList()
     }
 
+    /**
+     * Journal-aware variant used by typed model deletion. The callback runs
+     * immediately after each path is preserved, removed, or found to be
+     * undeletable, so a process interruption cannot turn a multi-file delete
+     * into an all-or-nothing guess on the next launch.
+     */
+    suspend fun deleteOwnedPathsWithProgress(
+        candidates: Collection<File>,
+        protectedPaths: Collection<String>,
+        onPathResult: suspend (path: String, deleted: Boolean, failure: ModelDeletionPathFailure?) -> Unit,
+        deleteRecursively: (File) -> Unit = { it.deleteRecursively() }
+    ): List<String> {
+        val protected = protectedPaths.mapNotNull(::canonicalPath).toSet()
+        val roots = candidates
+            .mapNotNull { file -> canonicalPath(file.path)?.let(::File) }
+            .distinctBy { it.path }
+            .sortedBy { it.path.length }
+        val deleted = linkedSetOf<String>()
+
+        fun isWithin(root: String, child: String): Boolean =
+            child == root || child.startsWith("$root${File.separator}")
+
+        fun hasProtectedDescendant(root: String): Boolean =
+            protected.any { isWithin(root, it) && it != root }
+
+        suspend fun removeTree(file: File) {
+            val canonical = canonicalPath(file.path) ?: return
+            if (protected.any { isWithin(it, canonical) }) {
+                onPathResult(canonical, false, null)
+                return
+            }
+            if (file.isDirectory && hasProtectedDescendant(canonical)) {
+                for (child in file.listFiles().orEmpty()) {
+                    removeTree(child)
+                }
+                if (file.listFiles().isNullOrEmpty() && file.delete()) {
+                    deleted += canonical
+                    onPathResult(canonical, true, null)
+                } else if (file.exists()) {
+                    onPathResult(canonical, false, null)
+                }
+            } else if (file.exists()) {
+                try {
+                    if (file.isDirectory) deleteRecursively(file) else file.delete()
+                    if (!file.exists()) {
+                        deleted += canonical
+                        onPathResult(canonical, true, null)
+                    } else {
+                        onPathResult(
+                            canonical,
+                            false,
+                            ModelDeletionPathFailure(
+                                path = canonical,
+                                code = ModelLibraryErrorCode.DELETION_RECOVERABLE,
+                                message = null
+                            )
+                        )
+                    }
+                } catch (error: Throwable) {
+                    onPathResult(
+                        canonical,
+                        false,
+                        ModelDeletionPathFailure(
+                            path = canonical,
+                            code = ModelLibraryErrorCode.DELETION_RECOVERABLE,
+                            message = error.message
+                        )
+                    )
+                }
+            }
+        }
+
+        for (root in roots) {
+            removeTree(root)
+        }
+        return deleted.toList()
+    }
+
     private fun String.replaceExactPath(oldPath: String, newPath: String): String =
         if (canonicalPath(this) == canonicalPath(oldPath)) newPath else this
 

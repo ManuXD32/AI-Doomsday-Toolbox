@@ -3,6 +3,7 @@ package com.example.llamadroid.sd
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.service.SDConfig
 import com.example.llamadroid.service.SdBinaryCapabilities
+import com.example.llamadroid.service.SdImageDimensionException
 import com.example.llamadroid.service.buildSdCommandArgs
 import com.example.llamadroid.service.inferSdFamilyForConfig
 import org.junit.Assert.assertEquals
@@ -76,6 +77,103 @@ class SdPipelineResolverTest {
     }
 
     @Test
+    fun `qwen image 21 text generation requires its VAE and text encoder`() {
+        val pipeline = resolveValidatedSdPipeline(
+            SDConfig(
+                modelPath = "/models/qwen_image_2.1-Q4_K.gguf",
+                modelFamily = SdModelFamily.QWEN_IMAGE.storedValue,
+                modelVariant = "2.1",
+                modelLayout = SdMainLayout.STANDALONE_DIFFUSION,
+                prompt = "a lighthouse",
+                outputPath = "/tmp/out.png",
+                vaePath = "/models/qwen-image-vae.safetensors",
+                llmPath = "/models/Qwen3VL-8B-Instruct-Q4_K_M.gguf"
+            )
+        )
+
+        assertEquals(
+            setOf(SdComponentRole.LLM, SdComponentRole.VAE),
+            pipeline.requiredExternalRoles
+        )
+        val args = buildSdCommandArgs(
+            SDConfig(
+                modelPath = "/models/qwen_image_2.1-Q4_K.gguf",
+                modelFamily = SdModelFamily.QWEN_IMAGE.storedValue,
+                modelVariant = "2.1",
+                modelLayout = SdMainLayout.STANDALONE_DIFFUSION,
+                prompt = "a lighthouse",
+                outputPath = "/tmp/out.png",
+                vaePath = "/models/qwen-image-vae.safetensors",
+                llmPath = "/models/Qwen3VL-8B-Instruct-Q4_K_M.gguf"
+            ),
+            pipeline,
+            SdBinaryCapabilities.ALLOW_ALL
+        )
+        assertTrue(args.containsAll(listOf("--diffusion-model", "--llm", "--vae")))
+        assertFalse(args.contains("--llm_vision"))
+    }
+
+    @Test
+    fun `qwen image 21 image editing requires and emits the matching mmproj`() {
+        val references = listOf("/tmp/input.png", "/tmp/ref-2.png", "/tmp/ref-3.png")
+        val base = SDConfig(
+            mode = com.example.llamadroid.service.SDMode.IMG2IMG,
+            modelPath = "/models/qwen_image_2.1-Q4_K.gguf",
+            modelFamily = SdModelFamily.QWEN_IMAGE.storedValue,
+            modelVariant = "2.1",
+            modelLayout = SdMainLayout.STANDALONE_DIFFUSION,
+            prompt = "edit this image",
+            outputPath = "/tmp/out.png",
+            initImage = references.first(),
+            referenceImages = references,
+            vaePath = "/models/qwen-image-vae.safetensors",
+            llmPath = "/models/Qwen3VL-8B-Instruct-Q4_K_M.gguf"
+        )
+        val missingVision = resolveSdPipeline(base)
+        assertFalse(missingVision.isValid)
+        assertTrue(
+            missingVision.blockingIssues.any {
+                it.role == SdComponentRole.LLM_VISION
+            }
+        )
+
+        val withVision = base.copy(
+            llmVisionPath = "/models/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"
+        )
+        val pipeline = resolveValidatedSdPipeline(withVision)
+        assertTrue(SdComponentRole.LLM_VISION in pipeline.requiredExternalRoles)
+        val args = buildSdCommandArgs(withVision, pipeline, SdBinaryCapabilities.ALLOW_ALL)
+        assertTrue(args.contains("--llm_vision"))
+        assertEquals(
+            references,
+            args.windowed(2).filter { it.first() == "-r" }.map { it.last() }
+        )
+    }
+
+    @Test
+    fun `qwen image 21 command rejects dimensions that are not multiples of 32`() {
+        val error = runCatching {
+            buildSdCommandArgs(
+                SDConfig(
+                    modelPath = "/models/qwen_image_2.1-Q4_K.gguf",
+                    modelFamily = SdModelFamily.QWEN_IMAGE.storedValue,
+                    modelVariant = "2.1",
+                    modelLayout = SdMainLayout.STANDALONE_DIFFUSION,
+                    prompt = "a lighthouse",
+                    outputPath = "/tmp/out.png",
+                    width = 520,
+                    height = 512,
+                    vaePath = "/models/qwen-image-vae.safetensors",
+                    llmPath = "/models/Qwen3VL-8B-Instruct-Q4_K_M.gguf"
+                ),
+                SdBinaryCapabilities.ALLOW_ALL
+            )
+        }.exceptionOrNull()
+
+        assertTrue(error is SdImageDimensionException)
+    }
+
+    @Test
     fun `full SD3 only requires encoders absent from the inspected artifact`() {
         val config = SDConfig(
             modelPath = "/models/sd3-full.safetensors",
@@ -103,6 +201,34 @@ class SdPipelineResolverTest {
         assertTrue(args.contains("-m"))
         assertFalse(args.contains("--diffusion-model"))
         assertTrue(pipeline.requiredExternalRoles.isEmpty())
+    }
+
+    @Test
+    fun `configured family remains authoritative when inspection disagrees`() {
+        val inspection = SdArtifactInspection(
+            format = SdArtifactFormat.SAFETENSORS,
+            detectedFamily = SdModelFamily.FLUX_2,
+            detectedRole = SdArtifactRole.FULL_MODEL,
+            mainLayout = SdMainLayout.FULL_MODEL,
+            containsDiffusion = true,
+            tensorCount = 1L,
+            confidence = SdInspectionConfidence.HIGH
+        )
+
+        val pipeline = resolveSdPipeline(
+            SDConfig(
+                modelPath = "/models/manual-chroma.safetensors",
+                modelFamily = SdModelFamily.CHROMA.storedValue,
+                modelLayout = SdMainLayout.FULL_MODEL,
+                prompt = "a lighthouse",
+                outputPath = "/tmp/out.png"
+            ),
+            inspection
+        )
+
+        assertEquals(SdModelFamily.CHROMA, pipeline.family)
+        assertTrue(pipeline.blockingIssues.isEmpty())
+        assertTrue(pipeline.warnings.any { it.code == SdPipelineIssueCode.DETECTED_FAMILY_CONFLICT })
     }
 
     @Test

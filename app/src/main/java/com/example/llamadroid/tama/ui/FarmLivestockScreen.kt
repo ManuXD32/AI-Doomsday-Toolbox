@@ -53,7 +53,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -78,6 +77,7 @@ import com.example.llamadroid.tama.data.occupiedLivestockCount
 import com.example.llamadroid.tama.data.storedLivestockOutput
 import com.example.llamadroid.tama.game.FarmRepository
 import com.example.llamadroid.tama.game.TamaGameEngine
+import com.example.llamadroid.tama.game.WorldFarmMaintenance
 import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import java.util.Locale
@@ -126,7 +126,6 @@ private fun FarmLivestockScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
-    val resources = LocalResources.current
     val configuration = LocalConfiguration.current
     val scope = rememberCoroutineScope()
     val walkthroughTargets = LocalWalkthroughTargets.current
@@ -276,29 +275,9 @@ private fun FarmLivestockScreen(
                             Button(
                                 onClick = {
                                     scope.launch {
-                                        val collected = farmRepository.collectLivestockOutput(pet.id, type)
-                                        if (collected > 0) {
-                                            val productName = resources.getString(
-                                                if (type == FarmLivestockType.BARN) R.string.tama_item_milk_bottle else R.string.tama_item_egg
-                                            )
-                                            gameEngine.grantItem(
-                                                InventoryItem(
-                                                    id = type.productInventoryId,
-                                                    name = productName,
-                                                    type = ItemType.CROP
-                                                ),
-                                                collected
-                                            )
-                                            gameEngine.logEvent(
-                                                pet.id,
-                                                com.example.llamadroid.tama.data.EventType.OTHER,
-                                                resources.getString(
-                                                    if (type == FarmLivestockType.BARN) R.string.tama_event_collected_milk else R.string.tama_event_collected_eggs,
-                                                    collected
-                                                )
-                                            )
-                                        }
-                                    }
+                                        val result = WorldFarmMaintenance.request(context, gameEngine, "collect_livestock", mapOf("type" to type.id))
+                                        Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                                }
                                 },
                                 enabled = stored > 0,
                                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
@@ -382,72 +361,9 @@ private fun FarmLivestockScreen(
                             onClick = {
                                 if (!feedModeEnabled || !slot.occupied) return@LivestockSlotCard
                                 scope.launch {
-                                    if (!isHungry) {
-                                        Toast.makeText(
-                                            context,
-                                            resources.getString(R.string.tama_farm_livestock_not_hungry),
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                        return@launch
-                                    }
-                                    if (wheatCount <= 0) {
-                                        Toast.makeText(
-                                            context,
-                                            resources.getString(R.string.tama_farm_livestock_no_wheat),
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                        return@launch
-                                    }
-                                    val wheatName = FarmTradeItemCatalog.displayName(
-                                        LIVESTOCK_FEED_ITEM_ID,
-                                        configuration.locales[0] ?: Locale.getDefault()
-                                    )
-                                    val consumed = gameEngine.consumeItem(
-                                        InventoryItem(
-                                            id = LIVESTOCK_FEED_ITEM_ID,
-                                            name = wheatName,
-                                            type = ItemType.CROP
-                                        ),
-                                        1
-                                    )
-                                    if (!consumed) {
-                                        Toast.makeText(
-                                            context,
-                                            resources.getString(R.string.tama_farm_livestock_no_wheat),
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                        return@launch
-                                    }
-                                    val fed = farmRepository.feedLivestockAnimal(
-                                        petId = pet.id,
-                                        type = type,
-                                        slotIndex = index
-                                    )
-                                    if (!fed) {
-                                        gameEngine.grantItem(
-                                            InventoryItem(
-                                                id = LIVESTOCK_FEED_ITEM_ID,
-                                                name = wheatName,
-                                                type = ItemType.CROP
-                                            ),
-                                            1
-                                        )
-                                        return@launch
-                                    }
-                                    gameEngine.logEvent(
-                                        pet.id,
-                                        com.example.llamadroid.tama.data.EventType.OTHER,
-                                        resources.getString(
-                                            if (type == FarmLivestockType.BARN) R.string.tama_event_fed_cow else R.string.tama_event_fed_chicken
-                                        )
-                                    )
-                                    Toast.makeText(
-                                        context,
-                                        resources.getString(
-                                            if (type == FarmLivestockType.BARN) R.string.tama_farm_livestock_fed_cow else R.string.tama_farm_livestock_fed_chicken
-                                        ),
-                                        Toast.LENGTH_SHORT
-                                    ).show()
+                                    val result = WorldFarmMaintenance.request(context, gameEngine, "feed_livestock",
+                                        mapOf("type" to type.id, "slot" to index.toString()))
+                                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
                                 }
                             }
                         )

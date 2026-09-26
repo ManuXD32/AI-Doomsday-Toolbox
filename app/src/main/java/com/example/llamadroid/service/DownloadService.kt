@@ -16,8 +16,12 @@ import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_FAILED
 import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_RESUMABLE
 import com.example.llamadroid.data.db.DownloadTaskEntity
 import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.data.db.isAudioTtsComponentType
+import com.example.llamadroid.data.db.isStableAudioComponentType
 import com.example.llamadroid.data.model.DownloadTaskArtifacts
 import com.example.llamadroid.data.model.DownloadProgressHolder
+import com.example.llamadroid.data.model.AudioModelSupport
+import com.example.llamadroid.data.model.StableAudioCuratedBundleCatalog
 import com.example.llamadroid.data.model.ModelLibraryManager
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.data.model.PendingDownload
@@ -29,6 +33,7 @@ import com.example.llamadroid.data.model.library.PendingArtifactStatus
 import com.example.llamadroid.data.db.PendingModelArtifactEntity
 import com.example.llamadroid.data.model.library.ModelArtifactFinalizer
 import com.example.llamadroid.data.model.library.ModelArtifactDiscardPolicy
+import com.example.llamadroid.data.model.library.ModelClassificationPolicy
 import com.example.llamadroid.data.model.library.PendingArtifactRuntimeMetadata
 import com.example.llamadroid.data.model.library.ensurePendingArtifactActive
 import com.example.llamadroid.data.model.downloadPartFile
@@ -46,6 +51,8 @@ import com.example.llamadroid.onnx.OnnxImportSupport
 import com.example.llamadroid.onnx.OnnxTtsBundleValidator
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.Downloader
+import com.example.llamadroid.util.DownloadProgressPolicy
+import com.example.llamadroid.util.DownloadResumeMetadata
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collect
@@ -582,27 +589,56 @@ class DownloadService : Service() {
             val taskDao = db.downloadTaskDao()
             val taskMutex = taskMutexFor(resolvedTaskId)
             taskMutex.withLock {
+            // A modern intent carries the immutable task ID. A filename is only
+            // an alias for older intents that did not carry a distinct ID; using
+            // it here could adopt another repository's same-named task.
+            val legacyFilenameAlias = downloadId == null || downloadId == filename
             val storedTask = taskDao.getById(resolvedTaskId)
-                ?: filename?.let { taskDao.getByFilename(it) }
+                ?: filename?.takeIf { legacyFilenameAlias }?.let { alias ->
+                    taskDao.getByFilename(alias).singleOrNull()
+                }
             val memoryPending = PendingDownloadHolder.getPending(resolvedTaskId)
-                ?: filename?.let { PendingDownloadHolder.getPending(it) }
-            val pending = memoryPending ?: storedTask?.toPendingDownload()
+                ?: filename?.takeIf { legacyFilenameAlias }?.let { PendingDownloadHolder.getPending(it) }
+            val taskPending = memoryPending ?: storedTask?.toPendingDownload()
             val finalUrl = url ?: storedTask?.url ?: return@launch
-            val finalDestPath = destPath ?: storedTask?.destPath ?: pending?.destPath ?: return@launch
-            val finalFilename = filename ?: storedTask?.filename ?: pending?.filename ?: File(finalDestPath).name
+            // Once Room has issued a task, its destination and display
+            // identity belong to that row. Service intents may carry legacy
+            // filename/path aliases, but they must not silently retarget a
+            // concurrent task that happens to share a filename.
+            val finalDestPath = storedTask?.destPath ?: destPath ?: taskPending?.destPath ?: return@launch
+            val finalFilename = storedTask?.filename ?: filename ?: taskPending?.filename ?: File(finalDestPath).name
             val destFile = File(finalDestPath)
-            val progressKey = pending?.progressKey ?: storedTask?.progressKey ?: resolvedTaskId
-            val candidateTask = pending?.toDownloadTaskEntity(resolvedTaskId, finalUrl)
-                ?: storedTask?.copy(status = DOWNLOAD_TASK_STATUS_ACTIVE, updatedAt = System.currentTimeMillis())
-                ?: DownloadTaskEntity(
-                    id = resolvedTaskId,
+            val progressKey = storedTask?.progressKey ?: taskPending?.progressKey ?: resolvedTaskId
+            val candidateTask = if (storedTask != null) {
+                // The persisted row is authoritative once it exists. Keeping
+                // its identity and classification fields intact prevents a
+                // stale in-memory pending entry from replacing the filename,
+                // repository, task key, or stage policy during a retry.
+                storedTask.copy(
+                    createdAt = storedTask.createdAt,
                     url = finalUrl,
-                    destPath = finalDestPath,
-                    filename = finalFilename,
-                    repoId = finalUrl,
-                    progressKey = progressKey,
-                    modelType = ModelType.LLM.name
+                    status = DOWNLOAD_TASK_STATUS_ACTIVE,
+                    updatedAt = System.currentTimeMillis()
                 )
+            } else {
+                taskPending?.toDownloadTaskEntity(resolvedTaskId, finalUrl)
+                    ?: DownloadTaskEntity(
+                        id = resolvedTaskId,
+                        url = finalUrl,
+                        destPath = finalDestPath,
+                        filename = finalFilename,
+                        repoId = finalUrl,
+                        progressKey = progressKey,
+                        modelType = ModelType.LLM.name
+                    )
+            }
+            // A few legacy callers started the service directly and supplied
+            // no in-memory PendingDownload. The durable task still contains
+            // the canonical destination/type metadata, so promote that task
+            // to the same completion path instead of leaving a completed file
+            // unindexed when its picker coroutine goes away.
+            val pending = taskPending ?: candidateTask.toPendingDownload()
+                .takeIf { canInferLegacyLlmPending(destFile, candidateTask) }
             val libraryDao = db.modelLibraryDao()
             val armedTask: DownloadTaskEntity? = db.withTransaction {
                 val artifactId = pending?.pendingArtifactId ?: storedTask?.pendingArtifactId
@@ -765,7 +801,7 @@ class DownloadService : Service() {
                         }
                         db.modelDao().insertModel(entity)
                     }
-                    DebugLog.log("DownloadService: Saved $filename to DB as ${pending.type}")
+                    DebugLog.log("DownloadService: Saved $finalFilename to DB as ${pending.type}")
                     DownloadProgressHolder.removeProgress(progressKey)
                     db.withTransaction {
                         pending.pendingArtifactId?.let { artifactId ->
@@ -802,84 +838,106 @@ class DownloadService : Service() {
                 return@launch
             }
             
-            Downloader.download(
-                url = finalUrl,
-                destFile = destFile,
-                context = this@DownloadService,
-                bearerToken = pending?.huggingFaceToken,
-                downloadId = resolvedTaskId,
-                preservePartialOnCancel = pending?.stageOnly == true
-            )
-                .catch { e ->
-                    DebugLog.log("DownloadService: Download failed - ${e.message}")
-                    if (e is CancellationException) {
-                        // Cancellation is a control path. Let the service job
-                        // unwind without turning a user-cancelled artifact into
-                        // FAILED or RESUMABLE.
-                        throw e
-                    }
-                    val db = AppDatabase.getDatabase(this@DownloadService)
-                    val wasCancelled = recordDownloadFailure(
-                        db = db,
-                        taskId = resolvedTaskId,
-                        destPath = finalDestPath,
-                        pending = pending,
-                        error = e.message
-                    )
-                    if (wasCancelled) {
-                        PendingDownloadHolder.removePending(resolvedTaskId)
-                    } else {
-                        val failureStatus = if (pending?.liteRtDisplayName != null && e.isHuggingFaceAccessFailure()) {
-                            if (pending.huggingFaceToken.isNullOrBlank()) {
-                                getString(R.string.litert_hf_token_required_error, e.huggingFaceStatusCode())
-                            } else {
-                                getString(R.string.litert_hf_access_denied_error, e.huggingFaceStatusCode())
-                            }
-                        } else {
-                            getString(R.string.onnx_models_download_failed)
+            suspend fun downloadNetwork() {
+                val persistencePolicy = DownloadProgressPolicy(1_000L)
+                Downloader.download(
+                    url = finalUrl,
+                    destFile = destFile,
+                    context = this@DownloadService,
+                    bearerToken = pending?.huggingFaceToken,
+                    downloadId = resolvedTaskId,
+                    preservePartialOnCancel = pending?.stageOnly == true
+                )
+                    .catch { e ->
+                        DebugLog.log("DownloadService: Download failed - ${e.message}")
+                        if (e is CancellationException) {
+                            // Cancellation is a control path. Let the service job
+                            // unwind without turning a user-cancelled artifact into
+                            // FAILED or RESUMABLE.
+                            throw e
                         }
-                        DownloadProgressHolder.updateProgress(progressKey, -1f)
-                        DownloadProgressHolder.updateStatus(progressKey, failureStatus)
-                        PendingDownloadHolder.removePending(resolvedTaskId)
-                    }
-                }
-                .collect { progress ->
-                    if (pending?.stageOnly == true && pending.pendingArtifactId != null &&
-                        AppDatabase.getDatabase(this@DownloadService).modelLibraryDao()
-                            .getPendingArtifactById(pending.pendingArtifactId)?.status == PendingArtifactStatus.CANCELLED.storedValue
-                    ) {
-                        throw CancellationException("Staged download was cancelled")
-                    }
-                    val mappedProgress = if (pending?.onnxInstallKind == ONNX_INSTALL_KIND_ARCHIVE_BUNDLE) {
-                        if (progress >= 0f) progress * 0.9f else progress
-                    } else {
-                        progress
-                    }
-                    DownloadProgressHolder.updateProgress(progressKey, mappedProgress)
-                    if (pending?.onnxInstallKind == ONNX_INSTALL_KIND_ARCHIVE_BUNDLE) {
-                        DownloadProgressHolder.updateStatus(progressKey, getString(R.string.onnx_models_phase_downloading))
-                    }
-                    db.withTransaction {
-                        pending?.pendingArtifactId?.let { artifactId ->
-                            ensurePendingArtifactActive(db.modelLibraryDao(), artifactId)
-                        }
-                        taskDao.updateState(
-                            id = resolvedTaskId,
-                            status = DOWNLOAD_TASK_STATUS_ACTIVE,
-                            bytesDownloaded = downloadPartFile(finalDestPath).length(),
-                            totalBytes = null,
-                            lastError = null
+                        val db = AppDatabase.getDatabase(this@DownloadService)
+                        val wasCancelled = recordDownloadFailure(
+                            db = db,
+                            taskId = resolvedTaskId,
+                            destPath = finalDestPath,
+                            pending = pending,
+                            error = e.message
                         )
+                        if (wasCancelled) {
+                            PendingDownloadHolder.removePending(resolvedTaskId)
+                        } else {
+                            val failureStatus = if (pending?.liteRtDisplayName != null && e.isHuggingFaceAccessFailure()) {
+                                if (pending.huggingFaceToken.isNullOrBlank()) {
+                                    getString(R.string.litert_hf_token_required_error, e.huggingFaceStatusCode())
+                                } else {
+                                    getString(R.string.litert_hf_access_denied_error, e.huggingFaceStatusCode())
+                                }
+                            } else {
+                                getString(R.string.onnx_models_download_failed)
+                            }
+                            DownloadProgressHolder.updateProgress(progressKey, -1f)
+                            DownloadProgressHolder.updateStatus(progressKey, failureStatus)
+                            PendingDownloadHolder.removePending(resolvedTaskId)
+                        }
                     }
-                    val progressPercent = if (mappedProgress >= 0f) (mappedProgress * 100).toInt() else lastProgress
-                    if (mappedProgress >= 0f && (progressPercent >= lastProgress + 5 || progress == 1f)) {
-                        lastProgress = progressPercent
-                        updateNotification(finalFilename, progressPercent)
+                    .collect { progress ->
+                        if (pending?.stageOnly == true && pending.pendingArtifactId != null &&
+                            AppDatabase.getDatabase(this@DownloadService).modelLibraryDao()
+                                .getPendingArtifactById(pending.pendingArtifactId)?.status == PendingArtifactStatus.CANCELLED.storedValue
+                        ) {
+                            throw CancellationException("Staged download was cancelled")
+                        }
+                        val mappedProgress = if (pending?.onnxInstallKind == ONNX_INSTALL_KIND_ARCHIVE_BUNDLE) {
+                            if (progress >= 0f) progress * 0.9f else progress
+                        } else {
+                            progress
+                        }
+                        DownloadProgressHolder.updateProgress(progressKey, mappedProgress)
+                        if (pending?.onnxInstallKind == ONNX_INSTALL_KIND_ARCHIVE_BUNDLE) {
+                            DownloadProgressHolder.updateStatus(progressKey, getString(R.string.onnx_models_phase_downloading))
+                        }
+                        if (persistencePolicy.shouldUpdate(force = progress >= 1f)) {
+                            db.withTransaction {
+                                val current = taskDao.getById(resolvedTaskId)
+                                if (current == null || current.status == DOWNLOAD_TASK_STATUS_CANCELLED) {
+                                    throw CancellationException("Download task was cancelled")
+                                }
+                                pending?.pendingArtifactId?.let { artifactId ->
+                                    ensurePendingArtifactActive(db.modelLibraryDao(), artifactId)
+                                }
+                                val bytes = if (progress >= 1f) destFile.length()
+                                    else downloadPartFile(finalDestPath).length()
+                                val transferTotal = if (progress >= 1f) bytes else {
+                                    val part = downloadPartFile(finalDestPath)
+                                    DownloadResumeMetadata.read(DownloadResumeMetadata.companionFile(part))
+                                        ?.takeIf { it.matches(finalUrl, part.length()) }
+                                        ?.totalBytes
+                                }
+                                taskDao.updateState(
+                                    id = resolvedTaskId,
+                                    status = DOWNLOAD_TASK_STATUS_ACTIVE,
+                                    bytesDownloaded = bytes,
+                                    totalBytes = transferTotal,
+                                    lastError = null
+                                )
+                            }
+                        }
+                        val progressPercent = if (mappedProgress >= 0f) (mappedProgress * 100).toInt() else lastProgress
+                        if (mappedProgress >= 0f && (progressPercent >= lastProgress + 5 || progress == 1f)) {
+                            lastProgress = progressPercent
+                            updateNotification(finalFilename, progressPercent)
+                        }
+                        if (progress >= 1f) {
+                            downloadSuccess = true
+                        }
                     }
-                    if (progress >= 1f) {
-                        downloadSuccess = true
-                    }
-                }
+            }
+            if (pending?.type?.isStableAudioComponentType() == true) {
+                StableAudioDownloadCoordinator.withTransferLock { downloadNetwork() }
+            } else {
+                downloadNetwork()
+            }
             
             // Download complete - save to DB if pending
             if (downloadSuccess) {
@@ -900,7 +958,8 @@ class DownloadService : Service() {
                             database = db,
                             artifact = stagedArtifact,
                             downloadedFile = destFile,
-                            metadata = PendingArtifactRuntimeMetadata.fromPending(pending)
+                            metadata = PendingArtifactRuntimeMetadata.fromPending(pending),
+                            context = this@DownloadService
                         ).getOrThrow()
                         DownloadProgressHolder.updateProgress(progressKey, 1f)
                         DownloadProgressHolder.updateStatus(progressKey, getString(R.string.onnx_models_phase_completed))
@@ -908,6 +967,9 @@ class DownloadService : Service() {
                             // The artifact guard and task completion share one
                             // transaction, so cancellation cannot be silently
                             // overwritten by a late downloader callback.
+                            if (taskDao.getById(resolvedTaskId)?.status == DOWNLOAD_TASK_STATUS_CANCELLED) {
+                                throw CancellationException("Download task was cancelled")
+                            }
                             ensurePendingArtifactActive(db.modelLibraryDao(), pendingArtifactId)
                             taskDao.updateState(
                                 id = resolvedTaskId,
@@ -956,19 +1018,38 @@ class DownloadService : Service() {
                     try {
                         val genericCurated =
                             com.example.llamadroid.data.model.CuratedModelBundleRegistry
-                                .fileForInstalledFilename(finalFilename)
+                                .fileForInstalledFilename(finalFilename, this@DownloadService)
+                        val stableAudioCurated = if (pending.type.isStableAudioComponentType()) {
+                            StableAudioCuratedBundleCatalog.fileForDownload(
+                                context = this@DownloadService,
+                                localFilename = finalFilename,
+                                repoId = pending.repoId,
+                                sourceUrl = finalUrl
+                            )
+                        } else {
+                            null
+                        }
                         val sdCurated =
                             com.example.llamadroid.data.model.SdCuratedBundleCatalog
                                 .fileForLocalFilename(finalFilename)
-                        if (genericCurated != null || sdCurated != null) {
+                        if (genericCurated != null || stableAudioCurated != null || sdCurated != null) {
                             val verifyingLabel = getString(R.string.sd_bundle_verifying)
                             DownloadProgressHolder.updateProgress(progressKey, 0.999f)
                             DownloadProgressHolder.updateStatus(progressKey, verifyingLabel)
                             updateNotification(verifyingLabel, 99)
-                            if (genericCurated != null) {
-                                com.example.llamadroid.data.model.verifyCuratedModelDownload(
+                            if (stableAudioCurated != null) {
+                                com.example.llamadroid.data.model.verifyCuratedBundleFile(
+                                    expected = stableAudioCurated,
                                     localFilename = finalFilename,
                                     downloadedFile = destFile
+                                )
+                            } else if (genericCurated != null) {
+                                com.example.llamadroid.data.model.verifyCuratedModelDownload(
+                                    localFilename = finalFilename,
+                                    downloadedFile = destFile,
+                                    repoId = pending.repoId,
+                                    sourceUrl = finalUrl,
+                                    context = this@DownloadService
                                 )
                             } else {
                                 com.example.llamadroid.data.model.verifySdCuratedDownload(
@@ -1003,24 +1084,29 @@ class DownloadService : Service() {
                                 downloadedFile = destFile,
                                 onProgress = progressReporter
                             )
-                            DebugLog.log("DownloadService: Saved $filename to LiteRT model DB")
+                            DebugLog.log("DownloadService: Saved $finalFilename to LiteRT model DB")
                         } else {
                             val entity = finalizePendingDownload(
                                 pending = pending,
                                 downloadedFile = destFile,
+                                sourceUrl = finalUrl,
                                 onProgress = progressReporter
                             )
                             db.withTransaction {
                                 pending.pendingArtifactId?.let { artifactId ->
                                     ensurePendingArtifactActive(db.modelLibraryDao(), artifactId)
                                 }
-                                db.modelDao().insertModel(entity)
+                                val linkedEntity = linkAudioCompanion(db, entity)
+                                db.modelDao().insertModel(linkedEntity)
                             }
-                            DebugLog.log("DownloadService: Saved $filename to DB as ${pending.type}")
+                            DebugLog.log("DownloadService: Saved $finalFilename to DB as ${pending.type}")
                         }
                         DownloadProgressHolder.updateProgress(progressKey, 1f)
                         DownloadProgressHolder.updateStatus(progressKey, getString(R.string.onnx_models_phase_completed))
                         db.withTransaction {
+                            if (taskDao.getById(resolvedTaskId)?.status == DOWNLOAD_TASK_STATUS_CANCELLED) {
+                                throw CancellationException("Download task was cancelled")
+                            }
                             pending.pendingArtifactId?.let { artifactId ->
                                 ensurePendingArtifactActive(db.modelLibraryDao(), artifactId)
                             }
@@ -1104,8 +1190,9 @@ class DownloadService : Service() {
     private fun cancelDownloadInternal(filename: String, downloadId: String) {
         val cleanup = beginTaskCleanup(downloadId, discard = false)
         if (!cleanup.owner) return
+        val legacyFilenameAlias = downloadId == filename
         val memoryPending = PendingDownloadHolder.getPending(downloadId)
-            ?: PendingDownloadHolder.getPending(filename)
+            ?: filename.takeIf { legacyFilenameAlias }?.let(PendingDownloadHolder::getPending)
         serviceScope.launch(NonCancellable) {
             try {
                 // If a start was already constructing its lazy worker, wait
@@ -1305,7 +1392,8 @@ class DownloadService : Service() {
                 database = db,
                 candidates = candidates,
                 allowedPendingArtifactId = effectivePending?.id,
-                allowedTaskId = task?.id
+                allowedTaskId = task?.id,
+                context = this@DownloadService
             )
             ModelArtifactDiscardPolicy.deleteFiles(candidates)
         }
@@ -1333,7 +1421,9 @@ class DownloadService : Service() {
         val taskDao = db.downloadTaskDao()
         val libraryDao = db.modelLibraryDao()
         val task = taskDao.getById(requestedTaskId)
-            ?: filename?.let { taskDao.getByFilename(it) }
+            ?: filename?.takeIf { it == requestedTaskId }?.let { alias ->
+                taskDao.getByFilename(alias).singleOrNull()
+            }
         val taskId = task?.id ?: requestedTaskId
         val pending = requestedPendingArtifactId?.let { libraryDao.getPendingArtifactById(it) }
             ?: task?.pendingArtifactId?.let { libraryDao.getPendingArtifactById(it) }
@@ -1422,12 +1512,14 @@ class DownloadService : Service() {
             val libraryDao = db.modelLibraryDao()
             val artifact = pending?.pendingArtifactId?.let { libraryDao.getPendingArtifactById(it) }
             val bytes = (bytesOverride ?: downloadPartFile(destPath).length()).coerceAtLeast(0L)
-            if (artifact?.status == PendingArtifactStatus.CANCELLED.storedValue) {
+            val currentTask = taskDao.getById(taskId)
+            if (artifact?.status == PendingArtifactStatus.CANCELLED.storedValue ||
+                currentTask?.status == DOWNLOAD_TASK_STATUS_CANCELLED) {
                 taskDao.updateState(
                     id = taskId,
                     status = DOWNLOAD_TASK_STATUS_CANCELLED,
                     bytesDownloaded = bytes,
-                    totalBytes = null,
+                    totalBytes = currentTask?.totalBytes,
                     lastError = null
                 )
                 true
@@ -1436,7 +1528,7 @@ class DownloadService : Service() {
                     id = taskId,
                     status = if (bytes > 0L) DOWNLOAD_TASK_STATUS_RESUMABLE else DOWNLOAD_TASK_STATUS_FAILED,
                     bytesDownloaded = bytes,
-                    totalBytes = null,
+                    totalBytes = currentTask?.totalBytes,
                     lastError = error
                 )
                 if (pending?.stageOnly == true && artifact != null &&
@@ -1643,6 +1735,28 @@ class DownloadService : Service() {
         val part = File(destFile.parentFile ?: File("."), "${destFile.name}.part")
         return if (part.length() > 0L) DownloadProgressHolder.INDETERMINATE else 0f
     }
+
+    /**
+     * Legacy direct starts did not carry a PendingDownload. Infer the runtime
+     * row only for the canonical GGUF LLM directory; generic asset downloads
+     * must retain their existing task-only completion behavior.
+     */
+    private fun canInferLegacyLlmPending(
+        destFile: File,
+        candidateTask: DownloadTaskEntity
+    ): Boolean {
+        if (candidateTask.modelType != ModelType.LLM.name ||
+            !destFile.name.endsWith(".gguf", ignoreCase = true)
+        ) return false
+        val destination = runCatching { destFile.canonicalFile }.getOrNull() ?: return false
+        val roots = buildList {
+            applicationContext.getExternalFilesDir(null)?.let { add(File(it, "models/llm")) }
+            add(File(applicationContext.filesDir, "models"))
+        }
+        return roots.any { root ->
+            runCatching { destination.parentFile == root.canonicalFile }.getOrDefault(false)
+        }
+    }
     
     private fun updateNotification(text: String, progress: Int) {
         notificationTaskId?.let {
@@ -1659,6 +1773,7 @@ class DownloadService : Service() {
     private suspend fun finalizePendingDownload(
         pending: PendingDownload,
         downloadedFile: File,
+        sourceUrl: String? = null,
         onProgress: (Float, String) -> Unit
     ): ModelEntity {
         return if (
@@ -1715,7 +1830,9 @@ class DownloadService : Service() {
                     onnxAssetKind = pending.onnxAssetKind,
                     onnxPipelineFamily = pending.onnxPipelineFamily,
                     onnxReferenceUri = pending.onnxReferenceUri,
-                    onnxReferencePath = pending.onnxReferencePath
+                    onnxReferencePath = pending.onnxReferencePath,
+                    classificationSource = pending.classificationSource,
+                    detectedClassificationJson = pending.detectedClassificationJson
                 )
             } catch (e: Exception) {
                 OnnxImportSupport.deleteRecursively(installDir)
@@ -1732,6 +1849,25 @@ class DownloadService : Service() {
             } else {
                 pending.onnxCapabilities
             }
+            // This marker is assigned from the completed payload, never from
+            // a filename or imported metadata. Curated verification runs in
+            // the worker before finalizePendingDownload is called.
+            val audioIdentity = if (pending.type.isAudioTtsComponentType() || pending.type.isStableAudioComponentType()) {
+                com.example.llamadroid.data.model.library.artifactFileSha256(downloadedFile)
+                    ?.let { "sha256:$it" }
+            } else {
+                null
+            }
+            val audioDescriptor = AudioModelSupport.descriptorForPayload(
+                type = pending.type,
+                digest = audioIdentity,
+                repoId = pending.repoId,
+                filename = pending.filename,
+                familyHint = pending.artifactFamily,
+                roleHint = pending.artifactRole,
+                sourceUrl = sourceUrl,
+                context = this@DownloadService
+            )
             // Inspect the completed payload before copying it to the canonical
             // library or inserting a trusted model row.  A failed preflight
             // leaves the downloaded file in place for recovery/retry.
@@ -1747,6 +1883,8 @@ class DownloadService : Service() {
             } else {
                 null
             }
+            val detectedEvidence = pending.detectedClassificationJson
+                ?: sdInspection?.toJson()?.let(ModelClassificationPolicy::boundedEvidence)
             if (ModelLibraryManager.usesManagedExternalCanonicalStorage(pending.type)) {
                 // Single-copy path: the managed external destination is already the canonical runtime file.
             } else if (pending.type == ModelType.ONNX_IMAGE_GEN ||
@@ -1779,10 +1917,61 @@ class DownloadService : Service() {
                 onnxAssetKind = pending.onnxAssetKind,
                 onnxPipelineFamily = pending.onnxPipelineFamily,
                 onnxReferenceUri = pending.onnxReferenceUri,
-                onnxReferencePath = pending.onnxReferencePath
+                onnxReferencePath = pending.onnxReferencePath,
+                audioFamily = audioDescriptor?.family,
+                audioLanguage = audioDescriptor?.language,
+                audioComponentRole = audioDescriptor?.role,
+                audioArtifactIdentity = audioIdentity,
+                classificationSource = pending.classificationSource,
+                detectedClassificationJson = detectedEvidence
             ).let { candidate ->
                 sdInspection?.let(candidate::withSdArtifactInspection) ?: candidate
             }
+        }
+    }
+
+    /**
+     * Persist the selected main -> companion edge once both rows are present.
+     * Matching is limited to durable family/language metadata and the same
+     * managed directory. Custom/legacy rows require an explicit mmprojPath so
+     * an arbitrary GGUF companion can never be selected by position.
+     */
+    private suspend fun linkAudioCompanion(
+        database: AppDatabase,
+        entity: ModelEntity
+    ): ModelEntity {
+        if (entity.type != ModelType.LLAMA_TTS && entity.type != ModelType.LLAMA_TTS_COMPANION) {
+            return entity
+        }
+        val descriptor = AudioModelSupport.descriptorForModel(entity, this@DownloadService) ?: return entity
+        if (descriptor.family == AudioModelSupport.FAMILY_CUSTOM_TTS && entity.mmprojPath == null) {
+            return entity
+        }
+        val rows = database.modelDao().getModelsByTypesSync(
+            listOf(ModelType.LLAMA_TTS, ModelType.LLAMA_TTS_COMPANION)
+        )
+        val sameDirectory: (ModelEntity) -> Boolean = { candidate ->
+            File(candidate.path).parentFile?.canonicalPath == File(entity.path).parentFile?.canonicalPath
+        }
+        val compatible: (ModelEntity) -> Boolean = { candidate ->
+            val candidateDescriptor = AudioModelSupport.descriptorForModel(candidate, this@DownloadService)
+            candidateDescriptor != null &&
+                candidateDescriptor.family == descriptor.family &&
+                (descriptor.language == null || candidateDescriptor.language == descriptor.language) &&
+                sameDirectory(candidate)
+        }
+        return if (entity.type == ModelType.LLAMA_TTS) {
+            if (entity.mmprojPath != null) entity else {
+                rows.firstOrNull {
+                    it.type == ModelType.LLAMA_TTS_COMPANION && compatible(it)
+                }?.path?.let { entity.copy(mmprojPath = it) } ?: entity
+            }
+        } else {
+            rows.filter { it.type == ModelType.LLAMA_TTS && compatible(it) }
+                .forEach { main ->
+                    database.modelDao().insertModel(main.copy(mmprojPath = entity.path))
+                }
+            entity
         }
     }
 
@@ -1845,7 +2034,9 @@ class DownloadService : Service() {
                 onnxAssetKind = pending.onnxAssetKind,
                 onnxPipelineFamily = pending.onnxPipelineFamily,
                 onnxReferenceUri = pending.onnxReferenceUri,
-                onnxReferencePath = pending.onnxReferencePath
+                onnxReferencePath = pending.onnxReferencePath,
+                classificationSource = pending.classificationSource,
+                detectedClassificationJson = pending.detectedClassificationJson
             )
         } catch (e: Exception) {
             OnnxImportSupport.deleteRecursively(installDir)

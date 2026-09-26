@@ -35,8 +35,6 @@ import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.clickable
 import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
@@ -87,7 +85,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.first
 import java.io.File
 import com.example.llamadroid.R
-import com.example.llamadroid.data.api.HfTreeItemDto
 import com.example.llamadroid.data.db.ModelBundleEntity
 import com.example.llamadroid.data.db.ModelBundleItemEntity
 import com.example.llamadroid.data.db.ModelEntity
@@ -95,8 +92,6 @@ import com.example.llamadroid.data.db.ModelProvenanceEntity
 import com.example.llamadroid.data.db.ModelSourceEntity
 import com.example.llamadroid.data.db.PendingModelArtifactEntity
 import com.example.llamadroid.data.model.LiteRtModelEntity
-import com.example.llamadroid.data.model.PortableModelMetadata
-import com.example.llamadroid.data.model.library.HfFolderListing
 import com.example.llamadroid.data.model.library.InstalledModelAsset
 import com.example.llamadroid.data.model.library.ModelFamily
 import com.example.llamadroid.data.model.library.ModelLibraryErrorCode
@@ -111,7 +106,6 @@ import com.example.llamadroid.ui.components.AppChromeDefaults
 import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppSectionCard
-import org.json.JSONObject
 
 /** Persistent source, bundle and staged-artifact management surface. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -584,37 +578,53 @@ private fun ModelLibraryMessageBanner(message: ModelLibraryMessage) {
 }
 
 @Composable
-internal fun modelLibraryErrorText(code: ModelLibraryErrorCode): String = when (code) {
-    ModelLibraryErrorCode.INVALID_URL -> androidx.compose.ui.res.stringResource(R.string.model_library_error_invalid_url)
-    ModelLibraryErrorCode.HTTPS_REQUIRED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_https)
-    ModelLibraryErrorCode.EMBEDDED_CREDENTIALS -> androidx.compose.ui.res.stringResource(R.string.model_library_error_credentials)
-    ModelLibraryErrorCode.CREDENTIAL_QUERY_PARAMETER -> androidx.compose.ui.res.stringResource(R.string.model_library_error_query_credentials)
-    ModelLibraryErrorCode.UNSAFE_PATH -> androidx.compose.ui.res.stringResource(R.string.model_library_error_unsafe_path)
-    ModelLibraryErrorCode.INVALID_HF_REPOSITORY -> androidx.compose.ui.res.stringResource(R.string.model_library_error_hf_repository)
-    ModelLibraryErrorCode.INVALID_HF_FILE_PATH -> androidx.compose.ui.res.stringResource(R.string.model_library_error_hf_file)
-    ModelLibraryErrorCode.UNSUPPORTED_HF_PATH -> androidx.compose.ui.res.stringResource(R.string.model_library_error_hf_path)
-    ModelLibraryErrorCode.WEBPAGE_LINK -> androidx.compose.ui.res.stringResource(R.string.model_library_error_webpage)
-    ModelLibraryErrorCode.AUTHENTICATION_REQUIRED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_auth_required)
-    ModelLibraryErrorCode.AUTHENTICATION_REJECTED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_auth_rejected)
-    ModelLibraryErrorCode.HTTP_FAILURE -> androidx.compose.ui.res.stringResource(R.string.model_library_error_http)
-    ModelLibraryErrorCode.NETWORK_FAILURE -> androidx.compose.ui.res.stringResource(R.string.model_library_error_network)
-    ModelLibraryErrorCode.REQUEST_TIMEOUT -> androidx.compose.ui.res.stringResource(R.string.model_library_error_timeout)
-    ModelLibraryErrorCode.SOURCE_NOT_FOUND -> androidx.compose.ui.res.stringResource(R.string.model_library_error_source_missing)
-    ModelLibraryErrorCode.SOURCE_ALREADY_SAVED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_source_duplicate)
-    ModelLibraryErrorCode.SOURCE_HAS_PENDING_DOWNLOAD -> androidx.compose.ui.res.stringResource(R.string.model_library_error_source_pending)
-    ModelLibraryErrorCode.SOURCE_NOT_VERIFIED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_not_verified)
-    ModelLibraryErrorCode.RECOGNITION_FAILED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_recognition)
-    ModelLibraryErrorCode.MANUAL_PROMOTION_REQUIRED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_manual)
-    ModelLibraryErrorCode.BUNDLE_INVALID -> androidx.compose.ui.res.stringResource(R.string.model_library_error_bundle)
-    ModelLibraryErrorCode.BUNDLE_ITEM_SOURCE_MISSING -> androidx.compose.ui.res.stringResource(R.string.model_library_error_bundle_source)
-    ModelLibraryErrorCode.BUNDLE_ITEM_PATH_INVALID -> androidx.compose.ui.res.stringResource(R.string.model_library_error_bundle_path)
-    ModelLibraryErrorCode.DOWNLOAD_FAILED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_download)
-    ModelLibraryErrorCode.DOWNLOAD_TIMEOUT -> androidx.compose.ui.res.stringResource(R.string.model_library_error_download_timeout)
-    ModelLibraryErrorCode.GROUPED_ARTIFACT_RENAME_UNSUPPORTED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_grouped_rename)
-    ModelLibraryErrorCode.ARTIFACT_DISCARD_UNSAFE_PATH -> androidx.compose.ui.res.stringResource(R.string.model_library_error_artifact_discard_unsafe)
-    ModelLibraryErrorCode.ARTIFACT_DISCARD_PROTECTED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_artifact_discard_protected)
-    ModelLibraryErrorCode.ARTIFACT_DISCARD_PROMOTED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_artifact_discard_promoted)
-    ModelLibraryErrorCode.ARTIFACT_DISCARD_FAILED -> androidx.compose.ui.res.stringResource(R.string.model_library_error_artifact_discard_failed)
+internal fun modelLibraryErrorText(code: ModelLibraryErrorCode): String =
+    androidx.compose.ui.res.stringResource(modelLibraryErrorResource(code))
+
+@androidx.annotation.StringRes
+internal fun modelLibraryErrorResource(code: ModelLibraryErrorCode): Int = when (code) {
+    ModelLibraryErrorCode.RESPONSE_PARSING -> R.string.model_library_error_response_parsing
+    ModelLibraryErrorCode.INTERNAL_ERROR -> R.string.model_library_error_internal
+    ModelLibraryErrorCode.REVISION_NOT_FOUND -> R.string.model_library_error_revision_missing
+    ModelLibraryErrorCode.INVALID_URL -> R.string.model_library_error_invalid_url
+    ModelLibraryErrorCode.HTTPS_REQUIRED -> R.string.model_library_error_https
+    ModelLibraryErrorCode.EMBEDDED_CREDENTIALS -> R.string.model_library_error_credentials
+    ModelLibraryErrorCode.CREDENTIAL_QUERY_PARAMETER -> R.string.model_library_error_query_credentials
+    ModelLibraryErrorCode.UNSAFE_PATH -> R.string.model_library_error_unsafe_path
+    ModelLibraryErrorCode.INVALID_HF_REPOSITORY -> R.string.model_library_error_hf_repository
+    ModelLibraryErrorCode.INVALID_HF_FILE_PATH -> R.string.model_library_error_hf_file
+    ModelLibraryErrorCode.UNSUPPORTED_HF_PATH -> R.string.model_library_error_hf_path
+    ModelLibraryErrorCode.WEBPAGE_LINK -> R.string.model_library_error_webpage
+    ModelLibraryErrorCode.AUTHENTICATION_REQUIRED -> R.string.model_library_error_auth_required
+    ModelLibraryErrorCode.AUTHENTICATION_REJECTED -> R.string.model_library_error_auth_rejected
+    ModelLibraryErrorCode.HTTP_FAILURE -> R.string.model_library_error_http
+    ModelLibraryErrorCode.RATE_LIMITED -> R.string.model_library_error_rate_limited
+    ModelLibraryErrorCode.NETWORK_FAILURE -> R.string.model_library_error_network
+    ModelLibraryErrorCode.REQUEST_TIMEOUT -> R.string.model_library_error_timeout
+    ModelLibraryErrorCode.SOURCE_NOT_FOUND -> R.string.model_library_error_source_missing
+    ModelLibraryErrorCode.SOURCE_ALREADY_SAVED -> R.string.model_library_error_source_duplicate
+    ModelLibraryErrorCode.SOURCE_HAS_PENDING_DOWNLOAD -> R.string.model_library_error_source_pending
+    ModelLibraryErrorCode.SOURCE_NOT_VERIFIED -> R.string.model_library_error_not_verified
+    ModelLibraryErrorCode.RECOGNITION_FAILED -> R.string.model_library_error_recognition
+    ModelLibraryErrorCode.MANUAL_PROMOTION_REQUIRED -> R.string.model_library_error_manual
+    ModelLibraryErrorCode.BUNDLE_INVALID -> R.string.model_library_error_bundle
+    ModelLibraryErrorCode.BUNDLE_ITEM_SOURCE_MISSING -> R.string.model_library_error_bundle_source
+    ModelLibraryErrorCode.BUNDLE_ITEM_PATH_INVALID -> R.string.model_library_error_bundle_path
+    ModelLibraryErrorCode.DOWNLOAD_FAILED -> R.string.model_library_error_download
+    ModelLibraryErrorCode.DOWNLOAD_TIMEOUT -> R.string.model_library_error_download_timeout
+    ModelLibraryErrorCode.GROUPED_ARTIFACT_RENAME_UNSUPPORTED -> R.string.model_library_error_grouped_rename
+    ModelLibraryErrorCode.ARTIFACT_DISCARD_UNSAFE_PATH -> R.string.model_library_error_artifact_discard_unsafe
+    ModelLibraryErrorCode.ARTIFACT_DISCARD_PROTECTED -> R.string.model_library_error_artifact_discard_protected
+    ModelLibraryErrorCode.ARTIFACT_DISCARD_PROMOTED -> R.string.model_library_error_artifact_discard_promoted
+    ModelLibraryErrorCode.ARTIFACT_DISCARD_FAILED -> R.string.model_library_error_artifact_discard_failed
+    ModelLibraryErrorCode.DELETION_BLOCKED -> R.string.model_library_error_deletion_blocked
+    ModelLibraryErrorCode.DELETION_RECOVERABLE -> R.string.model_library_error_deletion_recoverable
+    ModelLibraryErrorCode.DELETION_FAILED -> R.string.model_library_error_deletion_failed
+    ModelLibraryErrorCode.AUDIO_MODEL_FILE_REQUIRED -> R.string.model_library_error_audio_file_required
+    ModelLibraryErrorCode.AUDIO_STRUCTURE_INVALID -> R.string.model_library_error_audio_structure
+    ModelLibraryErrorCode.AUDIO_ARCHITECTURE_UNRESOLVED -> R.string.model_library_error_audio_architecture
+    ModelLibraryErrorCode.AUDIO_ROLE_INVALID -> R.string.model_library_error_audio_role_invalid
+    ModelLibraryErrorCode.AUDIO_ROLE_MISMATCH -> R.string.model_library_error_audio_role_mismatch
 }
 
 @Composable
@@ -1148,10 +1158,20 @@ fun PendingArtifactCard(
     }
     if (showDetails) {
         val emptyRecord = androidx.compose.ui.res.stringResource(R.string.model_artifact_no_inspection)
+        val rawValidation = artifact.validationMessage
+        val validationCode = rawValidation
+            ?.let { runCatching { ModelLibraryErrorCode.valueOf(it) }.getOrNull() }
+        val localizedValidation = if (rawValidation == null) {
+            null
+        } else if (validationCode == null) {
+            rawValidation
+        } else {
+            modelLibraryErrorText(validationCode)
+        }
         com.example.llamadroid.ui.components.AppTextDetailsDialog(
             title = androidx.compose.ui.res.stringResource(R.string.model_artifact_inspection_record),
             text = listOfNotNull(artifact.filename, artifact.stagingPath,
-                artifact.validationMessage, artifact.validationJson).joinToString("\n\n") +
+                localizedValidation, artifact.validationJson).joinToString("\n\n") +
                 if (artifact.validationMessage == null && artifact.validationJson == null) "\n\n$emptyRecord" else "",
             onDismiss = { showDetails = false }
         )
@@ -1938,322 +1958,4 @@ private fun splitBundlePart(relativePath: String): BundlePart? {
         index = index,
         count = count
     )
-}
-
-@Composable
-internal fun HfFolderDialog(
-    listing: HfFolderListing,
-    busy: Boolean = false,
-    onDismiss: () -> Unit,
-    canGoUp: Boolean,
-    onGoUp: () -> Unit,
-    onOpenFolder: (String) -> Unit,
-    onLoadMore: () -> Unit = {},
-    onSelectFile: (HfTreeItemDto) -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(androidx.compose.ui.res.stringResource(R.string.model_library_hf_browser_title, listing.repositoryId)) },
-        text = {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 520.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                item {
-                    Text(
-                        text = androidx.compose.ui.res.stringResource(R.string.model_library_browser_path, listing.folderPath.ifBlank { "/" }),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                item {
-                    Text(
-                        text = androidx.compose.ui.res.stringResource(R.string.model_library_browser_pages, listing.pagesFetched),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                if (canGoUp) {
-                    item {
-                        OutlinedButton(onClick = onGoUp, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
-                            Icon(Icons.Default.ArrowBack, null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text(androidx.compose.ui.res.stringResource(R.string.model_library_browser_parent))
-                        }
-                    }
-                }
-                if (listing.nextCursor != null) {
-                    item {
-                        OutlinedButton(
-                            onClick = onLoadMore,
-                            enabled = !busy,
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                        ) {
-                            Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text(androidx.compose.ui.res.stringResource(R.string.model_library_browser_load_more))
-                        }
-                    }
-                } else if (listing.truncated) {
-                    item {
-                        Text(
-                            text = androidx.compose.ui.res.stringResource(R.string.model_library_browser_truncated),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    }
-                }
-                if (listing.items.isEmpty()) {
-                    item { Text(androidx.compose.ui.res.stringResource(R.string.model_library_browser_empty)) }
-                } else {
-                    items(listing.items, key = { it.path }) { item ->
-                        HfTreeItemRow(item, onOpenFolder, onSelectFile)
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text(androidx.compose.ui.res.stringResource(R.string.model_library_close)) }
-        }
-    )
-}
-
-@Composable
-private fun HfTreeItemRow(
-    item: HfTreeItemDto,
-    onOpenFolder: (String) -> Unit,
-    onSelectFile: (HfTreeItemDto) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(if (item.type == "directory") Icons.Default.FolderOpen else Icons.Default.Link, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(
-            item.path,
-            modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.bodySmall,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
-        )
-        if (item.type == "directory") {
-            TextButton(onClick = { onOpenFolder(item.path) }, modifier = Modifier.heightIn(min = 48.dp)) {
-                Icon(Icons.Default.ChevronRight, null, modifier = Modifier.size(16.dp))
-                Text(androidx.compose.ui.res.stringResource(R.string.model_library_browser_open))
-            }
-        } else {
-            Column(horizontalAlignment = Alignment.End) {
-                if (item.size > 0L) {
-                    Text(formatBytes(item.size), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                TextButton(onClick = { onSelectFile(item) }, modifier = Modifier.heightIn(min = 48.dp)) {
-                    Text(androidx.compose.ui.res.stringResource(R.string.model_library_browser_use_file))
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun PromoteArtifactDialog(
-    artifact: PendingModelArtifactEntity,
-    busy: Boolean,
-    onDismiss: () -> Unit,
-    onPromote: (ModelFamily, String, String?, String) -> Unit,
-    savedMetadataJson: String? = null
-) {
-    val savedMetadata = remember(artifact.id, savedMetadataJson) {
-        JSONObject(PortableModelMetadata.sanitize(savedMetadataJson))
-    }
-    var family by remember(artifact.id) {
-        mutableStateOf(ModelFamily.fromStoredValue(if (artifact.bundleId != null)
-            artifact.requestedFamily ?: artifact.detectedFamily else artifact.detectedFamily ?: artifact.requestedFamily) ?: ModelFamily.LLM)
-    }
-    var name by remember(artifact.id) { mutableStateOf(artifact.filename.substringBeforeLast('.')) }
-    val typeChoices = remember(family) { modelPromotionChoices(family) }
-    var choiceId by remember(artifact.id, family, savedMetadataJson) {
-        mutableStateOf(initialModelPromotionChoice(family, artifact, savedMetadataJson).id)
-    }
-    val selectedType = typeChoices.firstOrNull { it.id == choiceId } ?: typeChoices.first()
-    val inspected = remember(artifact.id) { com.example.llamadroid.sd.SdArtifactInspection.fromJson(artifact.validationJson) }
-    var sdFamily by remember(artifact.id, savedMetadataJson) { mutableStateOf(savedMetadata.optString("sdFamily").ifBlank { inspected?.detectedFamily?.storedValue.orEmpty() }) }
-    var sdVariant by remember(artifact.id, savedMetadataJson) { mutableStateOf(savedMetadata.optString("sdVariant").ifBlank { inspected?.detectedVariant.orEmpty() }) }
-    var compatibility by remember(artifact.id, savedMetadataJson) { mutableStateOf(savedMetadata.optString("sdCompatProfiles")) }
-    var onnxPipeline by remember(artifact.id, savedMetadataJson) { mutableStateOf(savedMetadata.optString("onnxPipelineFamily")) }
-    var liteRtBackend by remember(artifact.id, savedMetadataJson) { mutableStateOf(savedMetadata.optString("liteRtBackend").takeIf { it in setOf("auto", "cpu", "gpu") } ?: "auto") }
-    var supportsVision by remember(artifact.id, savedMetadataJson) { mutableStateOf(savedMetadata.optBoolean("supportsVision", false)) }
-    var supportsAudio by remember(artifact.id, savedMetadataJson) { mutableStateOf(savedMetadata.optBoolean("supportsAudio", false)) }
-    var supportsEmbedding by remember(artifact.id, savedMetadataJson) { mutableStateOf(savedMetadata.optBoolean("supportsEmbedding", false)) }
-    var whisperVariant by remember(artifact.id, savedMetadataJson) { mutableStateOf(savedMetadata.optString("whisperVariant")) }
-    var familyMenuExpanded by remember { mutableStateOf(false) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(androidx.compose.ui.res.stringResource(R.string.model_library_promote_title)) },
-        text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                androidx.compose.foundation.text.selection.SelectionContainer {
-                    Text(artifact.filename, style = MaterialTheme.typography.labelLarge)
-                }
-                androidx.compose.foundation.layout.Box {
-                    OutlinedButton(onClick = { familyMenuExpanded = true }, modifier = Modifier.fillMaxWidth()) {
-                        Text(modelFamilyLabel(family), modifier = Modifier.weight(1f))
-                    }
-                    DropdownMenu(expanded = familyMenuExpanded, onDismissRequest = { familyMenuExpanded = false }) {
-                        ModelFamily.entries.forEach { option ->
-                            DropdownMenuItem(text = { Text(modelFamilyLabel(option)) }, onClick = { family = option; familyMenuExpanded = false })
-                        }
-                    }
-                }
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(androidx.compose.ui.res.stringResource(R.string.model_library_promote_name)) },
-                    placeholder = { Text(androidx.compose.ui.res.stringResource(R.string.model_library_promote_name_hint)) },
-                    singleLine = true
-                )
-                ModelPromotionDropdown(
-                    label = androidx.compose.ui.res.stringResource(R.string.model_library_promote_type),
-                    selectedLabel = androidx.compose.ui.res.stringResource(selectedType.labelRes),
-                    choices = typeChoices.map { it.id to androidx.compose.ui.res.stringResource(it.labelRes) },
-                    onSelect = { choiceId = it }
-                )
-                OutlinedTextField(
-                    value = compatibility,
-                    onValueChange = { compatibility = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(androidx.compose.ui.res.stringResource(R.string.model_library_compatibility)) },
-                    placeholder = { Text(androidx.compose.ui.res.stringResource(R.string.model_library_compatibility_hint)) },
-                    singleLine = true,
-                    supportingText = { Text(androidx.compose.ui.res.stringResource(R.string.model_library_compatibility_help)) }
-                )
-                if (family == ModelFamily.SD) {
-                    val families = com.example.llamadroid.sd.SdModelFamily.entries.map {
-                        it.storedValue to androidx.compose.ui.res.stringResource(com.example.llamadroid.ui.ai.sdFamilyLabelRes(it))
-                    }
-                    ModelPromotionDropdown(androidx.compose.ui.res.stringResource(R.string.model_library_sd_family),
-                        families.firstOrNull { it.first == sdFamily }?.second
-                            ?: androidx.compose.ui.res.stringResource(R.string.model_promote_detect_family),
-                        families) { sdFamily = it }
-                    OutlinedTextField(
-                        value = sdVariant,
-                        onValueChange = { sdVariant = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text(androidx.compose.ui.res.stringResource(R.string.model_library_sd_variant)) },
-                        singleLine = true
-                    )
-                }
-                if (family == ModelFamily.ONNX) {
-                    OutlinedTextField(
-                        value = onnxPipeline,
-                        onValueChange = { onnxPipeline = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text(androidx.compose.ui.res.stringResource(R.string.model_library_onnx_pipeline)) },
-                        singleLine = true
-                    )
-                }
-                if (family == ModelFamily.LITERT) {
-                    val backends = listOf("auto" to androidx.compose.ui.res.stringResource(R.string.model_promote_auto),
-                        "cpu" to androidx.compose.ui.res.stringResource(R.string.model_promote_cpu),
-                        "gpu" to androidx.compose.ui.res.stringResource(R.string.litert_backend_gpu))
-                    ModelPromotionDropdown(androidx.compose.ui.res.stringResource(R.string.model_library_litert_backend),
-                        backends.first { it.first == liteRtBackend }.second, backends) { liteRtBackend = it }
-                    ModelPromotionToggle(
-                        androidx.compose.ui.res.stringResource(R.string.litert_models_modality_vision), supportsVision) { supportsVision = it }
-                    ModelPromotionToggle(
-                        androidx.compose.ui.res.stringResource(R.string.litert_models_modality_audio), supportsAudio) { supportsAudio = it }
-                    ModelPromotionToggle(
-                        androidx.compose.ui.res.stringResource(R.string.litert_models_modality_embedding), supportsEmbedding) { supportsEmbedding = it }
-                }
-                if (family == ModelFamily.WHISPER) {
-                    OutlinedTextField(
-                        value = whisperVariant,
-                        onValueChange = { whisperVariant = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text(androidx.compose.ui.res.stringResource(R.string.model_library_whisper_variant)) },
-                        singleLine = true
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    val metadata = JSONObject(PortableModelMetadata.sanitize(savedMetadataJson)).apply {
-                        put("modelType", selectedType.type.name)
-                        put("sdCapabilities", selectedType.sdCapabilities ?: savedMetadata.optString("sdCapabilities").takeIf { it.isNotBlank() })
-                        put("sdFamily", sdFamily.trim().takeIf { it.isNotBlank() })
-                        put("sdVariant", sdVariant.trim().takeIf { it.isNotBlank() })
-                        put("sdCompatProfiles", compatibility.trim().takeIf { it.isNotBlank() })
-                        put("onnxPipelineFamily", onnxPipeline.trim().takeIf { it.isNotBlank() })
-                        put("liteRtBackend", liteRtBackend.trim().takeIf { it.isNotBlank() })
-                        put("supportsVision", supportsVision)
-                        put("supportsAudio", supportsAudio)
-                        put("supportsEmbedding", supportsEmbedding)
-                        put("whisperVariant", whisperVariant.trim().takeIf { it.isNotBlank() })
-                    }.toString()
-                    onPromote(family, name.trim(), selectedType.role, PortableModelMetadata.sanitize(metadata))
-                },
-                enabled = !busy && name.isNotBlank()
-            ) { Text(androidx.compose.ui.res.stringResource(R.string.model_library_promote_action)) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(androidx.compose.ui.res.stringResource(R.string.model_library_cancel)) }
-        }
-    )
-}
-
-@Composable
-private fun EmptyLibraryCard(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)), shape = AppChromeDefaults.InnerCardShape) {
-        Row(modifier = Modifier.fillMaxWidth().padding(18.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Icon(icon, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-private fun modelFamilyLabel(family: ModelFamily): String = when (family) {
-    ModelFamily.LLM -> androidx.compose.ui.res.stringResource(R.string.model_library_family_llm)
-    ModelFamily.SD -> androidx.compose.ui.res.stringResource(R.string.model_library_family_sd)
-    ModelFamily.ONNX -> androidx.compose.ui.res.stringResource(R.string.model_library_family_onnx)
-    ModelFamily.LITERT -> androidx.compose.ui.res.stringResource(R.string.model_library_family_litert)
-    ModelFamily.WHISPER -> androidx.compose.ui.res.stringResource(R.string.model_library_family_whisper)
-}
-
-@Composable
-private fun modelSourceKindLabel(kind: ModelSourceKind?): String = when (kind) {
-    ModelSourceKind.HUGGING_FACE_REPOSITORY -> androidx.compose.ui.res.stringResource(R.string.model_library_source_kind_hf_repository)
-    ModelSourceKind.HUGGING_FACE_FILE -> androidx.compose.ui.res.stringResource(R.string.model_library_source_kind_hf_file)
-    ModelSourceKind.HTTPS, null -> androidx.compose.ui.res.stringResource(R.string.model_library_source_kind_https)
-}
-
-@Composable
-private fun pendingStatusLabel(status: PendingArtifactStatus?): String = when (status) {
-    PendingArtifactStatus.STAGED -> androidx.compose.ui.res.stringResource(R.string.model_library_status_staged)
-    PendingArtifactStatus.INSPECTING -> androidx.compose.ui.res.stringResource(R.string.model_library_status_inspecting)
-    PendingArtifactStatus.NEEDS_MANUAL_PROMOTION -> androidx.compose.ui.res.stringResource(R.string.model_library_status_manual)
-    PendingArtifactStatus.VALIDATED -> androidx.compose.ui.res.stringResource(R.string.model_library_status_validated)
-    PendingArtifactStatus.PROMOTED -> androidx.compose.ui.res.stringResource(R.string.model_library_status_promoted)
-    PendingArtifactStatus.REJECTED -> androidx.compose.ui.res.stringResource(R.string.model_library_status_rejected)
-    PendingArtifactStatus.CANCELLED -> androidx.compose.ui.res.stringResource(R.string.model_library_status_cancelled)
-    PendingArtifactStatus.FAILED, null -> androidx.compose.ui.res.stringResource(R.string.model_library_status_failed)
-}
-
-private fun formatBytes(bytes: Long): String = when {
-    bytes >= 1024L * 1024L * 1024L -> "%.1f GB".format(java.util.Locale.US, bytes / (1024.0 * 1024.0 * 1024.0))
-    bytes >= 1024L * 1024L -> "%.1f MB".format(java.util.Locale.US, bytes / (1024.0 * 1024.0))
-    bytes >= 1024L -> "%.1f KB".format(java.util.Locale.US, bytes / 1024.0)
-    else -> "$bytes B"
 }

@@ -24,6 +24,8 @@ import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.CustomToolEntity
+import com.example.llamadroid.service.CustomToolDefinitionValidator
+import com.example.llamadroid.service.CustomToolHttpExecutor
 import kotlinx.coroutines.launch
 
 /**
@@ -223,6 +225,11 @@ private fun CustomToolEditorDialog(
     var requiredParams by remember { mutableStateOf(tool?.requiredParamsJson ?: "[]") }
     var workingDirectory by remember { mutableStateOf(tool?.workingDirectory ?: ".") }
     var needsApproval by remember { mutableStateOf(tool?.needsApproval ?: true) }
+    var enableAfterSaving by remember { mutableStateOf(tool?.isEnabled ?: true) }
+    var validationRequested by remember { mutableStateOf(false) }
+    val validation = remember(name, description, commandTemplate, parameters, requiredParams, exampleUsage) {
+        CustomToolDefinitionValidator.validate(name, description, commandTemplate, parameters, requiredParams, exampleUsage)
+    }
     
     val isEditing = tool != null
     
@@ -282,6 +289,8 @@ private fun CustomToolEditorDialog(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                    Text(stringResource(R.string.custom_tool_wizard_intro), style = MaterialTheme.typography.bodySmall)
+                    Text(stringResource(R.string.custom_tool_step_identity), fontWeight = FontWeight.Bold)
                     OutlinedTextField(
                         value = name,
                         onValueChange = { name = it.replace(" ", "_").lowercase() },
@@ -300,7 +309,8 @@ private fun CustomToolEditorDialog(
                         modifier = Modifier.fillMaxWidth(),
                         maxLines = 3
                     )
-                    
+
+                    Text(stringResource(R.string.custom_tool_step_execution), fontWeight = FontWeight.Bold)
                     OutlinedTextField(
                         value = commandTemplate,
                         onValueChange = { commandTemplate = it },
@@ -320,7 +330,8 @@ private fun CustomToolEditorDialog(
                         singleLine = true,
                         supportingText = { Text(stringResource(R.string.agent_tool_working_dir_desc)) }
                     )
-                    
+
+                    Text(stringResource(R.string.custom_tool_step_schema), fontWeight = FontWeight.Bold)
                     OutlinedTextField(
                         value = parameters,
                         onValueChange = { parameters = it },
@@ -348,7 +359,8 @@ private fun CustomToolEditorDialog(
                         maxLines = 3,
                         supportingText = { Text(stringResource(R.string.agent_tool_example_desc)) }
                     )
-                    
+
+                    Text(stringResource(R.string.custom_tool_step_permission), fontWeight = FontWeight.Bold)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -358,6 +370,52 @@ private fun CustomToolEditorDialog(
                         Switch(
                             checked = needsApproval,
                             onCheckedChange = { needsApproval = it }
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(stringResource(R.string.custom_tool_enable_after_save))
+                        Switch(
+                            checked = enableAfterSaving,
+                            onCheckedChange = { enableAfterSaving = it }
+                        )
+                    }
+                    val nativeCompatible = CustomToolHttpExecutor.supports(commandTemplate) && !needsApproval
+                    Text(
+                        text = stringResource(
+                            if (nativeCompatible) R.string.custom_tool_native_ready else R.string.custom_tool_native_requirements
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (nativeCompatible) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(stringResource(R.string.custom_tool_step_preview), fontWeight = FontWeight.Bold)
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = commandTemplate.ifBlank { stringResource(R.string.custom_tool_preview_empty) }.take(800),
+                            modifier = Modifier.padding(10.dp),
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = { validationRequested = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text(stringResource(R.string.custom_tool_test_definition)) }
+                    if (validationRequested) {
+                        Text(
+                            text = stringResource(
+                                if (validation.valid) R.string.custom_tool_definition_valid
+                                else R.string.custom_tool_definition_invalid
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (validation.valid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
                         )
                     }
                 }
@@ -376,15 +434,14 @@ private fun CustomToolEditorDialog(
                             exampleUsage = exampleUsage,
                             workingDirectory = workingDirectory.ifBlank { "." },
                             needsApproval = needsApproval,
-                            isEnabled = tool?.isEnabled ?: true,
+                            isEnabled = enableAfterSaving,
                             createdAt = tool?.createdAt ?: System.currentTimeMillis(),
                             updatedAt = System.currentTimeMillis()
                         )
                         onSave(newTool)
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = name.isNotBlank() && description.isNotBlank() && 
-                              commandTemplate.isNotBlank() && exampleUsage.isNotBlank()
+                    enabled = validation.valid
                 ) {
                     Icon(Icons.Default.Save, null)
                     Spacer(modifier = Modifier.width(8.dp))

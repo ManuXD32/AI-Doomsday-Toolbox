@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="audio_models_prefix_invalid">Choose a non-empty prefix using letters, numbers, dots, hyphens, or underscores.</string>
+    <string name="audio_models_bundle_use_error">Speech bundle could not be activated</string>
+    <string name="audio_models_bundle_use_error_hint">The verified main model and companion could not be linked. Check the installed artifact metadata and try again.</string>
+    <string name="models_delete_interrupted">Model removal needs recovery</string>
+</resources>

@@ -229,6 +229,17 @@ class AgentRemoteChatWorkerService : Service() {
                             if (remaining > 0) thinkingBuffer.append(delta.take(remaining))
                         }
                         publishSnapshot()
+                    },
+                    onStreamDiagnostics = { counts ->
+                        val metadata = org.json.JSONObject()
+                            .put("delta", counts.deltaChoiceChunks)
+                            .put("message", counts.messageFallbackChoiceChunks)
+                            .put("content", counts.contentChannelChunks)
+                            .put("reasoning_content", counts.reasoningContentChannelChunks)
+                            .put("thinking", counts.thinkingChannelChunks)
+                            .put("reasoning", counts.reasoningChannelChunks)
+                            .put("tool_calls", counts.toolCallChannelChunks)
+                        reply.sendRemoteEvent(AgentRemoteWorkerProtocol.MSG_STATUS, id, "stream_channels $metadata")
                     }
                 ).getOrThrow()
                 publishSnapshot(force = true)
@@ -250,7 +261,7 @@ class AgentRemoteChatWorkerService : Service() {
                 reply.sendRemoteEvent(
                     AgentRemoteWorkerProtocol.MSG_ERROR,
                     id,
-                    "${error.javaClass.simpleName}: ${error.message.orEmpty().take(240)}"
+                    formatLlamaServerSseFailure(error)
                 )
                 recordLifecycle(id, "failed", sessionId, error.javaClass.simpleName)
             } finally {

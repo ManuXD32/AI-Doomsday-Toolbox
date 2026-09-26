@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_dismiss_notice">Cerrar aviso</string>
+    <string name="harness_connection_connected">Conexión del chat: conectada</string>
+    <string name="harness_connection_connecting">Conexión del chat: conectando</string>
+    <string name="harness_connection_interrupted">Conexión del chat interrumpida. Pulsa Continuar en Chat para reconectar.</string>
+    <string name="harness_event_rpc">Solicitud de Harness</string>
+    <string name="harness_event_websocket">Conexión del chat</string>
+    <string name="harness_event_webview">Interfaz original</string>
+    <string name="harness_event_native_failure">Error de la interfaz nativa</string>
+    <string name="harness_event_native_recovered">Interfaz nativa recuperada</string>
+    <string name="harness_diagnostic_success">Completado</string>
+    <string name="harness_diagnostic_connected">Conectado</string>
+    <string name="harness_diagnostic_connecting">Conectando / reintentando</string>
+    <string name="harness_diagnostic_closed">Cerrado</string>
+    <string name="harness_diagnostic_failed">Error</string>
+    <string name="harness_management_load_failed">No se pudo cargar esta sección: %1$s</string>
+    <string name="harness_extensions_back">Volver a extensiones</string>
+</resources>

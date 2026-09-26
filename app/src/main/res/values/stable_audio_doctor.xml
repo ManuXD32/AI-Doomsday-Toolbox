@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="audio_music_error_model_stale">This Stable Audio model row is stale or legacy. Re-download the curated component from the LiteRT catalog.</string>
+    <string name="audio_music_error_file_io">Stable Audio could not read a model file while loading. Check the model doctor and re-download the affected component.</string>
+    <string name="audio_music_error_invalid_model">Stable Audio could not read this model. Check its integrity before downloading it again; intact files can also fail because of a runtime incompatibility.</string>
+    <string name="audio_music_error_native_memory">Stable Audio ran out of memory while loading a model. Close other tasks or reduce the requested duration, then retry.</string>
+    <string name="audio_stable_doctor_title">Stable Audio model doctor</string>
+    <string name="audio_stable_doctor_check">Check model</string>
+    <string name="audio_stable_doctor_checking">Checking model…</string>
+    <string name="audio_stable_doctor_redownload">Re-download component</string>
+    <string name="audio_stable_doctor_redownload_confirm">Remove the current %1$s row and download the exact curated component again?</string>
+    <string name="audio_stable_doctor_redownload_started">Curated component download started.</string>
+    <string name="audio_stable_doctor_ready">Ready</string>
+    <string name="audio_stable_doctor_repair">Repair required</string>
+    <string name="audio_stable_doctor_role">Role: %1$s</string>
+    <string name="audio_stable_doctor_readable">Readable: %1$s</string>
+    <string name="audio_stable_doctor_parent">Parent directory: %1$s</string>
+    <string name="audio_stable_doctor_size">Size: %1$s / %2$s</string>
+    <string name="audio_stable_doctor_digest">Digest: %1$s / %2$s</string>
+    <string name="audio_stable_doctor_status">Status: %1$s</string>
+    <string name="audio_stable_doctor_yes">yes</string>
+    <string name="audio_stable_doctor_no">no</string>
+    <string name="audio_stable_doctor_unknown">not checked</string>
+    <string name="audio_stable_doctor_role_ok">canonical</string>
+    <string name="audio_stable_doctor_role_bad">stale or unknown</string>
+    <string name="audio_stable_doctor_status_missing">missing</string>
+    <string name="audio_stable_doctor_status_unreadable">unreadable</string>
+    <string name="audio_stable_doctor_status_size">size mismatch</string>
+    <string name="audio_stable_doctor_status_digest">digest mismatch</string>
+    <string name="audio_stable_doctor_status_path">non-canonical path</string>
+    <string name="audio_stable_doctor_status_parent">parent unavailable</string>
+    <string name="audio_stable_doctor_status_ready">ready</string>
+    <string name="audio_stable_doctor_expected_file">Expected file: %1$s</string>
+</resources>

@@ -15,7 +15,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.zip.ZipEntry
-import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
 /**
@@ -25,19 +24,19 @@ import java.util.zip.ZipOutputStream
  * Uses SAF (Storage Access Framework) URIs for file I/O so the user picks the location.
  */
 object DatabaseBackupManager {
-    
+
     private const val TAG = "[DB-Backup]"
     
     // Database file names (must match the names in AppDatabase/TamaDatabase builders)
-    private const val APP_DB_NAME = "llama_droid_db"
-    private const val TAMA_DB_NAME = "tama_database"
+    internal const val APP_DB_NAME = "llama_droid_db"
+    internal const val TAMA_DB_NAME = "tama_database"
     
     // Journal file suffixes
     private val DB_SUFFIXES = listOf("", "-wal", "-shm")
     private const val MEDIA_ROOT_PREFIX = "media_roots/"
     private const val SHARED_PREFS_PREFIX = "shared_prefs/"
-    private const val SHARED_PREFS_DIR_NAME = "shared_prefs"
-    private val PORTABLE_MEDIA_ROOTS = listOf(
+    internal const val SHARED_PREFS_DIR_NAME = "shared_prefs"
+    internal val PORTABLE_MEDIA_ROOTS = listOf(
         "ai_server_artifacts",
         "bgr_output",
         "live_translator_audio",
@@ -159,204 +158,28 @@ object DatabaseBackupManager {
         }
     }
     
-    /**
-     * Restore databases from a backup ZIP file.
-     * 
-     * IMPORTANT: After calling this, the app MUST be restarted for changes to take effect,
-     * because Room caches the database connection.
-     * 
-     * @param context Application context
-     * @param sourceUri SAF URI of the backup ZIP file
-     * @return Result with success message or error
-     */
+    /** Validates and stages a restore. Installation runs during the next process bootstrap. */
     suspend fun restoreBackup(context: Context, sourceUri: Uri): Result<String> = withContext(Dispatchers.IO) {
-        try {
-            DebugLog.log("$TAG Starting restore...")
-            
-            val dbDir = context.getDatabasePath(APP_DB_NAME).parentFile
-                ?: return@withContext Result.failure(
-                    Exception(context.getString(R.string.backup_error_db_dir_missing))
-                )
-            
-            // Close existing database instances so we can overwrite files
-            closeDatabases()
-            
-            var restoredCount = 0
-            val restoredFileNames = mutableSetOf<String>()
-            val restoredMediaRoots = mutableSetOf<String>()
-            var restoredSharedPreferences = false
-            val validFileNames = buildSet {
-                for (dbName in listOf(APP_DB_NAME, TAMA_DB_NAME)) {
-                    for (suffix in DB_SUFFIXES) {
-                        add("$dbName$suffix")
-                    }
-                }
-            }
-            
-            // Read the ZIP and extract database files
-            context.contentResolver.openInputStream(sourceUri)?.use { inputStream ->
-                ZipInputStream(inputStream).use { zipIn ->
-                    var entry = zipIn.nextEntry
-                    while (entry != null) {
-                        val fileName = entry.name
-                        
-                        // Only restore known database files (security: prevent path traversal)
-                        if (fileName in validFileNames) {
-                            val targetFile = File(dbDir, fileName)
-                            FileOutputStream(targetFile).use { fos ->
-                                zipIn.copyTo(fos)
-                            }
-                            restoredCount++
-                            restoredFileNames += fileName
-                            DebugLog.log("$TAG Restored: $fileName (${targetFile.length()} bytes)")
-                        } else if (fileName.startsWith(MEDIA_ROOT_PREFIX) && !entry.isDirectory) {
-                            val restored = restorePortableMediaEntry(
-                                context = context,
-                                entryName = fileName,
-                                restoredMediaRoots = restoredMediaRoots
-                            ) { targetFile ->
-                                FileOutputStream(targetFile).use { fos ->
-                                    zipIn.copyTo(fos)
-                                }
-                            }
-                            if (restored) {
-                                restoredCount++
-                                DebugLog.log("$TAG Restored media: $fileName")
-                            } else {
-                                DebugLog.log("$TAG Skipped unsafe media entry: $fileName")
-                            }
-                        } else if (fileName.startsWith(SHARED_PREFS_PREFIX) && !entry.isDirectory) {
-                            val restored = restoreSharedPreferenceEntry(
-                                context = context,
-                                entryName = fileName,
-                                shouldClearExisting = !restoredSharedPreferences
-                            ) { targetFile ->
-                                FileOutputStream(targetFile).use { fos ->
-                                    zipIn.copyTo(fos)
-                                }
-                            }
-                            if (restored) {
-                                restoredCount++
-                                restoredSharedPreferences = true
-                                DebugLog.log("$TAG Restored preferences: $fileName")
-                            } else {
-                                DebugLog.log("$TAG Skipped unsafe preferences entry: $fileName")
-                            }
-                        } else {
-                            DebugLog.log("$TAG Skipped unknown file: $fileName")
-                        }
-                        
-                        zipIn.closeEntry()
-                        entry = zipIn.nextEntry
-                    }
-                }
-            } ?: return@withContext Result.failure(
-                Exception(context.getString(R.string.backup_restore_error_open_input))
-            )
-            
-            if (restoredCount == 0) {
-                return@withContext Result.failure(
-                    Exception(context.getString(R.string.backup_restore_error_no_valid_files))
-                )
-            }
-
-            cleanupMissingJournalFiles(dbDir, restoredFileNames)
-            if (APP_DB_NAME in restoredFileNames) {
-                sanitizePortableAppDatabase(File(dbDir, APP_DB_NAME))
-            }
-            validateRestoredDatabases(context, dbDir, restoredFileNames)
-            
-            DebugLog.log("$TAG Restore completed: $restoredCount files")
-            Result.success("$restoredCount files restored")
-            
-        } catch (e: Exception) {
-            DebugLog.log("$TAG Restore failed: ${e.message}")
-            Result.failure(e)
-        }
+        runCatching { RestoreCoordinator.prepare(context, sourceUri) }
     }
-    
+
     /**
      * Checkpoint WAL to flush pending writes to the main database files.
      */
     private fun checkpointDatabases(context: Context) {
-        try {
-            val appDb = AppDatabase.getDatabase(context)
-            appDb.openHelper.writableDatabase.execSQL("PRAGMA wal_checkpoint(TRUNCATE)")
-            DebugLog.log("$TAG AppDatabase WAL checkpointed")
-        } catch (e: Exception) {
-            DebugLog.log("$TAG AppDatabase checkpoint failed: ${e.message}")
-        }
-        
-        try {
-            val tamaDb = TamaDatabase.getInstance(context)
-            tamaDb.openHelper.writableDatabase.execSQL("PRAGMA wal_checkpoint(TRUNCATE)")
-            DebugLog.log("$TAG TamaDatabase WAL checkpointed")
-        } catch (e: Exception) {
-            DebugLog.log("$TAG TamaDatabase checkpoint failed: ${e.message}")
-        }
-    }
-    
-    /**
-     * Close both database instances so files can be safely overwritten during restore.
-     */
-    private fun closeDatabases() {
-        try {
-            AppDatabase.closeInstance()
-            DebugLog.log("$TAG AppDatabase closed")
-        } catch (e: Exception) {
-            DebugLog.log("$TAG AppDatabase close failed: ${e.message}")
-        }
-        
-        try {
-            TamaDatabase.closeInstance()
-            DebugLog.log("$TAG TamaDatabase closed")
-        } catch (e: Exception) {
-            DebugLog.log("$TAG TamaDatabase close failed: ${e.message}")
-        }
-    }
-
-    private fun validateRestoredDatabases(
-        context: Context,
-        dbDir: File,
-        restoredFileNames: Set<String>
-    ) {
-        val databasesToValidate = listOf(
-            APP_DB_NAME to context.getString(R.string.backup_restore_db_label_app),
-            TAMA_DB_NAME to context.getString(R.string.backup_restore_db_label_tama)
+        val databases = listOf(
+            "AppDatabase" to AppDatabase.getDatabase(context).openHelper.writableDatabase,
+            "TamaDatabase" to TamaDatabase.getInstance(context).openHelper.writableDatabase
         )
-
-        databasesToValidate.forEach { (dbName, label) ->
-            val touched = restoredFileNames.any { it == dbName || it.startsWith("$dbName-") }
-            if (!touched) return@forEach
-
-            val dbFile = File(dbDir, dbName)
-            if (!dbFile.exists()) {
-                throw IllegalStateException(
-                    context.getString(R.string.backup_restore_error_missing_db_file, label)
-                )
+        databases.forEach { (name, database) ->
+            database.query("PRAGMA wal_checkpoint(TRUNCATE)").use { cursor ->
+                check(cursor.moveToFirst() && cursor.getInt(0) == 0) { "$name checkpoint failed" }
             }
-
-            validateIntegrity(context, dbFile, label)
+            DebugLog.log("$TAG $name WAL checkpointed")
         }
     }
 
-    private fun cleanupMissingJournalFiles(dbDir: File, restoredFileNames: Set<String>) {
-        listOf(APP_DB_NAME, TAMA_DB_NAME).forEach dbLoop@ { dbName ->
-            if (dbName !in restoredFileNames) return@dbLoop
-
-            listOf("-wal", "-shm").forEach suffixLoop@ { suffix ->
-                val fileName = "$dbName$suffix"
-                if (fileName in restoredFileNames) return@suffixLoop
-
-                val staleFile = File(dbDir, fileName)
-                if (staleFile.exists() && staleFile.delete()) {
-                    DebugLog.log("$TAG Deleted stale restore companion: $fileName")
-                }
-            }
-        }
-    }
-
-    private fun sanitizePortableAppDatabase(dbFile: File) {
+    internal fun sanitizePortableAppDatabase(dbFile: File) {
         val db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
         try {
             sanitizePortableModelLibrary(db)
@@ -392,7 +215,7 @@ object DatabaseBackupManager {
         }
     }
 
-    private fun validateIntegrity(context: Context, dbFile: File, label: String) {
+    internal fun validateIntegrity(context: Context, dbFile: File, label: String) {
         val db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
         try {
             db.rawQuery("PRAGMA integrity_check", null).use { cursor ->
@@ -444,58 +267,6 @@ object DatabaseBackupManager {
                 BackupFile("$SHARED_PREFS_PREFIX$name", file)
             }
             .orEmpty()
-    }
-
-    private fun restorePortableMediaEntry(
-        context: Context,
-        entryName: String,
-        restoredMediaRoots: MutableSet<String>,
-        writer: (File) -> Unit
-    ): Boolean {
-        if (!isSafeRelativePath(entryName)) return false
-        val relative = entryName.removePrefix(MEDIA_ROOT_PREFIX)
-        val rootName = relative.substringBefore('/', missingDelimiterValue = "")
-        val childPath = relative.substringAfter('/', missingDelimiterValue = "")
-        if (rootName !in PORTABLE_MEDIA_ROOTS || !isSafeRelativePath(childPath)) return false
-
-        val root = File(context.filesDir, rootName)
-        if (restoredMediaRoots.add(rootName) && root.exists()) {
-            root.deleteRecursively()
-        }
-        val targetFile = File(root, childPath)
-        val canonicalRoot = root.canonicalFile
-        val canonicalTarget = targetFile.canonicalFile
-        if (!canonicalTarget.path.startsWith(canonicalRoot.path + File.separator)) return false
-        canonicalTarget.parentFile?.mkdirs()
-        writer(canonicalTarget)
-        return true
-    }
-
-    private fun restoreSharedPreferenceEntry(
-        context: Context,
-        entryName: String,
-        shouldClearExisting: Boolean,
-        writer: (File) -> Unit
-    ): Boolean {
-        if (!isSafeRelativePath(entryName)) return false
-        val fileName = entryName.removePrefix(SHARED_PREFS_PREFIX)
-        if (!isSafeSharedPreferenceFileName(fileName)) return false
-
-        val root = sharedPreferencesDir(context)
-        if (shouldClearExisting && root.exists()) {
-            root.listFiles()?.forEach { existing ->
-                if (existing.isFile && (existing.extension == "xml" || existing.name.endsWith(".xml.bak"))) {
-                    existing.delete()
-                }
-            }
-        }
-        val targetFile = File(root, fileName)
-        val canonicalRoot = root.canonicalFile
-        val canonicalTarget = targetFile.canonicalFile
-        if (!canonicalTarget.path.startsWith(canonicalRoot.path + File.separator)) return false
-        canonicalTarget.parentFile?.mkdirs()
-        writer(canonicalTarget)
-        return true
     }
 
     private fun sharedPreferencesDir(context: Context): File =

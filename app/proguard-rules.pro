@@ -32,6 +32,21 @@
 -dontwarn org.ietf.jgss.**
 -dontwarn com.jcraft.jsch.jgss.**
 -dontwarn com.jcraft.jsch.jcraft.Compression
+
+# MINA SSHD's Android recovery SFTP path passes a bundled BC provider instance. BC registers its
+# services by class name, so retain the provider mapping and implementation names for R8. The
+# instance is the default SSHD provider for every JCA factory after the Android `BC` registrar is
+# disabled; retaining the complete provider mapping avoids a later RSA/signature/HMAC lookup
+# falling back to a class name that R8 renamed.
+-keep class org.bouncycastle.jce.provider.BouncyCastleProvider { *; }
+-keep class org.bouncycastle.jcajce.provider.** { *; }
+-keep class org.bouncycastle.jcajce.provider.asymmetric.EC { *; }
+-keep class org.bouncycastle.jcajce.provider.asymmetric.EC$Mappings { *; }
+-keep class org.bouncycastle.jcajce.provider.asymmetric.ec.** { *; }
+-keep class org.bouncycastle.jcajce.provider.util.** { *; }
+-keep class org.bouncycastle.jcajce.provider.config.** { *; }
+-keep class org.bouncycastle.asn1.sec.** { *; }
+-keep class org.bouncycastle.asn1.x9.** { *; }
 -dontwarn com.gemalto.jp2.**
 
 # Keep OkHttp
@@ -64,6 +79,27 @@
 -keep class com.google.gson.reflect.TypeToken { *; }
 -keep class * extends com.google.gson.reflect.TypeToken
 
+# Queue snapshots survive app upgrades. Keep the JSON field and enum names of
+# the frozen image/video request graph stable across R8 builds.
+-keep class com.example.llamadroid.service.SDConfig { *; }
+-keep class com.example.llamadroid.service.SDUpscaleConfig { *; }
+-keep class com.example.llamadroid.service.VideoGenerationConfig { *; }
+-keep class com.example.llamadroid.service.SdIpAdapterConfig { *; }
+-keep class com.example.llamadroid.service.SdADetailerConfig { *; }
+-keep class com.example.llamadroid.service.SdDistributedRuntimeConfig { *; }
+-keep class com.example.llamadroid.service.SdDistributedPlacementMode { *; }
+-keep class com.example.llamadroid.service.SdDistributedSplitMode { *; }
+-keep class com.example.llamadroid.service.SamplingMethod { *; }
+-keep class com.example.llamadroid.service.SdScheduler { *; }
+-keep class com.example.llamadroid.service.SdCacheMode { *; }
+-keep class com.example.llamadroid.service.SdCacheScmPolicy { *; }
+-keep class com.example.llamadroid.service.SDMode { *; }
+-keep class com.example.llamadroid.service.VideoGenerationMode { *; }
+-keep class com.example.llamadroid.sd.SdVideo* { *; }
+-keep class com.example.llamadroid.sd.SdLoraSpec { *; }
+-keep class com.example.llamadroid.sd.SdLoraApplyMode { *; }
+-keep class com.example.llamadroid.sd.SdMainLayout { *; }
+
 # Explicitly keep HuggingFace API DTOs (Gson needs these for generic List<T>)
 -keep class com.example.llamadroid.data.api.HfModelDto { *; }
 -keep class com.example.llamadroid.data.api.HfRepoInfoDto { *; }
@@ -95,8 +131,10 @@
 -dontwarn javax.management.DynamicMBean
 -dontwarn javax.management.InstanceAlreadyExistsException
 -dontwarn javax.management.MBeanServer
+-dontwarn javax.management.MBeanException
 -dontwarn javax.management.ObjectInstance
 -dontwarn javax.management.ObjectName
+-dontwarn javax.management.ReflectionException
 -dontwarn javax.naming.NamingException
 -dontwarn javax.naming.directory.DirContext
 -dontwarn javax.naming.directory.InitialDirContext
@@ -109,6 +147,11 @@
 -dontwarn javax.security.auth.login.Configuration$Parameters
 -dontwarn javax.security.auth.login.Configuration
 -dontwarn javax.security.auth.login.LoginContext
+# Android exposes LoginException but not these two JDK-only exceptions. MINA SSHD reaches them
+# only while parsing encrypted PEM/private-key material; this app generates an unencrypted,
+# app-private host key and uses password authentication, so that optional branch is unsupported.
+-dontwarn javax.security.auth.login.CredentialException
+-dontwarn javax.security.auth.login.FailedLoginException
 -dontwarn javax.security.auth.spi.LoginModule
 -dontwarn javax.security.sasl.RealmCallback
 -dontwarn javax.security.sasl.RealmChoiceCallback
@@ -195,6 +238,27 @@
 -keepclassmembers class * {
     *** Companion;
 }
+
+# Stable Audio 3 is entered through JNI from the isolated worker process.
+-keep class com.example.llamadroid.audio.music.StableAudio3Native { *; }
+-keep class com.example.llamadroid.audio.music.StableAudio3Native$ProgressSink { *; }
+-keep class com.example.llamadroid.audio.music.StableAudio3WorkerService { *; }
 -keepclasseswithmembers class * {
     kotlinx.serialization.KSerializer serializer(...);
+}
+
+# Retrofit 2.9 predates these R8 full-mode rules. Suspend response reflection
+# needs generic signatures on both Continuation and Response (upstream retrofit2.pro).
+-keep,allowoptimization,allowshrinking,allowobfuscation class kotlin.coroutines.Continuation
+-keep,allowoptimization,allowshrinking,allowobfuscation class retrofit2.Response
+
+# Termux terminal-emulator enters this class from the locally built libtermux.so PTY helper.
+# The Java native method names must remain stable in minified release builds.
+-keep class com.termux.terminal.JNI { *; }
+
+# The native DSH terminal view installs a parser-only TerminalSession by field name; retain
+# only the two members used by that adapter, without keeping the whole Termux dependency.
+-keepclassmembers,allowoptimization class com.termux.terminal.TerminalSession {
+    com.termux.terminal.TerminalEmulator mEmulator;
+    int mTerminalFileDescriptor;
 }

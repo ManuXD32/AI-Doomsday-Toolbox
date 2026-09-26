@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_world_runtime_travel_started">Caminando a %1$s.</string>
+    <string name="tama_world_runtime_farm_queued">Tu mascota caminará hasta la parcela para cuidarla.</string>
+    <string name="tama_world_runtime_stopped">Actividad detenida.</string>
+    <string name="tama_world_runtime_action_unavailable">Esa acción no está disponible ahora.</string>
+    <string name="tama_world_runtime_loading">Abriendo tu mundo…</string>
+    <string name="tama_world_runtime_continue">Continuar</string>
+    <string name="tama_world_runtime_retry">El mundo se ha pausado. Tu progreso guardado está a salvo. Toca Continuar para reintentarlo.</string>
+    <string name="tama_world_runtime_activity">Actividad</string>
+    <string name="tama_world_runtime_adventure">Aventura</string>
+    <string name="tama_world_runtime_pending_memory">Recuerdo pendiente del resumidor configurado</string>
+    <string name="tama_world_runtime_charging">El entrenamiento está pausado hasta que el dispositivo se esté cargando.</string>
+    <string name="tama_world_runtime_battery">El entrenamiento está pausado para conservar batería.</string>
+    <string name="tama_world_runtime_thermal">El entrenamiento está pausado mientras se enfría el dispositivo.</string>
+    <string name="tama_world_runtime_action_queued">Tu mascota completará esta acción.</string>
+</resources>

@@ -16,6 +16,8 @@ import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.db.ModelProvenanceEntity
 import com.example.llamadroid.data.db.PendingModelArtifactEntity
+import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_FAILED
+import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_RESUMABLE
 import com.example.llamadroid.data.db.parseOnnxCapabilities
 import com.example.llamadroid.data.db.ONNX_CAPABILITY_TXT2IMG
 import com.example.llamadroid.sd.defaultCapabilitiesForFamily
@@ -24,7 +26,6 @@ import com.example.llamadroid.sd.resolveSdCompatProfiles
 import com.example.llamadroid.sd.SdArtifactInspection
 import com.example.llamadroid.sd.SdArtifactInspector
 import com.example.llamadroid.sd.SdArtifactRole
-import com.example.llamadroid.sd.SdInspectionConfidence
 import com.example.llamadroid.sd.SdModelFamily
 import com.example.llamadroid.sd.SdInspectionCache
 import com.example.llamadroid.sd.needsSdArtifactInspection
@@ -43,8 +44,21 @@ import com.example.llamadroid.onnx.OnnxStorage
 import com.example.llamadroid.onnx.buildOnnxCatalogStableId
 import com.example.llamadroid.onnx.buildOnnxImageGenModelEntity
 import com.example.llamadroid.data.model.library.ModelArtifactLifecycle
+import com.example.llamadroid.data.model.library.ModelDeletionDependency
+import com.example.llamadroid.data.model.library.ModelDeletionFile
+import com.example.llamadroid.data.model.library.ModelDeletionPathFailure
+import com.example.llamadroid.data.model.library.ModelDeletionPreview
+import com.example.llamadroid.data.model.library.ModelDeletionResult
+import com.example.llamadroid.data.model.library.ModelDeletionStatus
 import com.example.llamadroid.data.model.library.ModelLibraryErrorCode
 import com.example.llamadroid.data.model.library.ModelLibraryException
+import com.example.llamadroid.data.model.library.ModelClassificationPolicy
+import com.example.llamadroid.data.model.library.ModelClassificationSource
+import com.example.llamadroid.data.model.library.RoomModelDeletionJournal
+import com.example.llamadroid.data.model.library.activeDownloadDependencies
+import com.example.llamadroid.data.model.library.activeAudioJobDependencies
+import com.example.llamadroid.data.model.library.modelDeletionOperationMutex
+import com.example.llamadroid.data.model.library.StableAudioModelLease
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.Downloader
 import kotlinx.coroutines.CoroutineScope
@@ -52,6 +66,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
@@ -67,17 +82,30 @@ import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import java.io.File
 import com.example.llamadroid.data.db.buildOnnxCapabilities
+import com.example.llamadroid.data.db.isAudioTtsComponentType
+import com.example.llamadroid.data.db.isStableAudioComponentType
 import java.util.Locale
+
+/** Repository instances are short-lived across model-manager screens. */
+private val catalogDownloadMutex = Mutex()
 
 class ModelRepository(
     private val context: Context,
     private val modelDao: ModelDao
 ) {
+    private data class InstalledModelReferenceKey(
+        val path: String,
+        val key: String,
+        val relation: String
+    )
+
     private data class LifecycleProtectionSnapshot(
         val pendingArtifacts: List<PendingModelArtifactEntity>,
         val allProvenance: List<ModelProvenanceEntity>,
         val otherRuntimePaths: List<String>,
-        val otherLiteRtPaths: List<String>
+        val otherLiteRtPaths: List<String>,
+        val activeAudioJobPaths: List<String>,
+        val activeDownloadPaths: List<String>
     )
 
     // Use kotlinx.serialization for API responses to avoid reflection issues with R8
@@ -93,6 +121,15 @@ class ModelRepository(
         
     private val hfService = retrofit.create(HuggingFaceService::class.java)
     private val reconciliationMutex = Mutex()
+
+    private data class CatalogDownloadHandle(
+        val taskId: String,
+        val progressKey: String,
+        val url: String,
+        val localFilename: String,
+        val destFile: File,
+        val alreadyInstalled: Boolean = false
+    )
 
     init {
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
@@ -123,36 +160,39 @@ class ModelRepository(
     }
 
     fun getModelManagerModels(): Flow<List<ModelEntity>> = modelDao.getModelsByTypes(
-        listOf(
-            ModelType.LLM,
-            ModelType.LLM_DRAFT,
-            ModelType.LORA,
-            ModelType.EMBEDDING,
-            // Keep legacy vision/projector rows visible for UI category normalization.
-            ModelType.VISION,
-            ModelType.VISION_PROJECTOR,
-            ModelType.MMPROJ
-        )
+        ModelManagerModelTypes.llama
+    ).onStart {
+        pruneLegacyPortableModelRows()
+        reconcileManagedModelCopiesIfNeeded()
+    }
+
+    fun getLiteRtAudioModels(): Flow<List<ModelEntity>> = modelDao.getModelsByTypes(
+        ModelManagerModelTypes.liteRtAudio
     ).onStart {
         pruneLegacyPortableModelRows()
         reconcileManagedModelCopiesIfNeeded()
     }
     
-    suspend fun searchModels(query: String, filter: String? = null): List<HfModelDto> = withContext(Dispatchers.IO) {
-        try {
-            // Enhance query with filter keyword for better search results
-            val enhancedQuery = if (filter != null && !query.contains(filter, ignoreCase = true)) {
-                "$query $filter"
-            } else {
-                query
+    /** Result-preserving variant used by model management UI error recovery. */
+    suspend fun searchModelsResult(query: String, filter: String? = null): Result<List<HfModelDto>> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                // Enhance query with filter keyword for better results without
+                // turning an HTTP/auth failure into a misleading empty catalog.
+                val enhancedQuery = if (filter != null && !query.contains(filter, ignoreCase = true)) {
+                    "$query $filter"
+                } else {
+                    query
+                }
+                hfService.searchModels(enhancedQuery, filter = filter, limit = 40)
+            }.onFailure { error ->
+                DebugLog.log("[HF-SEARCH] ${error::class.simpleName}")
             }
-            hfService.searchModels(enhancedQuery, filter = filter, limit = 40)
-        } catch (e: Exception) {
-            DebugLog.log("[HF-SEARCH] Error: ${e.message}")
-            e.printStackTrace()
-            emptyList()
         }
-    }
+
+    /** Legacy callers retain the old empty-list behavior; new UI uses the Result API. */
+    suspend fun searchModels(query: String, filter: String? = null): List<HfModelDto> =
+        searchModelsResult(query, filter).getOrElse { emptyList() }
     
     suspend fun getGgufFiles(repoId: String): List<String> = withContext(Dispatchers.IO) {
         try {
@@ -190,13 +230,13 @@ class ModelRepository(
     suspend fun getFilesWithVisionSupport(repoId: String): RepoFiles = withContext(Dispatchers.IO) {
         try {
             val treeItems = hfService.getRepoTree(repoId)
-            
+
             // Find model files (GGUF files only for LLM - llama.cpp doesn't support safetensors)
             val modelFiles = treeItems
                 .filter { it.type == "file" && it.path.endsWith(".gguf") && !it.path.contains("mmproj") }
                 .map { FileInfo(it.path, it.size, FileType.MODEL) }
                 .sortedByDescending { it.sizeBytes }
-            
+
             // Find vision projection files (mmproj files)
             val visionFiles = treeItems
                 .filter { it.type == "file" && it.path.contains("mmproj") && it.path.endsWith(".gguf") }
@@ -226,6 +266,7 @@ class ModelRepository(
         val subfolder = when (type) {
             ModelType.LLM, ModelType.LORA, ModelType.EMBEDDING, ModelType.VISION -> "llm"
             ModelType.LLM_DRAFT -> "llm/drafts"
+            ModelType.SD_LLM -> "sd/llm"
             ModelType.VISION_PROJECTOR, ModelType.MMPROJ -> "mmproj"
             ModelType.QUADTRIX -> "quadtrix"
             ModelType.SD_CHECKPOINT, ModelType.SD_UPSCALER -> "sd/checkpoints"
@@ -245,6 +286,10 @@ class ModelRepository(
             ModelType.SD_AUDIO_VAE -> "sd/audio_vae"
             ModelType.SD_EMBEDDINGS_CONNECTORS -> "sd/connectors"
             ModelType.SD_MOTION_MODULE -> "sd/motion_module"
+            ModelType.LLAMA_TTS,
+            ModelType.LLAMA_TTS_COMPANION -> "audio/tts"
+            ModelType.LITERT_AUDIO_DIT,
+            ModelType.LITERT_AUDIO_COMPONENT -> "audio/stable"
             ModelType.ONNX_IMAGE_GEN,
             ModelType.ONNX_TTS,
             ModelType.ONNX_BACKGROUND_REMOVAL,
@@ -290,100 +335,202 @@ class ModelRepository(
         onnxAssetKind: String? = null,
         onnxPipelineFamily: String? = null,
         onnxReferenceUri: String? = null,
-        onnxReferencePath: String? = null
+        onnxReferencePath: String? = null,
+        artifactFamily: String? = null,
+        artifactRole: String? = null
     ) {
-        val modelDir = getModelDir(type)
-        val localFilename = chooseUniqueDownloadFilename(
-            requestedFilename = filename,
-            type = type,
-            modelDir = modelDir
-        )
         val modelUrl = "https://huggingface.co/$repoId/resolve/main/$filename"
-        val destFile = File(modelDir, localFilename)
-        val inferredFamily = inferSdFamily(type, repoId, filename)
-        val resolvedFamily = sdFamily ?: inferredFamily.first?.storedValue
-        val resolvedVariant = sdVariant ?: inferredFamily.second
-        val resolvedFamilyEnum = SdModelFamily.fromStoredValue(resolvedFamily)
-        val resolvedCapabilities = sdCapabilities ?: defaultCapabilitiesForFamily(resolvedFamilyEnum, type)
-        val resolvedCompatProfiles = resolveSdCompatProfiles(
-            type = type,
-            explicitProfiles = sdCompatProfiles,
-            family = resolvedFamilyEnum,
-            variant = resolvedVariant
-        )
-        
-        val progressKey = buildDownloadTaskId(repoId, localFilename, type)
-        
-        // Track progress under unique key for UI display
-        DownloadProgressHolder.updateProgress(progressKey, localFilename, 0f)
-        
-        // Start foreground service for background downloads with notification
-        // Must be called on main thread for foreground service
-        withContext(kotlinx.coroutines.Dispatchers.Main) {
-            com.example.llamadroid.service.DownloadService.startDownload(
-                context = context,
-                url = modelUrl,
-                destPath = destFile.absolutePath,
-                filename = localFilename,
-                downloadId = progressKey
-            )
+        // The short identity -> Room task -> service handoff must finish even
+        // when the picker ViewModel is leaving the screen. The transfer itself
+        // remains owned by DownloadService and is not kept non-cancellable.
+        val handle = handoffModelDownload {
+            val prepared = withContext(Dispatchers.IO) {
+                catalogDownloadMutex.withLock {
+                    // A previous service completion may have left the payload on
+                    // disk before the old picker coroutine was cancelled. Recover
+                    // that canonical file before allocating a timestamped name.
+                    if (type == ModelType.LLM) recoverUnindexedLlmFiles()
+
+                    val modelDir = getModelDir(type)
+                    val requestedFilename = ModelLibraryManager.canonicalFilename(filename)
+                    val installed = modelDao.getAllModels().first().firstOrNull { model ->
+                        matchesCatalogModel(model, repoId, filename, type)
+                    }
+                    if (installed != null) {
+                        return@withLock CatalogDownloadHandle(
+                            taskId = "installed:${installed.filename}",
+                            progressKey = "installed:${installed.filename}",
+                            url = modelUrl,
+                            localFilename = installed.filename,
+                            destFile = File(installed.path),
+                            alreadyInstalled = true
+                        )
+                    }
+
+                    val stableTaskId = buildDownloadTaskId(repoId, requestedFilename, type)
+                    val database = AppDatabase.getDatabase(context)
+                    val activeTask = database.downloadTaskDao().getActiveByUrlAndModelType(
+                        url = modelUrl,
+                        modelType = type.name
+                    )
+                    if (activeTask != null) {
+                        PendingDownloadHolder.addPendingFrom(activeTask)
+                        DownloadProgressHolder.updateProgress(
+                            activeTask.progressKey,
+                            activeTask.filename,
+                            DownloadProgressHolder.progress.value[activeTask.progressKey] ?: 0f
+                        )
+                        return@withLock CatalogDownloadHandle(
+                            taskId = activeTask.id,
+                            progressKey = activeTask.progressKey,
+                            url = activeTask.url,
+                            localFilename = activeTask.filename,
+                            destFile = File(activeTask.destPath)
+                        )
+                    }
+
+                    val pending = PendingDownloadHolder.getPending(stableTaskId)
+                    if (pending != null) {
+                        return@withLock CatalogDownloadHandle(
+                            taskId = stableTaskId,
+                            progressKey = pending.progressKey,
+                            url = modelUrl,
+                            localFilename = pending.filename,
+                            destFile = File(pending.destPath)
+                        )
+                    }
+
+                    // The process-local progress holder covers the small window
+                    // between registering the request and Room/service arming it.
+                    val trackedProgress = DownloadProgressHolder.progress.value[stableTaskId]
+                    if (trackedProgress != null && trackedProgress in 0f..<1f) {
+                        return@withLock CatalogDownloadHandle(
+                            taskId = stableTaskId,
+                            progressKey = stableTaskId,
+                            url = modelUrl,
+                            localFilename = DownloadProgressHolder.getFilename(stableTaskId)
+                                ?: requestedFilename,
+                            destFile = File(modelDir, DownloadProgressHolder.getFilename(stableTaskId)
+                                ?: requestedFilename)
+                        )
+                    }
+
+                    val localFilename = chooseUniqueDownloadFilename(
+                        requestedFilename = filename,
+                        type = type,
+                        modelDir = modelDir
+                    )
+                    val destFile = File(modelDir, localFilename)
+                    val inferredFamily = inferSdFamily(type, repoId, filename)
+                    val resolvedFamily = sdFamily ?: inferredFamily.first?.storedValue
+                    val resolvedVariant = sdVariant ?: inferredFamily.second
+                    val resolvedFamilyEnum = SdModelFamily.fromStoredValue(resolvedFamily)
+                    val resolvedCapabilities = sdCapabilities
+                        ?: defaultCapabilitiesForFamily(resolvedFamilyEnum, type, resolvedVariant)
+                    val resolvedCompatProfiles = resolveSdCompatProfiles(
+                        type = type,
+                        explicitProfiles = sdCompatProfiles,
+                        family = resolvedFamilyEnum,
+                        variant = resolvedVariant
+                    )
+                    val progressKey = buildDownloadTaskId(repoId, localFilename, type)
+
+                    // Register the complete runtime metadata before launching the
+                    // foreground service. The service owns final model insertion,
+                    // so a cancelled picker cannot orphan a completed payload.
+                    PendingDownloadHolder.addPending(
+                        downloadId = progressKey,
+                        filename = localFilename,
+                        repoId = repoId,
+                        progressKey = progressKey,
+                        type = type,
+                        destPath = destFile.absolutePath,
+                        isVision = isVision,
+                        sdCapabilities = resolvedCapabilities,
+                        sdFamily = resolvedFamily,
+                        sdVariant = resolvedVariant,
+                        sdCompatProfiles = resolvedCompatProfiles,
+                        onnxCapabilities = onnxCapabilities,
+                        onnxAssetKind = onnxAssetKind,
+                        onnxPipelineFamily = onnxPipelineFamily,
+                        onnxReferenceUri = onnxReferenceUri,
+                        onnxReferencePath = onnxReferencePath,
+                        artifactFamily = artifactFamily,
+                        artifactRole = artifactRole,
+                        classificationSource = ModelClassificationSource.CATALOG.storedValue
+                    )
+                    // Room is the ownership boundary across process death. Keep
+                    // the same metadata in the durable task before yielding to
+                    // Main to enqueue the foreground service.
+                    val persistedPending = requireNotNull(PendingDownloadHolder.getPending(progressKey))
+                    database.downloadTaskDao().upsert(
+                        persistedPending.toDownloadTaskEntity(progressKey, modelUrl)
+                    )
+                    DownloadProgressHolder.updateProgress(progressKey, localFilename, 0f)
+                    CatalogDownloadHandle(
+                        taskId = progressKey,
+                        progressKey = progressKey,
+                        url = modelUrl,
+                        localFilename = localFilename,
+                        destFile = destFile
+                    )
+                }
+            }
+            if (!prepared.alreadyInstalled) {
+                try {
+                    withContext(Dispatchers.Main) {
+                        com.example.llamadroid.service.DownloadService.startDownload(
+                            context = context,
+                            url = prepared.url,
+                            destPath = prepared.destFile.absolutePath,
+                            filename = prepared.localFilename,
+                            downloadId = prepared.taskId
+                        )
+                    }
+                } catch (failure: Throwable) {
+                    // Do not leave a Room task ACTIVE when Android rejects the
+                    // foreground-service handoff before a worker exists.
+                    withContext(Dispatchers.IO) {
+                        val status = if (downloadPartFile(prepared.destFile.path).length() > 0L) {
+                            DOWNLOAD_TASK_STATUS_RESUMABLE
+                        } else {
+                            DOWNLOAD_TASK_STATUS_FAILED
+                        }
+                        AppDatabase.getDatabase(context).downloadTaskDao().updateStatus(
+                            id = prepared.taskId,
+                            status = status,
+                            lastError = failure.message
+                        )
+                    }
+                    PendingDownloadHolder.removePending(prepared.taskId)
+                    DownloadProgressHolder.updateProgress(prepared.progressKey, -1f)
+                    throw failure
+                }
+            }
+            prepared
         }
-        
-        // Monitor progress from DownloadProgressHolder (updated by DownloadService)
-        // Wait for completion (progress reaches 1.0 or -1.0 for error)
+
+        if (handle.alreadyInstalled) return
+
+        // Monitor progress from DownloadProgressHolder. Registration and model
+        // insertion are service-owned, so this wait is only a UI compatibility
+        // bridge for the legacy catalog ViewModel.
         var lastProgress = 0f
         while (true) {
-                    kotlinx.coroutines.delay(500) // Check every 500ms
-                    val progressMap = DownloadProgressHolder.progress.value
-                    // Check by progressKey (set by us)
-            val progress = progressMap[progressKey] ?: 0f
-            
+            kotlinx.coroutines.delay(500)
+            val progress = DownloadProgressHolder.progress.value[handle.progressKey] ?: 0f
+
             if (progress != lastProgress && progress >= 0f) {
                 lastProgress = progress
-                DownloadProgressHolder.updateProgress(progressKey, progress)
+                DownloadProgressHolder.updateProgress(handle.progressKey, progress)
             }
-            
+
             if (progress >= 1f) {
-                // Download complete - save to DB
-                val entity = ModelEntity(
-                    filename = localFilename,
-                    path = destFile.absolutePath,
-                    sizeBytes = destFile.length(),
-                    type = type,
-                    repoId = repoId,
-                    isVision = isVision,
-                    isDownloaded = true,
-                    sdCapabilities = resolvedCapabilities,
-                    sdFamily = resolvedFamily,
-                    sdVariant = resolvedVariant,
-                    sdCompatProfiles = resolvedCompatProfiles,
-                    onnxCapabilities = onnxCapabilities,
-                    onnxAssetKind = onnxAssetKind,
-                    onnxPipelineFamily = onnxPipelineFamily,
-                    onnxReferenceUri = onnxReferenceUri,
-                    onnxReferencePath = onnxReferencePath
-                )
-                try {
-                    // insertModel performs the same bounded SD inspection used
-                    // by the foreground service before trusting this row.
-                    insertModel(entity)
-                    DownloadProgressHolder.removeProgress(progressKey)
-                    DebugLog.log("ModelRepository: Saved $localFilename to DB as $type")
-                } catch (error: Exception) {
-                    // Keep the completed file and task metadata recoverable;
-                    // only the trusted model row is withheld.
-                    DownloadProgressHolder.updateProgress(progressKey, -1f)
-                    DownloadProgressHolder.updateStatus(
-                        progressKey,
-                        "Model inspection failed: ${error.message.orEmpty()}"
-                    )
-                    DebugLog.log("ModelRepository: Refused unverified $localFilename: ${error.message}")
-                }
                 break
             } else if (progress < 0f && progress != DownloadProgressHolder.INDETERMINATE) {
                 // Download failed
-                DownloadProgressHolder.removeProgress(progressKey)
-                DebugLog.log("ModelRepository: Download failed for $localFilename")
+                DownloadProgressHolder.removeProgress(handle.progressKey)
+                DebugLog.log("ModelRepository: Download failed for ${handle.localFilename}")
                 break
             }
         }
@@ -409,7 +556,10 @@ class ModelRepository(
         onnxReferenceUri: String? = null,
         onnxReferencePath: String? = null,
         downloadUrlOverride: String? = null,
-        localFilenameOverride: String? = null
+        localFilenameOverride: String? = null,
+        artifactFamily: String? = null,
+        artifactRole: String? = null,
+        classificationSource: ModelClassificationSource = ModelClassificationSource.USER_OVERRIDE
     ) {
         val modelDir = getModelDir(type)
         val localFilename = localFilenameOverride?.let { requested ->
@@ -428,7 +578,8 @@ class ModelRepository(
         val resolvedFamily = sdFamily ?: inferredFamily.first?.storedValue
         val resolvedVariant = sdVariant ?: inferredFamily.second
         val resolvedFamilyEnum = SdModelFamily.fromStoredValue(resolvedFamily)
-        val resolvedCapabilities = sdCapabilities ?: defaultCapabilitiesForFamily(resolvedFamilyEnum, type)
+        val resolvedCapabilities = sdCapabilities
+            ?: defaultCapabilitiesForFamily(resolvedFamilyEnum, type, resolvedVariant)
         val resolvedCompatProfiles = resolveSdCompatProfiles(
             type = type,
             explicitProfiles = sdCompatProfiles,
@@ -459,7 +610,10 @@ class ModelRepository(
             onnxAssetKind = onnxAssetKind,
             onnxPipelineFamily = onnxPipelineFamily,
             onnxReferenceUri = onnxReferenceUri,
-            onnxReferencePath = onnxReferencePath
+            onnxReferencePath = onnxReferencePath,
+            artifactFamily = artifactFamily,
+            artifactRole = artifactRole,
+            classificationSource = classificationSource.storedValue
         )
         
         // Start foreground service (this is called from main thread via onClick)
@@ -535,7 +689,8 @@ class ModelRepository(
             onnxReferencePath = null,
             onnxInstallKind = installKind,
             onnxInstallDirPath = if (installKind == ONNX_INSTALL_KIND_FILE) null else OnnxStorage.managedBundleDir(context, modelId).absolutePath,
-            huggingFaceToken = if (entry.gated) huggingFaceToken() else null
+            huggingFaceToken = if (entry.gated) huggingFaceToken() else null,
+            classificationSource = ModelClassificationSource.CATALOG.storedValue
         )
 
         com.example.llamadroid.service.DownloadService.startDownload(
@@ -547,18 +702,365 @@ class ModelRepository(
         )
     }
     
+    private suspend fun activeAudioJobReferences(
+        database: AppDatabase
+    ): List<InstalledModelReferenceKey> = activeAudioJobDependencies(context, database).map { dependency ->
+        InstalledModelReferenceKey(
+            path = dependency.path,
+            key = dependency.targetKey,
+            relation = dependency.relation
+        )
+    }
+
+    /**
+     * Download rows and in-process pending entries are file leases too. Keep
+     * them in the same preflight set as runtime rows so a model removal cannot
+     * race a downloader that is about to materialize or resume its payload.
+     */
+    private suspend fun activeDownloadReferences(
+        database: AppDatabase
+    ): List<InstalledModelReferenceKey> = activeDownloadDependencies(database).map { dependency ->
+        InstalledModelReferenceKey(
+            path = dependency.path,
+            key = dependency.targetKey,
+            relation = dependency.relation
+        )
+    }
+
+    /**
+     * Records each candidate path after a deletion attempt. The journal is a
+     * Room-backed recovery boundary; callers intentionally do not replace it
+     * with an in-memory fallback when persistence fails.
+     */
+    private suspend fun recordDeletionPaths(
+        journal: RoomModelDeletionJournal,
+        preview: ModelDeletionPreview,
+        result: ModelDeletionResult
+    ) {
+        val deleted = result.deletedPaths.map(::canonicalPathOrSelf).toSet()
+        val failures = result.failedPaths.associateBy { canonicalPathOrSelf(it.path) }
+        for (file in preview.files) {
+            val path = canonicalPathOrSelf(file.path)
+            journal.recordPath(
+                operationId = result.operationId,
+                path = file.path,
+                deleted = path in deleted,
+                failure = failures[path]
+            )
+        }
+    }
+
+    private fun canonicalPathOrSelf(path: String): String =
+        if ("://" in path) path else runCatching { File(path).canonicalPath }.getOrDefault(path)
+
+    /** Computes dependency-aware deletion details without changing durable state. */
+    suspend fun previewDeleteModel(model: ModelEntity): ModelDeletionPreview = withContext(Dispatchers.IO) {
+        val database = AppDatabase.getDatabase(context)
+        val libraryDao = database.modelLibraryDao()
+        val otherRuntimeRows = modelDao.getAllModels().first()
+            .filter { it.filename != model.filename }
+        val provenance = libraryDao.observeProvenance().first()
+        val pendingArtifacts = libraryDao.observePendingArtifacts().first()
+        val protectedReferences = mutableListOf<InstalledModelReferenceKey>()
+        otherRuntimeRows.forEach { row ->
+            protectedReferences += InstalledModelReferenceKey(row.path, row.filename, "runtime")
+            row.mmprojPath?.let { protectedReferences += InstalledModelReferenceKey(it, row.filename, "companion") }
+        }
+        database.liteRtModelDao().getAllOnce().forEach { row ->
+            protectedReferences += InstalledModelReferenceKey(row.path, row.displayName, "litert")
+        }
+        provenance.filter { it.modelKey != model.filename }.forEach { edge ->
+            edge.localPath?.let { protectedReferences += InstalledModelReferenceKey(it, edge.modelKey, "provenance") }
+        }
+        protectedReferences += activeAudioJobReferences(database)
+        protectedReferences += activeDownloadReferences(database)
+        val candidates = linkedSetOf<File>().apply {
+            val primary = File(model.path)
+            if (primary.exists() && (
+                    isManagedModelPath(primary) ||
+                        ModelLibraryManager.usesManagedExternalCanonicalStorage(model.type) ||
+                        model.repoId == ModelBackupPolicy.LOCAL_IMPORT_REPO_ID ||
+                        model.repoId.startsWith("custom-import/")
+                    )) {
+                add(primary)
+            }
+            if (ModelLibraryManager.requiresRuntimeMirror(model.type)) {
+                add(File(getModelDir(model.type), ModelLibraryManager.canonicalFilename(model.filename)))
+            }
+            pendingArtifacts
+                .filter { it.promotedModelKey == model.filename }
+                .flatMap { listOfNotNull(it.stagingPath, it.destinationPath) }
+                .map(::File)
+                .filter { it.exists() && isManagedModelPath(it) }
+                .forEach(::add)
+            provenance
+                .filter { it.modelKey == model.filename }
+                .mapNotNull { it.localPath?.let(::File) }
+                .filter { it.exists() && isManagedModelPath(it) }
+                .forEach(::add)
+        }
+        val targetCanonicals = candidates.map { canonicalPathOrSelf(it.absolutePath) }.toSet()
+        val targetDirectories = candidates
+            .filter { it.isDirectory }
+            .map { canonicalPathOrSelf(it.absolutePath) }
+        val dependencies = protectedReferences.mapNotNull { reference ->
+            val path = reference.path
+            val canonical = runCatching { File(path).canonicalPath }.getOrNull()
+            if (canonical != null && (
+                    canonical in targetCanonicals ||
+                        targetDirectories.any { directory ->
+                            canonical.startsWith("$directory${File.separator}")
+                        }
+                )) {
+                ModelDeletionDependency(reference.key, reference.relation, path)
+            } else {
+                null
+            }
+        }
+        val protectedByPath = dependencies.groupBy { runCatching { File(it.path).canonicalPath }.getOrDefault(it.path) }
+        val files = candidates.filter { it.exists() }.map { file ->
+            val canonical = canonicalPathOrSelf(file.absolutePath)
+            ModelDeletionFile(
+                path = canonical,
+                sizeBytes = if (file.isFile) file.length() else file.walkTopDown().filter { it.isFile }.sumOf { it.length() },
+                kind = if (canonical == canonicalPathOrSelf(model.path)) "primary" else "managed-copy",
+                protectedBy = protectedByPath[canonical].orEmpty().map { it.targetKey }
+            )
+        }.toMutableList().apply {
+            if (model.type != ModelType.ONNX_IMAGE_GEN &&
+                model.type != ModelType.ONNX_TTS &&
+                model.type != ModelType.ONNX_BACKGROUND_REMOVAL &&
+                model.type != ModelType.ONNX_IMAGE_UPSCALER &&
+                dependencies.isEmpty()
+            ) {
+                ModelLibraryManager.libraryFile(
+                    context = context,
+                    relativeDir = ModelLibraryManager.relativeDirFor(model.type),
+                    filename = model.filename
+                )?.takeIf { it.exists() }?.let { document ->
+                    add(
+                        ModelDeletionFile(
+                            path = document.uri.toString(),
+                            sizeBytes = document.length().coerceAtLeast(0L),
+                            kind = "shared-library"
+                        )
+                    )
+                }
+            }
+        }
+        val blockedCode = if (dependencies.isNotEmpty()) ModelLibraryErrorCode.DELETION_BLOCKED else null
+        ModelDeletionPreview(
+            targetKey = model.filename,
+            targetLabel = model.filename,
+            files = files,
+            dependencies = dependencies,
+            protectedPaths = dependencies.map { it.path }.distinct(),
+            canDelete = dependencies.isEmpty(),
+            blockingCode = blockedCode
+        )
+    }
+
+    /** Performs a deletion and returns a recoverable typed result for UI callers. */
+    suspend fun deleteModelWithResult(model: ModelEntity): ModelDeletionResult =
+        modelDeletionOperationMutex.withLock {
+            if (model.type.isStableAudioComponentType()) {
+                StableAudioModelLease.withLease(listOf(model.path)) {
+                    deleteModelWithResultLocked(model, removeRuntimeRow = true)
+                }
+            } else {
+                deleteModelWithResultLocked(model, removeRuntimeRow = true)
+            }
+        }
+
+    /** Lists interrupted or recoverable model deletions for a Retry surface. */
+    suspend fun recoverableDeletionOperations(limit: Int = 50) =
+        RoomModelDeletionJournal(AppDatabase.getDatabase(context)).recoverableOperations(limit)
+
+    /** Retries a journal entry while the target runtime row is still present. */
+    suspend fun retryDeletion(operationId: String): ModelDeletionResult? {
+        val journal = RoomModelDeletionJournal(AppDatabase.getDatabase(context))
+        val snapshot = journal.operation(operationId) ?: return null
+        if (snapshot.preview.targetKind != "model") return null
+        val model = modelDao.getModelByFilename(snapshot.preview.targetKey)
+        if (model == null) {
+            // A process can be interrupted after the runtime row transaction
+            // succeeds but before the journal is finalized. Reconcile that
+            // durable state instead of leaving a Retry action that can never
+            // find its model row again.
+            val preserved = snapshot.preview.files
+                .map { it.path }
+                .filter(::deletionPathExists)
+            if (preserved.isEmpty()) {
+                val result = ModelDeletionResult(
+                    operationId = snapshot.operationId,
+                    targetKey = snapshot.preview.targetKey,
+                    targetKind = "model",
+                    status = ModelDeletionStatus.COMPLETED,
+                    deletedPaths = snapshot.preview.files.map { it.path },
+                    reclaimedBytes = 0L // No bytes were removed by this recovery pass.
+                )
+                journal.complete(result)
+                return result
+            }
+            return ModelDeletionResult(
+                operationId = snapshot.operationId,
+                targetKey = snapshot.preview.targetKey,
+                targetKind = "model",
+                status = ModelDeletionStatus.RECOVERABLE,
+                preservedPaths = preserved,
+                errorCode = ModelLibraryErrorCode.DELETION_RECOVERABLE,
+                errorMessage = context.getString(R.string.model_library_error_deletion_failed)
+            )
+        }
+        val retried = deleteModelWithResult(model)
+        val reconciled = retried.copy(operationId = snapshot.operationId)
+        if (retried.status == ModelDeletionStatus.COMPLETED) {
+            journal.complete(reconciled)
+        } else {
+            journal.fail(reconciled.copy(status = ModelDeletionStatus.RECOVERABLE))
+        }
+        return reconciled
+    }
+
+    private fun deletionPathExists(path: String): Boolean = if ("://" in path) {
+        DocumentFile.fromSingleUri(context, Uri.parse(path))?.exists() == true
+    } else {
+        File(path).exists()
+    }
+
+    private suspend fun deleteModelWithResultLocked(
+        model: ModelEntity,
+        removeRuntimeRow: Boolean
+    ): ModelDeletionResult {
+        val preview = previewDeleteModel(model)
+        if (!preview.canDelete) {
+            return ModelDeletionResult(
+                operationId = preview.operationId,
+                targetKey = model.filename,
+                status = ModelDeletionStatus.BLOCKED,
+                preservedPaths = preview.files.map { it.path },
+                errorCode = preview.blockingCode ?: ModelLibraryErrorCode.DELETION_BLOCKED,
+                errorMessage = context.getString(R.string.model_audio_companion_in_use)
+            )
+        }
+        val journal = RoomModelDeletionJournal(AppDatabase.getDatabase(context))
+        var journalStarted = false
+        val attemptedPaths = linkedSetOf<String>()
+        val attemptedDeletedPaths = linkedSetOf<String>()
+        val attemptedPreservedPaths = linkedSetOf<String>()
+        val attemptedFailures = linkedMapOf<String, ModelDeletionPathFailure>()
+        return try {
+            journal.begin(preview)
+            journalStarted = true
+            reconcileManagedModelCopiesIfNeeded()
+            val deleted = deleteModelArtifactsInternal(
+                model = model,
+                removeRuntimeRow = removeRuntimeRow,
+                onPathResult = { path, wasDeleted, failure ->
+                    val canonical = canonicalPathOrSelf(path)
+                    attemptedPaths += canonical
+                    if (wasDeleted) {
+                        attemptedDeletedPaths += canonical
+                    } else if (failure != null) {
+                        attemptedFailures[canonical] = failure
+                    } else {
+                        attemptedPreservedPaths += canonical
+                    }
+                    journal.recordPath(
+                        operationId = preview.operationId,
+                        path = path,
+                        deleted = wasDeleted,
+                        failure = failure
+                    )
+                }
+            )
+            val preserved = preview.files.map { it.path }.filterNot { it in deleted }
+            val result = ModelDeletionResult(
+                operationId = preview.operationId,
+                targetKey = model.filename,
+                status = ModelDeletionStatus.COMPLETED,
+                deletedPaths = deleted,
+                preservedPaths = preserved,
+                reclaimedBytes = preview.files.filter { it.path in deleted }.sumOf { it.sizeBytes }
+            )
+            recordDeletionPaths(journal, preview, result)
+            journal.complete(result)
+            result
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            val unobservedFailures = preview.files
+                .filter { canonicalPathOrSelf(it.path) !in attemptedPaths && File(it.path).exists() }
+                .map { file ->
+                    ModelDeletionPathFailure(
+                        path = file.path,
+                        code = ModelLibraryErrorCode.DELETION_RECOVERABLE,
+                        message = error.message
+                    )
+                }
+            val failedPaths = (attemptedFailures.values + unobservedFailures)
+                .distinctBy { canonicalPathOrSelf(it.path) }
+            val result = ModelDeletionResult(
+                operationId = preview.operationId,
+                targetKey = model.filename,
+                status = ModelDeletionStatus.RECOVERABLE,
+                deletedPaths = attemptedDeletedPaths.toList(),
+                preservedPaths = (attemptedPreservedPaths + preview.files
+                    .map { canonicalPathOrSelf(it.path) }
+                    .filter { path ->
+                        path !in attemptedPaths &&
+                            path !in failedPaths.map { failure -> canonicalPathOrSelf(failure.path) }
+                    })
+                    .toList(),
+                failedPaths = failedPaths,
+                errorCode = ModelLibraryErrorCode.DELETION_RECOVERABLE,
+                errorMessage = error.message
+            )
+            if (journalStarted) {
+                try {
+                    recordDeletionPaths(journal, preview, result)
+                    journal.fail(result)
+                } catch (_: Throwable) {
+                    // Keep the typed recoverable result when journal storage
+                    // itself is temporarily unavailable.
+                }
+            }
+            result
+        }
+    }
+
     suspend fun deleteModel(model: ModelEntity) {
-        reconcileManagedModelCopiesIfNeeded()
-        deleteModelArtifactsInternal(model, removeRuntimeRow = true)
+        val result = deleteModelWithResult(model)
+        if (result.status != ModelDeletionStatus.COMPLETED) {
+            throw ModelLibraryException(
+                code = result.errorCode ?: ModelLibraryErrorCode.DELETION_FAILED,
+                message = result.errorMessage ?: context.getString(R.string.error_generic)
+            )
+        }
     }
 
     suspend fun deleteModelArtifacts(model: ModelEntity) {
-        deleteModelArtifactsInternal(model, removeRuntimeRow = false)
+        val result = modelDeletionOperationMutex.withLock {
+            if (model.type.isStableAudioComponentType()) {
+                StableAudioModelLease.withLease(listOf(model.path)) {
+                    deleteModelWithResultLocked(model, removeRuntimeRow = false)
+                }
+            } else {
+                deleteModelWithResultLocked(model, removeRuntimeRow = false)
+            }
+        }
+        if (result.status != ModelDeletionStatus.COMPLETED) {
+            throw ModelLibraryException(
+                code = result.errorCode ?: ModelLibraryErrorCode.DELETION_FAILED,
+                message = result.errorMessage ?: context.getString(R.string.error_generic)
+            )
+        }
     }
 
     private suspend fun deleteModelArtifactsInternal(
         model: ModelEntity,
-        removeRuntimeRow: Boolean
+        removeRuntimeRow: Boolean,
+        onPathResult: suspend (path: String, deleted: Boolean, failure: ModelDeletionPathFailure?) -> Unit = { _, _, _ -> }
     ) = withContext(Dispatchers.IO) {
         val managedPaths = linkedSetOf<File>()
         val directPaths = linkedSetOf<File>()
@@ -581,13 +1083,23 @@ class ModelRepository(
         val database = AppDatabase.getDatabase(context)
         val libraryDao = database.modelLibraryDao()
         val lifecycle = try {
+            val otherRuntimeRows = modelDao.getAllModels().first()
+                .filter { it.filename != model.filename }
             LifecycleProtectionSnapshot(
                 pendingArtifacts = libraryDao.observePendingArtifacts().first(),
                 allProvenance = libraryDao.observeProvenance().first(),
-                otherRuntimePaths = modelDao.getAllModels().first()
-                    .filter { it.filename != model.filename }
-                    .map { it.path },
-                otherLiteRtPaths = database.liteRtModelDao().getAllOnce().map { it.path }
+                // A native TTS main row persists its selected companion in
+                // mmprojPath. Protect those references as well as the rows'
+                // own paths so removing a shared companion cannot strand a
+                // still-runnable model. This uses actual installed-row
+                // references rather than the curated catalog, which may be
+                // present even when no bundle is installed.
+                otherRuntimePaths = otherRuntimeRows.flatMap { row ->
+                    listOfNotNull(row.path, row.mmprojPath)
+                },
+                otherLiteRtPaths = database.liteRtModelDao().getAllOnce().map { it.path },
+                activeAudioJobPaths = activeAudioJobReferences(database).map { it.path },
+                activeDownloadPaths = activeDownloadReferences(database).map { it.path }
             )
         } catch (error: CancellationException) {
             throw error
@@ -601,9 +1113,13 @@ class ModelRepository(
         val allProvenance = lifecycle.allProvenance
         val otherRuntimePaths = lifecycle.otherRuntimePaths
         val otherLiteRtPaths = lifecycle.otherLiteRtPaths
+        val activeAudioJobPaths = lifecycle.activeAudioJobPaths
+        val activeDownloadPaths = lifecycle.activeDownloadPaths
         val protectedPaths = buildList {
             addAll(otherRuntimePaths)
             addAll(otherLiteRtPaths)
+            addAll(activeAudioJobPaths)
+            addAll(activeDownloadPaths)
             addAll(allProvenance.filter { it.modelKey != model.filename }.mapNotNull { it.localPath })
         }
 
@@ -623,27 +1139,94 @@ class ModelRepository(
             .mapNotNull { it.localPath?.let(::File) }
             .filter { it.exists() && isManagedModelPath(it) }
             .forEach(ownedCandidates::add)
-        ModelArtifactLifecycle.deleteOwnedPaths(ownedCandidates, protectedPaths)
+        var firstPathFailure: ModelDeletionPathFailure? = null
+        var firstPreservedPath: String? = null
+        val deletedPaths = ModelArtifactLifecycle.deleteOwnedPathsWithProgress(
+            candidates = ownedCandidates,
+            protectedPaths = protectedPaths,
+            onPathResult = { path, deleted, failure ->
+                if (!deleted && failure != null && firstPathFailure == null) {
+                    firstPathFailure = failure
+                } else if (!deleted && failure == null && firstPreservedPath == null) {
+                    firstPreservedPath = path
+                }
+                onPathResult(path, deleted, failure)
+            }
+        ).toMutableList()
         val currentPathIsShared = protectedPaths.any { protected ->
             // A failed canonicalization is treated as shared.  Deletion must
             // fail closed when a protection path cannot be resolved.
-            runCatching { File(protected).canonicalFile == currentPath.canonicalFile }.getOrDefault(true)
+            runCatching {
+                val protectedPath = File(protected).canonicalFile
+                protectedPath == currentPath.canonicalFile ||
+                    (currentPath.isDirectory && protectedPath.path.startsWith(
+                        "${currentPath.canonicalPath}${File.separator}"
+                    ))
+            }.getOrDefault(true)
+        }
+        if (model.type == ModelType.LLAMA_TTS_COMPANION && currentPathIsShared) {
+            // Keep the companion row and bytes together while a native TTS
+            // main row still points at them. The caller can surface this
+            // localized error and ask the user to remove that association
+            // first; deleting only the row would leave a dangling mmprojPath.
+            throw IllegalStateException(context.getString(R.string.model_audio_companion_in_use))
         }
 
-        if (
+        val libraryTarget = if (
             model.type == ModelType.ONNX_IMAGE_GEN ||
             model.type == ModelType.ONNX_TTS ||
             model.type == ModelType.ONNX_BACKGROUND_REMOVAL ||
             model.type == ModelType.ONNX_IMAGE_UPSCALER
         ) {
-            // ONNX payloads are now internal-only and no longer mirrored to a shared model library folder.
-        } else if (!currentPathIsShared && protectedPaths.none {
-                File(it).name == ModelLibraryManager.canonicalFilename(model.filename)
-            }) {
-            ModelLibraryManager.deleteFromLibrary(
+            null
+        } else {
+            ModelLibraryManager.libraryFile(
                 context = context,
                 relativeDir = ModelLibraryManager.relativeDirFor(model.type),
                 filename = model.filename
+            )
+        }
+        if (libraryTarget != null && !currentPathIsShared && protectedPaths.none {
+                File(it).name == ModelLibraryManager.canonicalFilename(model.filename)
+            }) {
+            val libraryPath = libraryTarget.uri.toString()
+            try {
+                val removed = libraryTarget.delete() && !libraryTarget.exists()
+                if (removed) {
+                    deletedPaths += libraryPath
+                    onPathResult(libraryPath, true, null)
+                } else if (libraryTarget.exists()) {
+                    val failure = ModelDeletionPathFailure(
+                        path = libraryPath,
+                        code = ModelLibraryErrorCode.DELETION_RECOVERABLE,
+                        message = null
+                    )
+                    if (firstPathFailure == null) firstPathFailure = failure
+                    onPathResult(
+                        libraryPath,
+                        false,
+                        failure
+                    )
+                }
+            } catch (error: Throwable) {
+                val failure = ModelDeletionPathFailure(
+                    path = libraryPath,
+                    code = ModelLibraryErrorCode.DELETION_RECOVERABLE,
+                    message = error.message
+                )
+                if (firstPathFailure == null) firstPathFailure = failure
+                onPathResult(
+                    libraryPath,
+                    false,
+                    failure
+                )
+            }
+        }
+
+        if (firstPathFailure != null || firstPreservedPath != null) {
+            throw IllegalStateException(
+                firstPathFailure?.message
+                    ?: "Managed model files could not be removed: ${firstPreservedPath.orEmpty()}"
             )
         }
 
@@ -662,6 +1245,7 @@ class ModelRepository(
             libraryDao.upsertPendingArtifactsAtomically(changed)
             if (removeRuntimeRow) database.modelDao().deleteModel(model)
         }
+        deletedPaths
     }
     
     suspend fun insertModel(model: ModelEntity) {
@@ -909,12 +1493,21 @@ class ModelRepository(
             val resolvedFamily = sdFamily ?: inferredFamily.first?.storedValue
             val resolvedVariant = sdVariant ?: inferredFamily.second
             val resolvedFamilyEnum = SdModelFamily.fromStoredValue(resolvedFamily)
+            val classificationChanged = newType != original.type ||
+                resolvedFamily != original.sdFamily ||
+                resolvedVariant != original.sdVariant ||
+                sdCapabilities != original.sdCapabilities ||
+                sdCompatProfiles != original.sdCompatProfiles ||
+                onnxCapabilities != original.onnxCapabilities ||
+                onnxAssetKind != original.onnxAssetKind ||
+                onnxPipelineFamily != original.onnxPipelineFamily
             val updated = original.copy(
                 filename = normalizedFilename,
                 path = if (isManagedSource) finalFile.absolutePath else original.path,
                 sizeBytes = if (finalFile.exists()) finalFile.length() else original.sizeBytes,
                 type = newType,
-                sdCapabilities = sdCapabilities ?: defaultCapabilitiesForFamily(resolvedFamilyEnum, newType),
+                sdCapabilities = sdCapabilities
+                    ?: defaultCapabilitiesForFamily(resolvedFamilyEnum, newType, resolvedVariant),
                 sdFamily = resolvedFamily,
                 sdVariant = resolvedVariant,
                 sdCompatProfiles = resolveSdCompatProfiles(
@@ -933,7 +1526,14 @@ class ModelRepository(
                 onnxAssetKind = onnxAssetKind,
                 onnxPipelineFamily = onnxPipelineFamily,
                 onnxReferenceUri = onnxReferenceUri,
-                onnxReferencePath = onnxReferencePath ?: original.onnxReferencePath
+                onnxReferencePath = onnxReferencePath ?: original.onnxReferencePath,
+                classificationSource = if (classificationChanged) {
+                    ModelClassificationSource.USER_OVERRIDE.storedValue
+                } else {
+                    original.classificationSource
+                },
+                detectedClassificationJson = original.detectedClassificationJson
+                    ?: preflightInspection?.toJson()?.let(ModelClassificationPolicy::boundedEvidence)
             ).let { candidate ->
                 preflightInspection?.let(candidate::withSdArtifactInspection) ?: candidate
             }
@@ -1039,10 +1639,11 @@ class ModelRepository(
         )
 
         /**
-         * Validate structural evidence against the role/family selected by the
-         * user or curated metadata.  Unknown/low-confidence evidence remains
-         * manually configurable; high-confidence contradictions are blockers.
+         * Validate payload integrity only. Role/family disagreements are
+         * semantic warnings surfaced by the resolver and model UI; an explicit
+         * user classification remains authoritative at runtime.
          */
+        @Suppress("UNUSED_PARAMETER")
         fun validateSdArtifactInspection(
             configuredType: ModelType,
             inspection: SdArtifactInspection,
@@ -1075,45 +1676,6 @@ class ModelRepository(
                 )
             }
 
-            val expectedRole = configuredType.sdArtifactRole()
-            val detectedRole = inspection.detectedRole
-            val roleContradiction = inspection.confidence == SdInspectionConfidence.HIGH &&
-                expectedRole != null && detectedRole != null &&
-                when (expectedRole) {
-                    SdArtifactRole.FULL_MODEL -> detectedRole != SdArtifactRole.FULL_MODEL &&
-                        detectedRole != SdArtifactRole.MAIN_MODEL
-                    // SD_DIFFUSION is the generic standalone-diffusion
-                    // storage role, but the import UI also uses it for
-                    // architecture-specific SD3 files. Structural layout is
-                    // authoritative: retain the generic row type while
-                    // allowing a proven full model to be resolved as -m.
-                    SdArtifactRole.STANDALONE_DIFFUSION ->
-                        detectedRole != SdArtifactRole.STANDALONE_DIFFUSION &&
-                            !(configuredType == ModelType.SD_DIFFUSION &&
-                                detectedRole == SdArtifactRole.FULL_MODEL)
-                    else -> detectedRole != expectedRole
-                }
-            if (roleContradiction) {
-                return Result.failure(
-                    SdArtifactValidationException(
-                        code = SdArtifactValidationCode.ROLE_CONTRADICTION,
-                        detail = "Detected role ${detectedRole?.storedValue} contradicts configured role ${expectedRole?.storedValue}"
-                    )
-                )
-            }
-
-            val configuredFamilyEnum = SdModelFamily.fromStoredValue(configuredFamily)
-            if (inspection.confidence == SdInspectionConfidence.HIGH &&
-                configuredFamilyEnum != null && inspection.detectedFamily != null &&
-                configuredFamilyEnum != inspection.detectedFamily
-            ) {
-                return Result.failure(
-                    SdArtifactValidationException(
-                        code = SdArtifactValidationCode.FAMILY_CONTRADICTION,
-                        detail = "Detected family ${inspection.detectedFamily.storedValue} contradicts configured family ${configuredFamilyEnum.storedValue}"
-                    )
-                )
-            }
             return Result.success(inspection)
         }
 
@@ -1148,6 +1710,16 @@ class ModelRepository(
             supportedCapabilities = detectedCapabilities.ifEmpty { setOf(ONNX_CAPABILITY_TXT2IMG) },
             referenceUri = referenceUri,
             referencePath = referencePath
+        ).copy(
+            classificationSource = ModelClassificationSource.AUTO.storedValue,
+            detectedClassificationJson = ModelClassificationPolicy.evidenceJson(
+                com.example.llamadroid.data.model.library.ModelClassification(
+                    family = com.example.llamadroid.data.model.library.ModelFamily.ONNX,
+                    type = ModelType.ONNX_IMAGE_GEN,
+                    role = "image_gen",
+                    capabilities = detectedCapabilities
+                )
+            )
         )
 
         fun isSupportedMediaModelFile(path: String): Boolean {
@@ -1180,11 +1752,8 @@ class ModelRepository(
 
     private suspend fun reconcileManagedModelCopiesIfNeeded() = withContext(Dispatchers.IO) {
         val prefs = context.applicationContext.getSharedPreferences(HF_PREFS_NAME, Context.MODE_PRIVATE)
-        if (prefs.getBoolean(MANAGED_MODEL_STORAGE_RECONCILED_KEY, false)) {
-            return@withContext
-        }
-
         reconciliationMutex.withLock {
+            recoverUnindexedLlmFiles()
             if (prefs.getBoolean(MANAGED_MODEL_STORAGE_RECONCILED_KEY, false)) {
                 return@withLock
             }
@@ -1197,6 +1766,10 @@ class ModelRepository(
                 ModelType.VISION,
                 ModelType.VISION_PROJECTOR,
                 ModelType.MMPROJ,
+                ModelType.LLAMA_TTS,
+                ModelType.LLAMA_TTS_COMPANION,
+                ModelType.LITERT_AUDIO_DIT,
+                ModelType.LITERT_AUDIO_COMPONENT,
                 ModelType.WHISPER,
                 ModelType.SD_CHECKPOINT,
                 ModelType.SD_UPSCALER,
@@ -1214,7 +1787,8 @@ class ModelRepository(
                 ModelType.SD_ADETAILER,
                 ModelType.SD_AUDIO_VAE,
                 ModelType.SD_EMBEDDINGS_CONNECTORS,
-                ModelType.SD_MOTION_MODULE
+                ModelType.SD_MOTION_MODULE,
+                ModelType.SD_LLM
             )
             modelDao.getModelsByTypesSync(relevantTypes).forEach { model ->
                 runCatching {
@@ -1233,6 +1807,9 @@ class ModelRepository(
             prefs.edit().putBoolean(MANAGED_MODEL_STORAGE_RECONCILED_KEY, true).apply()
         }
     }
+
+    private suspend fun recoverUnindexedLlmFiles() =
+        recoverManagedGgufModels(context, modelDao, getModelDir(ModelType.LLM))
 
     private suspend fun reconcileModelCopy(model: ModelEntity) {
         if (!ModelLibraryManager.usesManagedExternalCanonicalStorage(model.type)) return
@@ -1456,38 +2033,45 @@ object DownloadProgressHolder {
     val status = _status.asStateFlow()
     
     // Track filename for each exact download task for cancellation and display.
-    private val filenameMap = mutableMapOf<String, String>()
+    private val filenameMap = java.util.concurrent.ConcurrentHashMap<String, String>()
     
     fun updateProgress(repoId: String, filename: String, value: Float) {
         filenameMap[repoId] = filename
-        _progress.value = _progress.value.toMutableMap().apply { put(repoId, value) }
+        _progress.update { current -> current + (repoId to value) }
     }
     
     /** Update by repoId only (when filename already tracked) */
     fun updateProgress(repoId: String, value: Float) {
-        _progress.value = _progress.value.toMutableMap().apply { put(repoId, value) }
+        _progress.update { current -> current + (repoId to value) }
     }
 
     fun updateStatus(repoId: String, value: String) {
-        _status.value = _status.value.toMutableMap().apply { put(repoId, value) }
+        _status.update { current -> current + (repoId to value) }
     }
 
     fun getStatus(repoId: String): String? = _status.value[repoId]
     
-    /** Find repoId by filename (for service callback) */
+    /** Resolve the task key from a filename only when the legacy alias is unambiguous. */
     fun findRepoIdByFilename(filename: String): String? {
-        return filenameMap.entries.find { it.value == filename }?.key
+        return filenameMap.entries
+            .filter { it.value == filename }
+            .singleOrNull()
+            ?.key
     }
     
     fun removeProgress(repoId: String) {
         filenameMap.remove(repoId)
-        _progress.value = _progress.value.toMutableMap().apply { remove(repoId) }
-        _status.value = _status.value.toMutableMap().apply { remove(repoId) }
+        _progress.update { current -> current - repoId }
+        _status.update { current -> current - repoId }
     }
     
     fun getFilename(repoId: String): String? = filenameMap[repoId]
 
     fun isFilenameTracked(filename: String): Boolean = filenameMap.values.contains(filename)
+
+    fun trackedFilenames(): Set<String> = filenameMap.values.toSet()
+
+    fun getTrackedFilenames(): Set<String> = trackedFilenames()
 }
 
 /**
@@ -1565,11 +2149,33 @@ data class PendingDownload(
     val artifactRole: String? = null,
     /** Pending staged-artifact row used when a custom file needs inspection. */
     val pendingArtifactId: String? = null,
-    val stageOnly: Boolean = false
+    /** AUTO/CATALOG/USER_OVERRIDE/LEGACY for the effective task selection. */
+    val classificationSource: String = "LEGACY",
+    /** Immutable bounded inspector evidence, if already available. */
+    val detectedClassificationJson: String? = null,
+    val stageOnly: Boolean = false,
+    /** Immutable Room/service identity; nullable only for legacy in-memory callers. */
+    val downloadId: String? = null
 )
 
 object PendingDownloadHolder {
-    private val pendingDownloads = mutableMapOf<String, PendingDownload>()
+    private val pendingDownloads = java.util.concurrent.ConcurrentHashMap<String, PendingDownload>()
+    private val pendingIdsByFilename = mutableMapOf<String, MutableMap<String, PendingDownload>>()
+    private val pendingLock = Any()
+
+    /** Registers a task by its immutable ID while retaining an unambiguous legacy filename lookup. */
+    internal fun putPending(downloadId: String, pending: PendingDownload) {
+        require(pending.downloadId == null || pending.downloadId == downloadId) {
+            "Pending download identity does not match its registration key"
+        }
+        val exact = pending.copy(downloadId = downloadId)
+        synchronized(pendingLock) {
+            pendingDownloads.put(downloadId, exact)?.let { previous ->
+                removeFilenameAliasLocked(downloadId, previous.filename)
+            }
+            pendingIdsByFilename.getOrPut(exact.filename) { linkedMapOf() }[downloadId] = exact
+        }
+    }
     
     fun addPending(
         downloadId: String? = null,
@@ -1604,10 +2210,13 @@ object PendingDownloadHolder {
         artifactFamily: String? = null,
         artifactRole: String? = null,
         pendingArtifactId: String? = null,
+        classificationSource: String = "LEGACY",
+        detectedClassificationJson: String? = null,
         stageOnly: Boolean = false
     ) {
         val taskId = downloadId ?: progressKey
         val pending = PendingDownload(
+            downloadId = taskId,
             filename = filename,
             repoId = repoId,
             progressKey = progressKey,
@@ -1639,30 +2248,48 @@ object PendingDownloadHolder {
             artifactFamily = artifactFamily,
             artifactRole = artifactRole,
             pendingArtifactId = pendingArtifactId,
+            classificationSource = classificationSource,
+            detectedClassificationJson = detectedClassificationJson,
             stageOnly = stageOnly
         )
-        pendingDownloads[taskId] = pending
-        if (taskId != filename) {
-            pendingDownloads[filename] = pending
-        }
+        putPending(taskId, pending)
     }
     
-    fun getPending(downloadId: String): PendingDownload? = pendingDownloads[downloadId]
+    fun getPending(downloadId: String): PendingDownload? {
+        pendingDownloads[downloadId]?.let { return it }
+        return synchronized(pendingLock) {
+            pendingIdsByFilename[downloadId]?.values?.distinctBy { it.downloadId }?.singleOrNull()
+        }
+    }
+
+    /** Snapshot process-local registrations before their Room task is visible. */
+    fun allPending(): List<PendingDownload> = pendingDownloads.values.toList()
+
+    fun getAllPending(): List<PendingDownload> = allPending()
 
     fun addPendingFrom(task: com.example.llamadroid.data.db.DownloadTaskEntity) {
-        val pending = task.toPendingDownload()
-        pendingDownloads[task.id] = pending
-        if (task.id != task.filename) {
-            pendingDownloads[task.filename] = pending
-        }
+        putPending(task.id, task.toPendingDownload())
     }
     
     fun removePending(downloadId: String) {
-        val removed = pendingDownloads.remove(downloadId)
-        if (removed != null) {
-            pendingDownloads.entries.removeAll { (_, value) ->
-                value.progressKey == removed.progressKey && value.filename == removed.filename
+        synchronized(pendingLock) {
+            val exact = pendingDownloads.remove(downloadId)
+            if (exact != null) {
+                removeFilenameAliasLocked(downloadId, exact.filename)
+            } else {
+                val candidates = pendingIdsByFilename[downloadId]
+                val unambiguous = candidates?.entries?.singleOrNull()
+                if (unambiguous != null) {
+                    pendingDownloads.remove(unambiguous.key)
+                    removeFilenameAliasLocked(unambiguous.key, downloadId)
+                }
             }
         }
+    }
+
+    private fun removeFilenameAliasLocked(downloadId: String, filename: String) {
+        val ids = pendingIdsByFilename[filename] ?: return
+        ids.remove(downloadId)
+        if (ids.isEmpty()) pendingIdsByFilename.remove(filename)
     }
 }

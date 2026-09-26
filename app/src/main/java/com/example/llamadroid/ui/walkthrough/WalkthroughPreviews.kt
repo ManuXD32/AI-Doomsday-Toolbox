@@ -16,6 +16,7 @@ internal fun lessonPreviewResource(id: String): Int? = when (id) {
     "video_interpolation" -> R.drawable.tour_lesson_video_interpolation
     "subtitle_burn" -> R.drawable.tour_lesson_subtitle_burn
     "onnx_tts" -> R.drawable.tour_lesson_onnx_tts
+    "audio_workspace" -> R.drawable.tour_lesson_onnx_tts
     "live_translator" -> R.drawable.tour_lesson_live_translator
     "transcription" -> R.drawable.tour_lesson_transcription
     "video_summary" -> R.drawable.tour_lesson_video_summary

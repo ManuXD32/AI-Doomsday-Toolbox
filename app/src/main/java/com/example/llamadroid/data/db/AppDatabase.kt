@@ -94,6 +94,11 @@ class Converters {
         AgentProjectFolderEntity::class,
         AgentMessageEntity::class,
         AgentProjectRunEntity::class,
+        AgentProotEnvironmentEntity::class,
+        AgentProotRunEntity::class,
+        HarnessRuntimeEntity::class,
+        HarnessWorkspaceEntity::class,
+        HarnessSessionEntity::class,
         AgentProjectEventEntity::class,
         AgentMessagePartEntity::class,
         AgentTurnContextEntity::class,
@@ -108,6 +113,10 @@ class Converters {
         AgentWorkReportEntity::class,
         AgentInvocationEntity::class,
         AgentPendingInputEntity::class,
+        AgentProjectContractEntity::class,
+        AgentDecisionEntity::class,
+        AgentContinuationOutboxEntity::class,
+        AgentSleepWakeEntity::class,
         // Custom tools/agents
         CustomToolEntity::class,
         CustomAgentEntity::class,
@@ -161,9 +170,18 @@ class Converters {
         ModelBundleItemEntity::class,
         PendingModelArtifactEntity::class,
         SystemStatsSampleEntity::class,
-        SystemStatsEventEntity::class
+        SystemStatsEventEntity::class,
+        com.example.llamadroid.audio.AudioVoiceProfileEntity::class,
+        com.example.llamadroid.audio.AudioGenerationJobEntity::class,
+        com.example.llamadroid.audio.library.AudioLibraryFolderEntity::class,
+        com.example.llamadroid.audio.library.AudioLibraryItemEntity::class,
+        com.example.llamadroid.audio.library.AudioLibraryPreferencesEntity::class,
+        com.example.llamadroid.data.model.library.ModelDeletionJournalOperationEntity::class,
+        com.example.llamadroid.data.model.library.ModelDeletionJournalPathEntity::class,
+        GenerationQueueItemEntity::class,
+        GenerationQueueControlEntity::class
     ], 
-    version = 113,
+    version = 125,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -181,6 +199,9 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun benchmarkDao(): BenchmarkDao
     abstract fun datasetDao(): DatasetDao
     abstract fun agentChatDao(): AgentChatDao
+    abstract fun agentProotEnvironmentDao(): AgentProotEnvironmentDao
+    abstract fun agentProotRunDao(): AgentProotRunDao
+    abstract fun harnessDao(): HarnessDao
     abstract fun agentWorkflowDao(): AgentWorkflowDao
     abstract fun customToolDao(): CustomToolDao
     abstract fun customAgentDao(): CustomAgentDao
@@ -210,37 +231,46 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun sdDistributedDao(): SdDistributedDao
     abstract fun downloadTaskDao(): DownloadTaskDao
     abstract fun systemStatsDao(): SystemStatsDao
+    abstract fun audioDao(): com.example.llamadroid.audio.AudioDao
+    abstract fun audioLibraryDao(): com.example.llamadroid.audio.library.AudioLibraryDao
+    abstract fun modelDeletionJournalDao(): com.example.llamadroid.data.model.library.ModelDeletionJournalDao
+    abstract fun generationQueueDao(): GenerationQueueDao
 
     companion object {
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
         fun getDatabase(context: Context): AppDatabase {
+            RestoreCoordinator.requireNormalAccess(context)
             return INSTANCE ?: synchronized(this) {
-                val instance = Room.databaseBuilder(
-                    context.applicationContext,
-                    AppDatabase::class.java,
-                    "llama_droid_db"
-                )
-                    // Apply any defined migrations
-                    .addMigrations(*Migrations.ALL_MIGRATIONS)
-                    // Only allow destructive migration from pre-release versions (1-26)
-                    // From v27 onwards, proper migrations are required
-                    .fallbackToDestructiveMigrationFrom(*Migrations.DESTRUCTIVE_FALLBACK_VERSIONS)
-                    .addCallback(object : RoomDatabase.Callback() {
-                        override fun onOpen(db: SupportSQLiteDatabase) {
-                            super.onOpen(db)
-                            DebugLog.log("[DB] AppDatabase opened, version: ${db.version}")
-                        }
-                    })
-                    .build()
-                INSTANCE = instance
-                instance
+                RestoreCoordinator.requireNormalAccess(context)
+                INSTANCE ?: run {
+                    val instance = Room.databaseBuilder(
+                        context.applicationContext,
+                        AppDatabase::class.java,
+                        "llama_droid_db"
+                    )
+                        // Apply any defined migrations
+                        .addMigrations(*Migrations.ALL_MIGRATIONS)
+                        // Only allow destructive migration from pre-release versions (1-26)
+                        // From v27 onwards, proper migrations are required
+                        .fallbackToDestructiveMigrationFrom(*Migrations.DESTRUCTIVE_FALLBACK_VERSIONS)
+                        .addCallback(object : RoomDatabase.Callback() {
+                            override fun onOpen(db: SupportSQLiteDatabase) {
+                                super.onOpen(db)
+                                DebugLog.log("[DB] AppDatabase opened, version: ${db.version}")
+                            }
+                        })
+                        .build()
+                    INSTANCE = instance
+                    instance
+                }
             }
         }
         
         /**
-         * Close the database instance. Used before restore to release file locks.
+         * Close under the factory monitor after process quiescence. Callers must not retain a
+         * database reference across restore or use this method as an ordinary cache reset.
          */
         fun closeInstance() {
             synchronized(this) {

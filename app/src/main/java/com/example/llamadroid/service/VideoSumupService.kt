@@ -530,7 +530,11 @@ object VideoSumupService {
             }
             if (exitCode != 0) {
                 throw IllegalStateException(
-                    context.getString(R.string.whisper_error_failed_with_exit_code, exitCode)
+                    if (whisperExitCodeIndicatesMissingModel(exitCode)) {
+                        context.getString(R.string.whisper_error_no_model)
+                    } else {
+                        context.getString(R.string.whisper_error_failed_with_exit_code, exitCode)
+                    }
                 )
             }
             if (!transcriptFile.isFile) {

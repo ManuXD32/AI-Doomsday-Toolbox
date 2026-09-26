@@ -7,8 +7,10 @@ import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.media.MediaPlayer
 import android.media.MediaRecorder
+import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.provider.OpenableColumns
 import android.provider.MediaStore
@@ -40,6 +42,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Pause
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -55,16 +58,19 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Square
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
@@ -80,6 +86,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
@@ -137,6 +144,7 @@ import com.example.llamadroid.service.NativeChatImageToolParams
 import com.example.llamadroid.service.NativeChatSdImageToolParams
 import com.example.llamadroid.service.NativeChatBackgroundRemovalToolParams
 import com.example.llamadroid.service.NativeChatToolConfig
+import com.example.llamadroid.ui.agent.CustomToolsScreen
 import com.example.llamadroid.service.SamplingMethod
 import com.example.llamadroid.service.supportsSdTxt2Img
 import com.example.llamadroid.ui.components.DraftFloatTextField
@@ -168,6 +176,7 @@ private data class LlamaChatLocalizedStrings(
     val noteTranscriptSystem: String,
     val noteTranscriptImage: String,
     val noteTranscriptAudio: String,
+    val noteTranscriptVideo: String,
     val notesImportSourceNativeChat: String,
     val saveChatAsNoteSuccess: String,
     val saveChatAsNoteFailedFormat: String,
@@ -197,6 +206,7 @@ private fun llamaChatLocalizedStrings() = LlamaChatLocalizedStrings(
     noteTranscriptSystem = stringResource(R.string.llama_note_transcript_system),
     noteTranscriptImage = stringResource(R.string.llama_note_transcript_image),
     noteTranscriptAudio = stringResource(R.string.llama_note_transcript_audio),
+    noteTranscriptVideo = stringResource(R.string.llama_video_note_label),
     notesImportSourceNativeChat = stringResource(R.string.notes_import_source_native_chat),
     saveChatAsNoteSuccess = stringResource(R.string.llama_save_chat_as_note_success),
     saveChatAsNoteFailedFormat = stringResource(R.string.llama_save_chat_as_note_failed),
@@ -380,7 +390,8 @@ fun LlamaChatScreen(
                                 role = it.role,
                                 content = it.content,
                                 imagePath = it.imagePath,
-                                audioPath = it.audioPath
+                                audioPath = it.audioPath,
+                                videoPath = it.videoPath
                             )
                         }
                     )
@@ -413,7 +424,8 @@ fun LlamaChatScreen(
                         messages = msgs,
                         systemLabel = localizedStrings.noteTranscriptSystem,
                         imageLabel = localizedStrings.noteTranscriptImage,
-                        audioLabel = localizedStrings.noteTranscriptAudio
+                        audioLabel = localizedStrings.noteTranscriptAudio,
+                        videoLabel = localizedStrings.noteTranscriptVideo
                     ),
                     type = NoteType.MANUAL,
                     sourceFile = localizedStrings.notesImportSourceNativeChat,
@@ -437,6 +449,7 @@ fun LlamaChatScreen(
     var showParams by remember { mutableStateOf(false) }
     var attachedImagePath by remember { mutableStateOf<String?>(null) }
     var attachedAudioPath by remember { mutableStateOf<String?>(null) }
+    var attachedVideoPath by remember { mutableStateOf<String?>(null) }
     var isExtractingDocument by remember { mutableStateOf(false) }
     var showAttachmentMenu by remember { mutableStateOf(false) }
     var isRecording by remember { mutableStateOf(false) }
@@ -446,6 +459,7 @@ fun LlamaChatScreen(
     var pendingMicStart by remember { mutableStateOf(false) }
     var pendingCallStart by remember { mutableStateOf(false) }
     var imagePreviewPath by remember { mutableStateOf<String?>(null) }
+    var videoPreviewPath by remember { mutableStateOf<String?>(null) }
 
     val activeLiteRtModel = remember(activeServer?.liteRtModelId, liteRtModels) {
         liteRtModels.firstOrNull { model -> model.id == activeServer?.liteRtModelId }
@@ -456,6 +470,9 @@ fun LlamaChatScreen(
         } else {
             server.supportsVision
         }
+    } == true
+    val supportsVideo = activeServer?.let { server ->
+        server.supportsVideo && (server.isLlamaServerEngine() || server.isLlamaSwapEngine())
     } == true
     val whisperFallbackAvailable = activeServer?.whisperModelPath?.isNotBlank() == true || whisperModels.isNotEmpty()
     val supportsDirectAudioInput = activeServer?.let { server ->
@@ -495,7 +512,8 @@ fun LlamaChatScreen(
             lastPersistedMessage.content.isNotBlank() ||
                 !lastPersistedMessage.thinking.isNullOrBlank() ||
                 !lastPersistedMessage.imagePath.isNullOrBlank() ||
-                !lastPersistedMessage.audioPath.isNullOrBlank()
+                !lastPersistedMessage.audioPath.isNullOrBlank() ||
+                !lastPersistedMessage.videoPath.isNullOrBlank()
         )
     val activeServerSubtitle = remember(
         activeServer,
@@ -659,6 +677,14 @@ fun LlamaChatScreen(
     var alarmToolsEnabled by remember(currentChat?.apiParams) {
         mutableStateOf(parseParam(currentChat?.apiParams, NativeChatToolConfig.KEY_ALARM_TOOLS_ENABLED, false))
     }
+    var fileToolsEnabled by remember(currentChat?.apiParams) {
+        mutableStateOf(parseParam(currentChat?.apiParams, NativeChatToolConfig.KEY_FILE_TOOLS_ENABLED, false))
+    }
+    var customToolsEnabled by remember(currentChat?.apiParams) {
+        mutableStateOf(parseParam(currentChat?.apiParams, NativeChatToolConfig.KEY_CUSTOM_TOOLS_ENABLED, false))
+    }
+    var showWorkspaceDialog by rememberSaveable { mutableStateOf(false) }
+    var showCustomToolsManager by rememberSaveable { mutableStateOf(false) }
     var knowledgeBaseEnabled by remember(currentChat?.apiParams) {
         mutableStateOf(parseParam(currentChat?.apiParams, NativeChatToolConfig.KEY_KNOWLEDGE_BASE_ENABLED, false))
     }
@@ -1047,6 +1073,8 @@ fun LlamaChatScreen(
                     todoToolsEnabled = todoToolsEnabled,
                     calendarToolsEnabled = calendarToolsEnabled,
                     alarmToolsEnabled = alarmToolsEnabled,
+                    fileToolsEnabled = fileToolsEnabled,
+                    customToolsEnabled = customToolsEnabled,
                     knowledgeBaseEnabled = nextKnowledgeBaseEnabled,
                     knowledgeBaseAutoContextEnabled = nextKnowledgeBaseAutoContextEnabled,
                     selectedKnowledgeBaseIds = selectedKnowledgeBaseIds,
@@ -1151,6 +1179,8 @@ fun LlamaChatScreen(
                     todoToolsEnabled = todoToolsEnabled,
                     calendarToolsEnabled = calendarToolsEnabled,
                     alarmToolsEnabled = alarmToolsEnabled,
+                    fileToolsEnabled = fileToolsEnabled,
+                    customToolsEnabled = customToolsEnabled,
                     knowledgeBaseEnabled = nextKnowledgeBaseEnabled,
                     knowledgeBaseAutoContextEnabled = nextKnowledgeBaseAutoContextEnabled,
                     selectedKnowledgeBaseIds = selectedKnowledgeBaseIds,
@@ -1289,6 +1319,8 @@ fun LlamaChatScreen(
         todoToolsEnabled = parseParam(params, NativeChatToolConfig.KEY_TODO_TOOLS_ENABLED, false)
         calendarToolsEnabled = parseParam(params, NativeChatToolConfig.KEY_CALENDAR_TOOLS_ENABLED, false)
         alarmToolsEnabled = parseParam(params, NativeChatToolConfig.KEY_ALARM_TOOLS_ENABLED, false)
+        fileToolsEnabled = parseParam(params, NativeChatToolConfig.KEY_FILE_TOOLS_ENABLED, false)
+        customToolsEnabled = parseParam(params, NativeChatToolConfig.KEY_CUSTOM_TOOLS_ENABLED, false)
         knowledgeBaseEnabled = parseParam(params, NativeChatToolConfig.KEY_KNOWLEDGE_BASE_ENABLED, false)
         knowledgeBaseAutoContextEnabled = parseParam(params, NativeChatToolConfig.KEY_KNOWLEDGE_AUTO_CONTEXT_ENABLED, false)
         selectedKnowledgeBaseIds = NativeChatToolConfig.fromApiParams(params).selectedKnowledgeBaseIds
@@ -1378,6 +1410,14 @@ fun LlamaChatScreen(
         attachedAudioPath = null
     }
 
+    fun clearVideoAttachment() {
+        attachedVideoPath?.let { File(it).delete() }
+        if (videoPreviewPath == attachedVideoPath) {
+            videoPreviewPath = null
+        }
+        attachedVideoPath = null
+    }
+
     fun retryUserMessage(message: LlamaMessageEntity) {
         val serverId = activeServer?.id
         if (serverId == null) {
@@ -1428,6 +1468,9 @@ fun LlamaChatScreen(
                 message.audioPath?.takeIf { it.isNotBlank() }?.let {
                     putExtra(LlamaClientService.EXTRA_AUDIO_PATH, it)
                 }
+                message.videoPath?.takeIf { it.isNotBlank() }?.let {
+                    putExtra(LlamaClientService.EXTRA_VIDEO_PATH, it)
+                }
             }
             context.startForegroundService(intent)
         }
@@ -1448,6 +1491,42 @@ fun LlamaChatScreen(
                             )
                         }
                         attachedImagePath = path
+                    } catch (e: Exception) {
+                        Toast.makeText(
+                            context,
+                            localizedStrings.attachMediaFailed,
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            }
+        }
+    )
+    val videoPickerLauncher = rememberLauncherForActivityResult(
+        // Keep video selection on the same persistable document contract as Video Summary. The
+        // staged private copy survives picker process recreation and is cleaned with the pending
+        // attachment lifecycle below.
+        contract = ActivityResultContracts.OpenDocument(),
+        onResult = { uri ->
+            if (uri != null) {
+                scope.launch {
+                    try {
+                        runCatching {
+                            context.contentResolver.takePersistableUriPermission(
+                                uri,
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            )
+                        }
+                        val path = withContext(Dispatchers.IO) {
+                            persistContentUriToAppPrivateFile(
+                                context = context,
+                                uri = uri,
+                                prefix = "llama_video_upload",
+                                defaultExtension = "mp4"
+                            )
+                        } ?: throw IllegalStateException(context.getString(R.string.llama_video_open_failed))
+                        clearVideoAttachment()
+                        attachedVideoPath = path
                     } catch (e: Exception) {
                         Toast.makeText(
                             context,
@@ -1839,6 +1918,11 @@ fun LlamaChatScreen(
                     }
                     IconButton(onClick = { showParams = !showParams }) {
                         Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.llama_parameters))
+                    }
+                    if (effectiveToolsEnabled && fileToolsEnabled && currentChat != null) {
+                        IconButton(onClick = { showWorkspaceDialog = true }) {
+                            Icon(Icons.Default.Folder, contentDescription = stringResource(R.string.native_chat_workspace_open))
+                        }
                     }
                     // Overflow menu
                     Box {
@@ -2544,6 +2628,26 @@ fun LlamaChatScreen(
                                 onCheckedChange = { alarmToolsEnabled = it }
                             )
                             LlamaToolToggleRow(
+                                label = stringResource(R.string.native_chat_file_tools),
+                                description = stringResource(R.string.native_chat_file_tools_desc),
+                                checked = fileToolsEnabled,
+                                enabled = true,
+                                onCheckedChange = { fileToolsEnabled = it }
+                            )
+                            LlamaToolToggleRow(
+                                label = stringResource(R.string.native_chat_custom_tools),
+                                description = stringResource(R.string.native_chat_custom_tools_desc),
+                                checked = customToolsEnabled,
+                                enabled = true,
+                                onCheckedChange = { customToolsEnabled = it }
+                            )
+                            OutlinedButton(
+                                onClick = { showCustomToolsManager = true },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(stringResource(R.string.native_chat_manage_custom_tools))
+                            }
+                            LlamaToolToggleRow(
                                 label = stringResource(R.string.llama_tool_image_generation),
                                 description = stringResource(R.string.llama_tool_image_generation_desc),
                                 checked = effectiveImageGenerationEnabled,
@@ -2944,6 +3048,46 @@ fun LlamaChatScreen(
                                     )
                                 }
 
+                                genState.videoProgress?.let { videoProgress ->
+                                    Column(
+                                        modifier = Modifier.padding(top = 6.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        LinearProgressIndicator(
+                                            progress = { videoProgress.coerceIn(0f, 1f) },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        genState.videoVisualPhase
+                                            ?.takeIf { it.isNotBlank() }
+                                            ?.let { phase ->
+                                                Text(
+                                                    stringResource(
+                                                        R.string.video_recognition_visual_phase,
+                                                        phase
+                                                    ),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        genState.videoAudioPhase
+                                            ?.takeIf { it.isNotBlank() }
+                                            ?.let { phase ->
+                                                Text(
+                                                    stringResource(
+                                                        R.string.video_recognition_audio_phase,
+                                                        phase
+                                                    ),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                    }
+                                }
+
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -3131,6 +3275,14 @@ fun LlamaChatScreen(
                         )
                     }
 
+                    if (attachedVideoPath != null) {
+                        PendingVideoAttachment(
+                            videoPath = attachedVideoPath!!,
+                            onPreview = { videoPreviewPath = attachedVideoPath },
+                            onRemove = { clearVideoAttachment() }
+                        )
+                    }
+
                     val approxTokens = estimateNativeChatTextTokens(inputMessage)
                     if (approxTokens > 0) {
                         Text(
@@ -3176,6 +3328,21 @@ fun LlamaChatScreen(
                                                     ActivityResultContracts.PickVisualMedia.ImageOnly
                                                 )
                                             )
+                                        }
+                                    )
+                                }
+                                if (supportsVideo) {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.llama_attach_video)) },
+                                        leadingIcon = {
+                                            Icon(
+                                                Icons.Default.Movie,
+                                                contentDescription = null
+                                            )
+                                        },
+                                        onClick = {
+                                            showAttachmentMenu = false
+                                            videoPickerLauncher.launch(arrayOf("video/*"))
                                         }
                                     )
                                 }
@@ -3244,7 +3411,8 @@ fun LlamaChatScreen(
                         } else {
                             val canSend = inputMessage.isNotBlank() ||
                                 attachedImagePath != null ||
-                                attachedAudioPath != null
+                                attachedAudioPath != null ||
+                                attachedVideoPath != null
                             IconButton(
                                 onClick = {
                                     if (!canSend) return@IconButton
@@ -3253,9 +3421,11 @@ fun LlamaChatScreen(
                                         val text = inputMessage
                                         val intentImagePath = attachedImagePath
                                         val intentAudioPath = attachedAudioPath
+                                        val intentVideoPath = attachedVideoPath
                                         inputMessage = ""
                                         attachedImagePath = null
                                         attachedAudioPath = null
+                                        attachedVideoPath = null
 
                                         val intent = Intent(context, LlamaClientService::class.java).apply {
                                             action = LlamaClientService.ACTION_GENERATE
@@ -3267,6 +3437,9 @@ fun LlamaChatScreen(
                                             }
                                             if (!intentAudioPath.isNullOrBlank()) {
                                                 putExtra(LlamaClientService.EXTRA_AUDIO_PATH, intentAudioPath)
+                                            }
+                                            if (!intentVideoPath.isNullOrBlank()) {
+                                                putExtra(LlamaClientService.EXTRA_VIDEO_PATH, intentVideoPath)
                                             }
                                         }
                                         context.startForegroundService(intent)
@@ -3301,11 +3474,34 @@ fun LlamaChatScreen(
                     onDismiss = { imagePreviewPath = null }
                 )
             }
+            if (videoPreviewPath != null) {
+                LlamaVideoPreviewDialog(
+                    videoFile = File(videoPreviewPath!!),
+                    onDismiss = { videoPreviewPath = null }
+                )
+            }
             if (showToolActivity) {
                 LlamaToolActivityDialog(
                     events = activeToolEvents,
                     onDismiss = { showToolActivity = false }
                 )
+            }
+            if (showWorkspaceDialog && currentChat != null) {
+                NativeChatWorkspaceDialog(
+                    context = context,
+                    chatId = currentChat!!.id,
+                    onDismiss = { showWorkspaceDialog = false }
+                )
+            }
+            if (showCustomToolsManager) {
+                androidx.compose.ui.window.Dialog(
+                    onDismissRequest = { showCustomToolsManager = false },
+                    properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+                ) {
+                    androidx.compose.material3.Surface(modifier = Modifier.fillMaxSize()) {
+                        CustomToolsScreen(onBack = { showCustomToolsManager = false })
+                    }
+                }
             }
         }
         messagePendingDelete?.let { messageToDelete ->
@@ -3345,6 +3541,8 @@ fun LlamaChatScreen(
                             todoToolsEnabled ||
                             calendarToolsEnabled ||
                             alarmToolsEnabled ||
+                            fileToolsEnabled ||
+                            customToolsEnabled ||
                             imageGenerationEnabled
                         saveParams(chatDocumentKnowledgeBaseIdOverride = null)
                         chatDocumentBaseToDelete?.let { baseId ->
@@ -3524,6 +3722,239 @@ private fun PendingAudioAttachment(
         audioFile = File(audioPath),
         onRemove = onRemove
     )
+}
+
+@Composable
+private fun PendingVideoAttachment(
+    videoPath: String,
+    onPreview: () -> Unit,
+    onRemove: () -> Unit
+) {
+    VideoAttachmentRow(
+        videoFile = File(videoPath),
+        onPreview = onPreview,
+        onRemove = onRemove
+    )
+}
+
+@Composable
+private fun VideoAttachmentRow(
+    videoFile: File,
+    onPreview: () -> Unit,
+    onRemove: (() -> Unit)? = null
+) {
+    val thumbnail by produceState<Bitmap?>(initialValue = null, videoFile.absolutePath) {
+        value = withContext(Dispatchers.IO) { extractVideoThumbnail(videoFile) }
+    }
+    val durationMs by produceState<Long?>(initialValue = null, videoFile.absolutePath) {
+        value = withContext(Dispatchers.IO) { extractVideoDurationMs(videoFile) }
+    }
+
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onPreview)
+                .padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(width = 88.dp, height = 60.dp)
+                    .clip(RoundedCornerShape(10.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (thumbnail != null) {
+                    Image(
+                        bitmap = thumbnail!!.asImageBitmap(),
+                        contentDescription = stringResource(R.string.llama_video_attached),
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Default.Movie,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                    }
+                }
+                Surface(
+                    color = Color.Black.copy(alpha = 0.62f),
+                    shape = CircleShape,
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Default.PlayArrow,
+                            contentDescription = stringResource(R.string.llama_video_play),
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.llama_video_attached),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = videoFile.name,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                formatVideoDuration(durationMs)?.let { duration ->
+                    Text(
+                        text = stringResource(R.string.llama_video_duration, duration),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            onRemove?.let { remove ->
+                IconButton(onClick = remove) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = stringResource(R.string.llama_remove_attachment)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VideoAttachmentMissingContent() {
+    Surface(
+        color = MaterialTheme.colorScheme.errorContainer,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(
+                Icons.Default.Movie,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onErrorContainer
+            )
+            Text(
+                text = stringResource(R.string.llama_video_file_missing),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer
+            )
+        }
+    }
+}
+
+@Composable
+private fun LlamaVideoPreviewDialog(
+    videoFile: File,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                AndroidView(
+                    factory = { viewContext ->
+                        android.widget.VideoView(viewContext).apply {
+                            setVideoPath(videoFile.absolutePath)
+                            setMediaController(android.widget.MediaController(viewContext))
+                            setOnPreparedListener { player ->
+                                player.isLooping = false
+                                start()
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 200.dp, max = 480.dp),
+                    update = { view ->
+                        if (view.tag != videoFile.absolutePath) {
+                            view.tag = videoFile.absolutePath
+                            view.setVideoPath(videoFile.absolutePath)
+                        }
+                    }
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text(stringResource(R.string.action_close))
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun extractVideoThumbnail(file: File): Bitmap? {
+    if (!file.isFile) return null
+    val retriever = MediaMetadataRetriever()
+    return runCatching {
+        retriever.setDataSource(file.absolutePath)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            retriever.getScaledFrameAtTime(
+                0L,
+                MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                480,
+                270
+            )
+        } else {
+            retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        }
+    }.getOrNull().also {
+        runCatching { retriever.release() }
+    }
+}
+
+private fun extractVideoDurationMs(file: File): Long? {
+    if (!file.isFile) return null
+    val retriever = MediaMetadataRetriever()
+    return runCatching {
+        retriever.setDataSource(file.absolutePath)
+        retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            ?.toLongOrNull()
+            ?.takeIf { it > 0L }
+    }.getOrNull().also {
+        runCatching { retriever.release() }
+    }
+}
+
+private fun formatVideoDuration(durationMs: Long?): String? {
+    val totalSeconds = durationMs?.div(1000L)?.takeIf { it >= 0L } ?: return null
+    val hours = totalSeconds / 3600L
+    val minutes = (totalSeconds % 3600L) / 60L
+    val seconds = totalSeconds % 60L
+    return if (hours > 0L) {
+        "%d:%02d:%02d".format(Locale.US, hours, minutes, seconds)
+    } else {
+        "%d:%02d".format(Locale.US, minutes, seconds)
+    }
 }
 
 @Composable
@@ -4126,6 +4557,15 @@ private fun mimeTypeToExtension(mimeType: String?, defaultExtension: String): St
             "image/webp" -> "webp"
             "image/bmp" -> "bmp"
             "image/gif" -> "gif"
+            else -> defaultExtension
+        }
+        mimeType.startsWith("video/") -> when (mimeType) {
+            "video/webm" -> "webm"
+            "video/x-matroska" -> "mkv"
+            "video/quicktime" -> "mov"
+            "video/avi", "video/x-msvideo" -> "avi"
+            "video/3gpp" -> "3gp"
+            "video/3gpp2" -> "3gpp"
             else -> defaultExtension
         }
         else -> defaultExtension
@@ -5542,9 +5982,11 @@ fun LlamaMessageItem(
         context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     val imageFile = remember(message.imagePath) { message.imagePath?.let(::File)?.takeIf { it.exists() } }
     val audioFile = remember(message.audioPath) { message.audioPath?.let(::File)?.takeIf { it.exists() } }
+    val videoFile = remember(message.videoPath) { message.videoPath?.let(::File)?.takeIf { it.exists() } }
     var isEditing by remember(message.id) { mutableStateOf(false) }
     var editContent by remember(message.id) { mutableStateOf(message.content) }
     var showImagePreview by remember(message.imagePath) { mutableStateOf(false) }
+    var showVideoPreview by remember(message.videoPath) { mutableStateOf(false) }
     var audioPlayer by remember(message.audioPath) { mutableStateOf<MediaPlayer?>(null) }
     var isAudioPlaying by remember(message.audioPath) { mutableStateOf(false) }
     val embeddedTranscript = remember(message.content) { extractEmbeddedAudioTranscript(message.content) }
@@ -5553,6 +5995,7 @@ fun LlamaMessageItem(
         stripEmbeddedDocumentText(stripEmbeddedAudioTranscript(message.content)).trim()
     }
     val transcriptionFailed = isUser && audioFile != null && message.isError && embeddedTranscript.isNullOrBlank()
+    val videoAttachmentMissing = !message.videoPath.isNullOrBlank() && videoFile == null
 
     fun copyMessageToClipboard() {
         val clip = android.content.ClipData.newPlainText(clipboardLabelMessageText, message.content)
@@ -5641,6 +6084,15 @@ fun LlamaMessageItem(
                                     autoPlay = autoPlayAssistantAudio,
                                     onAutoPlayConsumed = { onAssistantAudioAutoPlayed(audioFile.absolutePath) }
                                 )
+                            }
+
+                            if (videoFile != null) {
+                                VideoAttachmentRow(
+                                    videoFile = videoFile,
+                                    onPreview = { showVideoPreview = true }
+                                )
+                            } else if (videoAttachmentMissing) {
+                                VideoAttachmentMissingContent()
                             }
 
                             if (isUser && embeddedDocument != null) {
@@ -5849,6 +6301,12 @@ fun LlamaMessageItem(
             onDismiss = { showImagePreview = false }
         )
     }
+    if (showVideoPreview && videoFile != null) {
+        LlamaVideoPreviewDialog(
+            videoFile = videoFile,
+            onDismiss = { showVideoPreview = false }
+        )
+    }
 }
 
 @Composable
@@ -5940,7 +6398,8 @@ private fun llamaMessagesToNoteMarkdown(
     messages: List<LlamaMessageEntity>,
     systemLabel: String,
     imageLabel: String,
-    audioLabel: String
+    audioLabel: String,
+    videoLabel: String
 ): String {
     return buildString {
         systemPrompt?.takeIf { it.isNotBlank() }?.let {
@@ -5957,6 +6416,7 @@ private fun llamaMessagesToNoteMarkdown(
             append(message.content.trim())
             message.imagePath?.takeIf { it.isNotBlank() }?.let { append("\n\n").append(imageLabel).append(": ").append(it) }
             message.audioPath?.takeIf { it.isNotBlank() }?.let { append("\n\n").append(audioLabel).append(": ").append(it) }
+            message.videoPath?.takeIf { it.isNotBlank() }?.let { append("\n\n").append(videoLabel).append(": ").append(it) }
             append("\n\n")
         }
     }.trim()

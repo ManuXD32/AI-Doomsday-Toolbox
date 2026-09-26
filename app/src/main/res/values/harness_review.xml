@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_review_title">Project review</string>
+    <string name="harness_review_refresh">Refresh</string>
+    <string name="harness_review_deliverables">Delivered files</string>
+    <string name="harness_review_changes">Workspace changes</string>
+    <string name="harness_review_no_changes">No changes available</string>
+    <string name="harness_review_no_deliverables">No delivered files</string>
+    <string name="harness_review_diff">Diff</string>
+    <string name="harness_review_read">Read</string>
+    <string name="harness_review_open">Open</string>
+    <string name="harness_review_reveal">Reveal</string>
+    <string name="harness_review_workflows">Workflow history</string>
+    <string name="harness_review_schedules">Schedules</string>
+    <string name="harness_review_todos">Tasks</string>
+    <string name="harness_review_no_items">No items</string>
+    <string name="harness_review_pending">Pending</string>
+    <string name="harness_review_in_progress">In progress</string>
+    <string name="harness_review_completed">Completed</string>
+    <string name="harness_review_running">Running</string>
+    <string name="harness_review_failed">Failed</string>
+    <string name="harness_review_cancelled">Cancelled</string>
+    <string name="harness_review_interrupted">Interrupted</string>
+    <string name="harness_review_scheduled">Scheduled</string>
+    <string name="harness_review_overdue">Overdue</string>
+    <string name="harness_review_frequency_once">Once</string>
+    <string name="harness_review_frequency_every">Every %1$d %2$s</string>
+    <string name="harness_review_unit_day_one">day</string>
+    <string name="harness_review_unit_day_other">days</string>
+    <string name="harness_review_unit_hour_one">hour</string>
+    <string name="harness_review_unit_hour_other">hours</string>
+    <string name="harness_review_unit_minute_one">minute</string>
+    <string name="harness_review_unit_minute_other">minutes</string>
+    <string name="harness_review_unit_second_one">second</string>
+    <string name="harness_review_unit_second_other">seconds</string>
+    <string name="harness_review_relative_now">Due now</string>
+    <string name="harness_review_relative_future">in %1$d %2$s</string>
+    <string name="harness_review_relative_overdue">%1$d %2$s overdue</string>
+    <string name="harness_review_binary_file">Binary file</string>
+    <string name="harness_review_oversized_file">File too large to compare</string>
+    <string name="harness_review_missing_phase">missing phase</string>
+</resources>

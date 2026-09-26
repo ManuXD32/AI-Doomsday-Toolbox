@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_remote_run_started">Remote %1$s project started in %2$s.</string>
+    <string name="harness_remote_run_recovered">The remote owner was not present after runtime recovery.</string>
+    <string name="harness_remote_run_stopped">Remote run stopped.</string>
+    <string name="harness_remote_run_force_stopped">Remote run force-stopped.</string>
+    <string name="harness_remote_run_cleanup_pending">Remote cleanup is pending. Reconnect SSH and retry cleanup.</string>
+</resources>

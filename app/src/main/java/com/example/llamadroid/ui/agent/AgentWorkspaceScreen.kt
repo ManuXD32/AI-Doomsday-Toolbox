@@ -115,12 +115,19 @@ private fun isAllowedAgentPreviewUrl(url: String, origin: AgentPreviewOrigin): B
     return scheme == origin.scheme && host == origin.host && port == origin.port
 }
 
+private data class PendingAgentPreviewBlobDownload(
+    val webView: WebView,
+    val bridge: AgentPreviewDownloadBridge,
+    val request: AgentPreviewDownloadRequest,
+    val configuredPreviewUrl: String
+)
+
 /**
  * AgentWorkspaceScreen - File manager for AI Agent workspace
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AgentWorkspaceScreen(navController: NavController) {
+fun AgentWorkspaceScreen(navController: NavController, filesOnly: Boolean = false) {
     val context = LocalContext.current
     val walkthroughTargets = LocalWalkthroughTargets.current
     val statusDownloadingText = stringResource(R.string.status_downloading)
@@ -128,6 +135,10 @@ fun AgentWorkspaceScreen(navController: NavController) {
     val agentErrorPrefixFormat = stringResource(R.string.agent_error_prefix)
     val agentUploadSuccessFormat = stringResource(R.string.agent_upload_success)
     val agentWorkspacePreviewTitleText = stringResource(R.string.agent_workspace_preview_title)
+    val previewDownloadUnsupportedText = stringResource(R.string.agent_preview_download_unsupported)
+    val previewDownloadInProgressText = stringResource(R.string.agent_preview_download_in_progress)
+    val previewDownloadTooLargeText = stringResource(R.string.agent_preview_download_too_large)
+    val previewDownloadFailedText = stringResource(R.string.agent_preview_download_failed)
     val actionCopyText = stringResource(R.string.action_copy)
     val actionMoveText = stringResource(R.string.action_move)
     val agentCompressSuccessFormat = stringResource(R.string.agent_compress_success)
@@ -142,6 +153,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
         stringResource(R.string.agent_workspace_stop_project_shells_success)
     val agentDeleteToastText = stringResource(R.string.agent_delete_toast)
     val agentCreateToastText = stringResource(R.string.agent_create_toast)
+    val harnessTerminalFailedText = stringResource(R.string.harness_terminal_failed)
     val scope = rememberCoroutineScope()
     
     val agentService = remember { AgentForegroundService.getAgentService(context) }
@@ -154,26 +166,76 @@ fun AgentWorkspaceScreen(navController: NavController) {
     val runtimeCapabilities by AgentService.currentRuntimeCapabilities.collectAsState()
     val localRunStates by agentService.localProjectRunStates.collectAsState()
     val workspaceTerminalStates by AgentService.workspaceTerminalStates.collectAsState()
+    val prootTerminalStates by agentService.prootTerminalStates.collectAsState()
     val workspaceConversationAnchor = remember(preferredConversationId, activeConversationId) {
         resolveWorkspaceConversationAnchor(preferredConversationId, activeConversationId)
     }
+    val workspaceConversationFlow = remember(workspaceConversationAnchor) {
+        workspaceConversationAnchor?.let(db.agentChatDao()::observeConversation)
+            ?: kotlinx.coroutines.flow.flowOf(null)
+    }
+    val workspaceConversation by workspaceConversationFlow.collectAsState(initial = null)
+    val prootEnvironmentFlow = remember(workspaceConversation?.prootEnvironmentId) {
+        workspaceConversation?.prootEnvironmentId?.let(db.agentProotEnvironmentDao()::observeById)
+            ?: kotlinx.coroutines.flow.flowOf(null)
+    }
+    val prootEnvironment by prootEnvironmentFlow.collectAsState(initial = null)
     val resolvedProjectRoot = remember(workspaceConversationAnchor, currentProjectFolder, workspaceBackend) {
         resolveWorkspaceProjectRoot(workspaceConversationAnchor, currentProjectFolder, workspaceBackend)
     }
-    val workspaceTerminalState = resolvedProjectRoot?.let { workspaceTerminalStates[it] }
+    val prootSessions = workspaceConversationAnchor?.let { prootTerminalStates[it] }.orEmpty()
+    var selectedProotTerminalId by rememberSaveable(workspaceConversationAnchor) { mutableStateOf<String?>(null) }
+    val selectedProotTerminalState = prootSessions.firstOrNull { it.sessionId == selectedProotTerminalId }
+        ?: prootSessions.lastOrNull()
+    val workspaceTerminalState = if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+        selectedProotTerminalState
+    } else {
+        resolvedProjectRoot?.let { workspaceTerminalStates[it] }
+    }
     var currentPath by remember { mutableStateOf("") }
     var files by remember { mutableStateOf<List<FileInfo>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var showTerminalDialog by remember { mutableStateOf(false) }
+    var showHarnessTerminal by remember { mutableStateOf(false) }
     var stopProjectShellSummary by remember { mutableStateOf<com.example.llamadroid.service.ProjectShellSessionSummary?>(null) }
+    var stopHarnessSession by remember { mutableStateOf<Pair<Long, String>?>(null) }
     val requestedInitialTab = remember {
         navController.previousBackStackEntry?.savedStateHandle
             ?.remove<String>("agent_workspace_initial_tab")
     }
-    var selectedWorkspaceTab by rememberSaveable { mutableStateOf(requestedInitialTab ?: "files") }
-    val localRunState = activeConversationId?.let { localRunStates[it] }
-    val localBackendActive = workspaceBackend == AgentWorkspaceBackendType.LOCAL_SANDBOX
+    val requestedInitialRelativePath = remember {
+        navController.previousBackStackEntry?.savedStateHandle?.remove<String>("agent_workspace_initial_relative_path")
+            ?.takeIf { !it.startsWith('/') && it.split('/').none { part -> part == ".." } && '\u0000' !in it }
+    }
+    val requestedFilesOnly = rememberSaveable {
+        navController.previousBackStackEntry?.savedStateHandle?.remove<Boolean>("harness_workspace_files") == true
+    }
+    val filesOnlyMode = filesOnly || requestedFilesOnly
+    var initialPathApplied by rememberSaveable { mutableStateOf(false) }
+    var selectedWorkspaceTab by rememberSaveable(filesOnlyMode) {
+        mutableStateOf(if (filesOnlyMode) "files" else requestedInitialTab ?: "files")
+    }
+    val visibleWorkspaceTab = if (filesOnlyMode) "files" else selectedWorkspaceTab
+    val localRunState = workspaceConversationAnchor?.let { localRunStates[it] }
+    val effectivePreviewUrl = remember(localRunState?.previewUrl, workspaceConversation?.previewUrlOverride) {
+        resolveAgentPreviewAddress(localRunState?.previewUrl, workspaceConversation?.previewUrlOverride)
+    }
+    val localBackendActive = workspaceBackend != AgentWorkspaceBackendType.REMOTE_SSH
+    val harnessSession = workspaceConversation?.runtimeSource == com.example.llamadroid.data.db.AgentRuntimeSource.DEEPSEEK
+    val harnessWorkspace = harnessSession || workspaceConversation?.runtimeSource == com.example.llamadroid.data.db.AgentRuntimeSource.WORKSPACE_ONLY
+    val terminalBackendActive = if (harnessWorkspace) harnessSession else workspaceBackend != AgentWorkspaceBackendType.LOCAL_SANDBOX
+    val workspaceFiles = remember(workspaceConversationAnchor, harnessWorkspace) {
+        com.example.llamadroid.harness.HarnessWorkspaceFiles(context, agentService, workspaceConversationAnchor.takeIf { harnessWorkspace })
+    }
+
+    LaunchedEffect(prootSessions.map { it.sessionId }, selectedProotTerminalId) {
+        if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT &&
+            prootSessions.none { it.sessionId == selectedProotTerminalId }
+        ) {
+            selectedProotTerminalId = prootSessions.lastOrNull()?.sessionId
+        }
+    }
     val invocationsFlow = remember(activeConversationId) {
         activeConversationId?.let { db.agentWorkflowDao().observeInvocations(it) }
             ?: kotlinx.coroutines.flow.flowOf(emptyList())
@@ -218,12 +280,14 @@ fun AgentWorkspaceScreen(navController: NavController) {
     
     // Download state
     var downloadTarget by remember { mutableStateOf<FileInfo?>(null) }
+    var downloadFiles by remember { mutableStateOf<com.example.llamadroid.harness.HarnessWorkspaceFiles?>(null) }
     val downloadLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
         uri?.let {
             val target = downloadTarget ?: return@let
+            val capturedFiles = downloadFiles ?: return@let
             scope.launch {
                 setIsLoading(true, statusDownloadingText)
-                agentService.downloadFile(target.path, it).onSuccess {
+                capturedFiles.downloadFile(target.path, it).onSuccess {
                     Toast.makeText(context, statusCompleteText, Toast.LENGTH_SHORT).show()
                 }.onFailure { e: Throwable ->
                     Toast.makeText(
@@ -236,6 +300,75 @@ fun AgentWorkspaceScreen(navController: NavController) {
             }
         }
         downloadTarget = null
+        downloadFiles = null
+    }
+
+    // Preview Blob downloads use the same user-selected SAF destination, but
+    // remain separate from workspace FileInfo downloads because a blob has no
+    // workspace path for AgentService.downloadFile to resolve.
+    var previewDownloadTarget by remember { mutableStateOf<PendingAgentPreviewBlobDownload?>(null) }
+    var previewDownloadSession by remember { mutableStateOf<AgentPreviewBlobExportSession?>(null) }
+    fun releasePreviewDownloadPin(webView: WebView, url: String) {
+        if (url.isBlank() || url.length > 2_048) return
+        runCatching { webView.evaluateJavascript(buildAgentPreviewDownloadReleaseScript(url), null) }
+    }
+    val previewDownloadLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
+        val target = previewDownloadTarget
+        previewDownloadTarget = null
+        if (target == null) return@rememberLauncherForActivityResult
+        if (uri == null) {
+            releasePreviewDownloadPin(target.webView, target.request.url)
+            return@rememberLauncherForActivityResult
+        }
+        val configuredUrl = effectivePreviewUrl
+        if (configuredUrl == null ||
+            classifyAgentPreviewDownload(target.request.url, target.configuredPreviewUrl) != AgentPreviewDownloadKind.BLOB ||
+            classifyAgentPreviewDownload(target.webView.url.orEmpty(), configuredUrl) == AgentPreviewDownloadKind.UNSUPPORTED ||
+            !AgentPreviewBridge.hasActivePreview(workspaceConversationAnchor)
+        ) {
+            releasePreviewDownloadPin(target.webView, target.request.url)
+            Toast.makeText(context, previewDownloadUnsupportedText, Toast.LENGTH_LONG).show()
+            return@rememberLauncherForActivityResult
+        }
+        if (!isAgentPreviewDownloadSizeAllowed(target.request.contentLength)) {
+            releasePreviewDownloadPin(target.webView, target.request.url)
+            Toast.makeText(context, previewDownloadTooLargeText, Toast.LENGTH_LONG).show()
+            return@rememberLauncherForActivityResult
+        }
+        if (previewDownloadSession != null) {
+            releasePreviewDownloadPin(target.webView, target.request.url)
+            Toast.makeText(context, previewDownloadInProgressText, Toast.LENGTH_SHORT).show()
+            return@rememberLauncherForActivityResult
+        }
+        setIsLoading(true, statusDownloadingText)
+        val session = AgentPreviewBlobExportSession(
+            webView = target.webView,
+            downloadBridge = target.bridge,
+            contentResolver = context.contentResolver,
+            destination = uri,
+            blobUrl = target.request.url,
+            scope = scope,
+            onResult = { result ->
+                previewDownloadSession = null
+                setIsLoading(false)
+                result.onSuccess {
+                    Toast.makeText(context, statusCompleteText, Toast.LENGTH_SHORT).show()
+                }.onFailure { _ ->
+                    Toast.makeText(
+                        context,
+                        previewDownloadFailedText,
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        )
+        previewDownloadSession = session
+        runCatching { session.start() }.onFailure {
+            session.cancel()
+            previewDownloadSession = null
+            setIsLoading(false)
+            Toast.makeText(context, previewDownloadFailedText, Toast.LENGTH_LONG).show()
+        }
     }
     
     // Load files
@@ -249,7 +382,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
         isLoading = true
         error = null
         scope.launch {
-            agentService.listDirectory(currentPath).onSuccess { fileList ->
+            workspaceFiles.listDirectory(currentPath).onSuccess { fileList ->
                 files = fileList.sortedWith(compareBy({ !it.isDirectory }, { it.name }))
             }.onFailure { e: Throwable ->
                 error = e.message
@@ -269,19 +402,23 @@ fun AgentWorkspaceScreen(navController: NavController) {
         previewFile.absolutePath
     }
 
-    // File Picker for Upload
+    // The destination and owner are captured before Android opens the picker.
+    var uploadDestination by remember { mutableStateOf<Pair<com.example.llamadroid.harness.HarnessWorkspaceFiles, String>?>(null) }
     val uploadLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        val destination = uploadDestination
+        uploadDestination = null
         uri?.let {
+            val captured = destination ?: return@let
             scope.launch {
-                if (currentPath.isBlank()) return@launch
+                if (captured.second.isBlank()) return@launch
                 setIsLoading(true, uploadingStatusText)
                 val fileName = context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
                     val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
                     cursor.moveToFirst()
                     cursor.getString(nameIndex)
-                } ?: "uploaded_file"
+                }?.substringAfterLast('/')?.substringAfterLast('\\')?.take(255)?.takeUnless { it.isBlank() || it in setOf(".", "..") } ?: "uploaded_file"
                 
-                agentService.uploadFile(uri, "$currentPath/$fileName").onSuccess {
+                captured.first.uploadFile(uri, "${captured.second}/$fileName").onSuccess {
                     Toast.makeText(
                         context,
                         formatAgentWorkspaceString(agentUploadSuccessFormat, fileName),
@@ -313,6 +450,10 @@ fun AgentWorkspaceScreen(navController: NavController) {
         if (resolvedProjectRoot.isNullOrBlank()) {
             currentPath = ""
             isLoading = false
+        } else if (!initialPathApplied && requestedInitialRelativePath != null) {
+            currentPath = resolvedProjectRoot + requestedInitialRelativePath.takeUnless { it == "." || it.isBlank() }?.let { "/$it" }.orEmpty()
+            initialPathApplied = true
+            isLoading = true
         } else if (currentPath != resolvedProjectRoot && !currentPath.startsWith("$resolvedProjectRoot/")) {
             currentPath = resolvedProjectRoot
             isLoading = true
@@ -320,9 +461,10 @@ fun AgentWorkspaceScreen(navController: NavController) {
     }
 
     // Connect and load using a single path to avoid double startup reloads
-    LaunchedEffect(isConnected, currentPath, resolvedProjectRoot, localBackendActive) {
+    LaunchedEffect(isConnected, currentPath, resolvedProjectRoot, localBackendActive, harnessWorkspace, workspaceConversation) {
+        if (workspaceConversationAnchor != null && workspaceConversation == null) return@LaunchedEffect
         if (resolvedProjectRoot.isNullOrBlank() || currentPath.isBlank()) return@LaunchedEffect
-        if (!localBackendActive && !isConnected) {
+        if (!harnessWorkspace && !localBackendActive && !isConnected) {
             val connectResult = agentService.connect()
             if (connectResult.isFailure) {
                 val connectError = connectResult.exceptionOrNull()
@@ -365,10 +507,18 @@ fun AgentWorkspaceScreen(navController: NavController) {
                 )
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
                     .padding(horizontal = 20.dp), horizontalArrangement = Arrangement.End) {
-                        if (!localBackendActive) {
+                        if (!filesOnlyMode && terminalBackendActive) {
                             IconButton(
                                 onClick = {
                                     val projectRoot = resolvedProjectRoot ?: return@IconButton
+                                    if (harnessWorkspace) {
+                                        showHarnessTerminal = true
+                                        return@IconButton
+                                    }
+                                    if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                                        navController.navigate(Screen.AgentProotTerminal.route)
+                                        return@IconButton
+                                    }
                                     showTerminalDialog = true
                                     scope.launch {
                                         agentService.openWorkspaceTerminal(projectRoot).onFailure { e: Throwable ->
@@ -402,7 +552,13 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                 ) {
                                     Icon(
                                         Icons.Default.Code,
-                                        stringResource(R.string.agent_workspace_terminal_title),
+                                        stringResource(
+                                            if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                                                R.string.agent_proot_terminal_title
+                                            } else {
+                                                R.string.agent_workspace_terminal_title
+                                            }
+                                        ),
                                         tint = tint
                                     )
                                 }
@@ -410,6 +566,25 @@ fun AgentWorkspaceScreen(navController: NavController) {
                             IconButton(
                                 onClick = {
                                     val projectRoot = resolvedProjectRoot ?: return@IconButton
+                                    if (harnessWorkspace) {
+                                        val conversationId = workspaceConversationAnchor ?: return@IconButton
+                                        scope.launch {
+                                            val runtime = com.example.llamadroid.harness.HarnessAppRuntime.get(context)
+                                            try {
+                                                val session = requireNotNull(db.harnessDao().sessionForConversation(conversationId)).harnessSessionId
+                                                runtime.terminals.refresh(session)
+                                                val count = runtime.terminals.states.value[session].orEmpty().size
+                                                if (count == 0) Toast.makeText(context, agentWorkspaceStopProjectShellsNoneText, Toast.LENGTH_SHORT).show()
+                                                else {
+                                                    stopHarnessSession = conversationId to session
+                                                    stopProjectShellSummary = com.example.llamadroid.service.ProjectShellSessionSummary(projectRoot, 0, count)
+                                                }
+                                            } catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+                                            catch (_: Exception) { Toast.makeText(context, harnessTerminalFailedText, Toast.LENGTH_LONG).show() }
+                                        }
+                                        return@IconButton
+                                    }
+                                    stopHarnessSession = null
                                     val summary = agentService.getProjectShellSessionSummary(projectRoot)
                                     if (summary.totalActiveSessions == 0) {
                                         Toast.makeText(
@@ -431,15 +606,15 @@ fun AgentWorkspaceScreen(navController: NavController) {
                             }
                         }
                         // Upload
-                        IconButton(onClick = { uploadLauncher.launch("*/*") }, enabled = selectedWorkspaceTab == "files" && currentPath.isNotBlank()) {
+                        IconButton(onClick = { uploadDestination = workspaceFiles to currentPath; uploadLauncher.launch("*/*") }, enabled = visibleWorkspaceTab == "files" && currentPath.isNotBlank()) {
                             Icon(Icons.Default.Upload, stringResource(R.string.action_upload))
                         }
                         // New file/folder
-                        IconButton(onClick = { showNewDialog = true }, enabled = selectedWorkspaceTab == "files" && currentPath.isNotBlank()) {
+                        IconButton(onClick = { showNewDialog = true }, enabled = visibleWorkspaceTab == "files" && currentPath.isNotBlank()) {
                             Icon(Icons.Default.Add, stringResource(R.string.agent_new))
                         }
                         // Refresh
-                        IconButton(onClick = { loadFiles() }, enabled = selectedWorkspaceTab == "files" && currentPath.isNotBlank()) {
+                        IconButton(onClick = { loadFiles() }, enabled = visibleWorkspaceTab == "files" && currentPath.isNotBlank()) {
                             Icon(Icons.Default.Refresh, stringResource(R.string.agent_refresh))
                         }
                 }
@@ -447,7 +622,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
         }
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            if (connectionVisibility.showConnectionStatus) {
+            if (connectionVisibility.showConnectionStatus && !harnessWorkspace) {
                 ConnectionStatusBar(
                     isBackendConnected = true,
                     backendIsRecovering = false,
@@ -460,7 +635,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                 )
             }
 
-            if (showSshWarning) {
+            if (showSshWarning && !harnessWorkspace) {
                 SshConnectionWarningCard(
                     compactTitle = stringResource(R.string.soft_studio_ssh_required_short),
                     title = stringResource(R.string.agent_ssh_required_title),
@@ -469,69 +644,74 @@ fun AgentWorkspaceScreen(navController: NavController) {
                 )
             }
 
-            ScrollableTabRow(
-                selectedTabIndex = when (selectedWorkspaceTab) {
-                    "run" -> 1
-                    "preview" -> 2
-                    "agents" -> 3
-                    else -> 0
-                },
-                edgePadding = 12.dp,
-                modifier = Modifier.walkthroughTarget("agent.projects")
-            ) {
-                Tab(
-                    selected = selectedWorkspaceTab == "files",
-                    onClick = {
-                        selectedWorkspaceTab = "files"
-                        walkthroughTargets?.recordEvent("agent.projects")
+            if (!filesOnlyMode) {
+                ScrollableTabRow(
+                    selectedTabIndex = when (visibleWorkspaceTab) {
+                        "run" -> 1
+                        "preview" -> 2
+                        "agents" -> 3
+                        else -> 0
                     },
-                    text = { Text(stringResource(R.string.agent_workspace_tab_files), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    icon = { Icon(Icons.Default.Folder, contentDescription = null) }
-                )
-                Tab(
-                    selected = selectedWorkspaceTab == "run",
-                    onClick = {
-                        selectedWorkspaceTab = "run"
-                        walkthroughTargets?.recordEvent("agent.projects")
-                    },
-                    text = { Text(stringResource(R.string.agent_workspace_tab_run), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    icon = { Icon(Icons.Default.PlayArrow, contentDescription = null) }
-                )
-                Tab(
-                    selected = selectedWorkspaceTab == "preview",
-                    onClick = {
-                        selectedWorkspaceTab = "preview"
-                        walkthroughTargets?.recordEvent("agent.projects")
-                    },
-                    text = { Text(stringResource(R.string.agent_workspace_tab_preview), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    icon = { Icon(Icons.Default.Web, contentDescription = null) }
-                )
-                Tab(
-                    selected = selectedWorkspaceTab == "agents",
-                    onClick = {
-                        selectedWorkspaceTab = "agents"
-                        walkthroughTargets?.recordEvent("agent.projects")
-                    },
-                    text = { Text(stringResource(R.string.agent_workspace_tab_agents), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    icon = { Icon(Icons.Default.Groups, contentDescription = null) }
-                )
+                    edgePadding = 12.dp,
+                    modifier = Modifier.walkthroughTarget("agent.projects")
+                ) {
+                    Tab(
+                        selected = visibleWorkspaceTab == "files",
+                        onClick = {
+                            selectedWorkspaceTab = "files"
+                            walkthroughTargets?.recordEvent("agent.projects")
+                        },
+                        text = { Text(stringResource(R.string.agent_workspace_tab_files), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        icon = { Icon(Icons.Default.Folder, contentDescription = null) }
+                    )
+                    Tab(
+                        selected = visibleWorkspaceTab == "run",
+                        onClick = {
+                            selectedWorkspaceTab = "run"
+                            walkthroughTargets?.recordEvent("agent.projects")
+                        },
+                        text = { Text(stringResource(R.string.agent_workspace_tab_run), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        icon = { Icon(Icons.Default.PlayArrow, contentDescription = null) }
+                    )
+                    Tab(
+                        selected = visibleWorkspaceTab == "preview",
+                        onClick = {
+                            selectedWorkspaceTab = "preview"
+                            walkthroughTargets?.recordEvent("agent.projects")
+                        },
+                        text = { Text(stringResource(R.string.agent_workspace_tab_preview), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        icon = { Icon(Icons.Default.Web, contentDescription = null) }
+                    )
+                    Tab(
+                        selected = visibleWorkspaceTab == "agents",
+                        onClick = {
+                            selectedWorkspaceTab = "agents"
+                            walkthroughTargets?.recordEvent("agent.projects")
+                        },
+                        text = { Text(stringResource(R.string.agent_workspace_tab_agents), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        icon = { Icon(Icons.Default.Groups, contentDescription = null) }
+                    )
+                }
             }
 
-            if (selectedWorkspaceTab == "agents") {
+            if (visibleWorkspaceTab == "agents") {
                 AgentInvocationsTab(
                     invocations = invocations,
                     onOpen = { navController.navigate(Screen.AgentInvocation.createRoute(it)) }
                 )
-            } else if (selectedWorkspaceTab == "run") {
-                LocalSandboxRunTab(
+            } else if (visibleWorkspaceTab == "run") {
+                AgentWorkspaceRunTab(
                     modifier = Modifier.fillMaxSize(),
-                    conversationId = activeConversationId,
+                    conversationId = workspaceConversationAnchor,
                     projectFolder = currentProjectFolder,
                     backend = workspaceBackend,
+                    prootEnvironment = prootEnvironment,
+                    harnessWorkspace = harnessWorkspace,
+                    executionAvailable = !harnessWorkspace || harnessSession,
                     capabilities = runtimeCapabilities,
                     runState = localRunState,
                     onCapabilitiesChanged = { updated ->
-                        val conversationId = activeConversationId ?: return@LocalSandboxRunTab
+                        val conversationId = workspaceConversationAnchor ?: return@AgentWorkspaceRunTab
                         scope.launch {
                             db.agentChatDao().updateRuntimeSettings(
                                 id = conversationId,
@@ -545,8 +725,12 @@ fun AgentWorkspaceScreen(navController: NavController) {
                         }
                     },
                     onRun = {
+                        val capturedId = workspaceConversationAnchor
                         scope.launch {
-                            agentService.runLocalProject().onFailure { e ->
+                            val result = if (harnessWorkspace) runCatching {
+                                com.example.llamadroid.harness.HarnessAppRuntime.get(context).projectRuns.run(requireNotNull(capturedId))
+                            } else agentService.runLocalProject()
+                            result.onFailure { e ->
                                 Toast.makeText(
                                     context,
                                     formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
@@ -556,8 +740,12 @@ fun AgentWorkspaceScreen(navController: NavController) {
                         }
                     },
                     onStop = {
+                        val capturedId = workspaceConversationAnchor
                         scope.launch {
-                            agentService.stopLocalProjectRun(force = false).onFailure { e ->
+                            val result = if (harnessWorkspace) runCatching {
+                                com.example.llamadroid.harness.HarnessAppRuntime.get(context).projectRuns.stop(requireNotNull(capturedId))
+                            } else agentService.stopLocalProjectRun(force = false)
+                            result.onFailure { e ->
                                 Toast.makeText(
                                     context,
                                     formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
@@ -567,8 +755,12 @@ fun AgentWorkspaceScreen(navController: NavController) {
                         }
                     },
                     onForceStop = {
+                        val capturedId = workspaceConversationAnchor
                         scope.launch {
-                            agentService.stopLocalProjectRun(force = true).onFailure { e ->
+                            val result = if (harnessWorkspace) runCatching {
+                                com.example.llamadroid.harness.HarnessAppRuntime.get(context).projectRuns.stop(requireNotNull(capturedId))
+                            } else agentService.stopLocalProjectRun(force = true)
+                            result.onFailure { e ->
                                 Toast.makeText(
                                     context,
                                     formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
@@ -581,13 +773,72 @@ fun AgentWorkspaceScreen(navController: NavController) {
                         selectedWorkspaceTab = "preview"
                     }
                 )
-            } else if (selectedWorkspaceTab == "preview") {
+            } else if (visibleWorkspaceTab == "preview") {
                 AgentWorkspacePreviewTab(
                     modifier = Modifier.fillMaxSize(),
-                    previewUrl = localRunState?.previewUrl,
+                    activeRunUrl = localRunState?.previewUrl,
+                    savedPreviewOverride = workspaceConversation?.previewUrlOverride,
                     backend = workspaceBackend,
+                    onPreviewOverrideChanged = { value ->
+                        val conversationId = workspaceConversationAnchor ?: return@AgentWorkspacePreviewTab
+                        scope.launch {
+                            db.agentChatDao().updatePreviewUrlOverride(conversationId, value)
+                        }
+                    },
                     onOpenExternal = { url ->
                         navController.navigate(Screen.TermuxWebView.createRoute(url, agentWorkspacePreviewTitleText, "agent_local"))
+                    },
+                    onDownloadRequest = { webView, request, bridge ->
+                        val configuredUrl = effectivePreviewUrl
+                        val rejected = configuredUrl == null ||
+                            classifyAgentPreviewDownload(request.url, configuredUrl) != AgentPreviewDownloadKind.BLOB ||
+                            !isAgentPreviewDownloadSizeAllowed(request.contentLength) ||
+                            previewDownloadSession != null || previewDownloadTarget != null
+                        // A duplicate click must not revoke a URL still being exported.
+                        if (rejected && previewDownloadSession == null &&
+                            previewDownloadTarget?.request?.url != request.url
+                        ) {
+                            releasePreviewDownloadPin(webView, request.url)
+                        }
+                        if (configuredUrl == null ||
+                            classifyAgentPreviewDownload(request.url, configuredUrl) != AgentPreviewDownloadKind.BLOB
+                        ) {
+                            Toast.makeText(context, previewDownloadUnsupportedText, Toast.LENGTH_LONG).show()
+                        } else if (!isAgentPreviewDownloadSizeAllowed(request.contentLength)) {
+                            Toast.makeText(context, previewDownloadTooLargeText, Toast.LENGTH_LONG).show()
+                        } else if (previewDownloadSession != null || previewDownloadTarget != null) {
+                            Toast.makeText(context, previewDownloadInProgressText, Toast.LENGTH_SHORT).show()
+                        } else {
+                            previewDownloadTarget = PendingAgentPreviewBlobDownload(
+                                webView = webView,
+                                bridge = bridge,
+                                request = request,
+                                configuredPreviewUrl = configuredUrl
+                            )
+                            runCatching {
+                                previewDownloadLauncher.launch(
+                                    sanitizeAgentPreviewDownloadFilename(request.contentDisposition, request.mimeType)
+                                )
+                            }.onFailure {
+                                releasePreviewDownloadPin(webView, request.url)
+                                previewDownloadTarget = null
+                                Toast.makeText(context, previewDownloadUnsupportedText, Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    },
+                    onPreviewDisposed = {
+                        previewDownloadTarget?.let { releasePreviewDownloadPin(it.webView, it.request.url) }
+                        previewDownloadTarget = null
+                        if (previewDownloadSession != null) setIsLoading(false)
+                        previewDownloadSession?.cancel()
+                        previewDownloadSession = null
+                    },
+                    onPreviewNavigated = {
+                        previewDownloadTarget?.let { releasePreviewDownloadPin(it.webView, it.request.url) }
+                        previewDownloadTarget = null
+                        if (previewDownloadSession != null) setIsLoading(false)
+                        previewDownloadSession?.cancel()
+                        previewDownloadSession = null
                     }
                 )
             } else {
@@ -633,7 +884,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                 scope.launch {
                                     if (currentPath.isBlank()) return@launch
                                     val tarName = "archive_${System.currentTimeMillis()}.tar.gz"
-                                        agentService.compress(selectedFiles.map { it.path }, "$currentPath/$tarName").onSuccess {
+                                        workspaceFiles.compress(selectedFiles.map { it.path }, "$currentPath/$tarName").onSuccess {
                                             Toast.makeText(
                                                 context,
                                                 formatAgentWorkspaceString(agentCompressSuccessFormat, tarName),
@@ -659,7 +910,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                     if (currentPath.isBlank()) return@launch
                                     var failure: Throwable? = null
                                     selectedFiles.forEach { file ->
-                                        agentService.deletePath(file.path, recursive = file.isDirectory)
+                                        workspaceFiles.deletePath(file.path, recursive = file.isDirectory)
                                             .onFailure { error -> failure = failure ?: error }
                                     }
                                     failure?.let { error ->
@@ -710,9 +961,9 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                     targets.forEach { target ->
                                         val dest = "$currentPath/${target.name}"
                                         if (action == "copy") {
-                                            agentService.copy(target.path, dest)
+                                            workspaceFiles.copy(target.path, dest)
                                         } else {
-                                            agentService.move(target.path, dest)
+                                            workspaceFiles.move(target.path, dest)
                                         }
                                     }
                                     loadFiles()
@@ -810,7 +1061,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                         viewingImage = file
                                         imagePreviewPath = null
                                         scope.launch {
-                                            agentService.readFileBytes(file.path).onSuccess { bytes ->
+                                            workspaceFiles.readFileBytes(file.path).onSuccess { bytes ->
                                                 imagePreviewPath = persistPreviewImage(file.name, bytes)
                                             }.onFailure { e: Throwable ->
                                                 Toast.makeText(
@@ -825,7 +1076,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                         // View file
                                         viewingFile = file
                                         scope.launch {
-                                            agentService.readFile(file.path).onSuccess { content: String ->
+                                            workspaceFiles.readFile(file.path).onSuccess { content: String ->
                                                 fileContent = content
                                                 editedContent = content
                                             }.onFailure { e: Throwable ->
@@ -852,7 +1103,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                                 if (currentPath.isBlank()) return@launch
                                                 setIsLoading(true, statusProcessingText)
                                                 val archiveName = "${file.name}.tar.gz"
-                                                agentService.compress(
+                                                workspaceFiles.compress(
                                                     listOf(file.path),
                                                     "$currentPath/$archiveName"
                                                 ).onSuccess {
@@ -876,7 +1127,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                             scope.launch {
                                                 if (currentPath.isBlank()) return@launch
                                                 setIsLoading(true, statusProcessingText)
-                                                agentService.uncompress(file.path, currentPath).onSuccess {
+                                                workspaceFiles.uncompress(file.path, currentPath).onSuccess {
                                                     Toast.makeText(context, agentUncompressSuccessText, Toast.LENGTH_SHORT).show()
                                                     loadFiles()
                                                 }.onFailure { e: Throwable ->
@@ -891,6 +1142,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                         }
                                         "download" -> {
                                             downloadTarget = file
+                                            downloadFiles = workspaceFiles
                                             downloadLauncher.launch(file.name)
                                         }
                                     }
@@ -915,7 +1167,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
             onToggleEdit = { isEditMode = !isEditMode },
             onSave = {
                 scope.launch {
-                    agentService.writeFile(file.path, editedContent).onSuccess {
+                    workspaceFiles.writeFile(file.path, editedContent).onSuccess {
                         Toast.makeText(context, agentSaveToastText, Toast.LENGTH_SHORT).show()
                         fileContent = editedContent
                         isEditMode = false
@@ -949,6 +1201,9 @@ fun AgentWorkspaceScreen(navController: NavController) {
         }
     }
 
+    if (showHarnessTerminal) workspaceConversationAnchor?.let { conversationId ->
+        com.example.llamadroid.harness.HarnessTerminalDialog(conversationId) { showHarnessTerminal = false }
+    }
     stopProjectShellSummary?.let { summary ->
         AlertDialog(
             onDismissRequest = { stopProjectShellSummary = null },
@@ -976,11 +1231,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                     Text(
                         stringResource(
                             R.string.agent_workspace_stop_project_shells_workspace_terminal,
-                            if (summary.workspaceTerminalOpen) {
-                                stringResource(R.string.action_yes)
-                            } else {
-                                stringResource(R.string.action_no)
-                            }
+                            summary.workspaceTerminalCount
                         ),
                         fontWeight = FontWeight.SemiBold
                     )
@@ -992,8 +1243,20 @@ fun AgentWorkspaceScreen(navController: NavController) {
                 TextButton(
                     onClick = {
                         val projectRoot = summary.workspaceRoot
+                        val harnessTarget = stopHarnessSession
                         stopProjectShellSummary = null
+                        stopHarnessSession = null
                         scope.launch {
+                            if (harnessTarget != null) {
+                                val runtime = com.example.llamadroid.harness.HarnessAppRuntime.get(context)
+                                try {
+                                    runtime.projectRuns.stop(harnessTarget.first)
+                                    runtime.terminals.closeAll(harnessTarget.second)
+                                    Toast.makeText(context, formatAgentWorkspaceString(agentWorkspaceStopProjectShellsSuccessFormat, summary.totalActiveSessions), Toast.LENGTH_SHORT).show()
+                                } catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+                                catch (_: Exception) { Toast.makeText(context, harnessTerminalFailedText, Toast.LENGTH_LONG).show() }
+                                return@launch
+                            }
                             agentService.stopProjectShellSessions(projectRoot)
                                 .onSuccess { result ->
                                     Toast.makeText(
@@ -1029,14 +1292,27 @@ fun AgentWorkspaceScreen(navController: NavController) {
         )
     }
 
-    if (showTerminalDialog && resolvedProjectRoot != null) {
+    if (
+        showTerminalDialog &&
+        resolvedProjectRoot != null &&
+        workspaceBackend != AgentWorkspaceBackendType.LOCAL_PROOT
+    ) {
         WorkspaceTerminalDialog(
             workspaceRoot = resolvedProjectRoot,
             state = workspaceTerminalState,
+            sessions = if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT) prootSessions else listOfNotNull(workspaceTerminalState),
+            allowMultipleSessions = workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT,
             onDismiss = { showTerminalDialog = false },
             onSend = { input ->
                 scope.launch {
-                    agentService.sendWorkspaceTerminalInput(resolvedProjectRoot, input).onFailure { e: Throwable ->
+                    val result = if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                        workspaceTerminalState?.sessionId?.let {
+                            agentService.sendProotWorkspaceTerminalInput(it, input)
+                        } ?: Result.failure(IllegalStateException(context.getString(R.string.agent_workspace_terminal_status_disconnected)))
+                    } else {
+                        agentService.sendWorkspaceTerminalInput(resolvedProjectRoot, input)
+                    }
+                    result.onFailure { e: Throwable ->
                         Toast.makeText(
                             context,
                             formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
@@ -1047,7 +1323,14 @@ fun AgentWorkspaceScreen(navController: NavController) {
             },
             onInterrupt = {
                 scope.launch {
-                    agentService.interruptWorkspaceTerminal(resolvedProjectRoot).onFailure { e: Throwable ->
+                    val result = if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                        workspaceTerminalState?.sessionId?.let {
+                            agentService.sendProotWorkspaceTerminalInput(it, "\u0003", appendNewline = false)
+                        } ?: Result.failure(IllegalStateException(context.getString(R.string.agent_workspace_terminal_status_disconnected)))
+                    } else {
+                        agentService.interruptWorkspaceTerminal(resolvedProjectRoot)
+                    }
+                    result.onFailure { e: Throwable ->
                         Toast.makeText(
                             context,
                             formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
@@ -1058,7 +1341,19 @@ fun AgentWorkspaceScreen(navController: NavController) {
             },
             onReconnect = {
                 scope.launch {
-                    agentService.reconnectWorkspaceTerminal(resolvedProjectRoot).onFailure { e: Throwable ->
+                    val result = if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                        agentService.openProotWorkspaceTerminal(
+                            conversationId = workspaceConversationAnchor ?: return@launch,
+                            projectFolder = currentProjectFolder.orEmpty()
+                        )
+                    } else {
+                        agentService.reconnectWorkspaceTerminal(resolvedProjectRoot)
+                    }
+                    result.onSuccess { opened ->
+                        if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                            selectedProotTerminalId = opened.sessionId
+                        }
+                    }.onFailure { e: Throwable ->
                         Toast.makeText(
                             context,
                             formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
@@ -1067,10 +1362,49 @@ fun AgentWorkspaceScreen(navController: NavController) {
                     }
                 }
             },
-            onClear = { agentService.clearWorkspaceTerminalTranscript(resolvedProjectRoot) },
+            onClear = {
+                if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                    workspaceTerminalState?.sessionId?.let(agentService::clearProotWorkspaceTerminalTranscript)
+                } else {
+                    agentService.clearWorkspaceTerminalTranscript(resolvedProjectRoot)
+                }
+            },
             onStop = {
-                agentService.closeWorkspaceTerminal(resolvedProjectRoot)
-                showTerminalDialog = false
+                if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                    workspaceTerminalState?.sessionId?.let { sessionId ->
+                        scope.launch { agentService.closeProotWorkspaceTerminal(sessionId) }
+                    }
+                } else {
+                    agentService.closeWorkspaceTerminal(resolvedProjectRoot)
+                    showTerminalDialog = false
+                }
+            },
+            onNewSession = {
+                scope.launch {
+                    agentService.openProotWorkspaceTerminal(
+                        conversationId = workspaceConversationAnchor ?: return@launch,
+                        projectFolder = currentProjectFolder.orEmpty()
+                    ).onSuccess { selectedProotTerminalId = it.sessionId }
+                        .onFailure { e ->
+                            Toast.makeText(
+                                context,
+                                formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                }
+            },
+            onSelectSession = { selectedProotTerminalId = it },
+            onSpecialKey = { sequence ->
+                scope.launch {
+                    if (workspaceBackend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                        workspaceTerminalState?.sessionId?.let {
+                            agentService.sendProotWorkspaceTerminalInput(it, sequence, appendNewline = false)
+                        }
+                    } else {
+                        agentService.sendWorkspaceTerminalInput(resolvedProjectRoot, sequence, appendNewline = false)
+                    }
+                }
             }
         )
     }
@@ -1086,7 +1420,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                     onClick = {
                         scope.launch {
                             if (currentPath.isBlank()) return@launch
-                            agentService.deletePath(file.path, recursive = file.isDirectory).onSuccess {
+                            workspaceFiles.deletePath(file.path, recursive = file.isDirectory).onSuccess {
                                 Toast.makeText(context, agentDeleteToastText, Toast.LENGTH_SHORT).show()
                                 loadFiles()
                             }.onFailure { e: Throwable ->
@@ -1144,9 +1478,9 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                 if (currentPath.isBlank()) return@launch
                                 val fullPath = if (newItemName.startsWith("/")) newItemName else "$currentPath/$newItemName"
                                 val result = if (newItemIsFolder) {
-                                    agentService.createFolder(fullPath)
+                                    workspaceFiles.createFolder(fullPath)
                                 } else {
-                                    agentService.writeFile(fullPath, "")
+                                    workspaceFiles.writeFile(fullPath, "")
                                 }
                                 result.onSuccess {
                                     Toast.makeText(context, agentCreateToastText, Toast.LENGTH_SHORT).show()
@@ -1319,7 +1653,8 @@ fun FileViewerDialog(
                         value = editedContent,
                         onValueChange = onEditedContentChange,
                         modifier = Modifier
-                            .fillMaxSize()
+                            .fillMaxWidth()
+                            .weight(1f)
                             .padding(8.dp),
                         textStyle = LocalTextStyle.current.copy(
                             fontFamily = FontFamily.Monospace,
@@ -1330,7 +1665,8 @@ fun FileViewerDialog(
                     Surface(
                         color = Color.Black.copy(alpha = 0.9f),
                         modifier = Modifier
-                            .fillMaxSize()
+                            .fillMaxWidth()
+                            .weight(1f)
                             .padding(8.dp)
                     ) {
                         Box(
@@ -1413,20 +1749,48 @@ fun ImageViewerDialog(
     }
 }
 
+internal data class TerminalExtraKey(val label: String, val sequence: String)
+
+internal fun prootTerminalExtraKeys(): List<TerminalExtraKey> = listOf(
+    TerminalExtraKey("ESC", "\u001B"),
+    TerminalExtraKey("TAB", "\t"),
+    TerminalExtraKey("CTRL-C", "\u0003"),
+    TerminalExtraKey("CTRL-D", "\u0004"),
+    TerminalExtraKey("CTRL-L", "\u000C"),
+    TerminalExtraKey("HOME", "\u001B[H"),
+    TerminalExtraKey("END", "\u001B[F"),
+    TerminalExtraKey("←", "\u001B[D"),
+    TerminalExtraKey("↑", "\u001B[A"),
+    TerminalExtraKey("↓", "\u001B[B"),
+    TerminalExtraKey("→", "\u001B[C"),
+    TerminalExtraKey("PGUP", "\u001B[5~"),
+    TerminalExtraKey("PGDN", "\u001B[6~"),
+    TerminalExtraKey("-", "-"),
+    TerminalExtraKey("/", "/"),
+    TerminalExtraKey("|", "|")
+)
+
 @Composable
 fun WorkspaceTerminalDialog(
     workspaceRoot: String,
     state: com.example.llamadroid.service.WorkspaceTerminalUiState?,
+    sessions: List<com.example.llamadroid.service.WorkspaceTerminalUiState> = listOfNotNull(state),
+    allowMultipleSessions: Boolean = false,
     onDismiss: () -> Unit,
     onSend: (String) -> Unit,
     onInterrupt: () -> Unit,
     onReconnect: () -> Unit,
     onClear: () -> Unit,
-    onStop: () -> Unit
+    onStop: () -> Unit,
+    onNewSession: () -> Unit = {},
+    onSelectSession: (String) -> Unit = {},
+    onSpecialKey: (String) -> Unit = {},
+    managementContent: @Composable () -> Unit = {}
 ) {
-    var inputText by remember(workspaceRoot) { mutableStateOf("") }
-    var draftInput by remember(workspaceRoot) { mutableStateOf("") }
-    var historyIndex by remember(workspaceRoot) { mutableStateOf<Int?>(null) }
+    val terminalStateKey = state?.sessionId ?: workspaceRoot
+    var inputText by remember(terminalStateKey) { mutableStateOf("") }
+    var draftInput by remember(terminalStateKey) { mutableStateOf("") }
+    var historyIndex by remember(terminalStateKey) { mutableStateOf<Int?>(null) }
     var terminalFontSizeSp by rememberSaveable(workspaceRoot) { mutableStateOf(13f) }
     var fitToWidth by rememberSaveable(workspaceRoot) { mutableStateOf(true) }
     val clipboardManager = LocalClipboardManager.current
@@ -1439,6 +1803,12 @@ fun WorkspaceTerminalDialog(
     val transcript = state?.transcript.orEmpty()
     val commandHistory = state?.commandHistory.orEmpty()
     val inputFontSize = (terminalFontSizeSp + 1f).coerceIn(12f, 22f)
+    val terminalDensity = androidx.compose.ui.platform.LocalDensity.current
+    val terminalWindowHeight = androidx.compose.ui.platform.LocalWindowInfo.current.containerSize.height
+    val terminalVisibleHeight = (terminalWindowHeight - WindowInsets.ime.getBottom(terminalDensity)).coerceAtLeast(0)
+    val compactTerminal = with(terminalDensity) { terminalVisibleHeight.toDp() } < 600.dp ||
+        terminalDensity.fontScale >= 1.3f
+    val controlsScroll = rememberScrollState()
 
     fun recallPreviousCommand() {
         if (commandHistory.isEmpty()) return
@@ -1482,6 +1852,8 @@ fun WorkspaceTerminalDialog(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
+                    .imePadding()
+                    .then(if (compactTerminal) Modifier.verticalScroll(controlsScroll) else Modifier)
                     .padding(16.dp)
             ) {
                 Row(
@@ -1491,11 +1863,14 @@ fun WorkspaceTerminalDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            stringResource(R.string.agent_workspace_terminal_title),
+                            stringResource(
+                                if (allowMultipleSessions) R.string.agent_proot_terminal_title
+                                else R.string.agent_workspace_terminal_title
+                            ),
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            workspaceRoot,
+                            state?.workspaceRoot ?: workspaceRoot,
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 2,
@@ -1510,6 +1885,52 @@ fun WorkspaceTerminalDialog(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
+                if (allowMultipleSessions) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        sessions.forEachIndexed { index, session ->
+                            FilterChip(
+                                selected = session.sessionId == state?.sessionId,
+                                onClick = { onSelectSession(session.sessionId) },
+                                label = {
+                                    Text(
+                                        session.displayName.ifBlank {
+                                            stringResource(R.string.agent_proot_terminal_session_number, index + 1)
+                                        },
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        if (session.isConnected) Icons.Default.Terminal else Icons.Default.ErrorOutline,
+                                        null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            )
+                        }
+                        OutlinedButton(onClick = onNewSession) {
+                            Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.agent_proot_terminal_new_session))
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        stringResource(R.string.agent_proot_terminal_background_note),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                managementContent()
                 val statusText = when {
                     state?.isConnecting == true -> stringResource(R.string.agent_workspace_terminal_status_connecting)
                     state?.isConnected == true -> stringResource(R.string.agent_workspace_terminal_status_connected)
@@ -1533,7 +1954,10 @@ fun WorkspaceTerminalDialog(
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
                         text = when {
-                            state?.isConnecting == true -> stringResource(R.string.agent_workspace_terminal_connecting_body)
+                            state?.isConnecting == true -> stringResource(
+                                if (allowMultipleSessions) R.string.agent_proot_terminal_connecting_body
+                                else R.string.agent_workspace_terminal_connecting_body
+                            )
                             state?.isConnected == true -> stringResource(R.string.agent_workspace_terminal_input_placeholder)
                             else -> state?.errorMessage ?: stringResource(R.string.agent_workspace_terminal_status_disconnected)
                         },
@@ -1568,8 +1992,15 @@ fun WorkspaceTerminalDialog(
                         .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedButton(onClick = onReconnect) {
-                        Text(stringResource(R.string.agent_workspace_terminal_reconnect))
+                    if (!allowMultipleSessions || state?.isConnected != true) {
+                        OutlinedButton(onClick = onReconnect) {
+                            Text(
+                                stringResource(
+                                    if (allowMultipleSessions) R.string.agent_proot_terminal_new_session
+                                    else R.string.agent_workspace_terminal_reconnect
+                                )
+                            )
+                        }
                     }
                     OutlinedButton(onClick = onInterrupt, enabled = state?.isConnected == true) {
                         Text(stringResource(R.string.agent_workspace_terminal_interrupt))
@@ -1602,18 +2033,44 @@ fun WorkspaceTerminalDialog(
                     )
                     Button(
                         onClick = onStop,
+                        enabled = state != null,
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                     ) {
-                        Text(stringResource(R.string.action_stop))
+                        Text(
+                            stringResource(
+                                if (allowMultipleSessions) R.string.agent_proot_terminal_close_session
+                                else R.string.action_stop
+                            )
+                        )
                     }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    prootTerminalExtraKeys().forEach { key ->
+                        OutlinedButton(
+                            onClick = { onSpecialKey(key.sequence) },
+                            enabled = state?.isConnected == true,
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier.heightIn(min = 40.dp)
+                        ) {
+                            Text(key.label, fontFamily = FontFamily.Monospace, maxLines = 1)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
                 Surface(
                     color = Color.Black.copy(alpha = 0.96f),
                     modifier = Modifier
-                        .weight(1f)
+                        .then(if (compactTerminal) Modifier.height(240.dp) else Modifier.weight(1f))
                         .fillMaxWidth(),
                     shape = RoundedCornerShape(18.dp)
                 ) {
@@ -1634,7 +2091,10 @@ fun WorkspaceTerminalDialog(
                             Text(
                                 text = when {
                                     transcript.isNotBlank() -> transcript
-                                    state?.isConnecting == true -> stringResource(R.string.agent_workspace_terminal_connecting_body)
+                                    state?.isConnecting == true -> stringResource(
+                                        if (allowMultipleSessions) R.string.agent_proot_terminal_connecting_body
+                                        else R.string.agent_workspace_terminal_connecting_body
+                                    )
                                     else -> stringResource(R.string.agent_workspace_terminal_empty)
                                 },
                                 fontFamily = FontFamily.Monospace,
@@ -1776,11 +2236,14 @@ fun WorkspaceTerminalDialog(
 }
 
 @Composable
-private fun LocalSandboxRunTab(
+private fun AgentWorkspaceRunTab(
     modifier: Modifier,
     conversationId: Long?,
     projectFolder: String,
     backend: AgentWorkspaceBackendType,
+    prootEnvironment: com.example.llamadroid.data.db.AgentProotEnvironmentEntity?,
+    harnessWorkspace: Boolean = false,
+    executionAvailable: Boolean = true,
     capabilities: AgentLocalRuntimeCapabilities,
     runState: AgentLocalRunState?,
     onCapabilitiesChanged: (AgentLocalRuntimeCapabilities) -> Unit,
@@ -1789,7 +2252,7 @@ private fun LocalSandboxRunTab(
     onForceStop: () -> Unit,
     onOpenPreview: (String) -> Unit
 ) {
-    val localEnabled = backend == AgentWorkspaceBackendType.LOCAL_SANDBOX
+    val presentation = remember(backend) { agentWorkspaceRunBackendPresentation(backend) }
     val running = runState?.status == "RUNNING"
     val logScrollState = rememberScrollState()
     LazyColumn(
@@ -1797,6 +2260,9 @@ private fun LocalSandboxRunTab(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        if (!executionAvailable) item {
+            Text(stringResource(R.string.harness_workspace_session_required), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
@@ -1807,12 +2273,19 @@ private fun LocalSandboxRunTab(
                     AssistChip(
                         onClick = {},
                         label = {
-                            Text(
-                                if (localEnabled) stringResource(R.string.agent_project_backend_local)
-                                else stringResource(R.string.agent_project_backend_remote)
-                            )
+                            Text(stringResource(presentation.labelRes))
                         },
-                        leadingIcon = { Icon(if (localEnabled) Icons.Default.Security else Icons.Default.Terminal, null, modifier = Modifier.size(18.dp)) }
+                        leadingIcon = {
+                            Icon(
+                                when (backend) {
+                                    AgentWorkspaceBackendType.LOCAL_SANDBOX -> Icons.Default.Security
+                                    AgentWorkspaceBackendType.LOCAL_PROOT -> Icons.Default.Storage
+                                    AgentWorkspaceBackendType.REMOTE_SSH -> Icons.Default.Terminal
+                                },
+                                null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     )
                     Text(
                         stringResource(R.string.agent_workspace_backend_locked),
@@ -1820,20 +2293,39 @@ private fun LocalSandboxRunTab(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        if (localEnabled) {
-                            stringResource(R.string.agent_workspace_local_root, projectFolder)
-                        } else {
-                            stringResource(R.string.agent_workspace_remote_root, projectFolder)
+                        when (presentation.root) {
+                            AgentWorkspaceRootPresentation.APP_LOCAL ->
+                                stringResource(R.string.agent_workspace_local_root, projectFolder)
+                            AgentWorkspaceRootPresentation.DEBIAN ->
+                                stringResource(R.string.agent_workspace_proot_root)
+                            AgentWorkspaceRootPresentation.REMOTE ->
+                                stringResource(R.string.agent_workspace_remote_root, projectFolder)
                         },
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    if (harnessWorkspace) {
+                        Text(stringResource(R.string.harness_workspace_shared_runtime), style = MaterialTheme.typography.bodySmall)
+                    } else if (backend == AgentWorkspaceBackendType.LOCAL_PROOT) {
+                        Text(
+                            prootEnvironment?.let { environment ->
+                                stringResource(
+                                    R.string.agent_workspace_proot_environment,
+                                    environment.displayName,
+                                    environment.imageVersion,
+                                    prootEnvironmentStatusLabel(environment.status)
+                                )
+                            } ?: stringResource(R.string.agent_workspace_proot_environment_missing),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         }
 
-        item {
+        if (presentation.supportsProjectRun) item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -1859,7 +2351,7 @@ private fun LocalSandboxRunTab(
             }
         }
 
-        item {
+        if (presentation.showsSandboxDependencyPolicy && !harnessWorkspace) item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -1877,7 +2369,7 @@ private fun LocalSandboxRunTab(
                         )
                         Switch(
                             checked = capabilities.allowPythonDependencies,
-                            enabled = localEnabled && conversationId != null,
+                            enabled = conversationId != null,
                             onCheckedChange = { enabled ->
                                 onCapabilitiesChanged(capabilities.copy(allowPythonDependencies = enabled))
                             }
@@ -1889,6 +2381,17 @@ private fun LocalSandboxRunTab(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+            }
+        }
+
+        if (backend == AgentWorkspaceBackendType.LOCAL_PROOT) item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    stringResource(R.string.agent_workspace_proot_packages_note),
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
 
@@ -1921,7 +2424,7 @@ private fun LocalSandboxRunTab(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                         Button(
                             onClick = onRun,
-                            enabled = localEnabled && conversationId != null,
+                            enabled = executionAvailable && presentation.supportsProjectRun && conversationId != null,
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(Icons.Default.PlayArrow, null)
@@ -1930,7 +2433,7 @@ private fun LocalSandboxRunTab(
                         }
                         OutlinedButton(
                             onClick = onStop,
-                            enabled = localEnabled && running,
+                            enabled = presentation.supportsProjectRun && running,
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(Icons.Default.Stop, null)
@@ -1940,7 +2443,7 @@ private fun LocalSandboxRunTab(
                     }
                     OutlinedButton(
                         onClick = onForceStop,
-                        enabled = localEnabled && running,
+                        enabled = presentation.supportsProjectRun && running,
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
                     ) {
@@ -1995,29 +2498,152 @@ private fun LocalSandboxRunTab(
 @Composable
 private fun AgentWorkspacePreviewTab(
     modifier: Modifier,
-    previewUrl: String?,
+    activeRunUrl: String?,
+    savedPreviewOverride: String?,
     backend: AgentWorkspaceBackendType,
-    onOpenExternal: (String) -> Unit
+    onPreviewOverrideChanged: (String?) -> Unit,
+    onOpenExternal: (String) -> Unit,
+    onDownloadRequest: (WebView, AgentPreviewDownloadRequest, AgentPreviewDownloadBridge) -> Unit,
+    onPreviewDisposed: () -> Unit,
+    onPreviewNavigated: () -> Unit
 ) {
-    val configuredOrigin = remember(previewUrl) {
-        previewUrl?.let(::parseAgentPreviewOrigin)
+    val currentDownloadRequest = rememberUpdatedState(onDownloadRequest)
+    val currentPreviewDisposed = rememberUpdatedState(onPreviewDisposed)
+    val currentPreviewNavigated = rememberUpdatedState(onPreviewNavigated)
+    var customMode by rememberSaveable { mutableStateOf(savedPreviewOverride != null) }
+    var addressDraft by rememberSaveable { mutableStateOf(savedPreviewOverride.orEmpty()) }
+    var addressError by rememberSaveable { mutableStateOf(false) }
+    var reloadGeneration by rememberSaveable { mutableIntStateOf(0) }
+    LaunchedEffect(savedPreviewOverride) {
+        if (savedPreviewOverride != null) {
+            customMode = true
+            addressDraft = savedPreviewOverride
+            addressError = false
+        } else if (!customMode) {
+            addressDraft = activeRunUrl.orEmpty()
+        }
     }
+    val previewUrl = remember(activeRunUrl, savedPreviewOverride) {
+        resolveAgentPreviewAddress(activeRunUrl, savedPreviewOverride)
+    }
+    val configuredOrigin = remember(previewUrl) { previewUrl?.let(::parseAgentPreviewOrigin) }
     val safePreviewUrl = remember(previewUrl, configuredOrigin) {
-        previewUrl?.takeIf { configuredOrigin != null && isAllowedAgentPreviewUrl(it, configuredOrigin) }
+        normalizeAgentPreviewAddress(previewUrl)
+            ?.takeIf { configuredOrigin != null && isAllowedAgentPreviewUrl(it, configuredOrigin) }
     }
     Column(
         modifier = modifier.padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(stringResource(R.string.agent_workspace_tab_preview), fontWeight = FontWeight.Bold)
+        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp)) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(stringResource(R.string.agent_preview_address_title), fontWeight = FontWeight.SemiBold)
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = !customMode,
+                        onClick = {
+                            customMode = false
+                            addressError = false
+                            addressDraft = activeRunUrl.orEmpty()
+                            onPreviewOverrideChanged(null)
+                            reloadGeneration += 1
+                        },
+                        label = { Text(stringResource(R.string.agent_preview_mode_auto)) }
+                    )
+                    FilterChip(
+                        selected = customMode,
+                        onClick = {
+                            customMode = true
+                            if (addressDraft.isBlank()) addressDraft = activeRunUrl.orEmpty()
+                        },
+                        label = { Text(stringResource(R.string.agent_preview_mode_custom)) }
+                    )
+                }
+                Text(
+                    stringResource(
+                        if (customMode) R.string.agent_preview_mode_custom_desc
+                        else R.string.agent_preview_mode_auto_desc
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (customMode) {
+                    OutlinedTextField(
+                        value = addressDraft,
+                        onValueChange = {
+                            addressDraft = it.take(AGENT_PREVIEW_MAX_URL_CHARS)
+                            addressError = false
+                        },
+                        label = { Text(stringResource(R.string.agent_preview_address_label)) },
+                        placeholder = { Text(stringResource(R.string.agent_preview_address_hint)) },
+                        singleLine = true,
+                        isError = addressError,
+                        supportingText = if (addressError) {
+                            { Text(stringResource(R.string.agent_preview_address_invalid)) }
+                        } else null,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (customMode) {
+                        Button(onClick = {
+                            val normalized = normalizeAgentPreviewAddress(addressDraft)
+                            if (normalized == null) {
+                                addressError = true
+                            } else {
+                                addressDraft = normalized
+                                addressError = false
+                                onPreviewOverrideChanged(normalized)
+                                reloadGeneration += 1
+                            }
+                        }) {
+                            Icon(Icons.Default.PlayArrow, null)
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.agent_preview_save_go), maxLines = 1)
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            customMode = false
+                            addressDraft = activeRunUrl.orEmpty()
+                            addressError = false
+                            onPreviewOverrideChanged(null)
+                            reloadGeneration += 1
+                        },
+                        enabled = activeRunUrl != null
+                    ) {
+                        Text(stringResource(R.string.agent_preview_use_active_run), maxLines = 1)
+                    }
+                    IconButton(
+                        onClick = { reloadGeneration += 1 },
+                        enabled = safePreviewUrl != null
+                    ) {
+                        Icon(Icons.Default.Refresh, stringResource(R.string.agent_preview_reload))
+                    }
+                }
+            }
+        }
         if (safePreviewUrl.isNullOrBlank()) {
             Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp)) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        if (backend == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
-                            stringResource(R.string.agent_workspace_preview_empty_local)
-                        } else {
-                            stringResource(R.string.agent_workspace_preview_empty_remote)
+                        when (backend) {
+                            AgentWorkspaceBackendType.LOCAL_SANDBOX ->
+                                stringResource(R.string.agent_workspace_preview_empty_local)
+                            AgentWorkspaceBackendType.LOCAL_PROOT ->
+                                stringResource(R.string.agent_workspace_preview_empty_proot)
+                            AgentWorkspaceBackendType.REMOTE_SSH ->
+                                stringResource(R.string.agent_workspace_preview_empty_remote)
                         },
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -2035,19 +2661,53 @@ private fun AgentWorkspacePreviewTab(
                     Icon(Icons.Default.OpenInNew, stringResource(R.string.agent_workspace_open_preview))
                 }
             }
-            Card(modifier = Modifier.fillMaxSize(), shape = RoundedCornerShape(8.dp)) {
+            Card(modifier = Modifier.fillMaxWidth().weight(1f), shape = RoundedCornerShape(8.dp)) {
                 val origin = checkNotNull(configuredOrigin)
-                key(safePreviewUrl) {
+                key(safePreviewUrl, reloadGeneration) {
                     AndroidView(
                         modifier = Modifier.fillMaxSize(),
                         factory = { context ->
+                            // Android exposes addJavascriptInterface objects to
+                            // a document only when it is created. Install this
+                            // WebView-scoped dispatcher before the first load;
+                            // the export session later attaches its token route.
+                            val downloadBridge = AgentPreviewDownloadBridge()
                             WebView(context).apply {
+                                AgentPreviewDownloadBridgeRegistry.register(this, downloadBridge)
+                                addJavascriptInterface(downloadBridge, AGENT_PREVIEW_DOWNLOAD_BRIDGE_NAME)
                                 settings.javaScriptEnabled = true
                                 settings.domStorageEnabled = true
                                 settings.allowFileAccess = false
                                 settings.allowContentAccess = false
                                 settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                                setDownloadListener { url, userAgent, contentDisposition, mimeType, contentLength ->
+                                    currentDownloadRequest.value(
+                                        this,
+                                        AgentPreviewDownloadRequest(
+                                            url = url.orEmpty().takeIf { it.length <= 2_048 }.orEmpty(),
+                                            userAgent = userAgent?.take(256),
+                                            contentDisposition = contentDisposition?.take(512),
+                                            mimeType = mimeType?.take(128),
+                                            contentLength = contentLength
+                                        ),
+                                        downloadBridge
+                                    )
+                                }
                                 webViewClient = object : WebViewClient() {
+                                    override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                                        currentPreviewNavigated.value()
+                                        super.onPageStarted(view, url, favicon)
+                                    }
+
+                                    override fun onPageFinished(view: WebView?, url: String?) {
+                                        super.onPageFinished(view, url)
+                                        if (view != null && url != null && isAllowedAgentPreviewUrl(url, origin)) {
+                                            runCatching {
+                                                view.evaluateJavascript(buildAgentPreviewDownloadPinScript(safePreviewUrl), null)
+                                            }
+                                        }
+                                    }
+
                                     override fun shouldOverrideUrlLoading(
                                         view: WebView,
                                         request: WebResourceRequest
@@ -2060,7 +2720,8 @@ private fun AgentWorkspacePreviewTab(
                                 loadUrl(safePreviewUrl)
                                 AgentPreviewBridge.register(
                                     this,
-                                    AgentService.activeConversationId.value,
+                                    AgentService.activeConversationId.value
+                                        ?: AgentService.preferredConversationId.value,
                                     safePreviewUrl
                                 )
                             }
@@ -2068,7 +2729,8 @@ private fun AgentWorkspacePreviewTab(
                         update = { webView ->
                             AgentPreviewBridge.register(
                                 webView,
-                                AgentService.activeConversationId.value,
+                                AgentService.activeConversationId.value
+                                    ?: AgentService.preferredConversationId.value,
                                 safePreviewUrl
                             )
                             if (webView.url != safePreviewUrl && isAllowedAgentPreviewUrl(safePreviewUrl, origin)) {
@@ -2076,6 +2738,10 @@ private fun AgentWorkspacePreviewTab(
                             }
                         },
                         onRelease = { webView ->
+                            webView.setDownloadListener(null)
+                            currentPreviewDisposed.value()
+                            AgentPreviewDownloadBridgeRegistry.remove(webView)?.clear()
+                            runCatching { webView.removeJavascriptInterface(AGENT_PREVIEW_DOWNLOAD_BRIDGE_NAME) }
                             AgentPreviewBridge.unregister(webView)
                             webView.stopLoading()
                             webView.loadUrl("about:blank")

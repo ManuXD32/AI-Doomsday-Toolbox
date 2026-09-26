@@ -9,6 +9,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import kotlinx.coroutines.runBlocking
 import java.io.File
 
 class ModelArtifactLifecycleTest {
@@ -123,6 +124,26 @@ class ModelArtifactLifecycleTest {
         assertFalse(owned.exists())
         assertTrue(shared.exists())
         assertTrue(deleted.any { it == owned.canonicalPath })
+    }
+
+    @Test
+    fun journalAwareDeletionReportsEachPathImmediately() = runBlocking {
+        val root = temporary.newFolder("journal-progress")
+        val first = File(root, "first.bin").apply { writeText("first") }
+        val second = File(root, "second.bin").apply { writeText("second") }
+        val progress = mutableListOf<Triple<String, Boolean, ModelDeletionPathFailure?>>()
+
+        val deleted = ModelArtifactLifecycle.deleteOwnedPathsWithProgress(
+            candidates = listOf(first, second),
+            protectedPaths = emptyList(),
+            onPathResult = { path, wasDeleted, failure ->
+                progress += Triple(path, wasDeleted, failure)
+            }
+        )
+
+        assertEquals(setOf(first.canonicalPath, second.canonicalPath), deleted.toSet())
+        assertEquals(setOf(first.canonicalPath, second.canonicalPath), progress.map { it.first }.toSet())
+        assertTrue(progress.all { it.second && it.third == null })
     }
 
     @Test

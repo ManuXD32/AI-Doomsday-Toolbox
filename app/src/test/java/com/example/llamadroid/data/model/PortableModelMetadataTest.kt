@@ -39,4 +39,18 @@ class PortableModelMetadataTest {
         val raw = JSONObject().put("sdFamily", "/private/path").put("liteRtProfile", "https://private/token")
         assertEquals("{}", PortableModelMetadata.sanitize(raw.toString()))
     }
+
+    @Test fun `stable audio component metadata keeps role without local paths`() {
+        val metadata = JSONObject(
+            PortableModelMetadata.fromStableAudioComponent(
+                family = "stable_audio_music",
+                role = "stable_audio_dit",
+                version = "3-small"
+            )
+        )
+        assertEquals("stable_audio_music", metadata.getString("stableAudioFamily"))
+        assertEquals("dit", metadata.getString("stableAudioComponentRole"))
+        assertEquals("3-small", metadata.getString("stableAudioVersion"))
+        assertFalse(metadata.has("path"))
+    }
 }

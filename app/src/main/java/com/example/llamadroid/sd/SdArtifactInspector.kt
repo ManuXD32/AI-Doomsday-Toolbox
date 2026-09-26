@@ -631,7 +631,9 @@ class SdArtifactInspector {
         }
         val familyFromFilename = when {
             filenameText.contains("sd3") || filenameText.contains("stable-diffusion-3") -> SdModelFamily.SD3
-            filenameText.contains("flux") -> SdModelFamily.FLUX_1
+            filenameText.contains("flux") || filenameText.contains("klein") ||
+                filenameText.contains("kaleidoscope") || filenameText.contains("chroma") ||
+                filenameText.contains("radiance") -> familyFromText("", filenameText, SdModelFamily.FLUX_1)
             filenameText.contains("sdxl") -> SdModelFamily.CHECKPOINT
             filenameText.contains("sd2") -> SdModelFamily.CHECKPOINT
             else -> null
@@ -763,13 +765,43 @@ class SdArtifactInspector {
         return family to variant
     }
 
-    private fun familyFromText(text: String, filename: String, default: SdModelFamily): SdModelFamily = when {
-        text.contains("kontext") || filename.contains("kontext") -> SdModelFamily.FLUX_KONTEXT
-        text.contains("flux.2") || text.contains("flux-2") || filename.contains("flux.2") -> SdModelFamily.FLUX_2
-        text.contains("radiance") || filename.contains("radiance") -> SdModelFamily.CHROMA_RADIANCE
-        text.contains("qwen image edit") || text.contains("qwen-image-edit") || filename.contains("qwen-image-edit") -> SdModelFamily.QWEN_IMAGE_EDIT
-        text.contains("qwen image") || text.contains("qwen-image") -> SdModelFamily.QWEN_IMAGE
-        else -> default
+    /**
+     * Resolve the specific image-family markers before broad markers such as
+     * `flux` or `chroma`. Chroma2/Kaleidoscope is a FLUX.2/Klein base model,
+     * so treating the first `chroma` token as the generic Chroma family makes
+     * the resulting pipeline unusable even though the artifact is valid.
+     */
+    private fun familyFromText(text: String, filename: String, default: SdModelFamily): SdModelFamily {
+        val haystack = "$text $filename"
+            .lowercase(Locale.US)
+            .replace('_', ' ')
+            .replace('-', ' ')
+            .replace('.', ' ')
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        fun containsToken(token: String): Boolean = Regex(
+            "(^|[^a-z0-9])${Regex.escape(token)}([^a-z0-9]|$)"
+        ).containsMatchIn(haystack)
+
+        // Staged imports may prefix the original basename directly with a
+        // generated numeric ID. Do not require a leading token boundary for
+        // these distinctive multi-character family markers.
+        val isFlux2 = haystack.contains("flux 2") || haystack.contains("flux2")
+        val isKlein = haystack.contains("klein")
+        val isChroma2 = haystack.contains("chroma2") || haystack.contains("chroma 2")
+        val isKaleidoscope = haystack.contains("kaleidoscope")
+        return when {
+            // Chroma2/Kaleidoscope and Klein are the most specific FLUX.2
+            // markers and must win even when a generic `flux` token is also
+            // present in the same model card or filename.
+            isFlux2 || isKlein || isChroma2 || isKaleidoscope -> SdModelFamily.FLUX_2
+            containsToken("radiance") -> SdModelFamily.CHROMA_RADIANCE
+            containsToken("kontext") -> SdModelFamily.FLUX_KONTEXT
+            containsToken("chroma") -> SdModelFamily.CHROMA
+            haystack.contains("qwen image edit") -> SdModelFamily.QWEN_IMAGE_EDIT
+            haystack.contains("qwen image") -> SdModelFamily.QWEN_IMAGE
+            else -> default
+        }
     }
 
     private fun looksLikeVaeTensor(name: String): Boolean {
@@ -1091,8 +1123,10 @@ class SdArtifactInspector {
             ModelType.SD_AUDIO_VAE -> SdArtifactRole.AUDIO_VAE
             ModelType.SD_EMBEDDINGS_CONNECTORS -> SdArtifactRole.EMBEDDINGS_CONNECTORS
             ModelType.SD_MOTION_MODULE -> SdArtifactRole.MOTION_MODULE
-            ModelType.LLM -> SdArtifactRole.LLM
-            ModelType.VISION_PROJECTOR -> SdArtifactRole.LLM_VISION
+            ModelType.LLM,
+            ModelType.SD_LLM -> SdArtifactRole.LLM
+            ModelType.VISION_PROJECTOR,
+            ModelType.MMPROJ -> SdArtifactRole.LLM_VISION
             else -> null
         }
 

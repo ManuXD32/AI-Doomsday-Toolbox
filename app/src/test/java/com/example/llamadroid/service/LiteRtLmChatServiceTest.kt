@@ -2,6 +2,15 @@ package com.example.llamadroid.service
 
 import com.example.llamadroid.data.model.LiteRtModelEntity
 import com.example.llamadroid.data.model.estimateNativeChatTextTokens
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -813,6 +822,31 @@ class LiteRtLmChatServiceTest {
     }
 
     @Test
+    fun `LiteRtToolDefinition preserves a complete function parameter schema`() {
+        val tool = LiteRtToolDefinition(
+            name = "structured_tool",
+            description = "Accept structured input.",
+            parameters = mapOf("query" to "Query"),
+            requiredParams = listOf("query"),
+            parameterSchemaJson = """
+                {"type":"object","properties":{
+                  "query":{"type":"string","enum":["one","two"]},
+                  "options":{"type":"object","properties":{"limit":{"type":"integer"}}}
+                },"required":["query"]}
+            """.trimIndent()
+        )
+
+        val parameters = org.json.JSONObject(tool.toLiteRtOpenApiToolJson()).getJSONObject("parameters")
+        assertEquals("string", parameters.getJSONObject("properties").getJSONObject("query").getString("type"))
+        assertEquals("two", parameters.getJSONObject("properties").getJSONObject("query").getJSONArray("enum").getString(1))
+        assertEquals(
+            "integer",
+            parameters.getJSONObject("properties").getJSONObject("options")
+                .getJSONObject("properties").getJSONObject("limit").getString("type")
+        )
+    }
+
+    @Test
     fun `liteRtMessageSnapshot extracts structured tool calls`() {
         val message = FakeLiteRtMessage(
             contents = FakeLiteRtContents(emptyList()),
@@ -940,8 +974,8 @@ class LiteRtLmChatServiceTest {
             filename = "gemma-4-E2B-it.litertlm"
         )
         val longText = List(900) { index -> "section$index voice breath posture resonance" }.joinToString(" ")
-        val conversation = LiteRtConversationOverride(
-            systemInstruction = longText,
+       val conversation = LiteRtConversationOverride(
+            systemInstruction = "Keep this complete system instruction intact.",
             initialMessages = listOf(
                 LiteRtConversationMessage("user", longText),
                 LiteRtConversationMessage("assistant", longText),
@@ -950,11 +984,12 @@ class LiteRtLmChatServiceTest {
             userMessage = "Please continue with the first practical exercise."
         )
 
-        val fitted = fitLiteRtConversationOverrideForContext(
-            conversation = conversation,
-            model = model,
-            contextSize = 512
-        )
+       val fitted = fitLiteRtConversationOverrideForContext(
+           conversation = conversation,
+           model = model,
+            contextSize = 512,
+            maxOutputTokens = 128,
+       )
         val rendered = buildString {
             append(fitted.systemInstruction)
             fitted.initialMessages.forEach { message ->
@@ -967,7 +1002,8 @@ class LiteRtLmChatServiceTest {
             append(fitted.userMessage)
         }
 
-        assertTrue(estimateNativeChatTextTokens(rendered) <= 512)
+        assertTrue(estimateNativeChatTextTokens(rendered) <= liteRtPromptContextBudget(512, 128))
+        assertEquals(conversation.systemInstruction, fitted.systemInstruction)
         assertEquals("Please continue with the first practical exercise.", fitted.userMessage)
         assertTrue(fitted.initialMessages.size < conversation.initialMessages.size)
     }
@@ -1030,8 +1066,297 @@ class LiteRtLmChatServiceTest {
             contextSize = 512
         )
 
-        assertEquals("/tmp/current.wav", fitted.userAudioPath)
-        assertEquals("/tmp/earlier.wav", fitted.initialMessages.firstOrNull()?.audioPath)
+       assertEquals("/tmp/current.wav", fitted.userAudioPath)
+       assertEquals("/tmp/earlier.wav", fitted.initialMessages.firstOrNull()?.audioPath)
+   }
+
+    @Test
+    fun promptBudgetSubtractsOutputAndSafetyReserves() {
+        assertEquals(2_816, liteRtPromptContextBudget(4_096, 1_024))
+        assertEquals(5_632, liteRtPromptContextBudget(8_192, 2_048))
+        assertEquals(13_312, liteRtPromptContextBudget(16_384, 2_048))
+        assertEquals(256, liteRtPromptContextBudget(512, 128))
+    }
+
+    @Test
+    fun explicit32kContextKeepsOutputOverrideAndReservesMoreThanLogMargin() {
+        val overriddenOutputBudget = liteRtPromptContextBudget(32_768, 8_096)
+        val defaultOutputBudget = liteRtPromptContextBudget(32_768, 2_048)
+
+        assertEquals(23_648, overriddenOutputBudget)
+        assertTrue(24_050 > overriddenOutputBudget)
+        assertEquals(1_024, 32_768 - 8_096 - overriddenOutputBudget)
+        assertEquals(29_696, defaultOutputBudget)
+    }
+
+    @Test
+    fun historyIsTrimmedBeforeCompleteToolDefinitions() {
+        val model = LiteRtModelEntity(
+            displayName = "Gemma 4 E2B IT LiteRT-LM",
+            path = "/tmp/gemma-4-E2B-it.litertlm",
+            repoId = "litert-community/gemma-4-E2B-it-litert-lm",
+            filename = "gemma-4-E2B-it.litertlm",
+        )
+        val conversation = LiteRtConversationOverride(
+            systemInstruction = "Use the available tool when relevant.",
+            initialMessages = listOf(LiteRtConversationMessage("user", "history ".repeat(500))),
+            userMessage = "Summarize the current state.",
+            tools = listOf(
+                LiteRtToolDefinition(
+                    name = "read_state",
+                    description = "Read the current state.",
+                    parameters = mapOf("path" to "State path"),
+                )
+            ),
+        )
+
+        val fit = fitLiteRtConversationOverrideForContextWithSummary(
+            conversation = conversation,
+            model = model,
+            contextSize = 1_024,
+            maxOutputTokens = 128,
+        )
+
+        assertEquals(1, fit.droppedHistoryCount)
+        assertEquals(0, fit.droppedToolCount)
+        assertEquals(conversation.tools, fit.conversation.tools)
+        assertTrue(fit.conversation.initialMessages.isEmpty())
+        assertEquals(conversation.systemInstruction, fit.conversation.systemInstruction)
+        assertEquals(conversation.userMessage, fit.conversation.userMessage)
+    }
+
+    @Test
+    fun fiftyOneCompactToolSchemasFitAtSixteenKAndOverLimitAtEightKWithoutHidingTools() {
+        val logSizedSystemPrompt = "Use enabled tools and return concise results. ".repeat(148).take(6_803)
+        val conversation = LiteRtConversationOverride(
+            systemInstruction = logSizedSystemPrompt,
+            initialMessages = emptyList(),
+            userMessage = "continue",
+            tools = (0 until 51).map { index ->
+                val toolName = when (index) {
+                    0 -> "generate_image"
+                    1 -> "web_search"
+                    2 -> "read_file"
+                    3 -> "write_file"
+                    4 -> "list_directory"
+                    else -> "workspace_tool_${index.toString().padStart(2, '0')}"
+                }
+                val firstArgument = when (index) {
+                    0 -> "prompt"
+                    1 -> "query"
+                    else -> "target"
+                }
+                val secondArgument = when (index) {
+                    0 -> "output_path"
+                    1 -> "source_limit"
+                    else -> "limit"
+                }
+                val schema = JSONObject().apply {
+                    put("type", "object")
+                    put("title", "Verbose $toolName parameter schema title")
+                    put("properties", JSONObject().apply {
+                        put(firstArgument, JSONObject().apply {
+                            put("type", "string")
+                            if (index < 2) put("description", if (index == 0) "Image prompt" else "Search terms")
+                        })
+                        put(secondArgument, JSONObject().apply {
+                            put("type", if (index == 0) "string" else "integer")
+                        })
+                    })
+                    put("required", JSONArray().put(firstArgument))
+                    put("additionalProperties", false)
+                    put("examples", JSONArray().put(JSONObject().put(firstArgument, "example value")))
+                    put("x-verbose-metadata", "Verbose extension metadata that should not reach the model")
+                }.toString()
+                LiteRtToolDefinition(
+                    name = toolName,
+                    description = when (index) {
+                        0 -> "Generate an image from a prompt and save it to the requested path."
+                        1 -> "Search public web sources for the requested query."
+                        else -> "Use $toolName."
+                    },
+                    parameters = mapOf(firstArgument to firstArgument, secondArgument to secondArgument),
+                    requiredParams = listOf(firstArgument),
+                    parameterSchemaJson = schema,
+                )
+            },
+        )
+        val rendered = renderLiteRtPromptForEstimate(conversation)
+        val requiredInputTokens = estimateLiteRtPromptTokens(rendered)
+        assertEquals(6_803, logSizedSystemPrompt.length)
+        assertTrue(requiredInputTokens > liteRtPromptContextBudget(8_192, 2_048))
+        assertTrue(requiredInputTokens <= liteRtPromptContextBudget(16_384, 2_048))
+
+        val model = LiteRtModelEntity(
+            displayName = "Gemma 4 E2B IT LiteRT-LM",
+            path = "/tmp/gemma-4-E2B-it.litertlm",
+            repoId = "litert-community/gemma-4-E2B-it-litert-lm",
+            filename = "gemma-4-E2B-it.litertlm",
+        )
+        val fit = fitLiteRtConversationOverrideForContextWithSummary(
+            conversation = conversation,
+            model = model,
+            contextSize = 16_384,
+            maxOutputTokens = 2_048,
+        )
+        val fitted = fit.conversation
+        val availableInput = liteRtPromptContextBudget(16_384, 2_048)
+
+        assertEquals(0, fit.droppedToolCount)
+        assertEquals(0, fit.droppedHistoryCount)
+        assertEquals(conversation.tools, fitted.tools)
+        assertTrue(fitted.tools.any { it.name == "generate_image" })
+        assertTrue(fitted.tools.any { it.name == "web_search" })
+        val modelSchemas = fitted.tools.associate { tool ->
+            tool.name to JSONObject(tool.toLiteRtOpenApiToolJson()).getJSONObject("parameters")
+        }
+        assertEquals(51, modelSchemas.size)
+        assertTrue(modelSchemas.getValue("generate_image").getJSONObject("properties").has("prompt"))
+        assertTrue(modelSchemas.getValue("generate_image").getJSONObject("properties").has("output_path"))
+        assertTrue(modelSchemas.getValue("web_search").getJSONObject("properties").has("query"))
+        assertTrue(modelSchemas.getValue("web_search").getJSONObject("properties").has("source_limit"))
+        assertEquals(
+            listOf("query"),
+            modelSchemas.getValue("web_search").getJSONArray("required").let { array ->
+                (0 until array.length()).map { array.getString(it) }
+            },
+        )
+        assertEquals(conversation.systemInstruction, fitted.systemInstruction)
+        assertEquals(conversation.userMessage, fitted.userMessage)
+        assertTrue(estimateLiteRtPromptTokens(renderLiteRtPromptForEstimate(fitted)) <= availableInput)
+
+        val eightKFailure = runCatching {
+            fitLiteRtConversationOverrideForContextWithSummary(
+                conversation = conversation,
+                model = model,
+                contextSize = 8_192,
+                maxOutputTokens = 2_048,
+            )
+        }.exceptionOrNull()
+        assertTrue(eightKFailure is LiteRtPromptOverLimitException)
+        assertEquals(
+            liteRtPromptContextBudget(8_192, 2_048),
+            (eightKFailure as LiteRtPromptOverLimitException).availableInputTokens,
+        )
+    }
+
+    @Test
+    fun verboseToolSchemaIsCompactedForTheModelAndEssentialPromptOverLimitIsRecoverable() {
+        val model = LiteRtModelEntity(
+            displayName = "Gemma 4 E2B IT LiteRT-LM",
+            path = "/tmp/gemma-4-E2B-it.litertlm",
+            repoId = "litert-community/gemma-4-E2B-it-litert-lm",
+            filename = "gemma-4-E2B-it.litertlm"
+        )
+        val schemaDescription = "schema-field ".repeat(400)
+        val conversation = LiteRtConversationOverride(
+            systemInstruction = "Keep this complete system instruction.",
+            initialMessages = emptyList(),
+            userMessage = "Keep this complete current message.",
+            tools = listOf(
+                LiteRtToolDefinition(
+                    name = "save_record",
+                    description = "Save a record.",
+                    parameters = emptyMap(),
+                    parameterSchemaJson = """{"type":"object","properties":{"record":{"type":"string","description":"$schemaDescription"}}}""",
+                )
+            ),
+        )
+
+        val compactTool = JSONObject(conversation.tools.single().toLiteRtOpenApiToolJson())
+        val compactSchema = compactTool.getJSONObject("parameters")
+        val compactDescription = compactSchema.getJSONObject("properties")
+            .getJSONObject("record").getString("description")
+        assertTrue(compactDescription.length < schemaDescription.length)
+        assertFalse(compactTool.toString().contains("examples"))
+        assertEquals("Save a record.", compactTool.getString("description"))
+
+        val fitted = fitLiteRtConversationOverrideForContextWithSummary(
+            conversation = conversation,
+            model = model,
+            contextSize = 1_024,
+            maxOutputTokens = 128,
+        )
+        assertEquals(0, fitted.droppedHistoryCount)
+        assertEquals(0, fitted.droppedToolCount)
+        assertEquals(conversation.tools, fitted.conversation.tools)
+        assertEquals(conversation.systemInstruction, fitted.conversation.systemInstruction)
+        assertEquals(conversation.userMessage, fitted.conversation.userMessage)
+
+        val oversizedEssential = conversation.copy(
+            systemInstruction = "Keep this essential system instruction. ".repeat(100),
+            tools = emptyList(),
+        )
+        val error = runCatching {
+            fitLiteRtConversationOverrideForContext(
+                conversation = oversizedEssential,
+                model = model,
+                contextSize = 512,
+                maxOutputTokens = 128,
+            )
+        }.exceptionOrNull()
+
+        assertTrue(error is LiteRtPromptOverLimitException)
+        val overLimit = error as LiteRtPromptOverLimitException
+        assertTrue(overLimit.requiredInputTokens > overLimit.availableInputTokens)
+        assertEquals(256, overLimit.availableInputTokens)
+    }
+
+    @Test
+    fun compactSchemaRetainsRequiredTypesEnumsAndNestedItems() {
+        val rawSchema = """{"type":"object","title":"Long title","properties":{"query":{"type":"string","description":"${"query guidance ".repeat(40)}","examples":["x"]},"scope":{"type":"array","items":{"type":"string","enum":["workspace","global"]}}},"required":["query"],"default":{}}"""
+
+        val compact = JSONObject(requireNotNull(compactLiteRtToolParameterSchemaJson(rawSchema)))
+        val properties = compact.getJSONObject("properties")
+
+        assertFalse(compact.has("title"))
+        assertFalse(compact.has("default"))
+        assertFalse(properties.getJSONObject("query").has("examples"))
+        assertEquals(listOf("query"), compact.getJSONArray("required").let { array ->
+            (0 until array.length()).map { array.getString(it) }
+        })
+        assertEquals("string", properties.getJSONObject("query").getString("type"))
+        assertEquals(
+            listOf("workspace", "global"),
+            properties.getJSONObject("scope").getJSONObject("items").getJSONArray("enum").let { array ->
+                (0 until array.length()).map { array.getString(it) }
+            },
+        )
+        assertTrue(properties.getJSONObject("query").getString("description").length <= 96)
+    }
+
+    @Test
+    fun processGenerationLockKeepsMtpResetBeforeNextRequestAndUnlocksOnCancellation() = runBlocking {
+        val events = mutableListOf<String>()
+        val firstInside = CompletableDeferred<Unit>()
+        val first = launch {
+            withLiteRtProcessGenerationLock {
+                events += "first configured"
+                firstInside.complete(Unit)
+                try {
+                    awaitCancellation()
+                } finally {
+                    events += "first MTP reset"
+                }
+            }
+        }
+        firstInside.await()
+        val second = async {
+            withLiteRtProcessGenerationLock {
+                events += "second configured"
+                "done"
+            }
+        }
+        yield()
+
+        assertEquals(listOf("first configured"), events)
+        first.cancelAndJoin()
+
+        assertEquals("done", second.await())
+        assertEquals(
+            listOf("first configured", "first MTP reset", "second configured"),
+            events,
+        )
     }
 }
 

@@ -4,6 +4,10 @@ import com.example.llamadroid.data.model.LlamaMessageEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.google.gson.JsonParser
+import okio.Buffer
+import com.example.llamadroid.data.api.LlamaChatMessage
+import com.example.llamadroid.data.api.LlamaChatRequest
 import java.io.File
 
 class LlamaMultimodalPayloadTest {
@@ -78,6 +82,127 @@ class LlamaMultimodalPayloadTest {
         assertTrue(imageUrl.startsWith("data:image/jpeg;base64,"))
         assertEquals("mp3", inputAudio["format"])
         assertEquals("BAUG", inputAudio["data"])
+    }
+
+    @Test
+    fun `video attachment uses local file reference without base64 or format field`() {
+        val videoFile = tempFile(".mp4", byteArrayOf(1, 2, 3, 4))
+
+        val content = buildNativeLlamaUserContent(
+            userMessage = "describe this clip",
+            videoPath = videoFile.absolutePath
+        )
+
+        val parts = content as List<*>
+        assertEquals(2, parts.size)
+        assertEquals("text", (parts[0] as Map<*, *>) ["type"])
+        val videoPart = parts[1] as Map<*, *>
+        assertEquals("input_video", videoPart["type"])
+        val inputVideo = videoPart["input_video"] as Map<*, *>
+        assertEquals(localLlamaVideoFileUrl(videoFile.absolutePath), inputVideo["data"])
+        assertTrue("format" !in inputVideo)
+        assertTrue((inputVideo["data"] as String).startsWith("file://"))
+    }
+
+    @Test
+    fun `video payload can carry separately extracted audio`() {
+        val videoFile = tempFile(".mp4", byteArrayOf(1, 2, 3, 4))
+        val audioFile = tempFile(".wav", byteArrayOf(5, 6, 7, 8))
+
+        val content = buildNativeLlamaUserContent(
+            userMessage = "watch and listen",
+            videoPath = videoFile.absolutePath,
+            videoData = "file://${videoFile.name}",
+            additionalAudioPaths = listOf(audioFile.absolutePath)
+        )
+
+        val parts = content as List<*>
+        assertEquals(3, parts.size)
+        assertEquals("text", (parts[0] as Map<*, *>) ["type"])
+        assertEquals("input_video", (parts[1] as Map<*, *>) ["type"])
+        assertEquals("input_audio", (parts[2] as Map<*, *>) ["type"])
+        val inputAudio = (parts[2] as Map<*, *>) ["input_audio"] as Map<*, *>
+        assertEquals("wav", inputAudio["format"])
+        assertEquals("BQYHCA==", inputAudio["data"])
+    }
+
+    @Test
+    fun `remote video request streams bytes into marker without local path`() {
+        val videoFile = tempFile(".mp4", byteArrayOf(1, 2, 3, 4))
+        val marker = llamaVideoStreamMarker(0)
+        val request = LlamaChatRequest(
+            model = "video-model",
+            messages = listOf(
+                LlamaChatMessage(
+                    role = "user",
+                    content = listOf(
+                        mapOf(
+                            "type" to "input_video",
+                            "input_video" to mapOf("data" to marker)
+                        )
+                    )
+                )
+            )
+        )
+
+        val body = buildStreamingLlamaChatRequestBody(request, listOf(videoFile.absolutePath))
+        val buffer = Buffer()
+        body.writeTo(buffer)
+        val json = buffer.readUtf8()
+
+        assertTrue("AQIDBA==" in json)
+        assertTrue(marker !in json)
+        assertTrue(videoFile.absolutePath !in json)
+        assertTrue("input_video" in json)
+        val parsedData = JsonParser.parseString(json)
+            .asJsonObject["messages"].asJsonArray[0]
+            .asJsonObject["content"].asJsonArray[0]
+            .asJsonObject["input_video"].asJsonObject["data"].asString
+        assertEquals("AQIDBA==", parsedData)
+    }
+
+    @Test
+    fun `long video payload uses disclosed sampled frames without original input video`() {
+        val videoFile = tempFile(".mp4", byteArrayOf(1, 2, 3, 4))
+        val marker = llamaVideoStreamMarker(0)
+
+        val content = buildNativeLlamaUserContent(
+            userMessage = "what changes over time",
+            videoPath = videoFile.absolutePath,
+            videoFrameData = listOf(marker),
+            videoSamplingDisclosure = "Sampled 1 frame uniformly",
+            includeVideo = false
+        )
+
+        val parts = content as List<*>
+        assertEquals(3, parts.size)
+        assertEquals("text", (parts[0] as Map<*, *>) ["type"])
+        assertEquals("text", (parts[1] as Map<*, *>) ["type"])
+        assertEquals("Sampled 1 frame uniformly", (parts[1] as Map<*, *>) ["text"])
+        assertEquals("image_url", (parts[2] as Map<*, *>) ["type"])
+        assertTrue(parts.none { (it as Map<*, *>) ["type"] == "input_video" })
+        assertTrue(videoFile.absolutePath !in parts.toString())
+    }
+
+    @Test
+    fun `bounded video observation is injected as text while original video stays out`() {
+        val videoFile = tempFile(".mp4", byteArrayOf(1, 2, 3, 4))
+
+        val content = buildNativeLlamaUserContent(
+            userMessage = "what happened",
+            videoPath = videoFile.absolutePath,
+            videoObservation = "Observed: a person enters the room.",
+            includeVideo = false
+        )
+
+        val parts = content as List<*>
+        assertEquals(2, parts.size)
+        assertEquals("text", (parts[0] as Map<*, *>) ["type"])
+        assertEquals(
+            "Observed: a person enters the room.",
+            (parts[1] as Map<*, *>) ["text"]
+        )
+        assertTrue(parts.none { (it as Map<*, *>) ["type"] == "input_video" })
     }
 
     @Test

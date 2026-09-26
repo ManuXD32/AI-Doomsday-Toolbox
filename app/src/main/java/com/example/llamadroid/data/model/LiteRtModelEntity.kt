@@ -1,6 +1,7 @@
 package com.example.llamadroid.data.model
 
 import android.os.Build
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -40,6 +41,10 @@ data class LiteRtModelEntity(
     val kbEmbeddingRuntime: String? = null,
     val kbEmbeddingStatus: String? = null,
     val maxContextTokens: Int? = null,
+    /** AUTO/CATALOG/USER_OVERRIDE/LEGACY; runtime capability fields are effective. */
+    @ColumnInfo(defaultValue = "'LEGACY'") val classificationSource: String = "LEGACY",
+    /** Immutable bounded inspector evidence, separate from effective selections. */
+    @ColumnInfo(defaultValue = "NULL") val detectedClassificationJson: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )

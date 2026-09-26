@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_world_brain_workflow_subtitle">Practica, guarda un checkpoint, evalúalo y decide si adoptarlo.</string>
+    <string name="tama_world_brain_workflow_practice_title">Práctica desechable</string>
+    <string name="tama_world_brain_workflow_practice_body">Las prácticas usan entornos locales desechables. No cambian el cerebro activo del mundo vivo hasta que adoptes explícitamente un candidato aprobado.</string>
+    <string name="tama_world_brain_workflow_active_title">Cerebro activo</string>
+    <string name="tama_world_brain_workflow_active_body">Esta es la política que usa actualmente el mundo vivo. Los candidatos de entrenamiento permanecen separados hasta una evaluación y una adopción explícita.</string>
+    <string name="tama_world_brain_workflow_candidate_title">Candidato de práctica</string>
+    <string name="tama_world_brain_workflow_candidate_body">Un checkpoint de práctica guardado solo es un candidato. Evalúa este candidato guardado antes de elegir Adoptar o Mantener actual.</string>
+    <string name="tama_world_brain_workflow_candidate_empty">Todavía no hay candidato guardado. Practica y guarda un checkpoint para poder evaluarlo.</string>
+    <string name="tama_world_brain_workflow_candidate_not_active">No está activo</string>
+    <string name="tama_world_brain_workflow_evaluate_candidate">Evaluar candidato</string>
+    <string name="tama_world_brain_workflow_details_title">Detalles de práctica</string>
+    <string name="tama_world_brain_workflow_curriculum_title">Currículo y velocidad</string>
+    <string name="tama_world_brain_workflow_validation_only">El nivel 0 solo valida el contrato del entorno; no actualiza los pesos de la política.</string>
+    <string name="tama_world_brain_workflow_trainable_default">El nivel 1 es el punto de partida entrenable predeterminado.</string>
+    <string name="tama_world_brain_workflow_checkpoints_body">Los checkpoints guardados siguen siendo artefactos de entrenamiento hasta que adoptes explícitamente un candidato.</string>
+    <string name="tama_world_brain_workflow_try_again">Intentar de nuevo</string>
+    <string name="tama_world_brain_workflow_loading_title">Preparando la práctica</string>
+    <string name="tama_world_brain_workflow_loading_body">El entrenador está cargando su estado guardado. No se muestra progreso hasta disponer de una instantánea real.</string>
+    <string name="tama_world_brain_workflow_evaluating_title">Evaluando candidato</string>
+    <string name="tama_world_brain_workflow_evaluating_body">El candidato guardado se está comparando en entornos de validación. Las acciones permanecen desactivadas hasta disponer de la comparación completa.</string>
+    <string name="tama_world_brain_workflow_blocked_title">Entrenamiento bloqueado</string>
+    <string name="tama_world_brain_workflow_error_title">El entrenamiento necesita atención</string>
+</resources>

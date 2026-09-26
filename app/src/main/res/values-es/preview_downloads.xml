@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="agent_preview_download_unsupported">Esta descarga de la vista previa no esta disponible. Solo se admiten descargas Blob generadas del mismo origen.</string>
+    <string name="agent_preview_download_in_progress">Ya hay una descarga de la vista previa en curso.</string>
+    <string name="agent_preview_download_too_large">La descarga de la vista previa supera el limite de 16 MiB.</string>
+    <string name="agent_preview_download_failed">La descarga de la vista previa fallo.</string>
+</resources>

@@ -8,6 +8,46 @@ import org.junit.Test
 
 class AgentChatRenderProjectionTest {
     @Test
+    fun projectControlPacketDetectionCoversCurrentAndLegacyFormats() {
+        assertTrue(isAgentProjectControlPacket("system", "# Project Control Packet\n- mode: BUILD"))
+        assertTrue(
+            isAgentProjectControlPacket(
+                "system",
+                "# Project Control Packet — Direct Control Capsule\n- exact_next_action: edit file"
+            )
+        )
+        assertTrue(isAgentProjectControlPacket("system", "CONTROL_CAPSULE v=1\nphase=BUILD"))
+        assertFalse(isAgentProjectControlPacket("assistant", "# Project Control Packet"))
+        assertFalse(isAgentProjectControlPacket("system", "ordinary status"))
+    }
+
+    @Test
+    fun projectControlPacketSummaryKeepsPhaseAndExactNextAction() {
+        val summary = summarizeAgentProjectControlPacket(
+            """# Project Control Packet — Direct Control Capsule
+                |- exact_next_action: update index.html
+                |- mode: BUILD
+            """.trimMargin()
+        )
+
+        assertEquals("BUILD", summary.phase)
+        assertEquals("update index.html", summary.nextAction)
+    }
+
+    @Test
+    fun legacyControlCapsuleSummarySupportsEqualsFields() {
+        val summary = summarizeAgentProjectControlPacket(
+            """CONTROL_CAPSULE v=1
+                |phase=VERIFY
+                |next_action=inspect preview
+            """.trimMargin()
+        )
+
+        assertEquals("VERIFY", summary.phase)
+        assertEquals("inspect preview", summary.nextAction)
+    }
+
+    @Test
     fun messageActionsReserveDistinctAccessibleTouchTargets() {
         assertTrue(AGENT_MESSAGE_ACTION_TOUCH_TARGET_DP >= 48)
     }

@@ -1,5 +1,6 @@
 package com.example.llamadroid.data.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
@@ -37,7 +38,18 @@ data class ModelEntity(
     val sdArtifactLayout: String? = null,
     val sdInspectionConfidence: String? = null,
     val sdInspectionVersion: Int = 0,
-    val sdInspectionJson: String? = null
+    val sdInspectionJson: String? = null,
+    // Audio model metadata. Nullable so existing model rows and non-audio
+    // rows remain unchanged while native TTS components survive renames.
+    val audioFamily: String? = null,
+    val audioLanguage: String? = null,
+    val audioComponentRole: String? = null,
+    /** Stable digest/content identity used for shared companion reuse. */
+    val audioArtifactIdentity: String? = null,
+    /** AUTO/CATALOG/USER_OVERRIDE/LEGACY; existing runtime fields stay effective. */
+    @ColumnInfo(defaultValue = "'LEGACY'") val classificationSource: String = "LEGACY",
+    /** Immutable bounded inspector evidence, separate from effective selections. */
+    @ColumnInfo(defaultValue = "NULL") val detectedClassificationJson: String? = null
 )
 
 const val SD_CAPABILITY_TXT2IMG = "txt2img"
@@ -134,5 +146,27 @@ enum class ModelType {
     // Video companion roles. Append only: legacy persisted enum values stay stable.
     SD_AUDIO_VAE,
     SD_EMBEDDINGS_CONNECTORS,
-    SD_MOTION_MODULE
+    SD_MOTION_MODULE,
+    // Audio text-to-speech model. Appended to preserve every persisted enum ordinal.
+    LLAMA_TTS,
+    // Companion projector/codec for a native TTS model. Appended for ordinal safety.
+    LLAMA_TTS_COMPANION,
+    // Stable Audio LiteRT components. These are deliberately appended: ModelType
+    // is persisted as an ordinal in legacy databases, so inserting a value above
+    // an existing entry would reinterpret installed model rows.
+    LITERT_AUDIO_DIT,
+    LITERT_AUDIO_COMPONENT,
+    // Stable-diffusion.cpp text encoder role. This value is deliberately
+    // appended because Room persists ModelType as an ordinal.
+    SD_LLM
 }
+
+/** True for native llama.cpp speech-generation model rows. */
+fun ModelType.isAudioTtsModelType(): Boolean = this == ModelType.LLAMA_TTS
+
+fun ModelType.isAudioTtsComponentType(): Boolean =
+    this == ModelType.LLAMA_TTS || this == ModelType.LLAMA_TTS_COMPANION
+
+/** Stable Audio is a LiteRT music/SFX pipeline, not a chat or llama.cpp row. */
+fun ModelType.isStableAudioComponentType(): Boolean =
+    this == ModelType.LITERT_AUDIO_DIT || this == ModelType.LITERT_AUDIO_COMPONENT

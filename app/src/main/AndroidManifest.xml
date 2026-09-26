@@ -40,6 +40,7 @@
     <application
         android:gwpAsanMode="${gwpAsanMode}"
         android:name=".LlamaApplication"
+        android:appComponentFactory=".data.db.RestoreComponentFactory"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -51,7 +52,8 @@
         android:usesCleartextTraffic="true"
         android:largeHeap="true"
         android:networkSecurityConfig="@xml/network_security_config"
-        tools:targetApi="31">
+        tools:targetApi="31"
+        tools:replace="android:appComponentFactory">
 
         <uses-native-library android:name="libOpenCL.so" android:required="false" />
         <uses-native-library android:name="libOpenCL-pixel.so" android:required="false" />
@@ -162,6 +164,16 @@
             android:exported="false" />
 
         <service
+            android:name=".audio.AudioGenerationService"
+            android:foregroundServiceType="mediaProcessing"
+            android:exported="false" />
+
+        <service
+            android:name=".audio.music.StableAudio3WorkerService"
+            android:process=":stable_audio_worker"
+            android:exported="false" />
+
+        <service
             android:name=".service.LlamaCallService"
             android:foregroundServiceType="microphone|mediaPlayback"
             android:exported="false" />
@@ -189,6 +201,11 @@
 
         <service
             android:name=".service.VideoGenerationService"
+            android:foregroundServiceType="mediaProcessing"
+            android:exported="false" />
+
+        <service
+            android:name=".service.GenerationQueueService"
             android:foregroundServiceType="mediaProcessing"
             android:exported="false" />
 
@@ -263,8 +280,12 @@
             
         <service 
             android:name=".service.AgentForegroundService" 
-            android:foregroundServiceType="dataSync" 
-            android:exported="false" />
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started local AI agent environment with persistent interactive sessions, terminals and project previews; explicitly stopped through visible runtime controls" />
+        </service>
 
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"
@@ -378,6 +399,23 @@
 
         <receiver
             android:name=".service.LlamaScheduledTaskReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".service.GenerationQueueAlarmReceiver"
+            android:exported="false" />
+
+        <!-- Each declared worker process acknowledges restore quiescence in its own process. -->
+        <receiver android:name=".data.db.LlamaRuntimeRestoreReceiver" android:process=":llama_runtime" android:exported="false" />
+        <receiver android:name=".data.db.LlamaSessionsRestoreReceiver" android:process=":llama_sessions_runtime" android:exported="false" />
+        <receiver android:name=".data.db.DistributedLlamaRestoreReceiver" android:process=":distributed_llama_runtime" android:exported="false" />
+        <receiver android:name=".data.db.StableAudioRestoreReceiver" android:process=":stable_audio_worker" android:exported="false" />
+        <receiver android:name=".data.db.OnnxBgrRestoreReceiver" android:process=":onnx_bgr" android:exported="false" />
+        <receiver android:name=".data.db.LiteRtRestoreReceiver" android:process=":litert_lm" android:exported="false" />
+        <receiver android:name=".data.db.AgentRemoteRestoreReceiver" android:process=":agent_remote" android:exported="false" />
+
+        <receiver
+            android:name=".service.AgentSleepWakeReceiver"
             android:exported="false" />
 
         <receiver
