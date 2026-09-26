@@ -12,17 +12,21 @@ import androidx.core.content.ContextCompat
 import com.example.llamadroid.LlamaApplication
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.GenerationQueueItemEntity
+import com.example.llamadroid.data.db.RestoreCoordinator
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -39,11 +43,16 @@ class GenerationQueueService : Service() {
     private var timedOut = false
 
     override fun attachBaseContext(newBase: Context) {
-        super.attachBaseContext(LlamaApplication.updateLocale(newBase))
+        super.attachBaseContext(if (RestoreCoordinator.isMaintenance(newBase)) newBase
+            else LlamaApplication.updateLocale(newBase))
     }
 
     override fun onCreate() {
         super.onCreate()
+        if (RestoreCoordinator.isMaintenance(this)) {
+            stopSelf()
+            return
+        }
         repository = GenerationQueueRepository(this)
         GenerationDiagnosticsStore.init(applicationContext)
     }
@@ -51,6 +60,10 @@ class GenerationQueueService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (RestoreCoordinator.isMaintenance(this)) {
+            stopSelfResult(startId)
+            return START_NOT_STICKY
+        }
         when (intent?.action) {
             ACTION_RUN, ACTION_RUN_SCHEDULED -> {
                 if (drainJob?.isActive == true) return START_NOT_STICKY
@@ -135,10 +148,11 @@ class GenerationQueueService : Service() {
                 throw cancelled
             } catch (error: Exception) {
                 QueuedGenerationOutcome.failed(error.message ?: getString(R.string.error_generic))
+            } finally {
+                withContext(NonCancellable) { diagnosticJob.cancelAndJoin() }
             }
             val outcome = if (timedOut) QueuedGenerationOutcome.interrupted(MEDIA_PROCESSING_TIMEOUT_REASON)
                 else attempted
-            diagnosticJob.cancelAndJoin()
             val lastProgress = progressReader()
             diagnostics.sample(lastProgress?.first, lastProgress?.second,
                 wakeLockProbe?.invoke(), GenerationQueueRuntime.isActive,
@@ -348,6 +362,7 @@ class GenerationQueueService : Service() {
     override fun onDestroy() {
         runCatching { currentCancel?.invoke() }
         drainJob?.cancel()
+        scope.cancel()
         GenerationQueueRuntime.setActive(false)
         super.onDestroy()
     }

@@ -180,7 +180,7 @@ class OnnxImageGenerationService : Service() {
                     startGeneration(config)
                 }
             }
-            ACTION_CANCEL_GENERATION -> cancelGeneration()
+            ACTION_CANCEL_GENERATION -> if (intent.matchesNotificationTask(notificationTaskId)) cancelGeneration()
         }
         return START_NOT_STICKY
     }
@@ -194,7 +194,8 @@ class OnnxImageGenerationService : Service() {
     private fun ensureForeground(title: String) {
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.IMAGE_GEN,
-            title
+            title,
+            cancellationOwner = UnifiedNotificationManager.CancellationOwner.ONNX_IMAGE
         )
         notificationTaskId = taskId
         startForeground(taskId, notification)
@@ -571,9 +572,10 @@ class OnnxImageGenerationService : Service() {
                 putExtra(EXTRA_CONFIG, config)
             }
 
-        fun createCancelIntent(context: Context): Intent =
+        fun createCancelIntent(context: Context, expectedTaskId: Int? = null): Intent =
             Intent(context, OnnxImageGenerationService::class.java).apply {
                 action = ACTION_CANCEL_GENERATION
+                expectedTaskId?.let { putExtra(UnifiedNotificationManager.EXTRA_EXPECTED_TASK_ID, it) }
             }
     }
 

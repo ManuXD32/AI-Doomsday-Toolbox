@@ -34,6 +34,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * Shows grouped notifications with progress tracking.
  */
 object UnifiedNotificationManager {
+    const val EXTRA_EXPECTED_TASK_ID = "com.example.llamadroid.expected_notification_task_id"
     
     private const val CHANNEL_ID = "doomsday_ai_tasks"
     private const val CHANNEL_NAME = "AI Tasks"
@@ -70,6 +71,8 @@ object UnifiedNotificationManager {
         PLAN_APPROVAL_REQUIRED,
         USER_INPUT_REQUIRED
     }
+
+    enum class CancellationOwner { STABLE_DIFFUSION, ONNX_IMAGE, VIDEO }
     
     /**
      * Represents a running task
@@ -84,7 +87,8 @@ object UnifiedNotificationManager {
         val completionAlertPolicy: CompletionAlertPolicy = type.defaultCompletionAlertPolicy,
         val isComplete: Boolean = false,
         val isError: Boolean = false,
-        val errorMessage: String? = null
+        val errorMessage: String? = null,
+        val cancellationOwner: CancellationOwner? = null
     )
     
     enum class TaskType(
@@ -310,7 +314,8 @@ object UnifiedNotificationManager {
     fun startTask(
         type: TaskType,
         title: String,
-        completionAlertPolicy: CompletionAlertPolicy = type.defaultCompletionAlertPolicy
+        completionAlertPolicy: CompletionAlertPolicy = type.defaultCompletionAlertPolicy,
+        cancellationOwner: CancellationOwner? = null
     ): Int {
         val id = nextId.getAndIncrement()
         val task = TaskInfo(
@@ -323,7 +328,8 @@ object UnifiedNotificationManager {
             } else {
                 "Starting..."
             },
-            completionAlertPolicy = completionAlertPolicy
+            completionAlertPolicy = completionAlertPolicy,
+            cancellationOwner = cancellationOwner
         )
         _activeTasks[id] = task
         updateTasksFlow()
@@ -343,9 +349,10 @@ object UnifiedNotificationManager {
     fun startTaskForForeground(
         type: TaskType,
         title: String,
-        completionAlertPolicy: CompletionAlertPolicy = type.defaultCompletionAlertPolicy
+        completionAlertPolicy: CompletionAlertPolicy = type.defaultCompletionAlertPolicy,
+        cancellationOwner: CancellationOwner? = null
     ): Pair<Int, android.app.Notification> {
-        val id = startTask(type, title, completionAlertPolicy)
+        val id = startTask(type, title, completionAlertPolicy, cancellationOwner)
         val notification = getForegroundNotification(id) 
             ?: createBasicForegroundNotification(title)
         return Pair(id, notification)
@@ -379,7 +386,8 @@ object UnifiedNotificationManager {
             val updated = task.copy(
                 progress = 1f,
                 progressText = resultText,
-                isComplete = true
+                isComplete = true,
+                cancellationOwner = null
             )
             _activeTasks[taskId] = updated
             updateTasksFlow()
@@ -447,7 +455,8 @@ object UnifiedNotificationManager {
             val updated = task.copy(
                 progressText = "Error: $errorMessage",
                 isError = true,
-                errorMessage = errorMessage
+                errorMessage = errorMessage,
+                cancellationOwner = null
             )
             _activeTasks[taskId] = updated
             updateTasksFlow()

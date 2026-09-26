@@ -104,7 +104,8 @@ interface DownloadTaskDao {
 
     @Query(
         "UPDATE download_tasks SET status = :status, bytesDownloaded = :bytesDownloaded, " +
-            "totalBytes = :totalBytes, lastError = :lastError, updatedAt = :updatedAt WHERE id = :id"
+            "totalBytes = CASE WHEN :totalBytes IS NULL AND :status != 'ACTIVE' " +
+            "THEN totalBytes ELSE :totalBytes END, lastError = :lastError, updatedAt = :updatedAt WHERE id = :id"
     )
     suspend fun updateState(
         id: String,

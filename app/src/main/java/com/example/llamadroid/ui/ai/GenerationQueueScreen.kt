@@ -22,6 +22,10 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.paging.LoadState
+import androidx.paging.compose.collectAsLazyPagingItems
+import androidx.paging.compose.itemKey
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -40,6 +44,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -56,7 +61,8 @@ import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.navigation.NavController
 import com.example.llamadroid.R
-import com.example.llamadroid.data.db.GenerationQueueItemEntity
+import com.example.llamadroid.data.db.GenerationQueueListItem
+import com.example.llamadroid.data.db.GenerationQueueRunSummary
 import com.example.llamadroid.service.GeneratedVideoMetadata
 import com.example.llamadroid.service.GenerationQueueNotifications
 import com.example.llamadroid.service.GenerationQueueProgress
@@ -84,17 +90,14 @@ fun GenerationQueueScreen(navController: NavController) {
     val repository = remember(context) { GenerationQueueRepository(context) }
     val scope = rememberCoroutineScope()
     val queue by repository.queue.collectAsState(initial = emptyList())
-    val history by repository.history.collectAsState(initial = emptyList())
     val control by repository.control.collectAsState(initial = null)
+    val pendingCount by repository.pendingCountFlow.collectAsState(initial = 0)
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     val runId = control?.runId
-    val progress = remember(runId, queue, history) {
-        val rows = (queue + history).filter { it.runId == runId && runId != null }
-        GenerationQueueProgress(rows.size, rows.count { it.status != "PENDING" && it.status != "RUNNING" },
-            rows.count { it.status == "SUCCEEDED" },
-            rows.count { it.status == "FAILED" || it.status == "INTERRUPTED" },
-            rows.count { it.status == "PENDING" })
-    }
+    val summaryFlow = remember(repository, runId) { repository.runSummaryFlow(runId) }
+    val summary by summaryFlow.collectAsState(initial = GenerationQueueRunSummary.EMPTY)
+    val progress = GenerationQueueProgress(summary.total, summary.finished, summary.succeeded,
+        summary.failed, summary.waiting)
     fun requestNotificationIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
@@ -157,7 +160,7 @@ fun GenerationQueueScreen(navController: NavController) {
                     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(stringResource(R.string.generation_queue_run_count,
-                                queue.count { it.status == "PENDING" }), style = MaterialTheme.typography.titleMedium)
+                                pendingCount), style = MaterialTheme.typography.titleMedium)
                             if (runId != null) {
                                 Text(stringResource(R.string.generation_queue_notification_detail,
                                     progress.finished, progress.total, progress.succeeded, progress.failed,
@@ -173,10 +176,7 @@ fun GenerationQueueScreen(navController: NavController) {
                                 Text(stringResource(R.string.generation_queue_missed_message),
                                     color = MaterialTheme.colorScheme.error)
                             }
-                            if (control?.state == "PAUSED" && history.any {
-                                    it.runId == runId &&
-                                        it.errorMessage == GenerationQueueService.MEDIA_PROCESSING_TIMEOUT_REASON
-                                }) {
+                            if (control?.state == "PAUSED" && summary.hasMediaTimeout > 0) {
                                 Text(stringResource(R.string.generation_queue_media_limit_message),
                                     color = MaterialTheme.colorScheme.error)
                             }
@@ -190,7 +190,7 @@ fun GenerationQueueScreen(navController: NavController) {
                     items(queue, key = { it.id }) { item ->
                         GenerationQueueItemCard(item,
                             queue.filter { it.status == "PENDING" }.indexOf(item),
-                            queue.count { it.status == "PENDING" },
+                            pendingCount,
                             onMove = { delta -> scope.launch {
                                 runCatching { repository.movePending(item.id, delta) }.onFailure { actionFailed() }
                             } },
@@ -245,7 +245,7 @@ fun GenerationQueueScreen(navController: NavController) {
 
 @Composable
 private fun GenerationQueueItemCard(
-    item: GenerationQueueItemEntity,
+    item: GenerationQueueListItem,
     index: Int,
     count: Int,
     onMove: (Int) -> Unit,
@@ -283,19 +283,36 @@ private fun GenerationQueueItemCard(
 @Composable
 fun GenerationQueueHistoryScreen(navController: NavController) {
     val context = LocalContext.current
-    val repository = remember(context) { GenerationQueueRepository(context) }
+    val historyViewModel: GenerationQueueHistoryViewModel = viewModel()
+    val repository = historyViewModel.repository
     val scope = rememberCoroutineScope()
-    val history by repository.history.collectAsState(initial = emptyList())
-    var selected by remember { mutableStateOf<GenerationQueueItemEntity?>(null) }
-    var discardCandidate by remember { mutableStateOf<GenerationQueueItemEntity?>(null) }
+    val history = historyViewModel.history.collectAsLazyPagingItems()
+    var selected by remember { mutableStateOf<GenerationQueueListItem?>(null) }
+    var discardCandidate by remember { mutableStateOf<GenerationQueueListItem?>(null) }
     var busyItemId by remember { mutableStateOf<String?>(null) }
-    var retryFilesRevision by remember { mutableStateOf(0) }
+    var retryFilesRevision by remember { mutableIntStateOf(0) }
     AppScreenScaffold(title = stringResource(R.string.generation_queue_history_title),
         onBack = { navController.popBackStack() }) {
         LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp)) {
-            if (history.isEmpty()) item { Text(stringResource(R.string.generation_queue_history_empty)) }
-            items(history, key = { it.id }) { item ->
+            if (history.loadState.refresh is LoadState.Loading) {
+                item { Text(stringResource(R.string.generation_queue_history_loading)) }
+            }
+            if (history.loadState.refresh is LoadState.Error) {
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(stringResource(R.string.generation_queue_history_load_failed))
+                        Button(onClick = history::retry) {
+                            Text(stringResource(R.string.generation_queue_history_retry_load))
+                        }
+                    }
+                }
+            }
+            if (history.itemCount == 0 && history.loadState.refresh is LoadState.NotLoading) {
+                item { Text(stringResource(R.string.generation_queue_history_empty)) }
+            }
+            items(history.itemCount, key = history.itemKey { it.id }) { index ->
+                val item = history[index] ?: return@items
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(queueKindLabel(item.kind), style = MaterialTheme.typography.titleMedium)
@@ -349,6 +366,16 @@ fun GenerationQueueHistoryScreen(navController: NavController) {
                                 }
                             }
                         }
+                    }
+                }
+            }
+            if (history.loadState.append is LoadState.Loading) {
+                item { Text(stringResource(R.string.generation_queue_history_loading)) }
+            }
+            if (history.loadState.append is LoadState.Error) {
+                item {
+                    Button(onClick = history::retry, modifier = Modifier.fillMaxWidth()) {
+                        Text(stringResource(R.string.generation_queue_history_retry_load))
                     }
                 }
             }

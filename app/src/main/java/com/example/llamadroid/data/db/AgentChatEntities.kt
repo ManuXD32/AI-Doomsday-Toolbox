@@ -180,7 +180,8 @@ data class AgentProotEnvironmentEntity(
     val storageKey: String = id,
     val imageId: String = "debian-trixie-arm64-20260824",
     val imageVersion: String = "13.6 (Trixie)",
-    val imageDigest: String = "4fca9c419bf46e2a639a635edd5f6c16da619a49ebb3b0d152a7378ea7cffeea",
+    /** An empty pin selects the checksum declared by the installed, signed asset pack. */
+    val imageDigest: String = "",
     val sharingMode: String = AgentProotEnvironmentSharingMode.ISOLATED,
     val status: String = AgentProotEnvironmentStatus.NOT_INSTALLED,
     val sizeBytes: Long = 0L,

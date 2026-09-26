@@ -181,7 +181,7 @@ class Converters {
         GenerationQueueItemEntity::class,
         GenerationQueueControlEntity::class
     ], 
-    version = 124,
+    version = 125,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -241,31 +241,36 @@ abstract class AppDatabase : RoomDatabase() {
         private var INSTANCE: AppDatabase? = null
 
         fun getDatabase(context: Context): AppDatabase {
+            RestoreCoordinator.requireNormalAccess(context)
             return INSTANCE ?: synchronized(this) {
-                val instance = Room.databaseBuilder(
-                    context.applicationContext,
-                    AppDatabase::class.java,
-                    "llama_droid_db"
-                )
-                    // Apply any defined migrations
-                    .addMigrations(*Migrations.ALL_MIGRATIONS)
-                    // Only allow destructive migration from pre-release versions (1-26)
-                    // From v27 onwards, proper migrations are required
-                    .fallbackToDestructiveMigrationFrom(*Migrations.DESTRUCTIVE_FALLBACK_VERSIONS)
-                    .addCallback(object : RoomDatabase.Callback() {
-                        override fun onOpen(db: SupportSQLiteDatabase) {
-                            super.onOpen(db)
-                            DebugLog.log("[DB] AppDatabase opened, version: ${db.version}")
-                        }
-                    })
-                    .build()
-                INSTANCE = instance
-                instance
+                RestoreCoordinator.requireNormalAccess(context)
+                INSTANCE ?: run {
+                    val instance = Room.databaseBuilder(
+                        context.applicationContext,
+                        AppDatabase::class.java,
+                        "llama_droid_db"
+                    )
+                        // Apply any defined migrations
+                        .addMigrations(*Migrations.ALL_MIGRATIONS)
+                        // Only allow destructive migration from pre-release versions (1-26)
+                        // From v27 onwards, proper migrations are required
+                        .fallbackToDestructiveMigrationFrom(*Migrations.DESTRUCTIVE_FALLBACK_VERSIONS)
+                        .addCallback(object : RoomDatabase.Callback() {
+                            override fun onOpen(db: SupportSQLiteDatabase) {
+                                super.onOpen(db)
+                                DebugLog.log("[DB] AppDatabase opened, version: ${db.version}")
+                            }
+                        })
+                        .build()
+                    INSTANCE = instance
+                    instance
+                }
             }
         }
         
         /**
-         * Close the database instance. Used before restore to release file locks.
+         * Close under the factory monitor after process quiescence. Callers must not retain a
+         * database reference across restore or use this method as an ordinary cache reset.
          */
         fun closeInstance() {
             synchronized(this) {

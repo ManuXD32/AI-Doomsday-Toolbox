@@ -19,6 +19,9 @@ import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardCopyOption
+import java.nio.channels.FileChannel
+import java.nio.channels.OverlappingFileLockException
+import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.util.UUID
 import java.util.zip.GZIPInputStream
@@ -98,6 +101,13 @@ class HarnessRootfsFileStore(private val mounts: List<GuestMount>) {
             }
         }
 
+    /** Test seam for deterministic short writes and cancellation between streamed chunks. */
+    internal var copyChunkCheckpoint: (() -> Unit)? = null
+
+    init {
+        mountStates.filter { it.definition.writable }.forEach(::recoverAbandonedCopyStages)
+    }
+
     /** Guest-only parent directories needed when a bind target is absent from the base image. */
     private val virtualGuestDirectories: Set<String> = mountStates
         .asSequence()
@@ -148,7 +158,8 @@ class HarnessRootfsFileStore(private val mounts: List<GuestMount>) {
             }
             .toList()
         val virtualNames = virtualEntries.map { it.name }.toSet()
-        (physicalEntries.filterNot { it.name in virtualNames } + virtualEntries)
+        (physicalEntries.filterNot { it.name in virtualNames ||
+            (directoryIsMountRoot(guestPath) && it.name == COPY_STAGE_DIRECTORY) } + virtualEntries)
             .sortedWith(compareByDescending<HarnessRootfsFileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
     }
 
@@ -230,7 +241,39 @@ class HarnessRootfsFileStore(private val mounts: List<GuestMount>) {
         val to = resolveMutation(destination)
         require(from != sourcePath.mount.hostRoot && from != to.path && !to.path.startsWith(from)) { "ROOTFS_COPY_FORBIDDEN" }
         require(!Files.exists(to.path, LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(to.path)) { "ROOTFS_DESTINATION_EXISTS" }
-        copyTreeNoFollow(from, to.path, to.mount.hostRoot, ArchiveBudget())
+        Files.createDirectories(to.path.parent ?: to.mount.hostRoot)
+        val stageBase = copyStageBase(to.mount)
+        require(!Files.isSymbolicLink(stageBase)) { "ROOTFS_SYMLINK_ESCAPE" }
+        Files.createDirectories(stageBase)
+        require(!Files.isSymbolicLink(stageBase) && stageBase.toRealPath() == stageBase) {
+            "ROOTFS_SYMLINK_ESCAPE"
+        }
+        val operationId = UUID.randomUUID().toString()
+        val stage = Files.createDirectory(stageBase.resolve(operationId))
+        try {
+            Files.write(stage.resolve(COPY_OWNER_RECORD), operationId.toByteArray(), StandardOpenOption.CREATE_NEW)
+            FileChannel.open(stage.resolve(COPY_ACTIVE_LOCK), StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.READ, StandardOpenOption.WRITE).use { channel ->
+                channel.lock().use {
+                    val payload = stage.resolve("payload")
+                    copyTreeNoFollow(from, payload, to.mount.hostRoot, ArchiveBudget())
+                    currentCoroutineContext().ensureActive()
+                    require(Files.getFileStore(payload) == Files.getFileStore(to.path.parent)) {
+                        "ROOTFS_CROSS_MOUNT_OPERATION"
+                    }
+                    synchronized(COPY_PUBLICATION_LOCK) {
+                        require(!Files.exists(to.path, LinkOption.NOFOLLOW_LINKS) &&
+                            !Files.isSymbolicLink(to.path)) { "ROOTFS_DESTINATION_EXISTS" }
+                        // This is a same-filesystem rename with no replacement option.
+                        Files.move(payload, to.path)
+                    }
+                }
+            }
+        } catch (failure: Throwable) {
+            cleanupOwnedStage(stage, operationId, failure, createdHere = true)
+            throw failure
+        }
+        cleanupOwnedStage(stage, operationId, null)
     }
 
     /** Exports a file or directory to a bounded `.tar.gz` stream for Android document providers. */
@@ -382,6 +425,7 @@ class HarnessRootfsFileStore(private val mounts: List<GuestMount>) {
         val guestPath = normalizeGuestPath(path)
         val mount = selectMount(guestPath)
         val candidate = hostPath(mount, guestPath)
+        requireNotCopyStage(mount, candidate)
         validateComponents(mount, candidate, allowExternalLeafSymlink = false)
         return ResolvedPath(guestPath, mount, candidate.toRealPath(), candidate)
     }
@@ -392,6 +436,7 @@ class HarnessRootfsFileStore(private val mounts: List<GuestMount>) {
         val mount = selectMount(guestPath)
         require(mount.definition.writable) { "ROOTFS_MOUNT_READ_ONLY" }
         val candidate = hostPath(mount, guestPath)
+        requireNotCopyStage(mount, candidate)
         require(!(mount.guestPrefix == "/" && guestPath in virtualGuestDirectories &&
             !Files.exists(candidate, LinkOption.NOFOLLOW_LINKS))) { "ROOTFS_MOUNT_PATH_REQUIRED" }
         validateComponents(mount, candidate, allowExternalLeafSymlink = true)
@@ -423,6 +468,15 @@ class HarnessRootfsFileStore(private val mounts: List<GuestMount>) {
         val candidate = mount.hostRoot.resolve(relative).normalize()
         require(candidate.startsWith(mount.hostRoot)) { "ROOTFS_PATH_ESCAPE" }
         return candidate
+    }
+
+    private fun directoryIsMountRoot(guestPath: String): Boolean =
+        selectMount(guestPath).guestPrefix == guestPath
+
+    private fun requireNotCopyStage(mount: MountState, candidate: Path) {
+        require(!candidate.startsWith(mount.hostRoot.resolve(COPY_STAGE_DIRECTORY))) {
+            "ROOTFS_RESERVED_PATH"
+        }
     }
 
     private fun validateComponents(mount: MountState, candidate: Path, allowExternalLeafSymlink: Boolean) {
@@ -464,9 +518,69 @@ class HarnessRootfsFileStore(private val mounts: List<GuestMount>) {
             } }
         } else {
             require(Files.isRegularFile(source, LinkOption.NOFOLLOW_LINKS)) { "ROOTFS_SPECIAL_FILE_FORBIDDEN" }
-            budget.accept(Files.size(source))
+            val expectedSize = Files.size(source)
+            budget.accept(expectedSize)
             Files.createDirectories(destination.parent ?: destinationRoot)
-            Files.copy(source, destination, StandardCopyOption.COPY_ATTRIBUTES)
+            Files.newInputStream(source).use { input ->
+                Files.newOutputStream(destination, StandardOpenOption.CREATE_NEW).use { output ->
+                    val buffer = ByteArray(COPY_BUFFER_SIZE)
+                    var copied = 0L
+                    while (true) {
+                        currentCoroutineContext().ensureActive()
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        output.write(buffer, 0, read)
+                        copied += read
+                        require(copied <= expectedSize) { "ROOTFS_ARCHIVE_LIMIT" }
+                        copyChunkCheckpoint?.invoke()
+                    }
+                    require(copied == expectedSize) { "ROOTFS_COPY_SOURCE_CHANGED" }
+                }
+            }
+            runCatching { Files.setLastModifiedTime(destination,
+                Files.getLastModifiedTime(source, LinkOption.NOFOLLOW_LINKS)) }
+            runCatching { Files.setPosixFilePermissions(destination,
+                Files.getPosixFilePermissions(source, LinkOption.NOFOLLOW_LINKS)) }
+        }
+    }
+
+    private fun copyStageBase(mount: MountState): Path = mount.hostReal.resolve(COPY_STAGE_DIRECTORY)
+
+    private fun cleanupOwnedStage(stage: Path, operationId: String, original: Throwable?,
+        createdHere: Boolean = false) {
+        if (!Files.isDirectory(stage, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(stage)) return
+        val marker = stage.resolve(COPY_OWNER_RECORD)
+        val recorded = if (Files.isRegularFile(marker, LinkOption.NOFOLLOW_LINKS))
+            runCatching { String(Files.readAllBytes(marker), Charsets.UTF_8) }.getOrNull() else null
+        if (recorded != operationId && !(createdHere && recorded == null)) return
+        runCatching { deletePathNoFollow(stage) }.onFailure { cleanupError ->
+            runCatching {
+                Files.write(stage.resolve("cleanup-failed"), cleanupError.javaClass.simpleName.toByteArray(),
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)
+            }
+            original?.addSuppressed(cleanupError)
+        }
+    }
+
+    private fun recoverAbandonedCopyStages(mount: MountState) {
+        val base = copyStageBase(mount)
+        if (!Files.isDirectory(base, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(base)) return
+        runCatching {
+            Files.newDirectoryStream(base).use { entries -> entries.forEach { stage ->
+                val id = stage.fileName.toString()
+                if (runCatching { UUID.fromString(id).toString() }.getOrNull() != id ||
+                    !Files.isDirectory(stage, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(stage) ||
+                    runCatching { String(Files.readAllBytes(stage.resolve(COPY_OWNER_RECORD)), Charsets.UTF_8) }.getOrNull() != id) {
+                    return@forEach
+                }
+                runCatching {
+                    FileChannel.open(stage.resolve(COPY_ACTIVE_LOCK), StandardOpenOption.READ,
+                        StandardOpenOption.WRITE).use { channel ->
+                        val lock = try { channel.tryLock() } catch (_: OverlappingFileLockException) { null }
+                        lock?.use { cleanupOwnedStage(stage, id, null) }
+                    }
+                }
+            } }
         }
     }
 
@@ -586,6 +700,10 @@ class HarnessRootfsFileStore(private val mounts: List<GuestMount>) {
     }
 
     private companion object {
+        const val COPY_STAGE_DIRECTORY = ".adt-copy-staging"
+        const val COPY_OWNER_RECORD = "owner-v1"
+        const val COPY_ACTIVE_LOCK = "active.lock"
+        val COPY_PUBLICATION_LOCK = Any()
         const val MAX_FILE_BYTES = 64 * 1024 * 1024
         const val MAX_ARCHIVE_BYTES = 256L * 1024 * 1024
         const val MAX_ARCHIVE_ENTRIES = 10_000

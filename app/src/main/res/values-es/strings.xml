@@ -802,6 +802,7 @@
     <string name="models_no_downloads">Sin descargas activas</string>
     <string name="models_downloading_desc">Los modelos aparecerán aquí mientras se descargan</string>
     <string name="downloads_complete">Descargas completadas</string>
+    <string name="download_verification_failed">No se pudo verificar la respuesta de descarga. Vuelve a intentar la descarga.</string>
     <string name="download_recovery_title">Descargas interrumpidas</string>
     <string name="download_clean_stale">Limpiar descargas obsoletas</string>
     <string name="download_clean_stale_title">¿Limpiar descargas obsoletas?</string>
@@ -1036,22 +1037,26 @@
     <string name="backup_creating">Creando copia de seguridad…</string>
     <string name="backup_restoring">Restaurando copia…</string>
     <string name="backup_success">✓ ¡Copia de seguridad creada con éxito!</string>
-    <string name="backup_restore_success">✓ ¡Copia restaurada! La app se reiniciará.</string>
+    <string name="backup_restore_success">Copia verificada y preparada. Reiniciando para instalarla.</string>
     <string name="backup_error">Error en la copia: %s</string>
-    <string name="backup_restore_error">Error al restaurar: %s</string>
+    <string name="backup_restore_prepare_failed">No se pudo verificar la copia de seguridad. Tus datos actuales no han cambiado.</string>
     <string name="backup_error_db_dir_missing">No se puede localizar el directorio de la base de datos.</string>
     <string name="backup_error_no_files_found">No se encontraron archivos de base de datos para copiar.</string>
     <string name="backup_error_open_output_stream">No se puede abrir el destino de la copia para escritura.</string>
     <string name="backup_restore_error_open_input">No se puede abrir el archivo de copia seleccionado.</string>
-    <string name="backup_restore_error_no_valid_files">No se encontraron archivos válidos de base de datos en la copia.</string>
-    <string name="backup_restore_db_label_app">datos de la app</string>
-    <string name="backup_restore_db_label_tama">datos de Tama</string>
-    <string name="backup_restore_error_missing_db_file">La copia restaurada no incluye el archivo de base de datos de %1$s.</string>
     <string name="backup_restore_error_integrity_unknown">La comprobación de integridad de %1$s no devolvió ningún resultado.</string>
     <string name="backup_restore_error_integrity_failed">La comprobación de integridad falló para %1$s: %2$s</string>
     <string name="backup_restore_confirm_title">¿Restaurar copia?</string>
-    <string name="backup_restore_confirm_msg">Esto reemplazará TODOS los datos actuales (chats, notas, agentes, mascotas) con los datos de la copia. No se puede deshacer.\n\nLa app se reiniciará después de restaurar.</string>
+    <string name="backup_restore_confirm_msg">Esto reemplazará los datos incluidos en la copia. Los datos actuales se conservarán si falla la validación o la instalación.\n\nLa app se reiniciará para completar la restauración.</string>
     <string name="backup_restore_confirm_btn">Restaurar</string>
+    <string name="backup_restore_bootstrap_title">Restaurando copia</string>
+    <string name="backup_restore_installing">Comprobando e instalando la copia preparada. Mantén la app abierta.</string>
+    <string name="backup_restore_installed">Copia instalada. Reinicia la app para cargar los datos restaurados.</string>
+    <string name="backup_restore_rolled_back">Falló la restauración. Se recuperaron tus datos anteriores.</string>
+    <string name="backup_restore_busy">Los procesos de la app aún no terminan de cerrarse. La copia preparada está a salvo; vuelve a intentarlo.</string>
+    <string name="backup_restore_recovery_blocked">No se pudo completar la recuperación. Se conservan los datos anteriores y los archivos de recuperación. Vuelve a intentarlo antes de abrir la app normalmente.</string>
+    <string name="backup_restore_continue">Continuar</string>
+    <string name="backup_restore_retry">Reintentar</string>
     <string name="backup_hint">💡 Haz copias de seguridad regularmente antes de actualizar la app. Los registros y archivos de modelos se omiten en ambos tipos de copia; se conservan la multimedia generada y los datos de la app.</string>
 
     <!-- LLM Settings -->
@@ -8069,8 +8074,10 @@
     <string name="wear_quick_chat_default_prompt">Eres un asistente breve del reloj para tareas rápidas y solicitadas explícitamente. Responde corto y pregunta antes de hacer cambios sensibles.</string>
     <string name="wear_tool_confirmation_unavailable">La confirmación de herramientas aún no está disponible para esta solicitud de Chat rápido de Wear.</string>
     <string name="wear_tool_rejected">Solicitud de herramienta rechazada.</string>
-    <string name="wear_task_not_found">No se encontró la tarea activa.</string>
-    <string name="wear_task_not_cancellable">Esta tarea no se puede cancelar desde el reloj.</string>
+    <string name="wear_task_unavailable">Esta tarea ya no está disponible para cancelar.</string>
+    <string name="generation_queue_history_loading">Cargando historial…</string>
+    <string name="generation_queue_history_load_failed">No se pudo cargar el historial.</string>
+    <string name="generation_queue_history_retry_load">Reintentar carga</string>
     <string name="wear_task_pause_resume_unavailable">Pausar y reanudar no están disponibles para esta tarea.</string>
     <string name="wear_task_cancelling">Cancelando tarea…</string>
     <string name="wear_audio_missing_asset">Faltaba el recurso de la grabacion de voz.</string>

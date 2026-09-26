@@ -2,6 +2,10 @@ package com.example.llamadroid.harness
 
 import java.io.ByteArrayOutputStream
 import java.nio.file.Files
+import java.io.IOException
+import java.io.RandomAccessFile
+import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -77,6 +81,83 @@ class HarnessRootfsFileStoreTest {
         Files.createSymbolicLink(root.resolve("linked-source"), root.resolve("source"))
         assertTrue(store.copy("/linked-source", "/destination/linked-copy").isFailure)
         assertTrue(store.exportArchive("/linked-source", ByteArrayOutputStream()).isFailure)
+    }
+
+    @Test fun nestedCopyFailureLeavesNoDestinationAndCanRetry() = withRootfs { root, store ->
+        Files.createDirectories(root.resolve("source/nested"))
+        Files.write(root.resolve("source/ordinary.txt"), "good".toByteArray())
+        Files.createSymbolicLink(root.resolve("source/nested/forbidden"), root.resolve("source/ordinary.txt"))
+        val destination = root.resolve("copy")
+        assertTrue(store.copy("/source", "/copy").isFailure)
+        assertFalse(Files.exists(destination))
+        Files.delete(root.resolve("source/nested/forbidden"))
+        store.copy("/source", "/copy").getOrThrow()
+        assertEquals("good", String(Files.readAllBytes(destination.resolve("ordinary.txt"))))
+    }
+
+    @Test fun copyRejectsSymlinkedPrivateStageRoot() = withRootfs { root, store ->
+        val outside = Files.createTempDirectory("copy-stage-outside")
+        val stageLink = root.resolve(".adt-copy-staging")
+        try {
+            Files.write(root.resolve("source.bin"), "source".toByteArray())
+            Files.createSymbolicLink(stageLink, outside)
+            assertTrue(store.copy("/source.bin", "/copied.bin").isFailure)
+            assertFalse(Files.exists(root.resolve("copied.bin")))
+            Files.list(outside).use { assertEquals(0L, it.count()) }
+        } finally {
+            Files.deleteIfExists(stageLink)
+            outside.toFile().deleteRecursively()
+        }
+    }
+
+    @Test fun copyBudgetAndWriteFailureLeaveNoFinalDestination() = withRootfs { root, store ->
+        Files.createDirectory(root.resolve("large"))
+        RandomAccessFile(root.resolve("large/oversize.bin").toFile(), "rw").use {
+            it.setLength(257L * 1024 * 1024)
+        }
+        assertTrue(store.copy("/large", "/large-copy").isFailure)
+        assertFalse(Files.exists(root.resolve("large-copy")))
+
+        Files.write(root.resolve("source.bin"), ByteArray(64 * 1024))
+        store.copyChunkCheckpoint = { throw IOException("injected write failure") }
+        assertTrue(store.copy("/source.bin", "/failed.bin").isFailure)
+        assertFalse(Files.exists(root.resolve("failed.bin")))
+        store.copyChunkCheckpoint = null
+    }
+
+    @Test fun cancellationAndConcurrentDestinationLeaveOtherFilesUntouched() = withRootfs { root, store ->
+        Files.write(root.resolve("source.bin"), ByteArray(64 * 1024))
+        store.copyChunkCheckpoint = { throw CancellationException("cancelled between chunks") }
+        try {
+            store.copy("/source.bin", "/cancelled.bin")
+            throw AssertionError("Expected cancellation")
+        } catch (_: CancellationException) { }
+        assertFalse(Files.exists(root.resolve("cancelled.bin")))
+
+        var publishedOther = false
+        store.copyChunkCheckpoint = {
+            if (!publishedOther) {
+                Files.write(root.resolve("raced.bin"), "other".toByteArray())
+                publishedOther = true
+            }
+        }
+        assertTrue(store.copy("/source.bin", "/raced.bin").isFailure)
+        assertEquals("other", String(Files.readAllBytes(root.resolve("raced.bin"))))
+        store.copyChunkCheckpoint = null
+    }
+
+    @Test fun nextStoreRemovesOnlyRecordedAbandonedCopyStages() = withRootfs { root, _ ->
+        val base = Files.createDirectories(root.resolve(".adt-copy-staging"))
+        val ownedId = UUID.randomUUID().toString()
+        val owned = Files.createDirectory(base.resolve(ownedId))
+        Files.write(owned.resolve("owner-v1"), ownedId.toByteArray())
+        Files.write(owned.resolve("active.lock"), ByteArray(0))
+        Files.write(owned.resolve("payload"), "partial".toByteArray())
+        val unowned = Files.createDirectory(base.resolve(UUID.randomUUID().toString()))
+        Files.write(unowned.resolve("payload"), "keep".toByteArray())
+        HarnessRootfsFileStore(root)
+        assertFalse(Files.exists(owned))
+        assertTrue(Files.exists(unowned.resolve("payload")))
     }
 
     @Test

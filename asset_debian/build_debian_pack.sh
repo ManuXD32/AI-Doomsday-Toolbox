@@ -5,7 +5,7 @@ set -euo pipefail
 # runs the arm64 Debian package resolver under Podman/QEMU: package post-install scripts are
 # guest scripts and must not be substituted with a host architecture or a floating mirror.
 #
-# Required host tools: podman (with arm64 emulation), sha256sum, tar, and install.
+# Required host tools: podman (with arm64 emulation), sha256sum, tar, install, and Python 3.
 # No executable is downloaded into the app at runtime. This script only writes signed asset-pack
 # inputs under src/main/assets/debian.
 
@@ -20,6 +20,7 @@ IMAGE_ID="debian-trixie-arm64-20260824"
 command -v podman >/dev/null || { echo "podman is required" >&2; exit 1; }
 command -v sha256sum >/dev/null || { echo "sha256sum is required" >&2; exit 1; }
 command -v install >/dev/null || { echo "install is required" >&2; exit 1; }
+command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
 
 mkdir -p "$ASSET_DIR/licenses"
 build_dir="$(mktemp -d "${TMPDIR:-/tmp}/adt-debian-pack.XXXXXX")"
@@ -88,6 +89,10 @@ test -s "$build_dir/rootfs.tar.xz"
 test -s "$build_dir/rootfs.manifest"
 test -s "$build_dir/rootfs.os-release"
 
+# Container exports can inherit host DNS/hosts/hostname bind mounts. Never ship
+# those settings; ADT provides the device's resolver when it launches the guest.
+python3 "$ROOT_DIR/sanitize_debian_rootfs.py" "$build_dir/rootfs.tar.xz"
+
 rootfs_sha256="$(sha256sum "$build_dir/rootfs.tar.xz" | awk '{print $1}')"
 rm -f "$ASSET_DIR/rootfs.tar.gz"
 install -m 0644 "$build_dir/rootfs.tar.xz" "$ASSET_DIR/rootfs.tar.xz"
@@ -112,6 +117,7 @@ cat > "$ASSET_DIR/provenance.json" <<EOF_PROVENANCE
   "buildEpoch": "2026-08-24T00:00:00Z",
   "rootfsSha256": "$rootfs_sha256",
   "builder": "asset_debian/build_debian_pack.sh",
+  "networkIdentityPolicy": "canonical-guest-v1",
   "packageInventory": "rootfs.manifest",
   "licenseIndex": "licenses/package-license-index.tsv"
 }

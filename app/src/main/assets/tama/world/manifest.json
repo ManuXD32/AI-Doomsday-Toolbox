@@ -16246,7 +16246,7 @@
       "sourceProvenance": [
         {
           "kind": "recovered-canonical-portrait",
-          "repository": "/home/manu/.gemini/antigravity/scratch/AI-Doomsday-Toolbox",
+          "repository": ".",
           "path": "app/src/main/assets/tama/npcs/boxing_coach.png",
           "sha256": "56b33df4966f2caf0b3aa1c62e19887fef63e374bccfba8f8637c96ecb7af21d",
           "note": "Canonical Coach Mira portrait recovered from the reference repository; retained as identity input only."

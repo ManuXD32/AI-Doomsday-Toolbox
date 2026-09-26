@@ -7,8 +7,10 @@
   "suite": "trixie",
   "snapshot": "20260824T000000Z",
   "buildEpoch": "2026-08-24T00:00:00Z",
-  "rootfsSha256": "4fca9c419bf46e2a639a635edd5f6c16da619a49ebb3b0d152a7378ea7cffeea",
+  "rootfsSha256": "73899844987f3261f80c0929187f4e6b25832845eec294356f93baf712b71bcf",
   "builder": "asset_debian/build_debian_pack.sh",
   "packageInventory": "rootfs.manifest",
-  "licenseIndex": "licenses/package-license-index.tsv"
+  "licenseIndex": "licenses/package-license-index.tsv",
+  "networkIdentityPolicy": "canonical-guest-v1",
+  "privacyRepackTool": "asset_debian/sanitize_debian_rootfs.py"
 }

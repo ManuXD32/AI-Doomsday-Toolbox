@@ -4,6 +4,15 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 object GenerationQueueMigration {
+    val MIGRATION_124_125: Migration = object : Migration(124, 125) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("""CREATE INDEX IF NOT EXISTS
+                index_generation_queue_items_finishedAtMillis_createdAtMillis_id
+                ON generation_queue_items(finishedAtMillis DESC, createdAtMillis DESC, id DESC)
+            """.trimIndent())
+        }
+    }
+
     val MIGRATION_123_124: Migration = object : Migration(123, 124) {
         override fun migrate(db: SupportSQLiteDatabase) {
             db.execSQL("""

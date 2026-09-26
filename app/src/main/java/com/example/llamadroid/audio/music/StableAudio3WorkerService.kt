@@ -150,7 +150,7 @@ class StableAudio3WorkerService : Service() {
                     is IllegalStateException -> StableAudio3Failure.fromNative(error.message, lastStage)
                     else -> StableAudio3Failure.fromNative(null, lastStage)
                 }
-                sendError(reply, requestId, failure.code, failure.stage, failure.nativeStatus)
+                sendError(reply, requestId, failure.code, failure.stage, failure.nativeStatus, failure.operation)
             } finally {
                 activeJob = null
                 activeReply = null
@@ -171,7 +171,7 @@ class StableAudio3WorkerService : Service() {
     }
 
     private fun sendError(reply: Messenger?, requestId: String, code: String,
-                          stage: String = "starting", nativeStatus: Int? = null) {
+                          stage: String = "starting", nativeStatus: Int? = null, nativeOperation: String? = null) {
         if (reply == null) return
         runCatching {
             reply.send(
@@ -181,6 +181,7 @@ class StableAudio3WorkerService : Service() {
                     putString(StableAudio3WorkerProtocol.KEY_ERROR_CODE, code)
                     putString(StableAudio3WorkerProtocol.KEY_STAGE, stage)
                     nativeStatus?.let { putInt(StableAudio3WorkerProtocol.KEY_NATIVE_STATUS, it) }
+                    nativeOperation?.let { putString(StableAudio3WorkerProtocol.KEY_NATIVE_OPERATION, it) }
                 }
             )
         }

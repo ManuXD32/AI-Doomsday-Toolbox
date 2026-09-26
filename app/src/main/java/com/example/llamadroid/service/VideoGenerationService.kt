@@ -27,6 +27,7 @@ import com.example.llamadroid.util.WakeLockManager
 import com.example.llamadroid.util.getParcelableExtraCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -115,6 +116,12 @@ class VideoGenerationService : Service() {
                     ?.let { runCatching { VideoGenerationMode.valueOf(it) }.getOrNull() }
                     ?.let { cancelMode(it, useDistributedStateHolder) }
             }
+            ACTION_CANCEL_ALL -> if (intent.matchesNotificationTask(notificationTaskId)) {
+                VideoGenerationMode.values().forEach { mode ->
+                    cancelMode(mode, false)
+                    cancelMode(mode, true)
+                }
+            }
             ACTION_RETRY_CONVERSION -> {
                 val useDistributedStateHolder = intent.getBooleanExtra(EXTRA_USE_DISTRIBUTED_STATE_HOLDER, false)
                 val metadata = intent.getStringExtra(EXTRA_METADATA_PATH)
@@ -173,7 +180,8 @@ class VideoGenerationService : Service() {
         markActivity(config.mode, "starting")
         ensureStallMonitorRunning()
 
-        modeJobs[lane] = serviceScope.launch {
+        val completion = QueuedAttemptCompletion(queuedCallback)
+        val job = serviceScope.launch(start = CoroutineStart.LAZY) {
             var queueOutcome = QueuedGenerationOutcome.interrupted(getString(R.string.generation_queue_interrupted))
             try {
                 val (metadata, warningMessage) = runGeneration(config, holder, useDistributedStateHolder)
@@ -189,7 +197,9 @@ class VideoGenerationService : Service() {
                     publishTimeoutForLane(lane, message, event = "foreground_timeout_cancelled")
                     DebugLog.log("[VIDEO-GEN] ${config.mode} stopped after foreground timeout")
                 } else {
-                    queueOutcome = QueuedGenerationOutcome.stopped()
+                    queueOutcome = if (cancelled.message == getString(R.string.video_gen_status_cancelled))
+                        QueuedGenerationOutcome.stopped()
+                    else QueuedGenerationOutcome.interrupted(getString(R.string.generation_queue_interrupted))
                     markActivity(config.mode, "cancelled")
                     holder.reset()
                     finishModeSession(config.mode, useDistributedStateHolder, "cancelled")
@@ -211,14 +221,31 @@ class VideoGenerationService : Service() {
                     failForegroundTask(message)
                 }
             } finally {
-                modeProcesses.remove(lane)
-                modeJobs.remove(lane)
-                clearTimedOutLane(lane)
-                clearDiagnostics(config.mode)
-                cleanupAfterWork()
-                queuedCallback?.let { callback -> runCatching { callback(queueOutcome) } }
+                completion.record(queueOutcome)
             }
         }
+        modeJobs[lane] = job
+        job.invokeOnCompletion { cause ->
+            val fallback = queuedFallback(cause, isTimedOutLane(lane),
+                getString(R.string.video_gen_error_media_processing_timeout),
+                getString(R.string.video_gen_status_cancelled),
+                getString(R.string.generation_queue_interrupted))
+            try {
+                val current = modeJobs[lane]
+                if (current == null || current === job) {
+                    if (current === job) modeJobs.remove(lane)
+                    modeProcesses.remove(lane)
+                    clearTimedOutLane(lane)
+                    clearDiagnostics(config.mode)
+                    cleanupAfterWork()
+                }
+            } catch (error: Exception) {
+                DebugLog.log("[VIDEO-GEN] queued cleanup failed: ${error.javaClass.simpleName}")
+            } finally {
+                completion.complete(fallback)
+            }
+        }
+        job.start()
     }
 
     /** Retry only the portable conversion for a completed native artifact. */
@@ -1028,7 +1055,8 @@ class VideoGenerationService : Service() {
         if (notificationTaskId != null) return
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.VIDEO_GEN,
-            getString(R.string.video_gen_title)
+            getString(R.string.video_gen_title),
+            cancellationOwner = UnifiedNotificationManager.CancellationOwner.VIDEO
         )
         notificationTaskId = taskId
         startForeground(taskId, notification)
@@ -1139,12 +1167,12 @@ class VideoGenerationService : Service() {
         }
     }
 
-    private fun hasActiveWork(): Boolean = modeJobs.values.any { it.isActive }
+    private fun hasActiveWork(): Boolean = modeJobs.values.any { !it.isCompleted }
 
     private fun hasActiveModeJob(
         mode: VideoGenerationMode,
         useDistributedStateHolder: Boolean
-    ): Boolean = modeJobs[laneFor(mode, useDistributedStateHolder)]?.isActive == true
+    ): Boolean = modeJobs[laneFor(mode, useDistributedStateHolder)]?.isCompleted == false
 
     private fun markActivity(mode: VideoGenerationMode, phase: String) {
         val now = SystemClock.elapsedRealtime()
@@ -1508,6 +1536,7 @@ class VideoGenerationService : Service() {
 
         private const val ACTION_START_GENERATION = "com.example.llamadroid.action.START_VIDEO_GENERATION"
         private const val ACTION_CANCEL_MODE = "com.example.llamadroid.action.CANCEL_VIDEO_GENERATION"
+        private const val ACTION_CANCEL_ALL = "com.example.llamadroid.action.CANCEL_ALL_VIDEO_GENERATION"
         private const val ACTION_RETRY_CONVERSION = "com.example.llamadroid.action.RETRY_VIDEO_CONVERSION"
         private const val EXTRA_CONFIG = "extra_video_generation_config"
         private const val EXTRA_MODE = "extra_video_generation_mode"
@@ -1535,6 +1564,12 @@ class VideoGenerationService : Service() {
                 action = ACTION_CANCEL_MODE
                 putExtra(EXTRA_MODE, mode.name)
                 putExtra(EXTRA_USE_DISTRIBUTED_STATE_HOLDER, useDistributedStateHolder)
+            }
+
+        fun createCancelAllIntent(context: Context, expectedTaskId: Int): Intent =
+            Intent(context, VideoGenerationService::class.java).apply {
+                action = ACTION_CANCEL_ALL
+                putExtra(UnifiedNotificationManager.EXTRA_EXPECTED_TASK_ID, expectedTaskId)
             }
 
         fun createRetryConversionIntent(

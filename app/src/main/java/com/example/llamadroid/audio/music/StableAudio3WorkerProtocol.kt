@@ -28,6 +28,7 @@ internal object StableAudio3WorkerProtocol {
     const val KEY_RESULT_JSON = "result_json"
     const val KEY_ERROR_CODE = "error_code"
     const val KEY_NATIVE_STATUS = "native_status"
+    const val KEY_NATIVE_OPERATION = "native_operation"
 
     const val ERROR_BAD_REQUEST = "bad_request"
     const val ERROR_MODEL_STALE = "stable_audio_model_stale"

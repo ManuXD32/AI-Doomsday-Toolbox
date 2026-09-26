@@ -51,6 +51,8 @@ import com.example.llamadroid.onnx.OnnxImportSupport
 import com.example.llamadroid.onnx.OnnxTtsBundleValidator
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.Downloader
+import com.example.llamadroid.util.DownloadProgressPolicy
+import com.example.llamadroid.util.DownloadResumeMetadata
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collect
@@ -837,6 +839,7 @@ class DownloadService : Service() {
             }
             
             suspend fun downloadNetwork() {
+                val persistencePolicy = DownloadProgressPolicy(1_000L)
                 Downloader.download(
                     url = finalUrl,
                     destFile = destFile,
@@ -894,17 +897,31 @@ class DownloadService : Service() {
                         if (pending?.onnxInstallKind == ONNX_INSTALL_KIND_ARCHIVE_BUNDLE) {
                             DownloadProgressHolder.updateStatus(progressKey, getString(R.string.onnx_models_phase_downloading))
                         }
-                        db.withTransaction {
-                            pending?.pendingArtifactId?.let { artifactId ->
-                                ensurePendingArtifactActive(db.modelLibraryDao(), artifactId)
+                        if (persistencePolicy.shouldUpdate(force = progress >= 1f)) {
+                            db.withTransaction {
+                                val current = taskDao.getById(resolvedTaskId)
+                                if (current == null || current.status == DOWNLOAD_TASK_STATUS_CANCELLED) {
+                                    throw CancellationException("Download task was cancelled")
+                                }
+                                pending?.pendingArtifactId?.let { artifactId ->
+                                    ensurePendingArtifactActive(db.modelLibraryDao(), artifactId)
+                                }
+                                val bytes = if (progress >= 1f) destFile.length()
+                                    else downloadPartFile(finalDestPath).length()
+                                val transferTotal = if (progress >= 1f) bytes else {
+                                    val part = downloadPartFile(finalDestPath)
+                                    DownloadResumeMetadata.read(DownloadResumeMetadata.companionFile(part))
+                                        ?.takeIf { it.matches(finalUrl, part.length()) }
+                                        ?.totalBytes
+                                }
+                                taskDao.updateState(
+                                    id = resolvedTaskId,
+                                    status = DOWNLOAD_TASK_STATUS_ACTIVE,
+                                    bytesDownloaded = bytes,
+                                    totalBytes = transferTotal,
+                                    lastError = null
+                                )
                             }
-                            taskDao.updateState(
-                                id = resolvedTaskId,
-                                status = DOWNLOAD_TASK_STATUS_ACTIVE,
-                                bytesDownloaded = downloadPartFile(finalDestPath).length(),
-                                totalBytes = null,
-                                lastError = null
-                            )
                         }
                         val progressPercent = if (mappedProgress >= 0f) (mappedProgress * 100).toInt() else lastProgress
                         if (mappedProgress >= 0f && (progressPercent >= lastProgress + 5 || progress == 1f)) {
@@ -950,6 +967,9 @@ class DownloadService : Service() {
                             // The artifact guard and task completion share one
                             // transaction, so cancellation cannot be silently
                             // overwritten by a late downloader callback.
+                            if (taskDao.getById(resolvedTaskId)?.status == DOWNLOAD_TASK_STATUS_CANCELLED) {
+                                throw CancellationException("Download task was cancelled")
+                            }
                             ensurePendingArtifactActive(db.modelLibraryDao(), pendingArtifactId)
                             taskDao.updateState(
                                 id = resolvedTaskId,
@@ -1084,6 +1104,9 @@ class DownloadService : Service() {
                         DownloadProgressHolder.updateProgress(progressKey, 1f)
                         DownloadProgressHolder.updateStatus(progressKey, getString(R.string.onnx_models_phase_completed))
                         db.withTransaction {
+                            if (taskDao.getById(resolvedTaskId)?.status == DOWNLOAD_TASK_STATUS_CANCELLED) {
+                                throw CancellationException("Download task was cancelled")
+                            }
                             pending.pendingArtifactId?.let { artifactId ->
                                 ensurePendingArtifactActive(db.modelLibraryDao(), artifactId)
                             }
@@ -1489,12 +1512,14 @@ class DownloadService : Service() {
             val libraryDao = db.modelLibraryDao()
             val artifact = pending?.pendingArtifactId?.let { libraryDao.getPendingArtifactById(it) }
             val bytes = (bytesOverride ?: downloadPartFile(destPath).length()).coerceAtLeast(0L)
-            if (artifact?.status == PendingArtifactStatus.CANCELLED.storedValue) {
+            val currentTask = taskDao.getById(taskId)
+            if (artifact?.status == PendingArtifactStatus.CANCELLED.storedValue ||
+                currentTask?.status == DOWNLOAD_TASK_STATUS_CANCELLED) {
                 taskDao.updateState(
                     id = taskId,
                     status = DOWNLOAD_TASK_STATUS_CANCELLED,
                     bytesDownloaded = bytes,
-                    totalBytes = null,
+                    totalBytes = currentTask?.totalBytes,
                     lastError = null
                 )
                 true
@@ -1503,7 +1528,7 @@ class DownloadService : Service() {
                     id = taskId,
                     status = if (bytes > 0L) DOWNLOAD_TASK_STATUS_RESUMABLE else DOWNLOAD_TASK_STATUS_FAILED,
                     bytesDownloaded = bytes,
-                    totalBytes = null,
+                    totalBytes = currentTask?.totalBytes,
                     lastError = error
                 )
                 if (pending?.stageOnly == true && artifact != null &&

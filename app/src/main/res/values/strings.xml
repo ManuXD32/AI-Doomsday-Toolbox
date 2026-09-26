@@ -768,6 +768,7 @@
     <string name="models_no_downloads">No active downloads</string>
     <string name="models_downloading_desc">Models will appear here while downloading</string>
     <string name="downloads_complete">Downloads complete</string>
+    <string name="download_verification_failed">The download response could not be verified. Retry the download.</string>
     <string name="download_recovery_title">Interrupted downloads</string>
     <string name="download_clean_stale">Clean stale downloads</string>
     <string name="download_clean_stale_title">Clean stale downloads?</string>
@@ -1003,22 +1004,26 @@
     <string name="backup_creating">Creating backup…</string>
     <string name="backup_restoring">Restoring backup…</string>
     <string name="backup_success">✓ Backup created successfully!</string>
-    <string name="backup_restore_success">✓ Backup restored! The app will restart.</string>
+    <string name="backup_restore_success">Backup checked and ready. Restarting to install it.</string>
     <string name="backup_error">Backup failed: %s</string>
-    <string name="backup_restore_error">Restore failed: %s</string>
+    <string name="backup_restore_prepare_failed">The backup could not be verified. Your current data is unchanged.</string>
     <string name="backup_error_db_dir_missing">Cannot locate the database directory.</string>
     <string name="backup_error_no_files_found">No database files were found to back up.</string>
     <string name="backup_error_open_output_stream">Cannot open the backup destination for writing.</string>
     <string name="backup_restore_error_open_input">Cannot open the selected backup file.</string>
-    <string name="backup_restore_error_no_valid_files">No valid database files were found in the backup.</string>
-    <string name="backup_restore_db_label_app">app data</string>
-    <string name="backup_restore_db_label_tama">Tama data</string>
-    <string name="backup_restore_error_missing_db_file">The restored backup is missing the %1$s database file.</string>
     <string name="backup_restore_error_integrity_unknown">The integrity check for %1$s returned no result.</string>
     <string name="backup_restore_error_integrity_failed">Integrity check failed for %1$s: %2$s</string>
     <string name="backup_restore_confirm_title">Restore Backup?</string>
-    <string name="backup_restore_confirm_msg">This will replace ALL current data (chats, notes, agents, pets) with the backup data. This cannot be undone.\n\nThe app will restart after restoring.</string>
+    <string name="backup_restore_confirm_msg">This will replace the data included in the backup. Existing data is retained if validation or installation fails.\n\nThe app will restart to complete the restore.</string>
     <string name="backup_restore_confirm_btn">Restore</string>
+    <string name="backup_restore_bootstrap_title">Restoring backup</string>
+    <string name="backup_restore_installing">Checking and installing the prepared backup. Keep the app open.</string>
+    <string name="backup_restore_installed">Backup installed. Restart the app to load the restored data.</string>
+    <string name="backup_restore_rolled_back">Restore failed. Your previous data has been recovered.</string>
+    <string name="backup_restore_busy">App workers have not finished shutting down. The prepared backup is safe; retry the restore.</string>
+    <string name="backup_restore_recovery_blocked">Recovery could not finish. The previous data and recovery files are preserved. Retry before opening the app normally.</string>
+    <string name="backup_restore_continue">Continue</string>
+    <string name="backup_restore_retry">Retry</string>
     <string name="backup_hint">💡 Back up regularly before updating the app. Model records and model files are skipped in both backup flows; generated media and app data are kept.</string>
 
     <!-- LLM Settings -->
@@ -8071,8 +8076,10 @@
     <string name="wear_quick_chat_default_prompt">You are a concise watch assistant for quick, explicitly requested tasks. Keep replies short and ask before making sensitive changes.</string>
     <string name="wear_tool_confirmation_unavailable">Tool confirmation is not available for this Wear Quick Chat request yet.</string>
     <string name="wear_tool_rejected">Tool request rejected.</string>
-    <string name="wear_task_not_found">The active task was not found.</string>
-    <string name="wear_task_not_cancellable">This task cannot be cancelled from the watch.</string>
+    <string name="wear_task_unavailable">This task is no longer available to cancel.</string>
+    <string name="generation_queue_history_loading">Loading history…</string>
+    <string name="generation_queue_history_load_failed">History could not be loaded.</string>
+    <string name="generation_queue_history_retry_load">Retry loading</string>
     <string name="wear_task_pause_resume_unavailable">Pause and resume are not available for this task.</string>
     <string name="wear_task_cancelling">Cancelling task…</string>
     <string name="wear_audio_missing_asset">The voice recording asset was missing.</string>

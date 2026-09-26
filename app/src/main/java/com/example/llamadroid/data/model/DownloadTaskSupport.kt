@@ -178,8 +178,13 @@ object DownloadTaskArtifacts {
             .sortedByDescending { it.updatedAt }
     }
 
-    fun deletePartialArtifact(task: DownloadTaskEntity): Boolean =
-        task.partFile().takeIf { it.exists() }?.delete() ?: true
+    fun deletePartialArtifact(task: DownloadTaskEntity): Boolean {
+        val part = task.partFile()
+        val metadata = File(part.parentFile, "${part.name}.resume")
+        val partDeleted = !part.exists() || part.delete()
+        val metadataDeleted = !metadata.exists() || metadata.delete()
+        return partDeleted && metadataDeleted
+    }
 
     fun deleteIncompleteArtifacts(task: DownloadTaskEntity) {
         deletePartialArtifact(task)

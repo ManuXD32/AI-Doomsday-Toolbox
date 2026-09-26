@@ -20,6 +20,8 @@ val verifyDebianAssetPayloads by tasks.registering {
     val assets = layout.projectDirectory.dir("src/main/assets")
     val archives = listOf("debian/rootfs.tar.xz", "harness/adt-harness-linux-arm64.tar.xz")
     inputs.files(archives.flatMap { listOf(assets.file(it), assets.file("$it.sha256")) })
+    val identityChecker = layout.projectDirectory.file("sanitize_debian_rootfs.py")
+    inputs.file(identityChecker)
 
     doLast {
         archives.forEach { archive ->
@@ -49,6 +51,11 @@ val verifyDebianAssetPayloads by tasks.registering {
                 "Debian asset checksum mismatch: $archive. Restore Git LFS assets before building."
             }
         }
+        val identityCheck = providers.exec {
+            commandLine("python3", identityChecker.asFile.absolutePath,
+                assets.file("debian/rootfs.tar.xz").asFile.absolutePath, "--check")
+        }
+        logger.lifecycle(identityCheck.standardOutput.asText.get().trim())
     }
 }
 

@@ -11,6 +11,13 @@ snapshot `20260824T000000Z`, exports the deterministic `rootfs.tar.xz`, and reco
 `rootfs.os-release`, `rootfs.sources.list`, `provenance.json`, and `licenses/` are shipped as
 auditable inventory/provenance inputs.
 
+Before hashing or packaging an exported image, `sanitize_debian_rootfs.py`
+replaces container-inherited host network identity with generic guest files.
+`verifyDebianAssetPayloads` checks this policy as well as archive hashes. Android
+network resolver data is supplied at guest launch. See
+[`docs/debian-rootfs-privacy.md`](../docs/debian-rootfs-privacy.md) for the exact
+contract, tests, and compatibility handling for saved environments.
+
 The base includes shell/core utilities, apt, certificates, curl, Git, Python 3, pip, and venv;
 Node and native toolchains remain deliberate user `apt` installs inside a writable guest copy.
 

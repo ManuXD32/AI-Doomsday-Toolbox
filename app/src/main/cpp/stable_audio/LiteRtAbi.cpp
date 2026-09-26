@@ -58,7 +58,10 @@ Api::~Api() { unload(); }
 
 bool Api::load(std::string* error) {
   if (library != nullptr) return true;
-  library = dlopen("libLiteRt.so", RTLD_NOW | RTLD_LOCAL);
+  // XNNPACK/runtime TLS and process-exit callbacks can outlive a graph. Keep
+  // their code mapped until worker exit; model/tensor allocations still close
+  // normally. Unmapping here reproduced a post-inference host SIGSEGV.
+  library = dlopen("libLiteRt.so", RTLD_NOW | RTLD_LOCAL | RTLD_NODELETE);
   if (library == nullptr) {
     if (error != nullptr) *error = "litert_library_unavailable";
     return false;

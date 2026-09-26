@@ -65,7 +65,9 @@ class ReadOnlyModelMapping final {
 // runtime; these checks make a compiler/platform layout drift fail at build
 // time rather than corrupting a model invocation. The LiteRT layout contract
 // is documented at the pinned public source revision
-// d846569552c71f0c0b05f89476f865f3979e0a12.
+// d865fd82cd7fe6752908b3a0836895461c305679, as pinned by LiteRT-LM v0.12.0.
+// Newer LiteRT headers add an environment parameter to model loading. Those
+// signatures are NOT compatible with the libLiteRt.so in this AAR.
 static_assert(sizeof(ElementType) == sizeof(int32_t), "LiteRT element type ABI changed");
 static_assert(sizeof(Layout) == 68, "LiteRT layout ABI changed");
 static_assert(offsetof(Layout, dimensions) == 4, "LiteRT layout dimensions ABI changed");
@@ -95,10 +97,10 @@ struct Api {
   using CreateOpaqueOptions = Status (*)(const char*, void*, void (*)(void*), void**);
   using DestroyOpaqueOptions = void (*)(void*);
   using AddOpaqueOptions = Status (*)(void*, void*);
-  using CreateModelFromFile = Status (*)(void*, const char*, void**);
+  using CreateModelFromFile = Status (*)(const char*, void**);
   // Optional in older LiteRT-LM AARs. The buffer API is used only as a
   // recovery path when the file API reports its public file-I/O status.
-  using CreateModelFromBuffer = Status (*)(void*, const void*, std::size_t, void**);
+  using CreateModelFromBuffer = Status (*)(const void*, std::size_t, void**);
   using DestroyModel = void (*)(void*);
   using CreateCompiledModel = Status (*)(void*, void*, void*, void**);
   using DestroyCompiledModel = void (*)(void*);

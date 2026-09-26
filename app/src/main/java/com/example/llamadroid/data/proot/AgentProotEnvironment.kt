@@ -473,9 +473,9 @@ class AgentProotEnvironmentManager(private val context: Context) {
                     copyProotCancellable(input, output, cancellation)
                 }
             } ?: error("Debian rootfs archive is missing from the asset pack")
-            val expected = spec.imageSha256?.lowercase()
-                ?: DebianAssetPack.readExpectedRootfsSha256(context)
-                ?: error("The signed Debian rootfs checksum declaration is missing")
+            val expected = DebianBootstrapChecksum.expected(
+                spec.imageSha256, DebianAssetPack.readExpectedRootfsSha256(context)
+            )
             require(AgentProotRootfsExtractor.sha256(archive, cancellation) == expected) {
                 "Debian rootfs checksum mismatch"
             }

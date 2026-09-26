@@ -6,6 +6,23 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class StableAudio3FailureTest {
+    @Test fun `classified failures preserve the real native API operation across IPC`() {
+        val native = StableAudio3Failure.fromNative("litert_invalid_data_failed:501:load_model_from_buffer", "conditioning")
+        val received = StableAudio3Failure.fromWire(native.code, native.stage, native.nativeStatus, native.operation)
+        assertEquals("litert_invalid_data_failed", received.code)
+        assertEquals("load_model_from_buffer", received.operation)
+        assertEquals(501, received.nativeStatus)
+    }
+
+    @Test fun `operation field accepts only known API names`() {
+        for (operation in listOf("/private/prompt", "private_prompt", "load_model:secret")) {
+            val failure = StableAudio3Failure.fromNative("litert_invalid_data_failed:501:$operation", "conditioning")
+            assertEquals("invalid_data", failure.operation)
+            assertFalse(failure.diagnosticMetadata().contains(operation))
+        }
+        assertNull(StableAudio3Failure.fromWire("output_invalid", "decoding", 501, "load_model").operation)
+    }
+
     @Test fun `native failure retains operation status and stage across worker boundary`() {
         val native = StableAudio3Failure.fromNative("litert_create_input_buffer_failed:3", "conditioning")
         val received = StableAudio3Failure.fromWire(native.code, native.stage, native.nativeStatus)

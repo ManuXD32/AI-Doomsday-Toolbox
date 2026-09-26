@@ -31,6 +31,7 @@ import com.example.llamadroid.util.WakeLockManager
 import com.example.llamadroid.util.getParcelableExtraCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -103,6 +104,16 @@ class StableDiffusionService : Service() {
         modeJobs.remove(laneFor(mode, useDistributedStateHolder))
     }
 
+    private fun clearCompletedModeJob(mode: SDMode, distributed: Boolean, job: Job): Boolean =
+        synchronized(modeLifecycleLock) {
+            val lane = laneFor(mode, distributed)
+            val current = modeJobs[lane]
+            if (current != null && current !== job) false else {
+                if (current === job) modeJobs.remove(lane)
+                true
+            }
+        }
+
     private fun storeModeProcess(mode: SDMode, useDistributedStateHolder: Boolean, process: Process) {
         synchronized(modeLifecycleLock) {
             modeProcesses[laneFor(mode, useDistributedStateHolder)] = process
@@ -135,11 +146,11 @@ class StableDiffusionService : Service() {
     }
 
     private fun hasActiveModeJobs(): Boolean = synchronized(modeLifecycleLock) {
-        modeJobs.values.any { it.isActive }
+        modeJobs.values.any { !it.isCompleted }
     }
 
     private fun hasActiveModeJob(mode: SDMode, useDistributedStateHolder: Boolean): Boolean = synchronized(modeLifecycleLock) {
-        modeJobs[laneFor(mode, useDistributedStateHolder)]?.isActive == true
+        modeJobs[laneFor(mode, useDistributedStateHolder)]?.isCompleted == false
     }
 
     private fun isModeProcessAlive(mode: SDMode): Boolean = synchronized(modeLifecycleLock) {
@@ -224,7 +235,7 @@ class StableDiffusionService : Service() {
                     ?.let { cancelMode(it, useDistributedStateHolder) }
             }
             ACTION_CANCEL_WORKFLOW -> cancelWorkflow()
-            ACTION_CANCEL_ALL -> cancel()
+            ACTION_CANCEL_ALL -> if (intent.matchesNotificationTask(notificationTaskId)) cancel()
         }
         return START_NOT_STICKY
     }
@@ -404,7 +415,8 @@ class StableDiffusionService : Service() {
         ensureStallMonitorRunning()
 
         val lane = laneFor(config.mode, useDistributedStateHolder)
-        storeModeJob(config.mode, useDistributedStateHolder, serviceScope.launch {
+        val completion = QueuedAttemptCompletion(queuedCallback)
+        val job = serviceScope.launch(start = CoroutineStart.LAZY) {
             var queueOutcome = QueuedGenerationOutcome.interrupted(getString(R.string.generation_queue_interrupted))
             try {
                 val result = executeGeneration(
@@ -427,7 +439,9 @@ class StableDiffusionService : Service() {
                     publishTimeoutForLane(lane, message, event = "foreground_timeout_cancelled")
                     DebugLog.log("[StableDiffusionService] ${config.mode} stopped after foreground timeout")
                 } else {
-                    queueOutcome = QueuedGenerationOutcome.stopped()
+                    queueOutcome = if (cancelled.message == getString(R.string.action_cancelled))
+                        QueuedGenerationOutcome.stopped()
+                    else QueuedGenerationOutcome.interrupted(getString(R.string.generation_queue_interrupted))
                     markActivity(config.mode, "cancelled")
                     finishModeSession(config.mode, useDistributedStateHolder, "cancelled")
                     DebugLog.log("[StableDiffusionService] ${config.mode} cancelled")
@@ -451,14 +465,29 @@ class StableDiffusionService : Service() {
                     failForegroundTask(message)
                 }
             } finally {
-                removeModeProcess(config.mode, useDistributedStateHolder)
-                removeModeJob(config.mode, useDistributedStateHolder)
-                clearTimedOutLane(lane)
-                clearDiagnostics(config.mode)
-                cleanupAfterWork()
-                queuedCallback?.let { callback -> runCatching { callback(queueOutcome) } }
+                completion.record(queueOutcome)
             }
-        })
+        }
+        storeModeJob(config.mode, useDistributedStateHolder, job)
+        job.invokeOnCompletion { cause ->
+            val fallback = queuedFallback(cause, isTimedOutLane(lane),
+                getString(R.string.imagegen_error_media_processing_timeout),
+                getString(R.string.action_cancelled),
+                getString(R.string.generation_queue_interrupted))
+            try {
+                if (clearCompletedModeJob(config.mode, useDistributedStateHolder, job)) {
+                    removeModeProcess(config.mode, useDistributedStateHolder)
+                    clearTimedOutLane(lane)
+                    clearDiagnostics(config.mode)
+                    cleanupAfterWork()
+                }
+            } catch (error: Exception) {
+                DebugLog.log("[StableDiffusionService] queued cleanup failed: ${error.javaClass.simpleName}")
+            } finally {
+                completion.complete(fallback)
+            }
+        }
+        job.start()
     }
 
     private fun startUpscale(
@@ -484,7 +513,8 @@ class StableDiffusionService : Service() {
         ensureStallMonitorRunning()
 
         val lane = laneFor(SDMode.UPSCALE, useDistributedStateHolder)
-        storeModeJob(SDMode.UPSCALE, useDistributedStateHolder, serviceScope.launch {
+        val completion = QueuedAttemptCompletion(queuedCallback)
+        val job = serviceScope.launch(start = CoroutineStart.LAZY) {
             var queueOutcome = QueuedGenerationOutcome.interrupted(getString(R.string.generation_queue_interrupted))
             try {
                 val result = executeUpscaleGeneration(
@@ -506,7 +536,9 @@ class StableDiffusionService : Service() {
                     publishTimeoutForLane(lane, message, event = "foreground_timeout_cancelled")
                     DebugLog.log("[StableDiffusionService] ${SDMode.UPSCALE} stopped after foreground timeout")
                 } else {
-                    queueOutcome = QueuedGenerationOutcome.stopped()
+                    queueOutcome = if (cancelled.message == getString(R.string.action_cancelled))
+                        QueuedGenerationOutcome.stopped()
+                    else QueuedGenerationOutcome.interrupted(getString(R.string.generation_queue_interrupted))
                     markActivity(SDMode.UPSCALE, "cancelled")
                     finishModeSession(SDMode.UPSCALE, useDistributedStateHolder, "cancelled")
                     DebugLog.log("[StableDiffusionService] ${SDMode.UPSCALE} cancelled")
@@ -530,14 +562,29 @@ class StableDiffusionService : Service() {
                     failForegroundTask(message)
                 }
             } finally {
-                removeModeProcess(SDMode.UPSCALE, useDistributedStateHolder)
-                removeModeJob(SDMode.UPSCALE, useDistributedStateHolder)
-                clearTimedOutLane(lane)
-                clearDiagnostics(SDMode.UPSCALE)
-                cleanupAfterWork()
-                queuedCallback?.let { callback -> runCatching { callback(queueOutcome) } }
+                completion.record(queueOutcome)
             }
-        })
+        }
+        storeModeJob(SDMode.UPSCALE, useDistributedStateHolder, job)
+        job.invokeOnCompletion { cause ->
+            val fallback = queuedFallback(cause, isTimedOutLane(lane),
+                getString(R.string.imagegen_error_media_processing_timeout),
+                getString(R.string.action_cancelled),
+                getString(R.string.generation_queue_interrupted))
+            try {
+                if (clearCompletedModeJob(SDMode.UPSCALE, useDistributedStateHolder, job)) {
+                    removeModeProcess(SDMode.UPSCALE, useDistributedStateHolder)
+                    clearTimedOutLane(lane)
+                    clearDiagnostics(SDMode.UPSCALE)
+                    cleanupAfterWork()
+                }
+            } catch (error: Exception) {
+                DebugLog.log("[StableDiffusionService] queued cleanup failed: ${error.javaClass.simpleName}")
+            } finally {
+                completion.complete(fallback)
+            }
+        }
+        job.start()
     }
 
     private fun startWorkflow(workflowConfig: SDWorkflowConfig) {
@@ -1178,7 +1225,8 @@ class StableDiffusionService : Service() {
         if (notificationTaskId != null) return
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.IMAGE_GEN,
-            getString(R.string.imagegen_title)
+            getString(R.string.imagegen_title),
+            cancellationOwner = UnifiedNotificationManager.CancellationOwner.STABLE_DIFFUSION
         )
         notificationTaskId = taskId
         startForeground(taskId, notification)
@@ -2183,9 +2231,10 @@ class StableDiffusionService : Service() {
                 action = ACTION_CANCEL_WORKFLOW
             }
 
-        fun createCancelAllIntent(context: Context): Intent =
+        fun createCancelAllIntent(context: Context, expectedTaskId: Int? = null): Intent =
             Intent(context, StableDiffusionService::class.java).apply {
                 action = ACTION_CANCEL_ALL
+                expectedTaskId?.let { putExtra(UnifiedNotificationManager.EXTRA_EXPECTED_TASK_ID, it) }
             }
     }
 

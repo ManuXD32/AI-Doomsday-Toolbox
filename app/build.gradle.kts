@@ -14,6 +14,14 @@ val isFatApkBuild = providers.gradleProperty("fatApkBuild")
     .map(String::toBoolean)
     .orElse(false)
 
+// Stable Audio's public C ABI is audited against this AAR, not LiteRT HEAD.
+val stableAudioLiteRtLmVersion = "0.12.0"
+val stableAudioRuntimeAbi by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isTransitive = false
+}
+
 // Explicit emulator carrier. It never changes production release ABIs or packaged assets.
 val isHarnessQaX86 = providers.gradleProperty("adtHarnessQaX86").map(String::toBoolean).orElse(false)
 val isHarnessQaMinified = providers.gradleProperty("adtHarnessQaMinified").map(String::toBoolean).orElse(false)
@@ -330,8 +338,40 @@ val verifyPackagedProotNative by tasks.registering {
     }
 }
 
+val verifyPackagedMetadataPrivacy by tasks.registering {
+    group = "verification"
+    description = "Reject build-host home paths in shipped JSON metadata."
+    val metadata = fileTree("src/main/assets") { include("**/*.json") }
+    inputs.files(metadata)
+    doLast {
+        val hostHome = Regex("/(?:home|Users)/[^/\\s\"\\\\]+")
+        metadata.files.forEach { file ->
+            require(!hostHome.containsMatchIn(file.readText())) {
+                "Private build-host path in packaged metadata: ${file.name}"
+            }
+        }
+    }
+}
+
+val verifyStableAudioRuntimeAbi by tasks.registering {
+    group = "verification"
+    description = "Require the LiteRT binaries audited for the Stable Audio C ABI."
+    inputs.files(stableAudioRuntimeAbi)
+    doLast {
+        val aar = stableAudioRuntimeAbi.singleFile
+        mapOf(
+            "arm64-v8a" to "011134b7559289f0ce4789e89bb7cf9adf51b9a2e342acf8b41a799767f25650",
+            "x86_64" to "31ab900a5319bdde5f4e95c18c67586d4162e8793293c1ddc9f1e41defde346e"
+        ).forEach { (abi, expected) ->
+            require(sha256ZipEntry(aar, "jni/$abi/libLiteRt.so") == expected) {
+                "LiteRT $abi binary changed: audit Stable Audio ABI and run native graph tests before updating the pin."
+            }
+        }
+    }
+}
+
 tasks.matching { it.name == "preBuild" }.configureEach {
-    dependsOn(verifyPackagedProotNative)
+    dependsOn(verifyPackagedProotNative, verifyPackagedMetadataPrivacy, verifyStableAudioRuntimeAbi)
 }
 
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
@@ -405,6 +445,10 @@ dependencies {
     // DB
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
+    implementation(libs.androidx.room.paging)
+    implementation(libs.androidx.paging.runtime)
+    implementation(libs.androidx.paging.compose)
+    testImplementation(libs.androidx.paging.testing)
     ksp(libs.androidx.room.compiler)
     // Catalog-referenced so it can never drift from the Room runtime/compiler
     // version, which previously had to be kept in step by hand.
@@ -434,7 +478,13 @@ dependencies {
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.26.0")
 
     // LiteRT-LM chat backend for CPU/GPU packaged models
-    runtimeOnly("com.google.ai.edge.litertlm:litertlm-android:0.12.0") {
+    // Keep the audited ABI pin shared by the hash gate and runtime dependency.
+    // Upgrading or moving this pin requires the audited hash/native tests above.
+    //noinspection GradleDependency,UseTomlInstead
+    stableAudioRuntimeAbi("com.google.ai.edge.litertlm:litertlm-android:$stableAudioLiteRtLmVersion")
+    //noinspection GradleDependency,UseTomlInstead
+    runtimeOnly("com.google.ai.edge.litertlm:litertlm-android:$stableAudioLiteRtLmVersion") {
+        version { strictly(stableAudioLiteRtLmVersion) }
         exclude(group = "org.jetbrains.kotlin")
     }
     
@@ -481,7 +531,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation("io.mockk:mockk:1.13.11")
     testImplementation("org.json:json:20240303")
-    testImplementation("org.robolectric:robolectric:4.16.1")
+    testImplementation(libs.robolectric)
     testImplementation(libs.androidx.work.testing)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
@@ -491,7 +541,7 @@ dependencies {
     debugImplementation(libs.androidx.ui.test.manifest)
     
     // Retrofit with kotlinx.serialization
-    implementation("com.jakewharton.retrofit:retrofit2-kotlinx-serialization-converter:1.0.0")
+    implementation(libs.retrofit.serialization)
 }
 
 val releaseFeatureSizeLimitBytes = 190L * 1024L * 1024L

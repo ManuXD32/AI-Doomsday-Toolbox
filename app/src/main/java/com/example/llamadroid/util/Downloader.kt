@@ -2,6 +2,7 @@ package com.example.llamadroid.util
 
 import android.content.Context
 import android.os.PowerManager
+import com.example.llamadroid.R
 import com.example.llamadroid.data.model.DownloadProgressHolder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -15,7 +16,9 @@ import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
-import java.io.InterruptedIOException
+import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.coroutineContext
@@ -48,108 +51,163 @@ object Downloader {
         }
         
         val partFile = File(destFile.parentFile, "${destFile.name}.part")
+        val metadataFile = DownloadResumeMetadata.companionFile(partFile)
+        val progressPolicy = DownloadProgressPolicy(250L)
+
+        fun verificationFailure(reason: String): IOException {
+            DebugLog.log("Downloader: response validation failed: $reason")
+            return IOException(context?.getString(R.string.download_verification_failed)
+                ?: "Download response could not be verified")
+        }
+
+        fun discardPartial() {
+            var deleted = false
+            if (partFile.exists()) {
+                if (!partFile.delete()) throw verificationFailure("cannot discard partial")
+                deleted = true
+            }
+            if (metadataFile.exists()) {
+                if (!metadataFile.delete()) throw verificationFailure("cannot discard metadata")
+                deleted = true
+            }
+            if (deleted) DownloadResumeMetadata.syncDirectory(partFile.parentFile)
+        }
+        var partialDurable = true
         
         try {
             wakeLock?.acquire(DOWNLOAD_WAKE_LOCK_TIMEOUT_MS)
             DebugLog.log("Downloader: Starting download of $url")
 
             var attempt = 0
+            var protocolRestarts = 0
             var completed = false
-            var lastError: Exception? = null
+            var lastError: IOException? = null
+            if (partFile.exists() &&
+                DownloadResumeMetadata.read(metadataFile)?.matches(url, partFile.length()) != true
+            ) discardPartial()
+            progressPolicy.shouldUpdate(force = true)
             emit(if (partFile.length() > 0L) DownloadProgressHolder.INDETERMINATE else 0f)
 
             while (attempt < MAX_DOWNLOAD_ATTEMPTS && !completed) {
                 coroutineContext.ensureActive()
-                val resumeFrom = partFile.length().coerceAtLeast(0L)
-                val requestBuilder = Request.Builder().url(url)
+                val saved = DownloadResumeMetadata.read(metadataFile)
+                val resumeFrom = if (saved?.matches(url, partFile.length()) == true) partFile.length() else 0L
+                if (partFile.exists() && resumeFrom == 0L) discardPartial()
+                val requestBuilder = Request.Builder().url(url).header("Accept-Encoding", "identity")
                 bearerToken?.trim()?.takeIf { it.isNotBlank() }?.let { token ->
                     requestBuilder.header("Authorization", "Bearer $token")
                 }
                 if (resumeFrom > 0L) {
                     requestBuilder.header("Range", "bytes=$resumeFrom-")
+                    requestBuilder.header("If-Range", saved!!.strongEtag)
                 }
                 val call = client.newCall(requestBuilder.build())
                 activeDownloads[downloadId] = call
 
                 try {
-                    val response = call.execute()
-                    if (resumeFrom > 0L && response.code == 200) {
-                        partFile.delete()
-                    }
-                    if (!response.isSuccessful || (resumeFrom > 0L && response.code != 206 && response.code != 200)) {
-                        throw Exception("Download failed: $url (${response.code})")
-                    }
-                    val body = response.body ?: throw Exception("Empty body")
-                    val responseResumeFrom = if (resumeFrom > 0L && response.code == 206) resumeFrom else 0L
-                    val remainingBytes = body.contentLength()
-                    val totalBytes = if (remainingBytes > 0L) responseResumeFrom + remainingBytes else -1L
-                    val inputStream: InputStream = body.byteStream()
-                    val outputStream = FileOutputStream(partFile, responseResumeFrom > 0L)
-                    val buffer = ByteArray(64 * 1024)
-                    var bytesRead: Int
-                    var totalRead = responseResumeFrom
-
-                    if (totalBytes <= 0L) {
-                        emit(DownloadProgressHolder.INDETERMINATE)
-                    } else {
-                        emit((totalRead.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f))
-                    }
-                    try {
-                        while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                            coroutineContext.ensureActive()
-                            if (call.isCanceled()) {
-                                DebugLog.log("Downloader: Download cancelled for ${destFile.name}")
-                                if (!preservePartialOnCancel) {
-                                    partFile.delete()
-                                    destFile.delete()
+                    call.execute().use { response ->
+                        if (response.code == 416 && resumeFrom > 0L) throw RestartFreshDownload("Range rejected")
+                        if (response.code !in listOf(200, 206)) {
+                            throw IOException("Download failed: $url (${response.code})")
+                        }
+                        val body = response.body ?: throw verificationFailure("empty body")
+                        if (response.header("Content-Encoding")?.equals("identity", ignoreCase = true) == false) {
+                            throw verificationFailure("unexpected content encoding")
+                        }
+                        val ranged = response.code == 206
+                        val range = if (ranged) DownloadContentRange.parse(response.header("Content-Range")) else null
+                        if (ranged && (resumeFrom == 0L || saved == null || range == null ||
+                                range.start != resumeFrom || range.total != saved.totalBytes ||
+                                response.header("ETag") != saved.strongEtag ||
+                                (body.contentLength() >= 0L && body.contentLength() != range.end - range.start + 1L))
+                        ) throw RestartFreshDownload("Unverified partial response")
+                        if (!ranged && resumeFrom > 0L) discardPartial()
+                        val totalBytes = if (ranged) range!!.total else body.contentLength()
+                        if (!ranged) {
+                            val etag = response.header("ETag")
+                            if (DownloadResumeMetadata.isStrongEtag(etag) && totalBytes > 0L) {
+                                DownloadResumeMetadata.write(metadataFile, DownloadResumeMetadata(
+                                    DownloadResumeMetadata.fingerprint(url), etag!!, totalBytes
+                                ))
+                            } else if (metadataFile.exists() && !metadataFile.delete()) {
+                                throw verificationFailure("cannot remove unusable metadata")
+                            }
+                        }
+                        var totalRead = if (ranged) resumeFrom else 0L
+                        var responseRead = 0L
+                        FileOutputStream(partFile, ranged).use { output ->
+                            partialDurable = false
+                            try {
+                                body.byteStream().use { input ->
+                                    val buffer = ByteArray(64 * 1024)
+                                    while (true) {
+                                        val count = input.read(buffer)
+                                        if (count < 0) break
+                                        coroutineContext.ensureActive()
+                                        if (call.isCanceled()) throw CancellationException("Download cancelled")
+                                        output.write(buffer, 0, count)
+                                        responseRead += count
+                                        totalRead += count
+                                        if (totalBytes > 0L && totalRead > totalBytes) {
+                                            throw RestartFreshDownload("Response exceeded declared total")
+                                        }
+                                        if (progressPolicy.shouldUpdate()) {
+                                            emit(if (totalBytes > 0L)
+                                                (totalRead.toFloat() / totalBytes.toFloat()).coerceIn(0f, 0.999f)
+                                                else DownloadProgressHolder.INDETERMINATE)
+                                        }
+                                    }
                                 }
-                                throw CancellationException("Download cancelled")
-                            }
-
-                            outputStream.write(buffer, 0, bytesRead)
-                            totalRead += bytesRead
-                            if (totalBytes > 0) {
-                                emit((totalRead.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f))
-                            } else {
-                                emit(DownloadProgressHolder.INDETERMINATE)
+                            } finally {
+                                partialDurable = runCatching { output.fd.sync() }.isSuccess
                             }
                         }
-                        outputStream.flush()
-                    } finally {
-                        inputStream.close()
-                        outputStream.close()
-                        body.close()
-                        response.close()
-                    }
-                    if (destFile.exists()) destFile.delete()
-                    if (!partFile.renameTo(destFile)) {
-                        partFile.inputStream().use { input ->
-                            FileOutputStream(destFile).use { output -> input.copyTo(output) }
+                        if (!partialDurable) throw verificationFailure("cannot sync partial payload")
+                        val expected = if (ranged) range!!.end - range.start + 1L else totalBytes
+                        if (expected >= 0L && responseRead != expected) {
+                            throw verificationFailure("incomplete response")
                         }
-                        partFile.delete()
+                        if (totalBytes > 0L && totalRead < totalBytes) {
+                            if (!ranged) throw verificationFailure("incomplete full response")
+                            attempt = 0
+                            return@use
+                        }
+                        Files.move(partFile.toPath(), destFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                        DownloadResumeMetadata.syncDirectory(destFile.parentFile)
+                        if (metadataFile.exists() && !metadataFile.delete()) {
+                            DebugLog.log("Downloader: could not remove completed resume metadata")
+                        }
+                        completed = true
+                        emit(1f)
+                        DebugLog.log("Downloader: Completed download of ${destFile.name}")
                     }
-                    emit(1f)
-                    completed = true
-                    DebugLog.log("Downloader: Completed download of ${destFile.name}")
-                } catch (e: InterruptedIOException) {
+                } catch (e: RestartFreshDownload) {
+                    discardPartial()
+                    protocolRestarts += 1
+                    if (protocolRestarts > MAX_PROTOCOL_RESTARTS) {
+                        throw verificationFailure("repeated invalid range response")
+                    }
+                    DebugLog.log("Downloader: restarting unverifiable partial for ${destFile.name}")
+                } catch (e: IOException) {
                     if (call.isCanceled()) {
-                        // OkHttp reports cancellation as an interrupted I/O
-                        // operation while a response is being read. It is a
-                        // terminal control path, never a transient retry.
                         throw CancellationException("Download cancelled")
                     }
+                    if (!partialDurable) discardPartial()
                     lastError = e
                     attempt += 1
-                    DebugLog.log("Downloader: idle/read timeout for ${destFile.name}; retry $attempt/$MAX_DOWNLOAD_ATTEMPTS")
+                    DebugLog.log("Downloader: I/O retry $attempt/$MAX_DOWNLOAD_ATTEMPTS for ${destFile.name}")
                     if (attempt >= MAX_DOWNLOAD_ATTEMPTS) throw e
-                } catch (e: Exception) {
-                    lastError = e
-                    throw e
                 } finally {
                     activeDownloads.remove(downloadId, call)
                 }
             }
-            if (!completed) throw lastError ?: Exception("Download did not complete")
+            if (!completed) throw lastError ?: verificationFailure("incomplete download")
+        } catch (cancelled: CancellationException) {
+            if (!preservePartialOnCancel ||
+                !partialDurable ||
+                DownloadResumeMetadata.read(metadataFile)?.matches(url, partFile.length()) != true
+            ) discardPartial()
+            throw cancelled
         } catch (e: Exception) {
             DebugLog.log("Downloader: ERROR - ${e.message}")
             throw e
@@ -259,5 +317,8 @@ object Downloader {
     }
 
     private const val MAX_DOWNLOAD_ATTEMPTS = 4
+    private const val MAX_PROTOCOL_RESTARTS = 2
     private const val DOWNLOAD_WAKE_LOCK_TIMEOUT_MS = 24 * 60 * 60 * 1_000L
+
+    private class RestartFreshDownload(message: String) : IOException(message)
 }

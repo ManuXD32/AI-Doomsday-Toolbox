@@ -55,7 +55,8 @@ internal class StableAudio3WorkerClient(private val context: Context) {
                         else result.completeExceptionally(StableAudio3Failure.fromWire(code,
                             data.getString(StableAudio3WorkerProtocol.KEY_STAGE) ?: lastStage,
                             if (data.containsKey(StableAudio3WorkerProtocol.KEY_NATIVE_STATUS))
-                                data.getInt(StableAudio3WorkerProtocol.KEY_NATIVE_STATUS) else null))
+                                data.getInt(StableAudio3WorkerProtocol.KEY_NATIVE_STATUS) else null,
+                            data.getString(StableAudio3WorkerProtocol.KEY_NATIVE_OPERATION)))
                     }
                 }
             }

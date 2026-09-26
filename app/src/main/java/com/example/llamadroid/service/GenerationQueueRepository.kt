@@ -5,6 +5,11 @@ import androidx.room.withTransaction
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.GenerationQueueControlEntity
 import com.example.llamadroid.data.db.GenerationQueueItemEntity
+import com.example.llamadroid.data.db.GenerationQueueRunSummary
+import com.example.llamadroid.data.db.GenerationQueueListItem
+import androidx.paging.PagingSource
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -51,8 +56,13 @@ class GenerationQueueRepository(context: Context) {
     private val dao = database.generationQueueDao()
 
     val queue = dao.observeQueue()
-    val history = dao.observeHistory()
+    val pendingCountFlow = dao.observePendingCount()
     val control = dao.observeControl()
+
+    fun historyPagingSource(): PagingSource<Int, GenerationQueueListItem> = dao.historyPagingSource()
+
+    fun runSummaryFlow(runId: String?): Flow<GenerationQueueRunSummary> =
+        runId?.let(dao::observeRunSummary) ?: flowOf(GenerationQueueRunSummary.EMPTY)
 
     suspend fun add(prepared: PreparedGenerationQueueItem) = withContext(Dispatchers.IO) {
         try { mutationMutex.withLock {
@@ -85,7 +95,7 @@ class GenerationQueueRepository(context: Context) {
 
     suspend fun item(id: String): GenerationQueueItemEntity? = withContext(Dispatchers.IO) { dao.getItem(id) }
 
-    suspend fun pendingCount(): Int = withContext(Dispatchers.IO) { dao.pendingItems().size }
+    suspend fun pendingCount(): Int = withContext(Dispatchers.IO) { dao.pendingCount() }
 
     suspend fun beginRun(scheduled: Boolean): String? = withContext(Dispatchers.IO) {
         mutationMutex.withLock {
@@ -96,11 +106,10 @@ class GenerationQueueRepository(context: Context) {
                         (control.scheduledAtMillis ?: Long.MAX_VALUE) > System.currentTimeMillis() + 1_000L)) {
                     return@withTransaction null
                 }
-                val pending = dao.pendingItems()
-                if (pending.isEmpty()) return@withTransaction null
+                if (dao.pendingCount() == 0) return@withTransaction null
                 val runId = control.runId.takeIf { control.state == "PAUSED" }
                     ?: UUID.randomUUID().toString()
-                pending.forEach { dao.updateItem(it.copy(runId = runId)) }
+                dao.assignRunToPending(runId)
                 dao.putControl(control.copy(state = "RUNNING", scheduledAtMillis = null,
                     runId = runId, activeItemId = null, updatedAtMillis = System.currentTimeMillis()))
                 runId
@@ -118,7 +127,7 @@ class GenerationQueueRepository(context: Context) {
                     return@withTransaction null
                 }
                 if (control.state != "RUNNING") return@withTransaction null
-                val next = dao.pendingItems().firstOrNull()
+                val next = dao.nextPending()
                 if (next == null) {
                     dao.putControl(control.copy(state = "IDLE", runId = null, activeItemId = null,
                         updatedAtMillis = System.currentTimeMillis()))
@@ -237,7 +246,7 @@ class GenerationQueueRepository(context: Context) {
             database.withTransaction {
                 val control = controlOrDefault()
                 require(control.state !in setOf("RUNNING", "PAUSING")) { "Queue is running" }
-                require(dao.pendingItems().isNotEmpty()) { "Queue is empty" }
+                require(dao.pendingCount() > 0) { "Queue is empty" }
                 dao.putControl(control.copy(state = "SCHEDULED", scheduledAtMillis = atMillis,
                     runId = null, activeItemId = null, updatedAtMillis = System.currentTimeMillis()))
             }
@@ -272,7 +281,7 @@ class GenerationQueueRepository(context: Context) {
         val removed = mutationMutex.withLock { database.withTransaction { dao.deletePending(itemId) > 0 } }
         if (removed) {
             discardStagedInputs(itemId)
-            if (dao.pendingItems().isEmpty()) {
+            if (dao.pendingCount() == 0) {
                 val control = controlNow()
                 if (control.state == "SCHEDULED") {
                     cancelSchedule()
@@ -287,27 +296,27 @@ class GenerationQueueRepository(context: Context) {
     suspend fun movePending(itemId: String, delta: Int): Boolean = withContext(Dispatchers.IO) {
         mutationMutex.withLock {
             database.withTransaction {
-                val rows = dao.pendingItems()
+                val rows = dao.pendingOrder()
                 val index = rows.indexOfFirst { it.id == itemId }
                 val otherIndex = index + delta
                 if (index < 0 || otherIndex !in rows.indices) return@withTransaction false
                 val first = rows[index]
                 val second = rows[otherIndex]
-                dao.updateItem(first.copy(sortOrder = second.sortOrder))
-                dao.updateItem(second.copy(sortOrder = first.sortOrder))
+                dao.updatePendingOrder(first.id, second.sortOrder)
+                dao.updatePendingOrder(second.id, first.sortOrder)
                 true
             }
         }
     }
 
     suspend fun progress(runId: String): GenerationQueueProgress = withContext(Dispatchers.IO) {
-        val items = dao.runItems(runId)
+        val summary = dao.runSummary(runId)
         GenerationQueueProgress(
-            total = items.size,
-            finished = items.count { it.status in TERMINAL_STATUSES },
-            succeeded = items.count { it.status == "SUCCEEDED" },
-            failed = items.count { it.status in setOf("FAILED", "INTERRUPTED") },
-            waiting = items.count { it.status == "PENDING" }
+            total = summary.total,
+            finished = summary.finished,
+            succeeded = summary.succeeded,
+            failed = summary.failed,
+            waiting = summary.waiting
         )
     }
 
@@ -346,14 +355,14 @@ class GenerationQueueRepository(context: Context) {
         val state = dao.getControl() ?: return
         if (state.state == "SCHEDULED") {
             state.scheduledAtMillis?.let { at ->
-                GenerationQueueNotifications.showScheduled(appContext, dao.pendingItems().size, at)
+                GenerationQueueNotifications.showScheduled(appContext, dao.pendingCount(), at)
             }
         } else if (state.state in setOf("RUNNING", "PAUSING") && GenerationQueueRuntime.isActive) {
             runCatching { appContext.startService(GenerationQueueService.refreshIntent(appContext)) }
         } else if (state.state == "PAUSED" && state.runId != null) {
             GenerationQueueNotifications.showStopped(appContext, progress(state.runId), paused = true)
         } else if (state.state == "IDLE") {
-            val count = dao.pendingItems().size
+            val count = dao.pendingCount()
             if (count > 0) GenerationQueueNotifications.showPending(appContext, count)
             else GenerationQueueNotifications.dismiss(appContext)
         }
@@ -362,6 +371,5 @@ class GenerationQueueRepository(context: Context) {
     companion object {
         private val mutationMutex = Mutex()
         private val retryClaims = mutableSetOf<String>()
-        private val TERMINAL_STATUSES = setOf("SUCCEEDED", "FAILED", "STOPPED", "INTERRUPTED")
     }
 }

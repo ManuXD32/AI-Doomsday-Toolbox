@@ -2,7 +2,7 @@
 <resources>
     <string name="audio_music_error_model_stale">This Stable Audio model row is stale or legacy. Re-download the curated component from the LiteRT catalog.</string>
     <string name="audio_music_error_file_io">Stable Audio could not read a model file while loading. Check the model doctor and re-download the affected component.</string>
-    <string name="audio_music_error_invalid_model">Stable Audio found invalid model data. Re-download the affected curated component.</string>
+    <string name="audio_music_error_invalid_model">Stable Audio could not read this model. Check its integrity before downloading it again; intact files can also fail because of a runtime incompatibility.</string>
     <string name="audio_music_error_native_memory">Stable Audio ran out of memory while loading a model. Close other tasks or reduce the requested duration, then retry.</string>
     <string name="audio_stable_doctor_title">Stable Audio model doctor</string>
     <string name="audio_stable_doctor_check">Check model</string>

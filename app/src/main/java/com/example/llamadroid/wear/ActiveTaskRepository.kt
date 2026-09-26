@@ -1,12 +1,11 @@
 package com.example.llamadroid.wear
 
 import android.content.Context
+import android.content.Intent
 import com.example.llamadroid.R
 import com.example.llamadroid.service.OnnxImageGenerationService
-import com.example.llamadroid.service.SDMode
 import com.example.llamadroid.service.StableDiffusionService
 import com.example.llamadroid.service.UnifiedNotificationManager
-import com.example.llamadroid.service.VideoGenerationMode
 import com.example.llamadroid.service.VideoGenerationService
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -39,35 +38,25 @@ object ActiveTaskRepository {
         val task = UnifiedNotificationManager.activeTasks.value.firstOrNull {
             it.id.toString() == request.taskId && it.isWearProgressTask()
         }
-            ?: return CommandAckDto(
-                commandId = request.meta.requestId,
-                accepted = false,
-                status = "FAILED",
-                errorCode = "task_not_found",
-                errorMessage = context.getString(R.string.wear_task_not_found),
-                updatedAtEpochMs = System.currentTimeMillis()
-            )
+            ?: return unavailable(context, request)
 
         return when (command) {
             "cancel" -> {
-                if (!task.canCancelFromWear()) {
-                    CommandAckDto(
-                        commandId = request.meta.requestId,
-                        accepted = false,
-                        status = "FAILED",
-                        errorCode = "task_not_cancellable",
-                        errorMessage = context.getString(R.string.wear_task_not_cancellable),
-                        updatedAtEpochMs = System.currentTimeMillis()
-                    )
+                val cancellation = cancellationIntent(context, task)
+                if (!task.canCancelFromWear() || cancellation == null) {
+                    unavailable(context, request)
                 } else {
-                    cancelTask(context, task.type)
-                    UnifiedNotificationManager.updateProgress(task.id, task.progress, context.getString(R.string.wear_task_cancelling))
-                    CommandAckDto(
-                        commandId = request.meta.requestId,
-                        accepted = true,
-                        status = "ACKNOWLEDGED",
-                        updatedAtEpochMs = System.currentTimeMillis()
-                    )
+                    val delivered = runCatching { context.startService(cancellation) != null }.getOrDefault(false)
+                    if (!delivered) unavailable(context, request) else {
+                        UnifiedNotificationManager.updateProgress(task.id, task.progress,
+                            context.getString(R.string.wear_task_cancelling))
+                        CommandAckDto(
+                            commandId = request.meta.requestId,
+                            accepted = true,
+                            status = "ACKNOWLEDGED",
+                            updatedAtEpochMs = System.currentTimeMillis()
+                        )
+                    }
                 }
             }
             "pause", "resume" -> CommandAckDto(
@@ -116,10 +105,14 @@ object ActiveTaskRepository {
     }
 
     private fun UnifiedNotificationManager.TaskInfo.canCancelFromWear(): Boolean =
-        !isComplete && !isError && type in setOf(
-            UnifiedNotificationManager.TaskType.IMAGE_GEN,
-            UnifiedNotificationManager.TaskType.VIDEO_GEN
-        )
+        !isComplete && !isError && when (cancellationOwner) {
+            UnifiedNotificationManager.CancellationOwner.STABLE_DIFFUSION,
+            UnifiedNotificationManager.CancellationOwner.ONNX_IMAGE ->
+                type == UnifiedNotificationManager.TaskType.IMAGE_GEN
+            UnifiedNotificationManager.CancellationOwner.VIDEO ->
+                type == UnifiedNotificationManager.TaskType.VIDEO_GEN
+            null -> false
+        }
 
     /**
      * The Wear Tasks surface is for work with observable progress. A running LLM server and an
@@ -131,18 +124,25 @@ object ActiveTaskRepository {
         UnifiedNotificationManager.TaskType.AGENT
     )
 
-    private fun cancelTask(context: Context, type: UnifiedNotificationManager.TaskType) {
-        when (type) {
-            UnifiedNotificationManager.TaskType.IMAGE_GEN -> {
-                context.startService(StableDiffusionService.createCancelAllIntent(context))
-                context.startService(OnnxImageGenerationService.createCancelIntent(context))
-            }
-            UnifiedNotificationManager.TaskType.VIDEO_GEN -> {
-                VideoGenerationMode.values().forEach { mode ->
-                    context.startService(VideoGenerationService.createCancelIntent(context, mode))
-                }
-            }
-            else -> Unit
+    internal fun cancellationIntent(context: Context, task: UnifiedNotificationManager.TaskInfo): Intent? {
+        if (!task.canCancelFromWear()) return null
+        return when (task.cancellationOwner) {
+            UnifiedNotificationManager.CancellationOwner.STABLE_DIFFUSION ->
+                StableDiffusionService.createCancelAllIntent(context, task.id)
+            UnifiedNotificationManager.CancellationOwner.ONNX_IMAGE ->
+                OnnxImageGenerationService.createCancelIntent(context, task.id)
+            UnifiedNotificationManager.CancellationOwner.VIDEO ->
+                VideoGenerationService.createCancelAllIntent(context, task.id)
+            null -> null
         }
     }
+
+    private fun unavailable(context: Context, request: TaskCommandRequest): CommandAckDto = CommandAckDto(
+        commandId = request.meta.requestId,
+        accepted = false,
+        status = "FAILED",
+        errorCode = "task_unavailable",
+        errorMessage = context.getString(R.string.wear_task_unavailable),
+        updatedAtEpochMs = System.currentTimeMillis()
+    )
 }

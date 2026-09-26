@@ -1,8 +1,8 @@
 {
   "schema": 2,
   "selection": "core-ai",
-  "run_dir": "/home/manu/.gemini/antigravity/scratch/android_native_build/runs/adt-native-20260922-0980",
-  "output_dir": "/home/manu/.gemini/antigravity/scratch/android_native_build/runs/adt-native-20260922-0980/binaries",
+  "run_dir": "runs/adt-native-20260922-0980",
+  "output_dir": "runs/adt-native-20260922-0980/binaries",
   "project_head": "a7deb33009459f8ec4f850ed92d5d286a0a75a88",
   "files": [
     {
@@ -457,7 +457,7 @@
     "selection": "core-ai",
     "android": {
       "api_level": 28,
-      "ndk_path": "/home/manu/.gemini/antigravity/scratch/android_native_build/android-ndk-r26d"
+      "ndk_path": "android-ndk-r26d"
     },
     "repositories": {
       "llama.cpp": {
@@ -525,5 +525,5 @@
       }
     }
   },
-  "published_from": "/home/manu/.gemini/antigravity/scratch/android_native_build/runs/adt-native-20260922-0980/native_build_manifest.json"
+  "published_from": "runs/adt-native-20260922-0980/native_build_manifest.json"
 }

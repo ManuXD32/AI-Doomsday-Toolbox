@@ -38,6 +38,13 @@ import com.example.llamadroid.data.binary.BinaryAvailability
 import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.DatabaseBackupManager
+import com.example.llamadroid.data.db.RestoreCoordinator
+import com.example.llamadroid.service.AgentService
+import com.example.llamadroid.service.DownloadService
+import com.example.llamadroid.service.GenerationQueueService
+import com.example.llamadroid.service.LlamaService
+import com.example.llamadroid.service.StableDiffusionService
+import com.example.llamadroid.service.VideoGenerationService
 import com.example.llamadroid.quadtrix.QuadtrixWorkspaceManager
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppChromeDefaults
@@ -913,16 +920,9 @@ fun GeneralSettingsScreen(navController: NavController) {
                                         isRestoring = false
                                         result.onSuccess {
                                             Toast.makeText(context, resources.getString(R.string.backup_restore_success), Toast.LENGTH_LONG).show()
-                                            // Restart the app so Room picks up the new DB files
-                                            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                                                val pm = context.packageManager
-                                                val intent = pm.getLaunchIntentForPackage(context.packageName)
-                                                intent?.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK)
-                                                context.startActivity(intent)
-                                                Runtime.getRuntime().exit(0)
-                                            }, 1500)
-                                        }.onFailure { e ->
-                                            Toast.makeText(context, resources.getString(R.string.backup_restore_error, e.message), Toast.LENGTH_LONG).show()
+                                            RestoreCoordinator.scheduleProcessRestart(context)
+                                        }.onFailure {
+                                            Toast.makeText(context, R.string.backup_restore_prepare_failed, Toast.LENGTH_LONG).show()
                                         }
                                     }
                                 },

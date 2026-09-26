@@ -2,7 +2,7 @@
 <resources>
     <string name="audio_music_error_model_stale">Esta fila de modelo de Stable Audio está obsoleta o es antigua. Vuelve a descargar el componente seleccionado del catálogo de LiteRT.</string>
     <string name="audio_music_error_file_io">Stable Audio no pudo leer un archivo de modelo al cargarlo. Revisa el doctor del modelo y vuelve a descargar el componente afectado.</string>
-    <string name="audio_music_error_invalid_model">Stable Audio encontró datos de modelo no válidos. Vuelve a descargar el componente seleccionado.</string>
+    <string name="audio_music_error_invalid_model">Stable Audio no pudo leer este modelo. Comprueba su integridad antes de volver a descargarlo; un archivo intacto también puede fallar por incompatibilidad con el motor.</string>
     <string name="audio_music_error_native_memory">Stable Audio se quedó sin memoria al cargar un modelo. Cierra otras tareas o reduce la duración solicitada y reintenta.</string>
     <string name="audio_stable_doctor_title">Doctor de modelos de Stable Audio</string>
     <string name="audio_stable_doctor_check">Comprobar modelo</string>

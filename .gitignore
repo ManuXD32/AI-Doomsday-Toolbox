@@ -88,6 +88,7 @@ build_log*.txt
 .Rhistory*
 
 # Local tooling/workspace files
+__pycache__/
 .codex
 .codex/
 .vscode/

@@ -14,6 +14,7 @@ import androidx.core.content.ContextCompat
 import com.example.llamadroid.LlamaApplication
 import com.example.llamadroid.MainActivity
 import com.example.llamadroid.R
+import com.example.llamadroid.data.db.RestoreCoordinator
 import com.example.llamadroid.ui.navigation.Screen
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -74,6 +75,7 @@ object GenerationQueueScheduler {
 class GenerationQueueAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         if (intent?.action != GenerationQueueScheduler.ACTION_FIRE) return
+        if (RestoreCoordinator.isMaintenance(context)) return
         runCatching {
             ContextCompat.startForegroundService(context,
                 GenerationQueueService.runIntent(context, scheduled = true))
