@@ -25,6 +25,11 @@ internal class NativeHarnessSettingsReader(
 ) {
     private val settingsLock = Mutex()
     private val catalogLock = Mutex()
+    /** Monotonic guard for reads that outlive an endpoint replacement. */
+    private var catalogRequestGeneration = 0L
+    /** Last complete provider snapshot used for provider-level catalog failures. */
+    private var lastGoodCatalogProviders: List<HarnessProviderOption> = emptyList()
+    private var lastCatalogClient: HarnessClient? = null
     var settingsRevisions: Map<String, Int> = emptyMap()
         private set
     var settingsWritable = false
@@ -34,16 +39,28 @@ internal class NativeHarnessSettingsReader(
 
     suspend fun refreshSettings(reportFailure: Boolean) = settingsLock.withLock { readSettings(reportFailure) }
 
+    /**
+     * Provider settings are the capability source for the catalog. Keep this
+     * ordering in one entry point so attach, reconnect, WebUI return, and
+     * manual refreshes cannot publish a catalog against an old provider view.
+     */
+    suspend fun refreshSettingsThenCatalog(reportFailure: Boolean) {
+        refreshSettings(reportFailure)
+        refreshModelCatalog(reportFailure)
+    }
+
     private suspend fun readSettings(reportFailure: Boolean) {
         val client = clientOrNull() ?: return
         when (val result = client.describeSettings()) {
-            is HarnessRpcResult.Failure -> if (reportFailure) reportFailure(result.error.code, result.error.message)
+            is HarnessRpcResult.Failure -> if (reportFailure && isCurrent(client)) {
+                reportFailure(result.error.code, result.error.message)
+            }
             is HarnessRpcResult.Success -> {
                 if (!isCurrent(client)) return
                 val namespaces = result.value.objectArray("namespaces")
-                settingsWritable = result.value.boolean("writable").orDefault(false)
+                val writable = result.value.boolean("writable").orDefault(false)
                 val settingsHasDocument = result.value.boolean("hasDocument").orDefault(false)
-                settingsRevisions = namespaces.mapNotNull { item ->
+                val revisions = namespaces.mapNotNull { item ->
                     item.string("ns")?.let { it to (item.int("revision") ?: 0) }
                 }.toMap()
                 val sections = namespaces.mapNotNull { item ->
@@ -56,7 +73,7 @@ internal class NativeHarnessSettingsReader(
                             schema = item.objectValue("schema"),
                             value = item["value"],
                             user = item["user"],
-                            writable = settingsWritable,
+                            writable = writable,
                             hiddenPaths = harnessNamespaceSecretPaths(item)
                         )
                     )
@@ -65,12 +82,14 @@ internal class NativeHarnessSettingsReader(
                     is HarnessRpcResult.Success -> directoryResult.value
                         .let { value -> if (value is JsonArray) value.mapNotNull { it.jsonObjectOrNull() } else emptyList() }
                     is HarnessRpcResult.Failure -> {
-                        if (reportFailure) reportFailure(directoryResult.error.code, directoryResult.error.message)
+                        if (reportFailure && isCurrent(client)) {
+                            reportFailure(directoryResult.error.code, directoryResult.error.message)
+                        }
                         emptyList()
                     }
                 }
-                providerBindings = buildHarnessProviderBindings(directory, namespaces, settingsWritable)
-                val credentialReferences = providerBindings.values
+                val bindings = buildHarnessProviderBindings(directory, namespaces, writable)
+                val credentialReferences = bindings.values
                     .mapNotNull { it.apiKeyReference }
                     .distinct()
                 val credentialInfo = if (credentialReferences.isEmpty()) {
@@ -84,7 +103,7 @@ internal class NativeHarnessSettingsReader(
                             credentialResult.value.objectValue(reference)
                         }
                         is HarnessRpcResult.Failure -> {
-                            if (reportFailure) reportFailure(
+                            if (reportFailure && isCurrent(client)) reportFailure(
                                 credentialResult.error.code,
                                 credentialResult.error.message
                             )
@@ -93,27 +112,30 @@ internal class NativeHarnessSettingsReader(
                     }
                 }
                 val authStates = try {
-                    describeAuth(providerBindings.keys.toList())
+                    describeAuth(bindings.keys.toList())
                 } catch (error: CancellationException) {
                     throw error
                 } catch (_: Throwable) {
                     emptyMap()
                 }
                 if (!isCurrent(client)) return
-                val configs = providerBindings.values.map { binding ->
+                settingsWritable = writable
+                settingsRevisions = revisions
+                providerBindings = bindings
+                val configs = bindings.values.map { binding ->
                     val credentialReference = binding.apiKeyReference
                     val credential = credentialReference?.let(credentialInfo::get)
                     HarnessProviderConfigUi(
                         id = binding.providerId,
                         name = binding.displayName,
-                        fields = harnessProviderFields(binding, namespaces, settingsWritable),
+                        fields = harnessProviderFields(binding, namespaces, writable),
                         auth = authStates[binding.providerId] ?: HarnessProviderAuthUi(),
                         credentialReference = credentialReference,
                         credentialConfigured = credential?.boolean("configured").orDefault(false),
                         credentialOptional = nativeHarnessProviderCredentialOptional(binding),
                         credentialSource = credential?.string("source"),
                         credentialWritable = nativeHarnessProviderCredentialWritable(binding, credential),
-                        canSave = settingsWritable,
+                        canSave = writable,
                         canDelete = binding.canDelete
                     )
                 }
@@ -124,8 +146,8 @@ internal class NativeHarnessSettingsReader(
                         schemaSections = sections,
                         provider = current.provider.copy(
                             configs = configs,
-                            canCreateProvider = settingsWritable &&
-                                settingsRevisions.containsKey(NATIVE_CUSTOM_PROVIDER_SETTINGS_NAMESPACE),
+                            canCreateProvider = writable &&
+                                revisions.containsKey(NATIVE_CUSTOM_PROVIDER_SETTINGS_NAMESPACE),
                             customProviderProtocols = NATIVE_CUSTOM_PROVIDER_PROTOCOLS
                         )
                     )
@@ -134,61 +156,116 @@ internal class NativeHarnessSettingsReader(
         }
     }
 
-    suspend fun refreshModelCatalog(reportFailure: Boolean) = catalogLock.withLock { readModelCatalog(reportFailure) }
+    suspend fun refreshModelCatalog(reportFailure: Boolean) = catalogLock.withLock {
+        val generation = ++catalogRequestGeneration
+        readModelCatalog(reportFailure, generation)
+    }
 
-    private suspend fun readModelCatalog(reportFailure: Boolean) {
+    private suspend fun readModelCatalog(reportFailure: Boolean, generation: Long) {
         val client = clientOrNull() ?: run {
             mutate { it.copy(provider = it.provider.copy(isCatalogLoading = false, catalogRefreshFailed = true)) }
             return
+        }
+        if (!isCatalogRequestCurrent(client, generation)) return
+        if (lastCatalogClient !== client) {
+            lastCatalogClient = client
+            lastGoodCatalogProviders = emptyList()
         }
         mutate { it.copy(provider = it.provider.copy(isCatalogLoading = true, catalogRefreshFailed = false)) }
         try {
         when (val result = client.modelCatalog()) {
             is HarnessRpcResult.Failure -> {
+                if (!isCatalogRequestCurrent(client, generation)) return
                 mutate { it.copy(provider = it.provider.copy(isCatalogLoading = false, catalogRefreshFailed = true)) }
                 if (reportFailure) reportFailure(result.error.code, result.error.message)
             }
             is HarnessRpcResult.Success -> {
-                if (!isCurrent(client)) return
+                if (!isCatalogRequestCurrent(client, generation)) return
                 val catalog = result.value.jsonObjectOrNull()
                 if (catalog == null) {
+                    if (!isCatalogRequestCurrent(client, generation)) return
                     mutate { it.copy(provider = it.provider.copy(isCatalogLoading = false, catalogRefreshFailed = true)) }
-                    reportFailure("MODEL_CATALOG_INVALID", "Harness returned an invalid model catalog")
+                    if (reportFailure) {
+                        reportFailure("MODEL_CATALOG_INVALID", "Harness returned an invalid model catalog")
+                    }
                     return
                 }
                 val parsed = parseHarnessModelCatalog(catalog)
-                val savedConfigs = state.value.provider.configs
-                val localProviders = runCatching {
-                    localModelCatalog()?.let(::parseHarnessLocalModelCatalog).orEmpty()
-                }.getOrDefault(emptyList())
-                val providers = mergeHarnessSavedModelCapabilities(
+                val stateSnapshot = state.value
+                val savedConfigs = stateSnapshot.provider.configs
+                var localCatalogRead = false
+                val localProviders = try {
+                    localModelCatalog()?.let { value ->
+                        localCatalogRead = true
+                        parseHarnessLocalModelCatalog(value)
+                    }.orEmpty()
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Throwable) {
+                    emptyList()
+                }
+                val catalogProviders = mergeHarnessSavedModelCapabilities(
                     mergeHarnessLocalModelProviders(parsed.providers, localProviders),
                     savedConfigs
                 )
-                val selectedProvider = state.value.provider.selectedProviderId
-                    ?.takeIf { id -> providers.any { it.id == id } }
-                    ?: parsed.defaultProvider
-                    ?: providers.firstOrNull()?.id
-                val provider = providers.firstOrNull { it.id == selectedProvider }
-                val selectedModel = state.value.provider.selectedModel
-                    ?.takeIf { model ->
-                        provider?.models?.contains(model) == true &&
-                            provider.let { it != null && harnessModelContextKnown(it, model) }
-                    }
-                    ?: parsed.defaultModel
-                        ?.takeIf { parsed.defaultProvider == selectedProvider }
-                        ?.takeIf { model -> provider?.let { harnessModelContextKnown(it, model) } == true }
-                    ?: provider?.models?.firstOrNull { harnessModelContextKnown(provider, it) }
-                val selectedEffort = state.value.provider.selectedReasoningEffort
-                    ?.takeIf { effort -> provider?.reasoningEfforts?.get(selectedModel).orEmpty().any { it.id == effort } }
-                    ?: if (state.value.provider.thinkingEnabled) {
-                        provider?.reasoningDefaults?.get(selectedModel)
-                            ?: parsed.defaultReasoningEffort?.takeIf { selectedModel == parsed.defaultModel }
-                    } else null
-                if (!isCurrent(client)) return
+                // A transient provider failure can arrive as an empty group.
+                // Overlay cached rows by ID so the empty group cannot win a
+                // distinctBy merge and erase the last known model limits.
+                val cachedProviders = stateSnapshot.provider.providers + lastGoodCatalogProviders
+                val failedProviderIds = parsed.failures.map { it.providerId }.toSet()
+                var providers = overlayHarnessProviderRows(
+                    fresh = catalogProviders,
+                    replacements = cachedProviders
+                        .filter { it.id in failedProviderIds }
+                        .associateBy { it.id },
+                )
+                if (!localCatalogRead) {
+                    // A failed Android bridge projection must not make all
+                    // previously discovered local rows disappear. A valid
+                    // empty JSON catalog is still authoritative and sets
+                    // localCatalogRead=true above.
+                    providers = overlayHarnessProviderRows(
+                        fresh = providers,
+                        replacements = cachedProviders
+                            .filter(::isAndroidManagedHarnessProvider)
+                            .associateBy { it.id },
+                    )
+                }
+                if (parsed.failures.isEmpty()) {
+                    lastGoodCatalogProviders = providers
+                }
+                if (!isCatalogRequestCurrent(client, generation)) return
                 mutate { current ->
+                    // Resolve the selection from the state held at commit
+                    // time. A session/model action may have completed while
+                    // the catalog RPC was in flight; using the earlier
+                    // snapshot here would overwrite that live selection.
+                    val selectedProviderId = current.provider.selectedProviderId
+                        ?.let { currentProviderId ->
+                            current.provider.selectedModel?.let { modelId ->
+                                canonicalHarnessProviderId(providers, currentProviderId, modelId)
+                            } ?: currentProviderId
+                        }
+                        ?: parsed.defaultProvider
+                            ?.takeIf { id -> providers.any { it.id == id } }
+                        ?: providers.firstOrNull()?.id
+                    val provider = providers.firstOrNull { it.id == selectedProviderId }
+                    val selectedModel = current.provider.selectedModel
+                        ?: parsed.defaultModel
+                            ?.takeIf { parsed.defaultProvider == selectedProviderId }
+                            ?.takeIf { model ->
+                                provider?.models?.contains(model) == true &&
+                                    (model.startsWith("llama:") || provider.let { harnessModelContextKnown(it, model) })
+                            }
+                        ?: provider?.let(::harnessSelectableModelIds)?.firstOrNull()
+                    val selectedEffort = current.provider.selectedReasoningEffort
+                        ?.takeIf { effort -> provider?.reasoningEfforts?.get(selectedModel).orEmpty().any { it.id == effort } }
+                        ?: if (current.provider.thinkingEnabled) {
+                            provider?.reasoningDefaults?.get(selectedModel)
+                                ?: parsed.defaultReasoningEffort?.takeIf { selectedModel == parsed.defaultModel }
+                        } else null
                     current.copy(provider = current.provider.copy(
-                        selectedProviderId = selectedProvider,
+                        selectedProviderId = selectedProviderId,
                         selectedModel = selectedModel,
                         selectedReasoningEffort = selectedEffort,
                         providers = providers,
@@ -201,7 +278,7 @@ internal class NativeHarnessSettingsReader(
             }
         }
         } catch (error: Throwable) {
-            if (error !is CancellationException) {
+            if (error !is CancellationException && isCatalogRequestCurrent(client, generation)) {
                 mutate { it.copy(provider = it.provider.copy(catalogRefreshFailed = true)) }
             }
             throw error
@@ -209,9 +286,32 @@ internal class NativeHarnessSettingsReader(
             // A replaced client or cancelled refresh must not leave the picker spinning.
             // The catalog mutex prevents this cleanup from racing a newer refresh.
             withContext(NonCancellable) {
-                mutate { it.copy(provider = it.provider.copy(isCatalogLoading = false)) }
+                if (isCatalogRequestCurrent(client, generation)) {
+                    mutate { it.copy(provider = it.provider.copy(isCatalogLoading = false)) }
+                }
             }
         }
     }
+
+    private fun isCatalogRequestCurrent(client: HarnessClient, generation: Long): Boolean =
+        catalogRequestGeneration == generation && isCurrent(client)
+
+    private fun overlayHarnessProviderRows(
+        fresh: List<HarnessProviderOption>,
+        replacements: Map<String, HarnessProviderOption>,
+    ): List<HarnessProviderOption> {
+        val result = fresh.map { replacements[it.id] ?: it }.toMutableList()
+        replacements.values.forEach { replacement ->
+            if (result.none { it.id == replacement.id }) result += replacement
+        }
+        return result
+    }
+
+    private fun isAndroidManagedHarnessProvider(provider: HarnessProviderOption): Boolean =
+        provider.detail == "Android-managed provider" || provider.id in setOf(
+            "adt-managed",
+            "adt-llama-server",
+            "adt-ollama",
+        )
 
 }

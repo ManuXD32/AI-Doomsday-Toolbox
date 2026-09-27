@@ -3,6 +3,7 @@ package com.example.llamadroid.tama.world.training
 import android.app.Application
 import android.content.Context
 import java.io.File
+import java.time.Duration
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -24,6 +25,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowSystemClock
 
 /**
  * Exercises the Android lifecycle boundary around one real PPO update. The fake living store
@@ -33,6 +35,178 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [34])
 class TamaBrainControllerLifecycleTest {
+    @Test
+    fun `cold unapplied guided result without checkpoint returns to paused recovery`() = runBlocking {
+        val context = RuntimeEnvironment.getApplication()
+        val petId = "brain-guided-stale-${System.nanoTime()}"
+        val repository = TrainingRepository(context, petId)
+        repository.saveState(
+            BrainRuntimePersistence(
+                chargingOnly = false,
+                maxThreads = 1,
+                environmentCount = 1,
+                guided = BrainGuidedRuntimeState(
+                    phase = BrainGuidedPhase.RESULTS,
+                    evaluationPassed = true
+                )
+            )
+        )
+        val living = FakeLivingPolicyStore()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val controller = controller(context, scope, petId, living)
+        try {
+            await(controller.initialize())
+            assertEquals(BrainGuidedPhase.PAUSED, controller.state.value.guided.phase)
+            assertEquals("guided_evaluation_stale", controller.state.value.guided.gateFailure)
+            assertFalse(controller.state.value.guided.evaluationPassed)
+        } finally {
+            closeController(controller, scope)
+            repository.resumeFile.parentFile?.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `guided budget finishes automatically at a batch boundary`() = runBlocking {
+        val context = RuntimeEnvironment.getApplication()
+        val petId = "brain-guided-budget-${System.nanoTime()}"
+        val repository = TrainingRepository(context, petId)
+        repository.saveState(
+            BrainRuntimePersistence(
+                chargingOnly = false,
+                maxThreads = 1,
+                environmentCount = 1,
+                guided = BrainGuidedRuntimeState(sessionBudgetMillis = 1L)
+            )
+        )
+        val living = FakeLivingPolicyStore()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val controller = controller(context, scope, petId, living)
+        try {
+            await(controller.initialize())
+            await(controller.startGuidedPractice())
+            awaitState(controller) {
+                it.guided.phase == BrainGuidedPhase.PRACTICING &&
+                    (it.snapshot?.metrics?.environmentSteps ?: 0L) >= 16L
+            }
+            // Robolectric's elapsedRealtime is otherwise fixed while the worker advances on a
+            // background dispatcher, so explicitly cross the one-millisecond test budget after
+            // the first eligible batch has started the active clock.
+            ShadowSystemClock.advanceBy(Duration.ofMillis(1))
+            awaitState(controller) {
+                it.guided.phase == BrainGuidedPhase.RESULTS &&
+                    it.comparison != null &&
+                    it.guided.candidateCheckpointId != null
+            }
+            assertEquals(1L, controller.state.value.guided.sessionMillis)
+            assertTrue(controller.state.value.guided.activeMillis >= 1L)
+            assertTrue(controller.state.value.requestedRunning.not())
+        } finally {
+            closeController(controller, scope)
+            repository.resumeFile.parentFile?.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `resource blocked guided practice does not consume active time`() = runBlocking {
+        val context = RuntimeEnvironment.getApplication()
+        val petId = "brain-guided-resource-${System.nanoTime()}"
+        val repository = TrainingRepository(context, petId)
+        val living = FakeLivingPolicyStore()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val controller = controller(context, scope, petId, living)
+        try {
+            await(controller.initialize())
+            await(controller.setResourceLimits(
+                chargingOnly = true,
+                minimumBatteryPercent = 0,
+                maxThreads = 1,
+                environmentCount = 1
+            ))
+            await(controller.startGuidedPractice())
+            awaitState(controller) { it.pauseReason != null }
+            assertEquals(0L, controller.state.value.guided.sessionMillis)
+            assertEquals(0L, controller.state.value.guided.activeMillis)
+        } finally {
+            closeController(controller, scope)
+            repository.resumeFile.parentFile?.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `guided lesson pauses resumes and finishes through an evaluated checkpoint`() = runBlocking {
+        val context = RuntimeEnvironment.getApplication()
+        val petId = "brain-guided-${System.nanoTime()}"
+        val repository = TrainingRepository(context, petId)
+        val living = FakeLivingPolicyStore()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val controller = controller(context, scope, petId, living)
+        try {
+            await(controller.initialize())
+            await(controller.setResourceLimits(
+                chargingOnly = false,
+                minimumBatteryPercent = 0,
+                maxThreads = 1,
+                environmentCount = 1
+            ))
+            assertEquals(CurriculumLevel.VISIBLE_TARGET.id, controller.state.value.guided.curriculumId)
+            await(controller.selectGuidedLesson(CurriculumLevel.RESOURCE_GATHERING.id))
+            assertEquals(CurriculumLevel.RESOURCE_GATHERING.id, controller.state.value.guided.curriculumId)
+            await(controller.startGuidedPractice())
+            awaitState(controller) {
+                it.guided.phase == BrainGuidedPhase.PRACTICING &&
+                    it.snapshot?.curriculum == CurriculumLevel.RESOURCE_GATHERING &&
+                    (it.snapshot?.metrics?.environmentSteps ?: 0L) >= 16L
+            }
+            // Advanced evaluation pauses the guided clock and makes the old guided result
+            // recoverable rather than leaving the lesson in a false PRACTICING state.
+            await(controller.evaluate("candidate"))
+            assertEquals(BrainGuidedPhase.PAUSED, controller.state.value.guided.phase)
+            assertEquals("guided_evaluation_stale", controller.state.value.guided.gateFailure)
+            await(controller.resumeGuidedPractice())
+            awaitState(controller) { it.guided.phase == BrainGuidedPhase.PRACTICING }
+            await(controller.pauseGuidedPractice())
+            assertEquals(BrainGuidedPhase.PAUSED, controller.state.value.guided.phase)
+            val pausedMillis = controller.state.value.guided.sessionMillis
+            await(controller.resumeGuidedPractice())
+            awaitState(controller) { it.guided.phase == BrainGuidedPhase.PRACTICING }
+            await(controller.pauseGuidedPractice())
+            assertTrue(controller.state.value.guided.sessionMillis >= pausedMillis)
+
+            await(controller.finishGuidedPractice())
+            awaitState(controller) {
+                it.guided.phase == BrainGuidedPhase.RESULTS &&
+                    it.comparison != null &&
+                    it.guided.candidateCheckpointId != null
+            }
+            val checkpointId = requireNotNull(controller.state.value.guided.candidateCheckpointId)
+            assertEquals(checkpointId, controller.state.value.candidateCheckpointId)
+            assertTrue(repository.index().any { it.id == checkpointId && it.evaluation != null })
+
+            val guidedBeforeRestart = controller.state.value.guided
+            val secondScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            val second = controller(context, secondScope, petId, living)
+            try {
+                await(second.initialize())
+                assertEquals(BrainGuidedPhase.RESULTS, second.state.value.guided.phase)
+                assertEquals(guidedBeforeRestart.evaluationPassed, second.state.value.guided.evaluationPassed)
+                assertEquals(checkpointId, second.state.value.guided.candidateCheckpointId)
+                assertTrue("completed guided evaluation should be restored", second.state.value.comparison != null)
+
+                // Restoring the active policy invalidates an unapplied guided result, so Apply
+                // cannot operate on a comparison made against a different reference.
+                await(second.restoreAdoptedPolicy(BASELINE_LIVING_POLICY_ID))
+                assertEquals(BrainGuidedPhase.PAUSED, second.state.value.guided.phase)
+                assertEquals("guided_evaluation_stale", second.state.value.guided.gateFailure)
+                assertNull(second.state.value.comparison)
+            } finally {
+                closeController(second, secondScope)
+            }
+        } finally {
+            closeController(controller, scope)
+            repository.resumeFile.parentFile?.deleteRecursively()
+        }
+    }
+
     @Test
     fun `training age and candidate survive controller recreation and living policy restores`() = runBlocking {
         val context = RuntimeEnvironment.getApplication()
@@ -104,7 +278,29 @@ class TamaBrainControllerLifecycleTest {
                 )
             }
             assertEquals(evaluation, repository.index().first { it.id == savedId }.evaluation)
+
+            // Changing the active living reference after evaluation invalidates Apply even when
+            // the candidate bytes are unchanged.
+            living.replaceReferenceForTest(requireNotNull(candidateArtifactBeforeRestore))
             await(first.adoptCandidate("candidate"))
+            assertEquals("living_reference_changed_since_evaluation", first.state.value.error)
+            await(first.restoreAdoptedPolicy(BASELINE_LIVING_POLICY_ID))
+            await(first.evaluate("candidate"))
+            awaitState(first) { it.comparison != null && !it.evaluating && it.error == null }
+            if (!first.state.value.hasAdoptedComparisonPolicy) {
+                await(first.adoptCandidate("candidate"))
+                assertTrue(first.state.value.error?.startsWith("guided_gate_") == true)
+                // The lifecycle test also covers restoring a living artifact without bypassing the
+                // controller's new Apply gate. A real passing candidate is covered by the pure gate
+                // tests; this one-batch fixture is intentionally too small to promise adoption.
+                living.adopt(
+                    requireNotNull(candidateArtifactBeforeRestore),
+                    "curriculum=1;episodes=${trainedUpdateCount}"
+                )
+                await(first.restoreAdoptedPolicy("policy-v1"))
+            } else {
+                await(first.adoptCandidate("candidate"))
+            }
             assertEquals("policy-v1", first.state.value.activePolicyId)
             assertEquals(1, first.state.value.activePolicyVersion)
             assertTrue(first.state.value.hasAdoptedComparisonPolicy)
@@ -260,6 +456,16 @@ class TamaBrainControllerLifecycleTest {
         }
 
         suspend fun currentArtifact(): ByteArray? = active.inferenceArtifact?.copyOf()
+
+        suspend fun replaceReferenceForTest(bytes: ByteArray) {
+            val copy = bytes.copyOf()
+            active = LivingPolicyReference(
+                id = "external-policy",
+                version = 99,
+                modelHash = TrainingRepository.sha256(copy),
+                inferenceArtifact = copy
+            )
+        }
 
         suspend fun reference(): LivingPolicyReference = active.copy(
             inferenceArtifact = active.inferenceArtifact?.copyOf()

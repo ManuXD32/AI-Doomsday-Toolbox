@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="easy_server_guide_title">How to set up a server</string>
+    <string name="easy_server_guide_create">1. Tap Add server, choose an installed model and optionally give it a name. Save keeps the server for later.</string>
+    <string name="easy_server_guide_start">2. Tap Start and open Chat to use it immediately. You can also start, stop or open Chat from its card. Easy servers stop after 10 idle minutes.</string>
+    <string name="easy_server_guide_arguments">3. Open Server arguments on a card to add llama.cpp flags. Advanced setup can reuse a saved profile. LLM Settings has the full controls for context, threads and other model options.</string>
+    <string name="easy_server_open_settings">Open LLM Settings</string>
+    <string name="easy_server_arguments">Server arguments</string>
+    <string name="easy_server_arguments_help">Optional llama.cpp flags go here. The app already supplies the executable, model and port. Leave this empty to use the profile defaults.</string>
+    <!-- This is a literal llama.cpp flag; its two hyphens are required command syntax. -->
+    <string name="easy_server_arguments_example" tools:ignore="TypographyDashes">Example: --no-warmup. Separate flags with spaces and quote paths containing spaces.</string>
+    <string name="easy_server_arguments_invalid">Close all quotes before saving the arguments.</string>
+    <string name="easy_server_template_help">Leave the template empty to generate the command automatically. For a custom template, start with {default_args} to retain the saved model settings.</string>
+    <string name="easy_server_arguments_restart">Changes apply after stopping and starting the server. Other cards using this saved profile receive the same changes. Easy servers keep their local connection and automatic idle stop.</string>
+    <string name="easy_chat_now">Chat now</string>
+    <string name="easy_chat_download_required">Install a chat model first. Choose a GGUF model in LLM models, then return to Chat now.</string>
+    <string name="easy_chat_opening_conversation">Connected. Opening your conversation…</string>
+    <string name="easy_chat_entry_title">Chat with a model</string>
+    <string name="easy_chat_entry_subtitle">Choose a model and start chatting. The app takes care of setup.</string>
+    <string name="easy_chat_picker_title">Choose a model</string>
+    <string name="easy_chat_picker_hint">Only installed LLM and vision GGUF models are shown.</string>
+    <string name="easy_chat_picker_search">Search models</string>
+    <string name="easy_chat_no_models">No chat models are ready</string>
+    <string name="easy_chat_no_models_hint">Install an LLM or vision GGUF model from the model library, then try again.</string>
+    <string name="easy_chat_no_matching_models">No matching models</string>
+    <string name="easy_chat_creating_server">Creating the managed server…</string>
+    <string name="easy_chat_starting_server">Starting the model…</string>
+    <string name="easy_chat_starting">Starting…</string>
+    <string name="easy_chat_open_failed">Could not open Chat.</string>
+    <string name="easy_chat_save_failed">Could not save the managed server.</string>
+    <string name="easy_chat_retry">Retry</string>
+    <string name="easy_chat_manage_models">Manage models</string>
+    <string name="easy_card_chat">Chat</string>
+    <string name="easy_server_add_title">Add a chat server</string>
+    <string name="easy_server_add_hint">Choose an installed model first. The app creates one managed server and keeps it linked to that model.</string>
+    <string name="easy_server_name_optional">Server name (optional)</string>
+    <string name="easy_server_no_model">No model selected</string>
+    <string name="easy_server_choose_model">Choose installed model</string>
+    <string name="easy_server_advanced_setup">Advanced server setup</string>
+    <string name="easy_server_start_chat">Start and open Chat</string>
+    <string name="easy_server_save">Save server</string>
+</resources>

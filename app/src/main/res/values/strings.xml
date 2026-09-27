@@ -25,10 +25,10 @@
     <string name="dashboard_memory">Memory</string>
     <string name="dashboard_storage">Storage</string>
     <string name="llama_cards_title">llama.cpp servers</string>
-    <string name="llama_cards_subtitle">Run independent local servers from GENERAL saved commands.</string>
+    <string name="llama_cards_subtitle">Choose a model, start a server and chat locally.</string>
     <string name="llama_cards_add">Add server</string>
     <string name="llama_cards_empty">No llama.cpp server cards yet.</string>
-    <string name="llama_cards_add_first">Add a card and choose a GENERAL saved command.</string>
+    <string name="llama_cards_add_first">Tap Add server and choose an installed model.</string>
     <string name="llama_card_name">Server name</string>
     <string name="llama_card_name_hint">e.g. Main model</string>
     <string name="llama_card_preset">GENERAL preset</string>

@@ -57,6 +57,21 @@ class NativeHarnessCatalogTest {
     }
 
     @Test
+    fun routableManagedProviderWithoutModelsRemainsDiscoverable() {
+        val result = parseHarnessModelCatalog(Json.parseToJsonElement(
+            """{"routableProviders":["adt-llama-server"],"groups":[]}"""
+        ).jsonObject)
+
+        val provider = result.providers.single()
+        assertEquals("adt-llama-server", provider.id)
+        assertEquals("ADT-llamacpp", provider.name)
+        assertTrue(provider.configured)
+        assertTrue(provider.models.isEmpty())
+        assertTrue(provider.modelContextWindows.isEmpty())
+        assertTrue(provider.modelAvailability.isEmpty())
+    }
+
+    @Test
     fun modelCatalogKeepsWireIdsSeparateFromCanonicalDisplayNames() {
         val value = Json.parseToJsonElement(
             """
@@ -101,6 +116,39 @@ class NativeHarnessCatalogTest {
     }
 
     @Test
+    fun managedLlamaModelsRemainSelectableBeforePreparationDiscoversContext() {
+        val provider = HarnessProviderOption(
+            id = "adt-llama-server",
+            name = "ADT llama.cpp",
+            models = listOf("llama:7", "unknown"),
+            modelCapabilitySources = mapOf("llama:7" to "unknown", "unknown" to "unknown"),
+        )
+
+        assertEquals(listOf("llama:7"), harnessSelectableModelIds(provider))
+    }
+
+    @Test
+    fun managedPreparationRowsRejectAvailabilityErrorsAndFailureStatuses() {
+        assertFalse(harnessPreparedLocalModelIsReady(Json.parseToJsonElement(
+            """{"available":false,"status":"running","context_length":32768}"""
+        ).jsonObject))
+        assertFalse(harnessPreparedLocalModelIsReady(Json.parseToJsonElement(
+            """{"available":true,"errorCode":"MANAGED_START_FAILED","status":"error"}"""
+        ).jsonObject))
+        assertFalse(harnessPreparedLocalModelIsReady(Json.parseToJsonElement(
+            """{"available":true,"status":"stopped"}"""
+        ).jsonObject))
+        listOf("starting", "loading", "stopping").forEach { status ->
+            assertFalse(harnessPreparedLocalModelIsReady(Json.parseToJsonElement(
+                """{"available":true,"status":"$status","context_length":32768}"""
+            ).jsonObject))
+        }
+        assertTrue(harnessPreparedLocalModelIsReady(Json.parseToJsonElement(
+            """{"available":true,"status":"running","context_length":32768}"""
+        ).jsonObject))
+    }
+
+    @Test
     fun explicitProviderModelContextOverridesDetectedCapability() {
         val provider = parseHarnessModelCatalog(Json.parseToJsonElement(
             """{"groups":[{"id":"local","models":[{"id":"model","context_length":8192}]}]}"""
@@ -141,6 +189,74 @@ class NativeHarnessCatalogTest {
         val llama = providers.single { it.id == "adt-llama-server" }
         assertEquals("Q4.gguf", llama.modelNames["llama:7"])
         assertEquals("unknown", llama.modelCapabilitySources["llama:7"])
+    }
+
+    @Test
+    fun managedRowsRetainRuntimeAvailabilityStatusAndErrorMetadata() {
+        val provider = parseHarnessLocalModelCatalog(Json.parseToJsonElement(
+            """{"data":[{"id":"llama:7","owned_by":"adt-llama-server","name":"Q4.gguf","available":false,"status":"stopped","errorCode":"MANAGED_MODEL_MISSING"}]}"""
+        ).jsonObject).single()
+
+        assertEquals("ADT-llamacpp", provider.name)
+        assertEquals(false, provider.modelAvailability["llama:7"])
+        assertEquals("stopped", provider.modelStatuses["llama:7"])
+        assertEquals("MANAGED_MODEL_MISSING", provider.modelErrorCodes["llama:7"])
+    }
+
+    @Test
+    fun savedContextOverridesDoNotReplaceManagedRuntimeContext() {
+        val provider = parseHarnessLocalModelCatalog(Json.parseToJsonElement(
+            """{"data":[{"id":"llama:7","owned_by":"adt-llama-server","context_length":32768,"capabilitySource":"server"}]}"""
+        ).jsonObject).single()
+        val config = HarnessProviderConfigUi(
+            id = "adt-llama-server",
+            name = "ADT-llamacpp",
+            fields = listOf(
+                HarnessSchemaField(
+                    key = "llm-pi-ai.providers.adt-llama-server.models",
+                    label = "Models",
+                    type = HarnessSchemaFieldType.JSON,
+                    value = "[{\"id\":\"llama:7\",\"contextWindow\":8192,\"maxTokens\":2048}]",
+                )
+            )
+        )
+
+        val merged = mergeHarnessSavedModelCapabilities(listOf(provider), listOf(config)).single()
+
+        assertEquals(32768L, merged.modelContextWindows["llama:7"])
+        assertEquals("server", merged.modelCapabilitySources["llama:7"])
+        assertEquals(2048L, merged.modelMaxOutputTokens["llama:7"])
+    }
+
+    @Test
+    fun preparedManagedModelUpdatesOnlyItsProviderCapabilityMetadata() {
+        val existing = listOf(
+            HarnessProviderOption(
+                id = "deepseek",
+                name = "DeepSeek",
+                models = listOf("reasoner"),
+            ),
+            HarnessProviderOption(
+                id = "adt-llama-server",
+                name = "ADT llama.cpp",
+                models = listOf("llama:7"),
+                modelCapabilitySources = mapOf("llama:7" to "unknown"),
+            ),
+        )
+
+        val updated = updateHarnessPreparedLocalModel(
+            providers = existing,
+            modelId = "llama:7",
+            row = Json.parseToJsonElement(
+                """{"id":"llama:7","owned_by":"adt-llama-server","name":"Q4.gguf","context_length":32768,"max_output_tokens":4096,"capabilitySource":"detected"}"""
+            ).jsonObject,
+        )
+
+        assertEquals(listOf("reasoner"), updated.first { it.id == "deepseek" }.models)
+        val llama = updated.single { it.id == "adt-llama-server" }
+        assertEquals(32768L, llama.modelContextWindows["llama:7"])
+        assertEquals(4096L, llama.modelMaxOutputTokens["llama:7"])
+        assertEquals("detected", llama.modelCapabilitySources["llama:7"])
     }
 
     @Test

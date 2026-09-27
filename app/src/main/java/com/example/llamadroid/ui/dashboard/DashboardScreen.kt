@@ -44,6 +44,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import com.example.llamadroid.ui.ai.ToolCatalog
 import com.example.llamadroid.ui.ai.ChatServerPickerDialog
 import com.example.llamadroid.ui.ai.llama.rememberRunningLlamaChatServers
+import com.example.llamadroid.ui.ai.llama.EasyLlamaChatEntryCard
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -139,6 +140,15 @@ fun DashboardScreen(navController: NavController) {
                 trailing = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() }
             )
 
+            EasyLlamaChatEntryCard(
+                onChatOpened = { chatId, serverId ->
+                    navController.navigate(Screen.LlamaChat.createRoute(chatId, serverId))
+                },
+                onManageModels = {
+                    navController.navigate(Screen.LLMModels.route)
+                }
+            )
+
             val pinnedTools = ToolCatalog.tools.filter { it.id in pinnedToolIds }
             if (pinnedTools.isNotEmpty()) {
                 AppSectionCard {
@@ -182,6 +192,7 @@ fun DashboardScreen(navController: NavController) {
                 state = serverState,
                 onOpen = { navController.navigate(Screen.LlamaServers.route) }
             )
+
 
             DashboardDomainState(
                 knowledgeBaseCount = knowledgeBases.size,

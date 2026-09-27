@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_chat_gameplay_limits">El chat sirve para conversar. Usa los cuidados o los controles del mundo para alimentar, mover o dirigir a tu mascota.</string>
+    <string name="tama_world_shared_pet_guidance">Explora con la misma mascota: sus necesidades, monedas, inventario y recompensas se comparten entre la habitación y este mundo opcional. La práctica mejora la navegación autónoma. El entrenamiento es opcional; tus órdenes funcionan desde el principio.</string>
+    <string name="tama_world_back_to_room">Volver a la habitación</string>
+</resources>

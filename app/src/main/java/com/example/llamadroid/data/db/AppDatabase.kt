@@ -181,7 +181,7 @@ class Converters {
         GenerationQueueItemEntity::class,
         GenerationQueueControlEntity::class
     ], 
-    version = 125,
+    version = 126,
     exportSchema = true
 )
 @TypeConverters(Converters::class)

@@ -69,6 +69,24 @@ class HarnessAppToolsBridgeTest {
     }
 
     @Test
+    fun providerUsageExecutesTheReceiptWriteAndReleasesItWithoutASession() = runBlocking {
+        val cardId = 8_000_000_001L
+        val token = java.util.UUID.randomUUID().toString()
+        val store = com.example.llamadroid.service.LlamaServerUsageStore(context, "card:$cardId")
+        val args = JSONObject().put("model", "llama:$cardId").put("token", token)
+        try {
+            val active = operations.invoke("provider.usage", null, args.put("active", true)) as JSONObject
+            assertTrue(active.getBoolean("ok"))
+            assertTrue(store.read().active)
+            val released = operations.invoke("provider.usage", null, args.put("active", false)) as JSONObject
+            assertTrue(released.getBoolean("ok"))
+            assertFalse(store.read().active)
+        } finally {
+            store.write(token, false)
+        }
+    }
+
+    @Test
     fun globalStatusWorksWithoutSessionAndReportsReadinessWithoutModelPaths() = runBlocking {
         val response = operations.invoke("appTools.status", sessionId = null, args = JSONObject()) as JSONObject
         val tools = response.getJSONObject("tools")

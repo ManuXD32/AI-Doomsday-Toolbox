@@ -64,6 +64,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.example.llamadroid.R
+import com.example.llamadroid.tama.world.training.BrainGuidedPhase
 import com.example.llamadroid.ui.components.AppAdvancedSection
 import com.example.llamadroid.ui.components.AppPageHeader
 import com.example.llamadroid.ui.components.AppSectionCard
@@ -94,7 +95,9 @@ private fun isBrainResourceBlocked(error: String?): Boolean =
 fun BrainTrainingScreen(
     state: BrainTrainingUiState,
     callbacks: BrainTrainingCallbacks,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    guidedState: BrainGuidedUiState = BrainGuidedUiState(),
+    guidedCallbacks: BrainGuidedCallbacks = BrainGuidedCallbacks()
 ) {
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -103,11 +106,22 @@ fun BrainTrainingScreen(
     ) {
         item(key = "header") { BrainHeader(callbacks) }
         item(key = "practice_note") { BrainPracticeNote() }
+        item(key = "guided_lesson") { GuidedLessonCard(guidedState, guidedCallbacks) }
+        if (state.error != null) {
+            item(key = "runtime_notice") { BrainRuntimeNotice(state.error) }
+        }
         if (!state.isLoading) {
             item(key = "active") { CurrentBrainCard(state) }
         }
-        item(key = "controls") { TrainingControls(state, callbacks) }
-        item(key = "candidate") { CandidateWorkflowCard(state, callbacks) }
+        item(key = "manual_workflow") {
+            AppAdvancedSection(
+                title = stringResource(R.string.tama_world_brain_advanced_controls_title),
+                modifier = Modifier.testTag("brain_manual_workflow_details")
+            ) {
+                TrainingControls(state, callbacks)
+                CandidateWorkflowCard(state, callbacks)
+            }
+        }
         state.evaluation?.let { evaluation ->
             item(key = "evaluation") { EvaluationCard(evaluation, callbacks) }
         }
@@ -153,6 +167,264 @@ fun BrainTrainingScreen(
             }
         }
     }
+}
+
+@Composable
+private fun BrainRuntimeNotice(error: String) {
+    AppStatePanel(
+        kind = if (isBrainResourceBlocked(error)) AppStateKind.Blocked else AppStateKind.Error,
+        title = stringResource(
+            if (isBrainResourceBlocked(error)) R.string.tama_world_brain_workflow_blocked_title
+            else R.string.tama_world_brain_workflow_error_title
+        ),
+        message = brainErrorMessage(error),
+        modifier = Modifier.testTag("brain_runtime_notice")
+    )
+}
+
+@Composable
+private fun GuidedLessonCard(
+    state: BrainGuidedUiState,
+    callbacks: BrainGuidedCallbacks
+) {
+    BrainCard(modifier = Modifier.testTag("brain_guided_lesson")) {
+        Text(
+            text = stringResource(R.string.tama_world_brain_guided_title),
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+        )
+        Text(
+            text = stringResource(R.string.tama_world_brain_guided_body),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = stringResource(R.string.tama_world_brain_guided_choose_lesson),
+            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold)
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            (1..10).forEach { lessonId ->
+                FilterChip(
+                    selected = lessonId == state.curriculumId,
+                    onClick = { callbacks.onLessonSelected(lessonId) },
+                    label = { Text(stringResource(R.string.tama_world_brain_guided_level, lessonId)) }
+                )
+            }
+        }
+        Text(
+            text = stringResource(guidedObjectiveString(state.curriculumId)),
+            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+        )
+        Text(
+            text = stringResource(guidedRelevanceString(state.curriculumId)),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = stringResource(R.string.tama_world_brain_guided_scope),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (state.phase != BrainGuidedPhase.IDLE) {
+            val progress = (state.sessionMillis.toFloat() / state.sessionBudgetMillis.coerceAtLeast(1L))
+                .coerceIn(0f, 1f)
+            LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+            Text(
+                text = stringResource(
+                    R.string.tama_world_brain_guided_time,
+                    formatGuidedDuration(state.sessionMillis),
+                    formatGuidedDuration(state.sessionBudgetMillis)
+                ),
+                style = MaterialTheme.typography.labelMedium
+            )
+        }
+        when (state.phase) {
+            BrainGuidedPhase.IDLE -> {
+                ResponsiveActionGroup(
+                    actions = listOf(
+                        ResponsiveAction(
+                            label = stringResource(R.string.tama_world_brain_guided_start),
+                            onClick = callbacks.onStart,
+                            style = ResponsiveActionStyle.Primary,
+                            modifier = Modifier.heightIn(min = 48.dp).testTag("brain_guided_start")
+                        )
+                    )
+                )
+            }
+            BrainGuidedPhase.PRACTICING -> {
+                Text(
+                    text = stringResource(R.string.tama_world_brain_guided_practicing),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                ResponsiveActionGroup(
+                    actions = listOf(
+                        ResponsiveAction(
+                            label = stringResource(R.string.tama_world_brain_guided_pause),
+                            onClick = callbacks.onPause,
+                            icon = Icons.Default.Pause,
+                            style = ResponsiveActionStyle.Secondary,
+                            modifier = Modifier.heightIn(min = 48.dp)
+                        ),
+                        ResponsiveAction(
+                            label = stringResource(R.string.tama_world_brain_guided_finish),
+                            onClick = callbacks.onFinishAndEvaluate,
+                            icon = Icons.Default.Science,
+                            style = ResponsiveActionStyle.Primary,
+                            modifier = Modifier.heightIn(min = 48.dp).testTag("brain_guided_finish")
+                        )
+                    )
+                )
+            }
+            BrainGuidedPhase.PAUSED -> {
+                Text(
+                    text = stringResource(R.string.tama_world_brain_guided_paused),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                GuidedFailureMessage(state.gateFailure)
+                ResponsiveActionGroup(
+                    actions = listOf(
+                        ResponsiveAction(
+                            label = stringResource(R.string.tama_world_brain_guided_resume),
+                            onClick = callbacks.onResume,
+                            icon = Icons.Default.PlayArrow,
+                            style = ResponsiveActionStyle.Primary,
+                            modifier = Modifier.heightIn(min = 48.dp)
+                        ),
+                        ResponsiveAction(
+                            label = stringResource(R.string.tama_world_brain_guided_finish),
+                            onClick = callbacks.onFinishAndEvaluate,
+                            icon = Icons.Default.Science,
+                            style = ResponsiveActionStyle.Secondary,
+                            modifier = Modifier.heightIn(min = 48.dp)
+                        )
+                    )
+                )
+            }
+            BrainGuidedPhase.EVALUATING -> {
+                Text(
+                    text = stringResource(R.string.tama_world_brain_guided_evaluating),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            BrainGuidedPhase.RESULTS -> {
+                Text(
+                    text = stringResource(
+                        if (state.applied) R.string.tama_world_brain_guided_applied
+                        else if (state.evaluationPassed) R.string.tama_world_brain_guided_passed
+                        else R.string.tama_world_brain_guided_needs_practice
+                    ),
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = if (state.evaluationPassed || state.applied) MaterialTheme.colorScheme.secondary
+                    else MaterialTheme.colorScheme.error
+                )
+                Text(
+                    text = stringResource(
+                        if (state.referenceWasAdopted) R.string.tama_world_brain_guided_adopted_reference
+                        else R.string.tama_world_brain_guided_untrained_reference
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (!state.evaluationPassed) GuidedFailureMessage(state.gateFailure)
+                ResponsiveActionGroup(
+                    actions = buildList {
+                        if (state.evaluationPassed && !state.applied && state.candidateCheckpointId != null) {
+                            add(
+                                ResponsiveAction(
+                                    label = stringResource(R.string.tama_world_brain_guided_apply),
+                                    onClick = { callbacks.onApply(requireNotNull(state.candidateCheckpointId)) },
+                                    style = ResponsiveActionStyle.Primary,
+                                    modifier = Modifier.heightIn(min = 48.dp).testTag("brain_guided_apply")
+                                )
+                            )
+                        }
+                        if (!state.evaluationPassed || state.applied) {
+                            add(
+                                ResponsiveAction(
+                                    label = stringResource(
+                                        if (state.applied) R.string.tama_world_brain_guided_new_session
+                                        else R.string.tama_world_brain_guided_continue
+                                    ),
+                                    onClick = callbacks.onStart,
+                                    style = ResponsiveActionStyle.Secondary,
+                                    modifier = Modifier.heightIn(min = 48.dp)
+                                )
+                            )
+                        }
+                        if (state.applied) {
+                            add(
+                                ResponsiveAction(
+                                    label = stringResource(R.string.tama_world_brain_guided_open_world),
+                                    onClick = callbacks.onOpenWorld,
+                                    style = ResponsiveActionStyle.Secondary,
+                                    modifier = Modifier.heightIn(min = 48.dp)
+                                )
+                            )
+                        }
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GuidedFailureMessage(failure: String?) {
+    failure ?: return
+    Text(
+        text = stringResource(guidedFailureString(failure)),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.error
+    )
+}
+
+private fun guidedFailureString(failure: String): Int = when (failure) {
+    "guided_gate_success_threshold" -> R.string.tama_world_brain_guided_gate_threshold
+    "guided_gate_invalid_actions" -> R.string.tama_world_brain_guided_gate_invalid
+    "guided_gate_stuck_rate" -> R.string.tama_world_brain_guided_gate_stuck
+    "guided_gate_critical_needs" -> R.string.tama_world_brain_guided_gate_needs
+    "guided_gate_no_improvement" -> R.string.tama_world_brain_guided_gate_improvement
+    "living_reference_changed_since_evaluation" -> R.string.tama_world_brain_guided_gate_reference_changed
+    "evaluate_candidate_before_adoption" -> R.string.tama_world_brain_guided_gate_candidate_changed
+    "guided_candidate_changed" -> R.string.tama_world_brain_guided_gate_candidate_changed
+    "guided_evaluation_stale" -> R.string.tama_world_brain_guided_gate_stale
+    else -> R.string.tama_world_brain_guided_gate_retry
+}
+
+private fun guidedObjectiveString(lessonId: Int): Int = when (lessonId) {
+    2 -> R.string.tama_world_brain_guided_objective_2
+    3 -> R.string.tama_world_brain_guided_objective_3
+    4 -> R.string.tama_world_brain_guided_objective_4
+    5 -> R.string.tama_world_brain_guided_objective_5
+    6 -> R.string.tama_world_brain_guided_objective_6
+    7 -> R.string.tama_world_brain_guided_objective_7
+    8 -> R.string.tama_world_brain_guided_objective_8
+    9 -> R.string.tama_world_brain_guided_objective_9
+    10 -> R.string.tama_world_brain_guided_objective_10
+    else -> R.string.tama_world_brain_guided_objective_1
+}
+
+private fun guidedRelevanceString(lessonId: Int): Int = when (lessonId) {
+    2 -> R.string.tama_world_brain_guided_relevance_2
+    3 -> R.string.tama_world_brain_guided_relevance_3
+    4 -> R.string.tama_world_brain_guided_relevance_4
+    5 -> R.string.tama_world_brain_guided_relevance_5
+    6 -> R.string.tama_world_brain_guided_relevance_6
+    7 -> R.string.tama_world_brain_guided_relevance_7
+    8 -> R.string.tama_world_brain_guided_relevance_8
+    9 -> R.string.tama_world_brain_guided_relevance_9
+    10 -> R.string.tama_world_brain_guided_relevance_10
+    else -> R.string.tama_world_brain_guided_relevance_1
+}
+
+private fun formatGuidedDuration(milliseconds: Long): String {
+    val totalSeconds = (milliseconds / 1_000L).coerceAtLeast(0L)
+    return "%d:%02d".format(totalSeconds / 60L, totalSeconds % 60L)
 }
 
 @Composable

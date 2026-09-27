@@ -82,6 +82,8 @@ import com.example.llamadroid.data.model.supportsLiteRtVision
 import com.example.llamadroid.data.repository.KnowledgeBaseRepository
 import com.example.llamadroid.data.repository.LlamaRepository
 import com.example.llamadroid.data.repository.LiteRtModelRepository
+import com.example.llamadroid.service.ManagedLlamaServerCoordinator
+import com.example.llamadroid.service.ManagedLlamaServerException
 import com.example.llamadroid.service.NativeChatToolConfig
 import com.example.llamadroid.service.LlamaServerLaunchProfile
 import com.example.llamadroid.service.LlamaVideoProfileLimits
@@ -95,7 +97,16 @@ import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.google.gson.Gson
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.io.File
+
+private enum class ManagedServerRecovery {
+    SERVER_MANAGER,
+    MODEL_MANAGER
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -130,9 +141,68 @@ fun LlamaServerListScreen(
     val liteRtModels by remember(liteRtModelRepository) {
         liteRtModelRepository.observeModels()
     }.collectAsState(initial = emptyList())
+    val managedServerCoordinator = remember(context, database) {
+        ManagedLlamaServerCoordinator(context, database)
+    }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val managedStartingText = stringResource(R.string.managed_llama_starting)
 
     var showAddDialog by remember { mutableStateOf(false) }
     var serverToEdit by remember { mutableStateOf<LlamaServerEntity?>(null) }
+    var preparingServerId by remember { mutableStateOf<Long?>(null) }
+    var preparationTarget by remember { mutableStateOf<LlamaServerEntity?>(null) }
+    var preparationStatus by remember { mutableStateOf<String?>(null) }
+    var preparationError by remember { mutableStateOf<String?>(null) }
+    var preparationRecovery by remember { mutableStateOf(ManagedServerRecovery.SERVER_MANAGER) }
+
+    fun prepareManagedServer(server: LlamaServerEntity) {
+        val cardId = server.managedServerCardId ?: return
+        if (preparingServerId != null) return
+        preparationTarget = server
+        preparationError = null
+        preparationRecovery = ManagedServerRecovery.SERVER_MANAGER
+        preparationStatus = managedStartingText
+        preparingServerId = server.id
+        scope.launch {
+            try {
+                managedServerCoordinator.prepare(cardId) { status ->
+                    scope.launch {
+                        if (isActive && preparingServerId == server.id) {
+                            preparationStatus = status
+                        }
+                    }
+                }
+                if (!currentCoroutineContext().isActive) return@launch
+                viewModel.selectServer(server)
+                walkthroughTargets?.recordEvent("llama.server_card")
+                walkthroughTargets?.recordEvent("llama.server_selection")
+                navController.navigate(Screen.LlamaChatList.route)
+                preparationTarget = null
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                if (currentCoroutineContext().isActive && preparingServerId == server.id) {
+                    preparationRecovery = if (
+                        (error as? ManagedLlamaServerException)?.code == "MANAGED_MODEL_MISSING"
+                    ) {
+                        ManagedServerRecovery.MODEL_MANAGER
+                    } else {
+                        ManagedServerRecovery.SERVER_MANAGER
+                    }
+                    preparationError = localizedEasyLlamaFailure(
+                        context,
+                        error,
+                        R.string.managed_llama_start_failed
+                    )
+                }
+            } finally {
+                if (currentCoroutineContext().isActive && preparingServerId == server.id) {
+                    preparingServerId = null
+                    preparationStatus = null
+                }
+            }
+        }
+    }
 
     AppScreenScaffold(
         title = stringResource(R.string.llama_servers_title),
@@ -143,17 +213,53 @@ fun LlamaServerListScreen(
             }
         }
     ) { padding ->
+        val recoveryLabel = if (preparationRecovery == ManagedServerRecovery.MODEL_MANAGER) {
+            stringResource(R.string.easy_chat_manage_models)
+        } else {
+            stringResource(R.string.managed_llama_open_server_management)
+        }
+        val openRecovery = {
+            if (preparationRecovery == ManagedServerRecovery.MODEL_MANAGER) {
+                navController.navigate(Screen.LLMModels.route)
+            } else {
+                navController.navigate(Screen.LlamaServers.route)
+            }
+        }
         if (servers.isEmpty()) {
-            Box(
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(padding),
-                contentAlignment = Alignment.Center
+                    .padding(padding)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                Text(
-                    text = stringResource(R.string.llama_no_servers),
-                    color = MaterialTheme.colorScheme.secondary
+                EasyLlamaChatEntryCard(
+                    onChatOpened = { chatId, serverId ->
+                        navController.navigate(Screen.LlamaChat.createRoute(chatId, serverId))
+                    },
+                    onManageModels = {
+                        navController.navigate(Screen.LLMModels.route)
+                    }
                 )
+                ManagedServerPreparationNotice(
+                    status = preparationStatus,
+                    error = preparationError,
+                    onRetry = { preparationTarget?.let(::prepareManagedServer) },
+                    recoveryLabel = recoveryLabel,
+                    onRecovery = openRecovery
+                )
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 180.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = stringResource(R.string.llama_no_servers),
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                }
             }
         } else {
             LazyColumn(
@@ -165,16 +271,49 @@ fun LlamaServerListScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                item(key = "easy-chat-entry") {
+                    EasyLlamaChatEntryCard(
+                        onChatOpened = { chatId, serverId ->
+                            navController.navigate(Screen.LlamaChat.createRoute(chatId, serverId))
+                        },
+                        onManageModels = {
+                            navController.navigate(Screen.LLMModels.route)
+                        }
+                    )
+                }
+                if (preparingServerId != null || preparationError != null) {
+                    item(key = "managed-server-preparation") {
+                        ManagedServerPreparationNotice(
+                            status = preparationStatus,
+                            error = preparationError,
+                            onRetry = { preparationTarget?.let(::prepareManagedServer) },
+                            recoveryLabel = recoveryLabel,
+                            onRecovery = openRecovery
+                        )
+                    }
+                }
                 items(items = servers, key = { it.id }) { server ->
                     LlamaServerCard(
                         server = server,
                         onConnect = {
-                            viewModel.selectServer(server)
-                            walkthroughTargets?.recordEvent("llama.server_card")
-                            walkthroughTargets?.recordEvent("llama.server_selection")
-                            navController.navigate(Screen.LlamaChatList.route)
+                            if (preparingServerId == null) {
+                                if (server.managedServerCardId != null) {
+                                    prepareManagedServer(server)
+                                } else {
+                                    viewModel.selectServer(server)
+                                    walkthroughTargets?.recordEvent("llama.server_card")
+                                    walkthroughTargets?.recordEvent("llama.server_selection")
+                                    navController.navigate(Screen.LlamaChatList.route)
+                                }
+                            }
                         },
-                        onEdit = { serverToEdit = server },
+                        onEdit = {
+                            if (server.managedServerCardId != null) {
+                                navController.navigate(Screen.LlamaServers.route)
+                            } else {
+                                serverToEdit = server
+                            }
+                        },
                         onDelete = { viewModel.deleteServer(server) },
                         onReload = { viewModel.refreshServerMetadata(server) }
                     )
@@ -203,6 +342,57 @@ fun LlamaServerListScreen(
             onLoadOllamaCapabilities = viewModel::loadOllamaCapabilities,
             onLoadLlamaSwapModels = viewModel::loadLlamaSwapModels
         )
+    }
+}
+
+@Composable
+private fun ManagedServerPreparationNotice(
+    status: String?,
+    error: String?,
+    onRetry: () -> Unit,
+    recoveryLabel: String,
+    onRecovery: () -> Unit
+) {
+    if (status == null && error == null) return
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (error == null) {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+            } else {
+                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.65f)
+            }
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = status ?: error.orEmpty(),
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (error == null) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.onErrorContainer
+                }
+            )
+            if (error != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TextButton(onClick = onRetry) {
+                        Text(stringResource(R.string.action_retry))
+                    }
+                    TextButton(onClick = onRecovery) {
+                        Text(recoveryLabel)
+                    }
+                }
+            }
+        }
     }
 }
 

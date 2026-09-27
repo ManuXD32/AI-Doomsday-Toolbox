@@ -23,6 +23,9 @@ interface LlamaServerCardDao {
     @Query("SELECT * FROM llama_server_cards WHERE id = :id")
     suspend fun getCard(id: Long): LlamaServerCardEntity?
 
+    @Query("SELECT * FROM llama_server_cards WHERE easyModelId = :modelId LIMIT 1")
+    suspend fun getEasyCard(modelId: String): LlamaServerCardEntity?
+
     /** The single card the watch is allowed to start, or null if the user enabled none. */
     @Query("SELECT * FROM llama_server_cards WHERE allowWearStart = 1 ORDER BY id ASC LIMIT 1")
     suspend fun getWearStartCard(): LlamaServerCardEntity?
@@ -54,7 +57,13 @@ interface LlamaServerCardDao {
     suspend fun insertCard(card: LlamaServerCardEntity): Long
 
     @Update
-    suspend fun updateCard(card: LlamaServerCardEntity)
+    suspend fun updateCardRow(card: LlamaServerCardEntity)
+
+    @Transaction
+    suspend fun updateCard(card: LlamaServerCardEntity) {
+        updateCardRow(card)
+        updateLinkedPort(card.id, card.port)
+    }
 
     @Delete
     suspend fun deleteCard(card: LlamaServerCardEntity)
@@ -74,5 +83,14 @@ interface LlamaServerCardDao {
     )
 
     @Query("UPDATE llama_server_cards SET port = :port, updatedAt = :updatedAt WHERE id = :id")
-    suspend fun updatePort(id: Long, port: Int, updatedAt: Long = System.currentTimeMillis())
+    suspend fun updatePortRow(id: Long, port: Int, updatedAt: Long)
+
+    @Query("UPDATE llama_servers SET port = :port WHERE managedServerCardId = :id")
+    suspend fun updateLinkedPort(id: Long, port: Int)
+
+    @Transaction
+    suspend fun updatePort(id: Long, port: Int, updatedAt: Long = System.currentTimeMillis()) {
+        updatePortRow(id, port, updatedAt)
+        updateLinkedPort(id, port)
+    }
 }

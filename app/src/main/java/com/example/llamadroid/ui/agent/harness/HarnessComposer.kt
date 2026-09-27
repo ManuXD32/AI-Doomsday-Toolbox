@@ -696,6 +696,13 @@ private fun HarnessComposerSessionControls(
                         enabled = false,
                     )
                 }
+                if (state.provider.isPreparingModel) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.harness_model_preparing)) },
+                        onClick = {},
+                        enabled = false,
+                    )
+                }
                 if (state.provider.catalogRefreshFailed) {
                     DropdownMenuItem(
                         text = {
@@ -727,10 +734,8 @@ private fun HarnessComposerSessionControls(
                         enabled = false,
                     )
                 }
-                state.provider.providers.mapNotNull { provider ->
-                    val selectableModels = provider.models.filter { harnessModelContextKnown(provider, it) }
-                    if (selectableModels.isEmpty()) null else provider to selectableModels
-                }.forEach { (provider, selectableModels) ->
+                selectedProvider?.let { provider ->
+                    val selectableModels = harnessSelectableModelIds(provider)
                     DropdownMenuItem(
                         text = { Text(provider.name, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         onClick = {},

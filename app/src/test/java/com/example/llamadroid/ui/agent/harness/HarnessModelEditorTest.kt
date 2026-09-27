@@ -12,6 +12,33 @@ import org.junit.Test
 
 class HarnessModelEditorTest {
     @Test
+    fun `managed server context cannot be replaced by a Harness settings edit`() {
+        assertNull(updateNativeHarnessModelRows(
+            """[{"id":"llama:7","contextWindow":8192}]""", "llama:7", "65536", "8192"
+        ))
+    }
+
+    @Test
+    fun `empty managed provider remains selectable in the provider first editor`() {
+        val options = harnessModelEditorProviderOptions(
+            provider = HarnessProviderUiState(
+                providers = listOf(
+                    HarnessProviderOption(
+                        id = "adt-llama-server",
+                        name = "ADT-llamacpp",
+                    )
+                ),
+                configs = listOf(
+                    HarnessProviderConfigUi(id = "adt-llama-server", name = "ADT-llamacpp")
+                ),
+            ),
+            modelProviders = emptyList(),
+        )
+
+        assertEquals(listOf("adt-llama-server" to "ADT-llamacpp"), options)
+    }
+
+    @Test
     fun `capacity update preserves exact wire id and unknown properties`() {
         val source = """[{"id":"/models/alpha.gguf","name":"Alpha","vendorFlag":true}]"""
 

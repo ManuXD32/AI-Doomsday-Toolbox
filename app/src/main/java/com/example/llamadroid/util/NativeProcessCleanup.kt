@@ -231,15 +231,20 @@ object NativeProcessCleanup {
         myUid: Int = Process.myUid()
     ): Boolean {
         if (rootPid <= 0 || expectedStartTimeTicks <= 0L || expectedPort !in 1..65535) return false
-        val root = findSameUidProcesses(procRoot, myPid, myUid).firstOrNull { it.pid == rootPid } ?: return false
+        // Ownership names an exact PID. Avoid enumerating every process on each readiness poll;
+        // some Android proc mounts allow direct same-UID reads but restrict directory listing.
+        if (rootPid == myPid) return false
+        val directory = File(procRoot, rootPid.toString())
+        val uid = parseUid(File(directory, "status").readTextOrNull() ?: return false)
+        if (uid != myUid) return false
         val actualStartTimeTicks = processStartTimeTicks(rootPid, procRoot) ?: return false
         return recordedLlamaOwnerMatches(
             expectedPid = rootPid,
             expectedStartTimeTicks = expectedStartTimeTicks,
             expectedPort = expectedPort,
-            actualPid = root.pid,
+            actualPid = rootPid,
             actualStartTimeTicks = actualStartTimeTicks,
-            actualCommandLine = root.commandLine
+            actualCommandLine = readCommandLine(File(directory, "cmdline"))
         )
     }
 

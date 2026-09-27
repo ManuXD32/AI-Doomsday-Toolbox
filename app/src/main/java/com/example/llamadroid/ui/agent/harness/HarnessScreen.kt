@@ -1405,16 +1405,25 @@ internal fun HarnessProviderCard(
     }
     // A model without a known context window cannot be selected safely. The
     // provider editor is the place to enter an explicit per-model override.
-    val modelIds = selectedProvider?.models.orEmpty().filter {
-        selectedProvider?.let { providerOption -> harnessModelContextKnown(providerOption, it) } == true
+    val modelIds = selectedProvider?.let(::harnessSelectableModelIds).orEmpty()
+    val unknownModelCount = selectedProvider?.models.orEmpty().count {
+        !it.startsWith("llama:") &&
+            selectedProvider?.let { providerOption -> !harnessModelContextKnown(providerOption, it) } == true
     }
-    val unknownModelCount = (selectedProvider?.models.orEmpty().size - modelIds.size).coerceAtLeast(0)
     val modelOptions = selectedProvider?.let { provider ->
         modelIds.map { modelId -> harnessModelOptionLabel(provider, modelId) }
     }.orEmpty()
     val selectedCatalogFailure = selectedProvider?.let { selected ->
         provider.catalogFailures.firstOrNull { it.providerId == selected.id }
     }
+    val selectedLocalStatus = provider.selectedModel?.let { modelId ->
+        selectedProvider?.modelStatuses?.get(modelId)
+    }
+    val selectedLocalUnavailable = provider.selectedModel?.let { modelId ->
+        selectedProvider?.modelAvailability?.get(modelId) == false ||
+            selectedProvider?.modelErrorCodes?.get(modelId)?.isNullOrBlank() == false ||
+            selectedLocalStatus?.lowercase() in setOf("error", "failed", "unavailable")
+    } == true
     val modelCatalogStatus = when {
         provider.isCatalogLoading -> stringResource(R.string.harness_refreshing_models)
         provider.catalogRefreshFailed -> stringResource(R.string.harness_model_refresh_failed)
@@ -1471,6 +1480,30 @@ internal fun HarnessProviderCard(
             statusIsError = !provider.isCatalogLoading &&
                 (provider.catalogRefreshFailed || selectedCatalogFailure != null),
         )
+        if (provider.isPreparingModel) {
+            Text(
+                stringResource(R.string.harness_model_preparing),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        if (selectedLocalStatus != null || selectedLocalUnavailable) {
+            val normalizedStatus = selectedLocalStatus?.trim()?.lowercase()
+            val statusResource = when {
+                selectedLocalUnavailable -> R.string.harness_model_editor_local_unavailable
+                normalizedStatus == "running" -> R.string.harness_model_editor_local_running
+                normalizedStatus == "starting" -> R.string.harness_model_editor_local_starting
+                normalizedStatus == "loading" -> R.string.harness_model_editor_local_loading
+                normalizedStatus == "stopped" -> R.string.harness_model_editor_local_stopped
+                else -> R.string.harness_model_editor_local_status_unknown
+            }
+            Text(
+                stringResource(statusResource),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (selectedLocalUnavailable) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         if (unknownModelCount > 0) {
             Text(
                 stringResource(R.string.harness_model_context_unknown_count, unknownModelCount),
@@ -1509,6 +1542,16 @@ internal fun HarnessProviderCard(
                 checked = provider.thinkingEnabled,
                 onCheckedChange = { onAction(NativeHarnessUiAction.SetThinkingEnabled(it)) }
             )
+        }
+        if (selectedProvider?.id == "adt-llama-server") {
+            OutlinedButton(
+                onClick = { onAction(NativeHarnessUiAction.OpenManagedLocalServers) },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Default.Settings, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(stringResource(R.string.harness_manage_local_servers))
+            }
         }
         OutlinedButton(
             onClick = { onAction(NativeHarnessUiAction.OpenModelManager) },

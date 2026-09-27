@@ -100,6 +100,13 @@ private class FakeLlamaServerDao(
 
     override fun getAllServers(): Flow<List<LlamaServerEntity>> = flowOf(servers.values.toList())
     override suspend fun getServerById(id: Long): LlamaServerEntity? = servers[id]
+    override suspend fun getManagedServer(cardId: Long): LlamaServerEntity? =
+        servers.values.firstOrNull { it.managedServerCardId == cardId }
+    override suspend fun updateManagedEndpoint(cardId: Long, host: String, port: Int) {
+        servers.values.filter { it.managedServerCardId == cardId }.forEach { server ->
+            servers[server.id] = server.copy(host = host, port = port)
+        }
+    }
     override suspend fun insertServer(server: LlamaServerEntity): Long {
         val id = server.id.takeIf { it != 0L } ?: nextId++
         servers[id] = server.copy(id = id)

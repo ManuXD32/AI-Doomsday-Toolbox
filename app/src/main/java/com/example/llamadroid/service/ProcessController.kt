@@ -1114,7 +1114,7 @@ class ProcessController {
                 }
             }.getOrNull() ?: -1L
             val childPid = if (reflectedChildPid > 0L) reflectedChildPid else {
-                resolveNativeChildPid(binaryPath)?.toLong() ?: -1L
+                resolveNativeChildPid(binaryPath, expectedPort = config.port)?.toLong() ?: -1L
             }
             activeChildPid = childPid.coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong()).toInt()
             if (stoppedIntentionally || shouldStop?.invoke() == true || process == null) {
@@ -1445,27 +1445,16 @@ class ProcessController {
     internal fun resolveNativeChildPid(
         binaryPath: String,
         procRoot: File = File("/proc"),
-        selfPid: Int = android.os.Process.myPid()
-    ): Int? {
-        val childIds = File(procRoot, "$selfPid/task").listFiles().orEmpty()
-            .asSequence()
-            .map { File(it, "children") }
-            .filter(File::isFile)
-            .flatMap { file ->
-                runCatching { file.readText() }.getOrDefault("")
-                    .trim().split(Regex("\\s+"))
-                    .asSequence()
-            }
-            .mapNotNull(String::toIntOrNull)
-            .distinct()
-            .toList()
-        val expectedName = File(binaryPath).name
-        return childIds.filter { pid ->
-            val cmdline = runCatching {
-                File(procRoot, "$pid/cmdline").readBytes().toString(Charsets.UTF_8).replace('\u0000', ' ')
-            }.getOrDefault("")
-            cmdline.contains(binaryPath) || cmdline.contains(expectedName)
-        }.maxOrNull()
+        selfPid: Int = android.os.Process.myPid(),
+        expectedPort: Int? = null
+    ): Int? = findNativeChildPid(binaryPath, procRoot, selfPid, expectedPort)
+
+    /** Retry after exec/model loading when a fork-time proc snapshot was not yet available. */
+    internal fun refreshOwnedChildPid(binaryPath: String, port: Int): Int {
+        if (activeChildPid <= 0) {
+            activeChildPid = resolveNativeChildPid(binaryPath, expectedPort = port) ?: -1
+        }
+        return activeChildPid
     }
 
     private fun nativeBinaryTier(binaryPath: String): String {

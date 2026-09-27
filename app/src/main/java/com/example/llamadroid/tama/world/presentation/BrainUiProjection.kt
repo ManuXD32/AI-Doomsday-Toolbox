@@ -4,6 +4,8 @@ import com.example.llamadroid.tama.world.core.AutonomyLevel
 import com.example.llamadroid.tama.world.core.AutonomyPolicy
 import com.example.llamadroid.tama.world.training.BrainRuntimeCheckpoint
 import com.example.llamadroid.tama.world.training.BrainRuntimeState
+import com.example.llamadroid.tama.world.training.BrainGuidedRuntimeState
+import com.example.llamadroid.tama.world.training.guidedAdoptionGateFailure
 import com.example.llamadroid.tama.world.training.BASELINE_LIVING_POLICY_ID
 import com.example.llamadroid.tama.world.training.CurriculumCatalog
 import com.example.llamadroid.tama.world.training.CurriculumLevel
@@ -24,6 +26,7 @@ import com.example.llamadroid.tama.world.ui.BrainResourceSettingsUi
 import com.example.llamadroid.tama.world.ui.BrainTrainingMetricsUi
 import com.example.llamadroid.tama.world.ui.BrainTrainingProfileUi
 import com.example.llamadroid.tama.world.ui.BrainTrainingUiState
+import com.example.llamadroid.tama.world.ui.BrainGuidedUiState
 import com.example.llamadroid.tama.world.ui.SafeAutonomyUi
 import com.example.llamadroid.tama.world.ui.WorldAutonomyLevel
 import kotlin.math.roundToInt
@@ -123,6 +126,23 @@ fun projectBrainRuntimeState(
         error = runtime.error ?: runtime.pauseReason
     )
 }
+
+/** Projects the resumable lesson metadata without exposing trainer internals to Compose. */
+fun projectGuidedState(runtime: BrainRuntimeState): BrainGuidedUiState =
+    runtime.guided.toUiGuidedState()
+
+private fun BrainGuidedRuntimeState.toUiGuidedState(): BrainGuidedUiState = BrainGuidedUiState(
+    phase = phase,
+    curriculumId = curriculumId,
+    activeMillis = activeMillis,
+    sessionMillis = sessionMillis,
+    sessionBudgetMillis = sessionBudgetMillis,
+    candidateCheckpointId = candidateCheckpointId,
+    evaluationPassed = evaluationPassed,
+    applied = applied,
+    referenceWasAdopted = referenceWasAdopted,
+    gateFailure = gateFailure
+)
 
 private fun projectMetrics(snapshot: TrainerSnapshot?): BrainTrainingMetricsUi {
     val metrics = snapshot?.metrics ?: return BrainTrainingMetricsUi(
@@ -304,7 +324,7 @@ private fun projectEvaluation(
     candidateNeedFailurePercent = rate(comparison.candidate.needFailures, comparison.candidate.seedCount),
     unseenSeedCount = minOf(comparison.current.seedCount, comparison.candidate.seedCount),
     complete = true,
-    candidateWins = comparison.candidateImproves,
+    candidateWins = guidedAdoptionGateFailure(comparison, currentPolicyIsAdopted) == null,
     currentPolicyIsAdopted = currentPolicyIsAdopted,
     currentPathEfficiencyPercent = (comparison.current.pathEfficiency * 100.0).toFloat(),
     candidatePathEfficiencyPercent = (comparison.candidate.pathEfficiency * 100.0).toFloat(),

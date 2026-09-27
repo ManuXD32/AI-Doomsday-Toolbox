@@ -78,6 +78,7 @@ import com.example.llamadroid.ui.settings.ImageGenSettingsContent
 import com.example.llamadroid.ui.settings.PDFSettingsContent
 import com.example.llamadroid.ui.settings.VideoUpscalerSettingsContent
 import com.example.llamadroid.ui.ai.llama.RunningLlamaChatServerUi
+import com.example.llamadroid.ui.ai.llama.EasyLlamaChatEntryCard
 import com.example.llamadroid.ui.ai.llama.rememberRunningLlamaChatServers
 import com.example.llamadroid.ui.settings.WhisperSettingsContent
 import kotlinx.coroutines.launch
@@ -208,6 +209,7 @@ fun AIHubScreen(navController: NavController) {
     val toolListState = rememberLazyListState()
     val tourKeys = buildList {
         add("tools.search")
+        add("easy-chat")
         if (pinnedChatItems.isEmpty() && pinnedTools.isEmpty() && groupedTools.isEmpty()) add("empty")
         if (pinnedChatItems.isNotEmpty()) { add("pinned.chat.header"); pinnedChatItems.forEach { add("chat.${it.chat.id}") } }
         if (pinnedTools.isNotEmpty()) { add("pinned.tool.header"); pinnedTools.forEach { add("tool.${it.definition.id}") } }
@@ -257,6 +259,19 @@ fun AIHubScreen(navController: NavController) {
                     }
                 )
                             }
+            }
+            item(key = "easy-chat") {
+                EasyLlamaChatEntryCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .walkthroughTarget("easy-chat"),
+                    onChatOpened = { chatId, serverId ->
+                        navController.navigate(Screen.LlamaChat.createRoute(chatId, serverId))
+                    },
+                    onManageModels = {
+                        navController.navigate(Screen.LLMModels.route)
+                    }
+                )
             }
                 if (pinnedChatItems.isEmpty() && pinnedTools.isEmpty() && groupedTools.isEmpty()) {
                     item {

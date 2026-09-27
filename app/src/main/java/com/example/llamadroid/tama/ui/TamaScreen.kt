@@ -680,6 +680,7 @@ fun TamaScreen(
             },
             onReturnHome = ::exitSimulation,
             onOpenInventory = { showInventoryDialog = true },
+            onEnterWorld = ::enterSimulation,
             modifier = modifier
         )
     } else BoxWithConstraints(modifier = modifier.fillMaxSize().background(TamaBackground)) {

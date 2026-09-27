@@ -123,6 +123,78 @@ internal fun advanceFollowIntent(
     return moveAlongFollowPath(state, npc.id, target, next, arguments, effects)
 }
 
+/**
+ * Advances a one-shot VisitNpc order. It reuses the explored-map target-ID
+ * routing used by continuous follow, but clears the follow marker and holds
+ * as soon as the actor reaches an adjacent tile.
+ */
+internal fun advanceVisitIntent(
+    state: WorldState,
+    effects: MutableList<WorldEffectRequest>,
+    observations: MutableList<String>
+): WorldState {
+    val actor = state.actor
+    val order = actor.explicitOrder
+    val targetId = order?.targetId
+    val npc = targetId?.let { id -> state.npcs.firstOrNull { it.id == id } }
+    if (targetId == null || npc == null) {
+        observations += "visit_target_missing"
+        return state.copy(actor = actor.copy(
+            followTargetId = null,
+            actionTargetId = targetId,
+            actionTargetX = null,
+            actionTargetY = null,
+            actionArguments = emptyMap()
+        ).blockOrder("counterparty_missing"))
+    }
+
+    val temporary = state.copy(actor = actor.copy(
+        followTargetId = targetId,
+        actionTargetId = targetId,
+        actionArguments = actor.actionArguments + (WorldActionSemantics.FOLLOW_INTENT_ARGUMENT to "true")
+    ))
+    val advanced = advanceFollowIntent(temporary, effects, observations)
+    val advancedActor = advanced.actor
+    if (advancedActor.actionState == ActionState.BLOCKED) {
+        val reason = if (observations.lastOrNull()?.startsWith("follow_target_unobserved") == true) {
+            "known_frontier"
+        } else {
+            "destination_unreachable"
+        }
+        return advanced.copy(actor = advancedActor.copy(
+            followTargetId = null,
+            actionArguments = emptyMap()
+        ).blockOrder(reason))
+    }
+
+    val currentNpc = advanced.npcs.firstOrNull { it.id == targetId } ?: npc
+    if (advancedActor.coordinate.chebyshevDistanceTo(currentNpc.coordinate) <= 1) {
+        observations += "visit_arrived:$targetId"
+        return advanced.copy(actor = advancedActor.copy(
+            goal = GoalId.IDLE,
+            action = ActionId.WAIT,
+            actionState = ActionState.COMPLETED,
+            actionTicksRemaining = 0,
+            destinationX = currentNpc.x,
+            destinationY = currentNpc.y,
+            actionTargetId = targetId,
+            actionTargetX = currentNpc.x,
+            actionTargetY = currentNpc.y,
+            actionArguments = emptyMap(),
+            followTargetId = null,
+            path = emptyList()
+        ).holdOrder())
+    }
+
+    return advanced.copy(actor = advancedActor.copy(
+        followTargetId = null,
+        actionTargetId = targetId,
+        actionTargetX = currentNpc.x,
+        actionTargetY = currentNpc.y,
+        actionArguments = emptyMap()
+    ))
+}
+
 private fun moveAlongFollowPath(
     state: WorldState,
     npcId: String,

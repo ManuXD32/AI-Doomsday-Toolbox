@@ -265,6 +265,54 @@ data class WorldHudUi(
     val simulationRateHz: Float = 5f
 )
 
+/**
+ * The visible lifecycle of the latest deliberate order. This is derived from
+ * the authoritative actor snapshot; the UI never invents a successful result.
+ */
+enum class WorldOrderPhase(@StringRes val labelRes: Int) {
+    IDLE(R.string.tama_world_order_status_idle),
+    EXECUTING(R.string.tama_world_order_status_executing),
+    COMPLETED(R.string.tama_world_order_status_completed),
+    HOLDING(R.string.tama_world_order_status_holding),
+    BLOCKED(R.string.tama_world_order_status_blocked)
+}
+
+/** Canonical outcomes supplied by the app after the real pet transaction commits. */
+@Immutable
+data class WorldOrderOutcomeUi(
+    val needDeltas: Map<String, Float> = emptyMap(),
+    val moneyDelta: Long = 0L,
+    val inventoryDeltas: Map<String, Int> = emptyMap()
+)
+
+@Immutable
+data class WorldOrderUi(
+    val phase: WorldOrderPhase = WorldOrderPhase.IDLE,
+    val command: WorldPetCommandKind? = null,
+    /** Localized core action name for orders without a button enum equivalent. */
+    val commandLabel: String? = null,
+    val targetId: String? = null,
+    val targetLabel: String? = null,
+    val target: WorldPointUi? = null,
+    val reason: String? = null,
+    val canRetry: Boolean = false,
+    val canCancel: Boolean = false,
+    val canResumeAutonomy: Boolean = false,
+    val outcome: WorldOrderOutcomeUi? = null
+)
+
+/** A durable route-host message, kept separate from the actor's actual state. */
+enum class WorldCommandFeedbackAction {
+    OPEN_AUTONOMY_CONTROLS
+}
+
+@Immutable
+data class WorldCommandFeedbackUi(
+    val message: String,
+    val isError: Boolean = true,
+    val action: WorldCommandFeedbackAction? = null
+)
+
 @Immutable
 data class WorldCameraUi(
     val centerX: Float,
@@ -340,6 +388,8 @@ data class WorldUiState(
     val assetReadiness: WorldAssetReadinessUi,
     val isLoading: Boolean = false,
     val unavailableReason: String? = null,
+    val order: WorldOrderUi = WorldOrderUi(),
+    val commandFeedback: WorldCommandFeedbackUi? = null,
     /** Canonical FarmRepository observations; locked/generated references are omitted. */
     val farmTiles: List<WorldFarmTileUi> = emptyList()
 )
@@ -444,6 +494,7 @@ sealed interface WorldInspectTarget {
 }
 
 enum class WorldPetCommandKind(@StringRes val labelRes: Int) {
+    WALK_HOME(R.string.tama_world_order_walk_home),
     COME_HOME(R.string.tama_world_command_come_home),
     GO_HERE(R.string.tama_world_command_go_here),
     VISIT_NPC(R.string.tama_world_command_visit_npc),
@@ -472,6 +523,9 @@ sealed interface WorldUiCommand {
     data object Recenter : WorldUiCommand
     data object DismissInspector : WorldUiCommand
     data object CancelTargetedCommand : WorldUiCommand
+    data object DismissCommandFeedback : WorldUiCommand
+    data object RetryLastOrder : WorldUiCommand
+    data object ResumeAutonomy : WorldUiCommand
     data object ShowCommandPalette : WorldUiCommand
     data object ToggleMinimap : WorldUiCommand
     data class SetCameraMode(val mode: WorldCameraMode, val actorId: String? = null) : WorldUiCommand

@@ -18,6 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
@@ -64,14 +65,20 @@ import com.example.llamadroid.data.db.launchProfile
 import com.example.llamadroid.data.model.LlamaServerCardEntity
 import com.example.llamadroid.data.repository.LlamaServerCardRepository
 import com.example.llamadroid.data.repository.RoomGeneralSavedCommandProvider
-import com.example.llamadroid.data.repository.launchProfileForCardPort
+import com.example.llamadroid.data.repository.EasyLlamaChatCoordinator
 import com.example.llamadroid.service.LlamaServerLauncher
 import com.example.llamadroid.service.LlamaServerSessionLogStore
 import com.example.llamadroid.service.LlamaServerSessionSnapshot
 import com.example.llamadroid.service.LlamaServerSessionStateStore
 import com.example.llamadroid.service.LlamaServerSessionStatus
+import com.example.llamadroid.service.ManagedLlamaServerCoordinator
 import com.example.llamadroid.ui.components.AppSectionCard
+import com.example.llamadroid.ui.settings.SavedLlamaCommandEditor
+import com.example.llamadroid.data.db.savedCommandFromLaunchProfile
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -80,6 +87,11 @@ data class RunningLlamaChatServerUi(
     val name: String,
     val port: Int
 )
+
+private enum class CardErrorAction {
+    START,
+    CHAT
+}
 
 /**
  * Reads the independently managed server sessions used by the AI Hub Chat tile.
@@ -127,16 +139,25 @@ fun rememberRunningLlamaChatServers(): List<RunningLlamaChatServerUi> {
 }
 
 /**
- * Persistent manager for independent local llama.cpp servers. The fallback card repository is
- * intentionally replaceable by the Room-backed repository once AppDatabase wiring is merged.
+ * Persistent manager for independent local llama.cpp servers. Cards, linked native servers, and
+ * saved launch profiles all remain owned by the Room-backed repositories.
  */
 @Composable
 fun LlamaServerCardsSection(
     modifier: Modifier = Modifier,
-    compact: Boolean = false
+    compact: Boolean = false,
+    onOpenChat: (chatId: Long, serverId: Long) -> Unit = { _, _ -> },
+    onManageModels: () -> Unit = {},
+    onOpenSettings: () -> Unit = {}
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val database = remember(context) { AppDatabase.getDatabase(context) }
+    val easyChatCoordinator = remember(context, database) {
+        EasyLlamaChatCoordinator(context, database)
+    }
+    val managedServerCoordinator = remember(context, database) {
+        ManagedLlamaServerCoordinator(context, database)
+    }
     val presets by remember(database) {
         database.savedCommandDao().getCommandsByScope(SavedCommandScopes.GENERAL)
     }.collectAsState(initial = emptyList())
@@ -148,14 +169,23 @@ fun LlamaServerCardsSection(
     }
     val cards by cardRepository.cards.collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
+    val startingChatText = stringResource(R.string.easy_chat_starting_server)
     val logs = remember(context) { LlamaServerSessionLogStore(context) }
     val stateStore = remember(context) { LlamaServerSessionStateStore(context) }
     var runtimeSnapshots by remember { mutableStateOf<Map<String, LlamaServerSessionSnapshot>>(emptyMap()) }
     var showAddDialog by remember { mutableStateOf(false) }
+    var showEasyAddDialog by remember { mutableStateOf(false) }
+    var presetToEdit by remember { mutableStateOf<SavedCommand?>(null) }
+    var actionJob by remember { mutableStateOf<Job?>(null) }
     var cardToEdit by remember { mutableStateOf<LlamaServerCardEntity?>(null) }
     var cardToDelete by remember { mutableStateOf<LlamaServerCardEntity?>(null) }
     var expandedLogs by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var logVersion by remember { mutableStateOf(0) }
+    var startingCardId by remember { mutableStateOf<Long?>(null) }
+    var chatCardId by remember { mutableStateOf<Long?>(null) }
+    var chatStatus by remember { mutableStateOf<String?>(null) }
+    var chatError by remember { mutableStateOf<Pair<Long, String>?>(null) }
+    var chatErrorAction by remember { mutableStateOf<Pair<Long, CardErrorAction>?>(null) }
 
     LaunchedEffect(Unit) {
         while (isActive) {
@@ -167,6 +197,62 @@ fun LlamaServerCardsSection(
         while (isActive && expandedLogs.isNotEmpty()) {
             logVersion++
             delay(750L)
+        }
+    }
+
+    fun startCard(card: LlamaServerCardEntity) {
+        if (startingCardId != null || chatCardId != null) return
+        startingCardId = card.id
+        chatError = null
+        chatErrorAction = null
+        actionJob = scope.launch {
+            try {
+                managedServerCoordinator.prepare(card.id)
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (throwable: Throwable) {
+                if (currentCoroutineContext().isActive) {
+                    chatError = card.id to localizedEasyLlamaFailure(
+                        context,
+                        throwable,
+                        R.string.managed_llama_start_failed
+                    )
+                    chatErrorAction = card.id to CardErrorAction.START
+                }
+            } finally {
+                startingCardId = null
+            }
+        }
+    }
+
+    fun openCardChat(card: LlamaServerCardEntity) {
+        if (startingCardId != null || chatCardId != null) return
+        chatCardId = card.id
+        chatStatus = startingChatText
+        chatError = null
+        chatErrorAction = null
+        actionJob = scope.launch {
+            val requestJob = currentCoroutineContext()[Job]
+            try {
+                val session = easyChatCoordinator.openChat(card.id) { message ->
+                    scope.launch { if (requestJob?.isActive == true) chatStatus = message }
+                }
+                onOpenChat(session.chatId, session.serverId)
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (throwable: Throwable) {
+                if (currentCoroutineContext().isActive) {
+                    chatError = card.id to localizedEasyLlamaFailure(
+                        context,
+                        throwable,
+                        R.string.easy_chat_open_failed
+                    )
+                    chatErrorAction = card.id to CardErrorAction.CHAT
+                }
+            } finally {
+                chatCardId = null
+                chatStatus = null
+            }
         }
     }
 
@@ -192,7 +278,7 @@ fun LlamaServerCardsSection(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            IconButton(onClick = { showAddDialog = true }) {
+            IconButton(onClick = { showEasyAddDialog = true }) {
                 Icon(
                     imageVector = Icons.Default.Add,
                     contentDescription = stringResource(R.string.llama_cards_add)
@@ -201,6 +287,22 @@ fun LlamaServerCardsSection(
         }
 
         Spacer(modifier = Modifier.height(12.dp))
+        Button(
+            onClick = { showEasyAddDialog = true },
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 12.dp)
+        ) {
+            Icon(Icons.Default.Add, contentDescription = null)
+            Spacer(modifier = Modifier.size(8.dp))
+            Text(stringResource(R.string.llama_cards_add), maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        LlamaServerSetupGuide(onOpenSettings)
+        EasyLlamaChatEntryCard(
+            onChatOpened = onOpenChat,
+            onManageModels = onManageModels,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(4.dp))
         if (cards.isEmpty()) {
             Text(
                 text = stringResource(R.string.llama_cards_empty),
@@ -225,17 +327,11 @@ fun LlamaServerCardsSection(
                         isLogsExpanded = isExpanded,
                         logs = if (isExpanded) logs.read(card.sessionId) else emptyList(),
                         logVersion = logVersion,
-                        onStart = {
-                            preset?.let {
-                                LlamaServerLauncher.startSession(
-                                    context = context,
-                                    sessionId = card.sessionId,
-                                    profile = it.launchProfileForCardPort(card.port),
-                                    portOverride = card.port
-                                )
-                            }
+                        onStart = { startCard(card) },
+                        onStop = {
+                            if (chatCardId == card.id || startingCardId == card.id) actionJob?.cancel()
+                            LlamaServerLauncher.stopSession(context, card.sessionId)
                         },
-                        onStop = { LlamaServerLauncher.stopSession(context, card.sessionId) },
                         onToggleLogs = {
                             expandedLogs = if (isExpanded) expandedLogs - card.id else expandedLogs + card.id
                             logVersion++
@@ -251,7 +347,23 @@ fun LlamaServerCardsSection(
                             logVersion++
                         },
                         onEdit = { cardToEdit = card },
+                        onArguments = { presetToEdit = preset },
+                        onCancel = { actionJob?.cancel() },
                         onDelete = { cardToDelete = card },
+                        onChat = { openCardChat(card) },
+                        onRetry = {
+                            when (chatErrorAction?.takeIf { it.first == card.id }?.second) {
+                                CardErrorAction.START -> startCard(card)
+                                CardErrorAction.CHAT -> openCardChat(card)
+                                null -> startCard(card)
+                            }
+                        },
+                        onManageModels = onManageModels,
+                        isStarting = startingCardId == card.id,
+                        isAnyActionBusy = startingCardId != null || chatCardId != null,
+                        isChatOpening = chatCardId == card.id,
+                        chatStatus = chatStatus.takeIf { chatCardId == card.id },
+                        chatError = chatError?.takeIf { it.first == card.id }?.second,
                         onToggleWearStart = {
                             scope.launch { cardRepository.setWearStartCard(card.id) }
                         }
@@ -260,15 +372,7 @@ fun LlamaServerCardsSection(
             }
         }
 
-        Button(
-            onClick = { showAddDialog = true },
-            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 12.dp)
-        ) {
-            Icon(Icons.Default.Add, contentDescription = null)
-            Spacer(modifier = Modifier.size(8.dp))
-            Text(stringResource(R.string.llama_cards_add), maxLines = 2, overflow = TextOverflow.Ellipsis)
-        }
+
     }
 
     if (showAddDialog) {
@@ -291,6 +395,34 @@ fun LlamaServerCardsSection(
                 }
             }
         )
+    }
+
+    if (showEasyAddDialog) {
+        EasyLlamaServerDialog(
+            onDismiss = { showEasyAddDialog = false },
+            onOpenAdvanced = {
+                showEasyAddDialog = false
+                showAddDialog = true
+            },
+            onSaved = { showEasyAddDialog = false },
+            onChatOpened = { chatId, serverId ->
+                showEasyAddDialog = false
+                onOpenChat(chatId, serverId)
+            },
+            onManageModels = {
+                showEasyAddDialog = false
+                onManageModels()
+            }
+        )
+    }
+
+    presetToEdit?.let { preset ->
+        SavedLlamaCommandEditor(command = preset, onDismiss = { presetToEdit = null }) { name, profile ->
+            scope.launch {
+                database.savedCommandDao().insertCommand(savedCommandFromLaunchProfile(name, profile, id = preset.id))
+                presetToEdit = null
+            }
+        }
     }
 
     cardToEdit?.let { card ->
@@ -354,7 +486,17 @@ private fun LlamaServerCard(
     onCopyLogs: () -> Unit,
     onClearLogs: () -> Unit,
     onEdit: () -> Unit,
+    onArguments: () -> Unit,
+    onCancel: () -> Unit,
     onDelete: () -> Unit,
+    onChat: () -> Unit,
+    onRetry: () -> Unit,
+    onManageModels: () -> Unit,
+    isStarting: Boolean,
+    isAnyActionBusy: Boolean,
+    isChatOpening: Boolean,
+    chatStatus: String?,
+    chatError: String?,
     onToggleWearStart: () -> Unit
 ) {
     val status = snapshot?.status ?: LlamaServerSessionStatus.STOPPED
@@ -364,14 +506,15 @@ private fun LlamaServerCard(
         LlamaServerSessionStatus.RUNNING
     )
     val statusLabel = when (status) {
-        LlamaServerSessionStatus.STOPPED -> stringResource(R.string.llama_card_status_stopped)
+        LlamaServerSessionStatus.STOPPED -> if (snapshot?.stopReason == "idle") {
+            stringResource(R.string.managed_llama_idle_stopped)
+        } else {
+            stringResource(R.string.llama_card_status_stopped)
+        }
         LlamaServerSessionStatus.STARTING -> stringResource(R.string.llama_card_status_starting)
         LlamaServerSessionStatus.LOADING -> stringResource(R.string.llama_card_status_loading)
         LlamaServerSessionStatus.RUNNING -> stringResource(R.string.llama_card_status_running, snapshot?.port ?: card.port)
-        LlamaServerSessionStatus.ERROR -> stringResource(
-            R.string.llama_card_status_error,
-            snapshot?.error.orEmpty().ifBlank { stringResource(R.string.status_error) }
-        )
+        LlamaServerSessionStatus.ERROR -> stringResource(R.string.managed_llama_start_failed)
     }
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -461,8 +604,22 @@ private fun LlamaServerCard(
                 )
             }
 
-            if (canStart) {
-                Button(onClick = onStart, modifier = Modifier.fillMaxWidth()) {
+            if (isStarting) {
+                Button(
+                    onClick = {},
+                    enabled = false,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null)
+                    Spacer(modifier = Modifier.size(6.dp))
+                    Text(stringResource(R.string.easy_chat_starting), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            } else if (canStart) {
+                Button(
+                    onClick = onStart,
+                    enabled = !isAnyActionBusy,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     Icon(Icons.Default.PlayArrow, contentDescription = null)
                     Spacer(modifier = Modifier.size(6.dp))
                     Text(stringResource(R.string.llama_card_start), maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -479,6 +636,64 @@ private fun LlamaServerCard(
                 }
             }
 
+            Button(
+                onClick = onChat,
+                enabled = !isAnyActionBusy && preset != null,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null)
+                Spacer(modifier = Modifier.size(6.dp))
+                Text(
+                    text = if (isChatOpening) stringResource(R.string.easy_chat_starting)
+                    else stringResource(R.string.easy_card_chat),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (isStarting || isChatOpening) {
+                TextButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+            chatStatus?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            chatError?.let { message ->
+                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = stringResource(R.string.llama_card_status_error, message),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = onRetry, enabled = !isAnyActionBusy) {
+                            Text(stringResource(R.string.easy_chat_retry), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        TextButton(onClick = onManageModels, enabled = !isAnyActionBusy) {
+                            Text(stringResource(R.string.easy_chat_manage_models), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+            if (status == LlamaServerSessionStatus.ERROR && chatError == null) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onRetry, enabled = !isAnyActionBusy) {
+                        Text(stringResource(R.string.easy_chat_retry), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    TextButton(onClick = onManageModels, enabled = !isAnyActionBusy) {
+                        Text(stringResource(R.string.easy_chat_manage_models), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+
             Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 TextButton(onClick = onToggleLogs, modifier = Modifier.fillMaxWidth()) {
                     Icon(if (isLogsExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore, contentDescription = null)
@@ -489,6 +704,9 @@ private fun LlamaServerCard(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
+                }
+                TextButton(onClick = onArguments, enabled = preset != null, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.easy_server_arguments))
                 }
                 TextButton(onClick = onEdit, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.llama_card_edit), maxLines = 2, overflow = TextOverflow.Ellipsis)

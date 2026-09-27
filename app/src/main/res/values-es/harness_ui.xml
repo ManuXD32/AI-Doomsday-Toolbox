@@ -79,11 +79,29 @@
     <string name="harness_open_model_manager">Editar modelos de Harness</string>
     <string name="harness_model_editor_title">Ajustes de modelos de Harness</string>
     <string name="harness_model_editor_description">Edita cada modelo del proveedor sin cambiar su ID exacto de red. Los campos de capacidad vacíos eliminan el ajuste.</string>
+    <string name="harness_model_editor_provider">Proveedor</string>
+    <string name="harness_model_editor_provider_description">Elige primero un proveedor; abajo solo se muestran sus límites de modelos.</string>
+    <string name="harness_model_editor_provider_empty">Este proveedor todavía no tiene filas de modelos editables.</string>
+    <string name="harness_manage_local_servers">Gestionar servidores locales</string>
+    <string name="harness_model_preparing">Preparando el modelo seleccionado…</string>
+    <string name="harness_retry_model_selection">Reintentar selección del modelo</string>
+    <string name="harness_model_editor_local_unavailable">Este modelo local no está disponible. Abre Gestionar servidores locales para reparar su ajuste preestablecido o modelo.</string>
+    <string name="harness_model_editor_local_running">El servidor local está listo.</string>
+    <string name="harness_model_editor_local_starting">El servidor local está iniciándose.</string>
+    <string name="harness_model_editor_local_loading">El servidor local está cargando el modelo.</string>
+    <string name="harness_model_editor_local_stopped">El servidor local está detenido. Selecciona el modelo para iniciarlo.</string>
+    <string name="harness_model_editor_local_status_unknown">El estado del servidor local requiere atención. Abre Gestionar servidores locales.</string>
     <string name="harness_model_editor_empty">Todavía no hay filas de modelos. Descubre o añade modelos en Proveedores primero.</string>
     <string name="harness_model_editor_wire_id">ID de red: %1$s</string>
     <string name="harness_model_editor_context">Ventana de contexto</string>
     <string name="harness_model_editor_output">Salida máxima</string>
     <string name="harness_model_editor_unknown">Desconocida; establece un ajuste antes de seleccionar este modelo.</string>
+    <string name="harness_model_editor_runtime_context">El contexto se hereda de los ajustes del servidor y se resuelve al iniciar el servidor local.</string>
+    <plurals name="harness_model_editor_inherited_context">
+        <item quantity="one">Contexto heredado de los ajustes del servidor: %1$d token</item>
+        <item quantity="many">Contexto heredado de los ajustes del servidor: %1$d tokens</item>
+        <item quantity="other">Contexto heredado de los ajustes del servidor: %1$d tokens</item>
+    </plurals>
     <string name="harness_model_editor_save">Guardar límites del modelo</string>
     <string name="harness_model_editor_close">Cerrar ajustes de modelos</string>
     <string name="harness_open_settings_document">Abrir documento de ajustes</string>
@@ -352,6 +370,7 @@
     <string name="harness_notice_plugin_invalid_result">Harness devolvió un resultado de instalación de plugin no válido.</string>
     <string name="harness_notice_plugin_install_cancelled">La instalación del plugin fue cancelada.</string>
     <string name="harness_notice_model_catalog_invalid">Harness devolvió un catálogo de modelos no válido.</string>
+    <string name="harness_notice_model_prepare_failed">No se pudo preparar el modelo local seleccionado. Comprueba su servidor y reintenta.</string>
     <string name="harness_notice_model_reasoning_invalid">Ese nivel de razonamiento no está disponible para este modelo.</string>
     <string name="harness_notice_model_context_unknown">Establece una ventana de contexto para este modelo antes de seleccionarlo.</string>
     <string name="harness_model_context_unknown_count" tools:ignore="PluralsCandidate">%1$d modelo(s) necesita(n) una ventana de contexto antes de poder seleccionarse.</string>

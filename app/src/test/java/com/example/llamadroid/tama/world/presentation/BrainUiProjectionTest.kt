@@ -175,6 +175,50 @@ class BrainUiProjectionTest {
         assertEquals(0f, projected.candidateInvalidActionPercent, 0.001f)
     }
 
+    @Test fun guidedProjectionUsesCurriculumThresholdSafetyAndAdoptedImprovement() {
+        val baselineCurrent = evaluationMetrics(
+            policyVersion = "untrained-model",
+            meanSteps = 40.0,
+            objectiveSteps = 0.0,
+            pathEfficiency = 0.1,
+            explorationScore = 0.1,
+            invalidActionRate = 0.20,
+            curriculumId = CurriculumLevel.VISIBLE_TARGET.id,
+            seedCount = 24,
+            successfulEpisodes = 0
+        )
+        val passingCandidate = evaluationMetrics(
+            policyVersion = "candidate-v1",
+            meanSteps = 20.0,
+            objectiveSteps = 20.0,
+            pathEfficiency = 0.7,
+            explorationScore = 0.8,
+            invalidActionRate = 0.10,
+            curriculumId = CurriculumLevel.VISIBLE_TARGET.id,
+            seedCount = 24,
+            successfulEpisodes = 20
+        )
+        val baselineProjection = projectBrainRuntimeState(
+            BrainRuntimeState(comparison = PolicyComparison(baselineCurrent, passingCandidate))
+        ).evaluation ?: error("evaluation_missing")
+        assertTrue(baselineProjection.candidateWins)
+
+        val belowThreshold = passingCandidate.copy(successfulEpisodes = 19)
+        val thresholdProjection = projectBrainRuntimeState(
+            BrainRuntimeState(comparison = PolicyComparison(baselineCurrent, belowThreshold))
+        ).evaluation ?: error("evaluation_missing")
+        assertFalse(thresholdProjection.candidateWins)
+
+        val sameAsAdopted = passingCandidate.copy(meanReturn = baselineCurrent.meanReturn)
+        val adoptedProjection = projectBrainRuntimeState(
+            BrainRuntimeState(
+                comparison = PolicyComparison(passingCandidate, sameAsAdopted),
+                hasAdoptedComparisonPolicy = true
+            )
+        ).evaluation ?: error("evaluation_missing")
+        assertFalse(adoptedProjection.candidateWins)
+    }
+
     @Test fun canonicalAutonomyWinsOverStaleBrainRuntimeDefaults() {
         val canonical = AutonomyPolicy(
             level = AutonomyLevel.FULL,
@@ -201,14 +245,19 @@ class BrainUiProjectionTest {
         objectiveSteps: Double,
         pathEfficiency: Double,
         explorationScore: Double,
-        invalidActionRate: Double
+        invalidActionRate: Double,
+        curriculumId: Int = CurriculumLevel.LOCOMOTION_VALIDATION.id,
+        seedCount: Int = 4,
+        successfulEpisodes: Int = 2,
+        stuckEpisodes: Int = 0,
+        needFailures: Int = 0
     ) = EvaluationMetrics(
         policyVersion = policyVersion,
-        curriculumId = CurriculumLevel.LOCOMOTION_VALIDATION.id,
-        seedCount = 4,
-        successfulEpisodes = 2,
-        needFailures = 0,
-        stuckEpisodes = 0,
+        curriculumId = curriculumId,
+        seedCount = seedCount,
+        successfulEpisodes = successfulEpisodes,
+        needFailures = needFailures,
+        stuckEpisodes = stuckEpisodes,
         meanReturn = 1.0,
         meanSteps = meanSteps,
         meanObjectiveReward = 0.0,
@@ -223,7 +272,7 @@ class BrainUiProjectionTest {
         meanObjectiveSteps = objectiveSteps,
         pathEfficiency = pathEfficiency,
         explorationScore = explorationScore,
-        invalidActions = (invalidActionRate * 4).toInt(),
+        invalidActions = (invalidActionRate * seedCount).toInt(),
         invalidActionRate = invalidActionRate
     )
 }

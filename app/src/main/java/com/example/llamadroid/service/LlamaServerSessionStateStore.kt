@@ -22,18 +22,12 @@ class LlamaServerSessionStateStore(context: Context) {
     fun write(snapshot: LlamaServerSessionSnapshot) = synchronized(lock) {
         file.parentFile?.mkdirs()
         val next = readAll().filterNot { it.sessionId == snapshot.sessionId } + snapshot
-        val temp = File(file.parentFile, "${file.name}.tmp")
-        temp.writeText(gson.toJson(next, type), Charsets.UTF_8)
-        if (!temp.renameTo(file)) {
-            file.writeText(gson.toJson(next, type), Charsets.UTF_8)
-            temp.delete()
-        }
+        writeLlamaServerMetadata(file, gson.toJson(next, type))
     }
 
     fun delete(sessionId: String) = synchronized(lock) {
         val next = readAll().filterNot { it.sessionId == sessionId }
         if (next.isEmpty()) file.delete()
-        else file.writeText(gson.toJson(next, type), Charsets.UTF_8)
+        else writeLlamaServerMetadata(file, gson.toJson(next, type))
     }
 }
-

@@ -19,6 +19,12 @@ interface LlamaServerDao {
     @Query("SELECT * FROM llama_servers WHERE id = :id")
     suspend fun getServerById(id: Long): LlamaServerEntity?
 
+    @Query("SELECT * FROM llama_servers WHERE managedServerCardId = :cardId LIMIT 1")
+    suspend fun getManagedServer(cardId: Long): LlamaServerEntity?
+
+    @Query("UPDATE llama_servers SET host = :host, port = :port WHERE managedServerCardId = :cardId")
+    suspend fun updateManagedEndpoint(cardId: Long, host: String, port: Int)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertServer(server: LlamaServerEntity): Long
 

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_world_order_title">Pet order</string>
+    <string name="tama_world_order_status_idle">No active order</string>
+    <string name="tama_world_order_status_executing">Executing</string>
+    <string name="tama_world_order_status_completed">Completed</string>
+    <string name="tama_world_order_status_holding">Holding for your next order</string>
+    <string name="tama_world_order_status_blocked">Blocked</string>
+    <string name="tama_world_order_walk_home">Walk home</string>
+    <string name="tama_world_order_target">Target: %1$s</string>
+    <string name="tama_world_order_reason">Reason: %1$s</string>
+    <string name="tama_world_order_retry">Retry</string>
+    <string name="tama_world_order_cancel">Cancel order</string>
+    <string name="tama_world_order_resume_autonomy">Resume autonomy</string>
+    <string name="tama_world_order_open_autonomy">Open autonomy controls</string>
+    <string name="tama_world_order_dismiss">Dismiss</string>
+    <string name="tama_world_order_outcome_title">Actual result</string>
+    <string name="tama_world_order_outcome_need">%1$s %2$s</string>
+    <string name="tama_world_order_outcome_item">%1$s %2$s</string>
+    <string name="tama_world_order_outcome_money">Coins %1$s</string>
+    <string name="tama_world_order_reason_invalid_target">That target is not available.</string>
+    <string name="tama_world_order_reason_unreachable">The destination cannot be reached from the known map.</string>
+    <string name="tama_world_order_reason_frontier">The pet is holding at the known map edge.</string>
+    <string name="tama_world_order_reason_action_progress">Another action is still in progress.</string>
+    <string name="tama_world_order_reason_pet_busy">Your pet is already doing an activity. Stop it before starting another.</string>
+    <string name="tama_world_order_reason_cannot_move">The pet cannot move right now.</string>
+    <string name="tama_world_order_reason_sleeping">The pet is sleeping.</string>
+    <string name="tama_world_order_reason_frozen">The pet is frozen or still an egg.</string>
+    <string name="tama_world_order_reason_activity_active">Your pet is already doing an activity. Stop it before starting another.</string>
+    <string name="tama_world_order_reason_counterparty">That NPC is no longer available.</string>
+    <string name="tama_world_order_reason_capability">A required item or tool is missing.</string>
+    <string name="tama_world_order_reason_requirements">The order does not meet the current requirements.</string>
+    <string name="tama_world_order_reason_effect_failed">The action could not be saved. Retry to continue.</string>
+    <string name="tama_world_order_reason_session_interrupted">The world session was interrupted. Retry this order after entering again.</string>
+    <string name="tama_world_order_reason_autonomy_disabled">Autonomy is off. Enable it in Brain practice controls before resuming.</string>
+</resources>

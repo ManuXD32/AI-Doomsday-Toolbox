@@ -34,12 +34,8 @@ import android.widget.Toast
 import com.example.llamadroid.R
 import com.example.llamadroid.tama.data.FarmTile
 import com.example.llamadroid.tama.data.CropDefinitions
-import com.example.llamadroid.tama.data.FarmTradeItemCatalog
 import com.example.llamadroid.tama.data.GrowthStage
-import com.example.llamadroid.tama.data.TamaCommerceCatalog
-import com.example.llamadroid.tama.data.WorldResourceCatalog
 import com.example.llamadroid.tama.data.cropDisplayName
-import com.example.llamadroid.tama.data.seedDisplayText
 import com.example.llamadroid.tama.db.TamaDatabase
 import com.example.llamadroid.tama.world.core.ActionId
 import com.example.llamadroid.tama.world.core.ActionState
@@ -63,10 +59,13 @@ import com.example.llamadroid.tama.world.training.TamaBrainController
 import com.example.llamadroid.tama.world.training.CurriculumLevel
 import com.example.llamadroid.tama.world.training.TrainerProfile
 import com.example.llamadroid.tama.world.ui.BrainTrainingCallbacks
+import com.example.llamadroid.tama.world.ui.BrainGuidedCallbacks
 import com.example.llamadroid.tama.world.ui.BrainTrainingProfileUi
 import com.example.llamadroid.tama.world.ui.BrainTrainingScreen
 import com.example.llamadroid.tama.world.ui.WorldCameraMode
 import com.example.llamadroid.tama.world.ui.WorldCameraUi
+import com.example.llamadroid.tama.world.ui.WorldCommandFeedbackUi
+import com.example.llamadroid.tama.world.ui.WorldCommandFeedbackAction
 import com.example.llamadroid.tama.world.ui.WorldBiome
 import com.example.llamadroid.tama.world.ui.WorldInspectTarget
 import com.example.llamadroid.tama.world.ui.WorldJournalCallbacks
@@ -124,6 +123,7 @@ fun TamaWorldRouteHost(
     onCloseWorld: () -> Unit = {},
     onReturnHome: (() -> Unit)? = null,
     onOpenInventory: () -> Unit = {},
+    onEnterWorld: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val scope = rememberCoroutineScope()
@@ -144,6 +144,7 @@ fun TamaWorldRouteHost(
     }
     var inspectorTarget by remember(petId) { mutableStateOf<WorldInspectTarget?>(null) }
     var activeCommand by remember(petId) { mutableStateOf<com.example.llamadroid.tama.world.ui.WorldPetCommandKind?>(null) }
+    var commandFeedback by remember(petId) { mutableStateOf<WorldCommandFeedbackUi?>(null) }
     var showMinimap by remember(petId) { mutableStateOf(true) }
     var selectedEpisodeId by remember(petId) { mutableStateOf<String?>(null) }
     var journalFilter by remember(petId) { mutableStateOf(WorldJournalFilter.ALL) }
@@ -194,7 +195,7 @@ fun TamaWorldRouteHost(
         onCloseWorld
     }
     val effectiveExitShortcutLabelRes = if (adventureActive) {
-        R.string.tama_classic_map_return_home
+        R.string.tama_world_back_to_room
     } else {
         exitShortcutLabelRes
     }
@@ -247,6 +248,18 @@ fun TamaWorldRouteHost(
         )
         BrainTrainingScreen(
             state = brainUi,
+            guidedState = projectGuidedState(runtime),
+            guidedCallbacks = BrainGuidedCallbacks(
+                onLessonSelected = brain::selectGuidedLesson,
+                onStart = brain::startGuidedPractice,
+                onPause = brain::pauseGuidedPractice,
+                onResume = brain::resumeGuidedPractice,
+                onFinishAndEvaluate = brain::finishGuidedPractice,
+                onApply = brain::adoptCandidate,
+                onOpenWorld = {
+                    if (adventureActive) routeName = WorldRoute.WORLD.name else onEnterWorld()
+                }
+            ),
             callbacks = BrainTrainingCallbacks(
                 onBack = {
                     if (adventureActive) routeName = WorldRoute.WORLD.name else onCloseWorld()
@@ -470,6 +483,7 @@ fun TamaWorldRouteHost(
         cameraForFrame,
         inspectorTarget,
         activeCommand,
+        commandFeedback,
         showMinimap,
         farmTiles,
         staticMinimap,
@@ -486,6 +500,7 @@ fun TamaWorldRouteHost(
                 relationshipByNpc = relationships,
                 inspectorTarget = inspectorTarget,
                 activeCommand = activeCommand,
+                commandFeedback = commandFeedback,
                 cachedMinimap = staticMinimap,
                 observedFarmTiles = farmTiles,
                 cropAssetIdByCropId = WORLD_CROP_ASSET_ALIASES
@@ -518,8 +533,14 @@ fun TamaWorldRouteHost(
                     onReturnHome = returnHomeAction,
                     isSimulationActive = adventureActive,
                     onCommandRejected = { reason ->
-                        showTransientCommandRejection(context, reason)
+                        commandFeedback = WorldCommandFeedbackUi(
+                            localizedWorldRuntimeError(context, reason),
+                            action = WorldCommandFeedbackAction.OPEN_AUTONOMY_CONTROLS
+                                .takeIf { reason == "autonomy_disabled" }
+                        )
                     },
+                    onCommandAccepted = { commandFeedback = null },
+                    onDismissCommandFeedback = { commandFeedback = null },
                     setCamera = { camera = it },
                     setInspector = { inspectorTarget = it },
                     setActiveCommand = { activeCommand = it },
@@ -530,7 +551,7 @@ fun TamaWorldRouteHost(
             exitShortcutLabelRes = effectiveExitShortcutLabelRes,
             isSimulationActive = adventureActive,
             homeActionLabelRes = if (adventureActive) {
-                R.string.tama_classic_map_return_home
+                R.string.tama_world_back_to_room
             } else {
                 R.string.tama_world_open_home
             },
@@ -680,6 +701,20 @@ fun localizedWorldRuntimeError(context: Context, reason: String): String {
         "target_unavailable", "target_type_not_allowed", "walkable_target_required" ->
             R.string.tama_world_runtime_error_target
         "autonomy_forbidden" -> R.string.tama_world_runtime_error_autonomy
+        "autonomy_disabled" -> R.string.tama_world_order_reason_autonomy_disabled
+        "action_in_progress" -> R.string.tama_world_order_reason_action_progress
+        "pet_busy" -> R.string.tama_world_order_reason_pet_busy
+        "canonical_activity_active", "activity_in_progress", "external_activity_active" ->
+            R.string.tama_world_order_reason_activity_active
+        "pet_cannot_move", "pet_cannot_act", "pet_cannot_enter", "pet_cannot_leave" ->
+            R.string.tama_world_order_reason_cannot_move
+        "sleeping" -> R.string.tama_world_order_reason_sleeping
+        "frozen", "egg" -> R.string.tama_world_order_reason_frozen
+        "destination_unreachable", "destination_blocked", "destination_outside_world" ->
+            R.string.tama_world_order_reason_unreachable
+        "known_frontier", "follow_target_unobserved" -> R.string.tama_world_order_reason_frontier
+        "counterparty_missing", "counterparty_required" -> R.string.tama_world_order_reason_counterparty
+        "capability_missing", "missing_item", "missing_tool" -> R.string.tama_world_order_reason_capability
         "item_required", "item_required_kind", "tool_required", "money_required" ->
             R.string.tama_world_runtime_error_requirements
         "home_required", "structure_required", "farm_required", "world_presence_required" ->
@@ -747,6 +782,8 @@ private fun handleRouteCommand(
     onReturnHome: (() -> Unit)? = null,
     isSimulationActive: Boolean = false,
     onCommandRejected: (String) -> Unit = {},
+    onCommandAccepted: () -> Unit = {},
+    onDismissCommandFeedback: () -> Unit = {},
     setRoute: (WorldRoute) -> Unit = {},
     setCamera: (WorldCameraUi) -> Unit = {},
     setInspector: (WorldInspectTarget?) -> Unit = {},
@@ -783,6 +820,7 @@ private fun handleRouteCommand(
         }
         WorldUiCommand.DismissInspector -> setInspector(null)
         WorldUiCommand.CancelTargetedCommand -> setActiveCommand(null)
+        WorldUiCommand.DismissCommandFeedback -> onDismissCommandFeedback()
         WorldUiCommand.ToggleMinimap -> toggleMinimap()
         is WorldUiCommand.SetCameraMode -> {
             val followId = when (command.mode) {
@@ -831,6 +869,8 @@ private fun handleRouteCommand(
         is WorldUiCommand.BeginTargetedCommand -> setActiveCommand(command.kind)
         is WorldUiCommand.IssuePetCommand,
         is WorldUiCommand.InspectorAction,
+        WorldUiCommand.RetryLastOrder,
+        WorldUiCommand.ResumeAutonomy,
         is WorldUiCommand.FollowActor -> {
             val current = state ?: run {
                 onCommandRejected("world_unavailable")
@@ -853,7 +893,8 @@ private fun handleRouteCommand(
                     return@launch
                 }
                 val result = try {
-                    controller.command(core)
+                    if (command == WorldUiCommand.RetryLastOrder) controller.retry()
+                    else controller.command(core)
                 } catch (error: kotlinx.coroutines.CancellationException) {
                     throw error
                 } catch (error: Exception) {
@@ -862,6 +903,9 @@ private fun handleRouteCommand(
                 }
                 if (!result.acceptedCommand) {
                     onCommandRejected(result.rejectionReason ?: "world_unavailable")
+                } else {
+                    setActiveCommand(null)
+                    onCommandAccepted()
                 }
             }
         }
@@ -1077,30 +1121,7 @@ internal fun localizedJournalLabels(
         return WorldNpcCatalog.find(normalized(raw))?.name
     }
 
-    fun itemName(raw: String): String? {
-        val id = normalized(raw)
-        if (id == "rotten_crop") return context.getString(R.string.tama_item_rotten_crop)
-        if (id in CropDefinitions.CROPS) return cropDisplayName(context, id)
-        if (id.startsWith("crop_")) {
-            val cropId = id.removePrefix("crop_")
-            if (cropId in CropDefinitions.CROPS) return cropDisplayName(context, cropId)
-        }
-        if (id.startsWith("seed_")) {
-            val cropId = id.removePrefix("seed_")
-            if (cropId in CropDefinitions.CROPS) return seedDisplayText(cropId).resolve(locale)
-        }
-        WorldResourceCatalog.displayName(id, locale)?.let { return it }
-        FarmTradeItemCatalog.displayText(id)?.resolve(locale)?.let { return it }
-        for (vendorId in listOf(
-            LegacyLocationAliases.SHOP,
-            LegacyLocationAliases.HOSPITAL,
-            LegacyLocationAliases.ALCHEMIST
-        )) {
-            val offer = runCatching { TamaCommerceCatalog.offer(context, id, vendorId) }.getOrNull()
-            if (offer != null) return offer.item.name
-        }
-        return null
-    }
+    fun itemName(raw: String): String? = localizedWorldItemName(context, raw)
 
     fun structureName(raw: String): String? {
         val type = runCatching { StructureType.valueOf(raw.trim().uppercase(Locale.ROOT)) }.getOrNull()
@@ -1213,10 +1234,13 @@ fun localizedWorldUiLabels(context: Context, petName: String): WorldUiLabels {
         },
         objectName = { objectKind -> context.getString(objectLabelRes(objectKind)) },
         needName = { need -> context.getString(needLabelRes(need)) },
+        itemName = { id -> localizedWorldItemName(context, id) ?: localizedToken(id, spanish) },
+        orderBlockerName = { blocker -> context.getString(worldOrderBlockerLabelRes(blocker)) },
         presenceName = { presence -> localizedToken(presence.name, spanish) },
         stateName = { value ->
             val cropId = value.lowercase().removePrefix("crop_")
-            if (cropId in CropDefinitions.CROPS) cropDisplayName(context, cropId)
+            if (value == "waiting_for_order") context.getString(R.string.tama_world_order_status_holding)
+            else if (cropId in CropDefinitions.CROPS) cropDisplayName(context, cropId)
             else localizedToken(value, spanish)
         },
         inspectorFieldName = { value -> localizedToken(value, spanish) },

@@ -494,6 +494,88 @@ enum class ActionState {
     INTERRUPTED
 }
 
+/**
+ * Durable ownership of the pet's next decision. Explicit map orders keep
+ * ownership until they finish, are cancelled, or become visibly blocked;
+ * autonomous selection is only allowed in [AUTONOMOUS].
+ */
+@Serializable
+enum class WorldControlMode {
+    AUTONOMOUS,
+    ORDER_ACTIVE,
+    HOLDING,
+    BLOCKED
+}
+
+@Serializable
+enum class WorldOrderStatus {
+    NONE,
+    QUEUED,
+    RUNNING,
+    COMPLETED,
+    BLOCKED,
+    CANCELLED
+}
+
+/** Stable, localizable blocker categories exposed to the map UI. */
+@Serializable
+enum class WorldOrderBlocker {
+    NONE,
+    INVALID_TARGET,
+    DESTINATION_UNREACHABLE,
+    KNOWN_FRONTIER,
+    ACTION_IN_PROGRESS,
+    PET_BUSY,
+    PET_CANNOT_MOVE,
+    SLEEPING,
+    FROZEN,
+    CANONICAL_ACTIVITY_ACTIVE,
+    COUNTERPARTY_MISSING,
+    CAPABILITY_MISSING,
+    REQUIREMENTS,
+    EFFECT_FAILED,
+    SESSION_INTERRUPTED
+}
+
+@Serializable
+enum class WorldOrderKind {
+    GO_TO,
+    GO_TO_STRUCTURE,
+    RETURN_HOME,
+    ENTER_STRUCTURE,
+    LEAVE_STRUCTURE,
+    INTERACT,
+    PERFORM_ACTION,
+    VISIT_NPC
+}
+
+/** Canonical effects can be attached after the adapter transaction commits. */
+@Serializable
+data class WorldOrderOutcome(
+    val needDeltas: Map<NeedType, Float> = emptyMap(),
+    val moneyDelta: Long = 0L,
+    val inventoryDeltas: Map<String, Int> = emptyMap()
+)
+
+/**
+ * Serializable retry payload for a user order. It deliberately stores only
+ * command data, so old actor JSON can decode with a null order.
+ */
+@Serializable
+data class WorldOrder(
+    val kind: WorldOrderKind,
+    val x: Int? = null,
+    val y: Int? = null,
+    val structureId: String? = null,
+    val action: ActionId? = null,
+    val targetId: String? = null,
+    val targetX: Int? = null,
+    val targetY: Int? = null,
+    val run: Boolean = false,
+    val arguments: Map<String, String> = emptyMap(),
+    val outcome: WorldOrderOutcome? = null
+)
+
 @Serializable
 data class PendingActivityIntent(
     val action: String,
@@ -547,6 +629,11 @@ data class WorldActor(
     val actionArguments: Map<String, String> = emptyMap(),
     val pendingCommand: PendingWorldCommand? = null,
     val pendingActivity: PendingActivityIntent? = null,
+    val controlMode: WorldControlMode = WorldControlMode.AUTONOMOUS,
+    val orderStatus: WorldOrderStatus = WorldOrderStatus.NONE,
+    val orderBlocker: WorldOrderBlocker = WorldOrderBlocker.NONE,
+    val explicitOrderId: String? = null,
+    val explicitOrder: WorldOrder? = null,
     /** Durable physical follow intent; cleared by Stop or a new route. */
     val followTargetId: String? = null,
     val needs: NeedsProjection = NeedsProjection(),
@@ -753,6 +840,21 @@ sealed interface WorldCommand {
     @Serializable
     @SerialName("stop")
     data object Stop : WorldCommand
+
+    @Serializable
+    @SerialName("resume_autonomy")
+    data object ResumeAutonomy : WorldCommand
+
+    @Serializable
+    @SerialName("retry_order")
+    data object Retry : WorldCommand
+
+    /** Visit one current NPC position, then hold when adjacent. */
+    @Serializable
+    @SerialName("visit_npc")
+    data class VisitNpc(
+        val targetId: String
+    ) : WorldCommand
 
     @Serializable
     @SerialName("interact")

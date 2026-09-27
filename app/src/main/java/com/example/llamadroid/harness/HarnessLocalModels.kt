@@ -3,15 +3,14 @@ package com.example.llamadroid.harness
 import android.annotation.SuppressLint
 import android.content.Context
 import android.os.SystemClock
-import com.example.llamadroid.data.HttpEndpointUrlSupport
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.model.LITERT_BACKEND_GPU
 import com.example.llamadroid.data.model.LiteRtModelEntity
 import com.example.llamadroid.data.model.LlamaChatEntity
 import com.example.llamadroid.data.model.defaultLiteRtEngineMaxTokens
-import com.example.llamadroid.data.runtime.AgentRuntimeProfileRuntime
-import com.example.llamadroid.data.runtime.ManagedLlamaServerState
+import com.example.llamadroid.service.ManagedLlamaServerCoordinator
+import com.example.llamadroid.service.LlamaServerUsageLease
 import com.example.llamadroid.harness.HarnessWorkspaceAccess.Companion.readBounded
 import com.example.llamadroid.service.LITERT_PARAM_MAX_OUTPUT_TOKENS
 import com.example.llamadroid.service.LITERT_PARAM_MTP_ENABLED
@@ -120,6 +119,7 @@ internal fun resolveHarnessLiteRtOutputTokens(
 class HarnessLocalModels(private val context: Context, private val database: AppDatabase) {
     private val settings: SettingsRepository get() = SettingsRepository(context)
     private val modelCapabilities = HarnessLocalModelCapabilityStore(context)
+    private val managedServers = ManagedLlamaServerCoordinator(context, database)
     /** Streaming inference has no wall-clock read deadline; cancellation owns the call. */
     private val client = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(0, TimeUnit.MILLISECONDS).build()
     private val inference = Mutex()
@@ -209,11 +209,7 @@ class HarnessLocalModels(private val context: Context, private val database: App
                 }
                 .put("input_modalities", JSONArray().put("text").apply { if (model.supportsVision) put("image"); if (model.supportsAudio) put("audio") }))
         }
-        AgentRuntimeProfileRuntime.repositoryState.value?.managedServerCatalog?.observeServers()?.first()
-            ?.filter { it.state == ManagedLlamaServerState.RUNNING }?.forEach {
-                data.put(JSONObject().put("id", "llama:${it.id}").put("object", "model")
-                    .put("owned_by", "adt-llama-server").put("name", it.displayName))
-            }
+        managedServers.catalog().forEach { data.put(it.modelRow()) }
         val saved = database.ollamaServerDao().getAllServers().first().take(32)
         val endpoints = (listOf("default" to settings.ollamaUrl.value) + saved.map { it.id.toString() to it.url }).distinctBy { it.second.trimEnd('/') }
         val discovered = coroutineScope { endpoints.map { (key, url) -> async(Dispatchers.IO) {
@@ -234,6 +230,14 @@ class HarnessLocalModels(private val context: Context, private val database: App
         return JSONObject().put("object", "list").put("data", data)
     }
 
+    /** Called only for explicit selection or inference, never by model discovery. */
+    suspend fun prepare(modelId: String): JSONObject = coroutineScope {
+        val cardId = modelId.removePrefix("llama:").toLongOrNull()
+            ?.takeIf { modelId.startsWith("llama:") && it > 0 } ?: error("MANAGED_MODEL_NOT_FOUND")
+        val usage = LlamaServerUsageLease(context, "card:$cardId", this)
+        try { managedServers.prepare(cardId).modelRow() } finally { usage.close() }
+    }
+
     suspend fun stream(request: JSONObject, emit: suspend (JSONObject) -> Unit) {
         val job = requireNotNull(currentCoroutineContext()[Job])
         activeRequests.add(job)
@@ -246,19 +250,21 @@ class HarnessLocalModels(private val context: Context, private val database: App
         val id = request.getString("model")
         when {
             id.startsWith("litert:") -> inference.withLock { streamLiteRt(request, id.removePrefix("litert:").toLong(), activityEmit) }
-            id.startsWith("llama:") -> {
-                val server = AgentRuntimeProfileRuntime.repositoryState.value?.managedServerCatalog?.getServer(id.removePrefix("llama:").toLong())
+            id.startsWith("llama:") -> coroutineScope {
+                val cardId = id.removePrefix("llama:").toLongOrNull()?.takeIf { it > 0 }
                     ?: error("MANAGED_MODEL_NOT_FOUND")
-                check(server.state == ManagedLlamaServerState.RUNNING) { "MANAGED_MODEL_NOT_RUNNING" }
+                val usage = LlamaServerUsageLease(context, "card:$cardId", this)
+                try {
+                val server = managedServers.prepare(cardId)
                 streamLlamaServer(
                     request = request,
-                    baseUrl = HttpEndpointUrlSupport.fromHostPort(server.host, server.port)
-                        ?: error("MANAGED_MODEL_URL_INVALID"),
-                    model = server.modelName ?: "default",
+                    baseUrl = server.baseUrl ?: error("MANAGED_MODEL_URL_INVALID"),
+                    model = server.profile?.modelPath?.substringAfterLast('/') ?: "default",
                     emit = activityEmit,
-                    endpointGeneration = "managed:${server.id}",
+                    endpointGeneration = "managed:${server.card.id}:${server.profile?.hashCode()}",
                     activityKey = activity.requestId,
                 )
+                } finally { usage.close() }
             }
             id.startsWith("llama-swap:") -> {
                 streamLlamaServer(

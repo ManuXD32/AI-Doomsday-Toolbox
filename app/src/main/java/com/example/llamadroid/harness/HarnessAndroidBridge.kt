@@ -294,6 +294,7 @@ class HarnessAndroidBridge(
         var cause: Throwable? = error
         while (cause != null && seen.add(cause)) {
             if (cause is LiteRtLmWorkerCrashedException) return "LITERT_WORKER_CRASHED"
+            if (cause is com.example.llamadroid.service.ManagedLlamaServerException) return cause.code
             cause = cause.cause
         }
         return "PROVIDER_INTERRUPTED"

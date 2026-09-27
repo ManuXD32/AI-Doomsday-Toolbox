@@ -14,7 +14,7 @@ internal fun HarnessNoticeBanner(notice: HarnessNoticeUi, onAction: (NativeHarne
         title = notice.title ?: notice.titleRes?.let { stringResource(it) }
             ?: stringResource(R.string.harness_notice_error),
         message = notice.message ?: notice.messageRes?.let { stringResource(it, *notice.messageArgs.toTypedArray()) }.orEmpty(),
-        actionLabel = stringResource(R.string.harness_dismiss_notice),
-        onAction = { onAction(NativeHarnessUiAction.DismissNotice) },
+        actionLabel = stringResource(notice.actionLabelRes ?: R.string.harness_dismiss_notice),
+        onAction = { onAction(notice.action ?: NativeHarnessUiAction.DismissNotice) },
     )
 }

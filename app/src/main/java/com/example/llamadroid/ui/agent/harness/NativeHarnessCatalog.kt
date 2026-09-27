@@ -1,7 +1,10 @@
 package com.example.llamadroid.ui.agent.harness
 
 import com.example.llamadroid.harness.harnessFriendlyModelLabel
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.contentOrNull
 
 /** Android's legacy global llama-swap setting is not a Harness provider. */
@@ -58,6 +61,18 @@ internal fun parseHarnessModelCatalog(value: JsonObject): HarnessModelCatalogUiR
                 ?: model.string("contextSource")
                 ?: if (context != null) "detected" else "unknown")
         }
+        val modelAvailability = models.associate { model ->
+            val modelId = model.string("id") ?: model.string("name").orEmpty()
+            modelId to model.boolean("available")
+        }
+        val modelStatuses = models.associate { model ->
+            val modelId = model.string("id") ?: model.string("name").orEmpty()
+            modelId to model.string("status")
+        }
+        val modelErrorCodes = models.associate { model ->
+            val modelId = model.string("id") ?: model.string("name").orEmpty()
+            modelId to (model.string("errorCode") ?: model.string("error_code"))
+        }
         val modelBackendLimits = models.mapNotNull { model ->
             val modelId = model.string("id") ?: model.string("name") ?: return@mapNotNull null
             val limits = HarnessModelBackendLimitsUi(
@@ -109,7 +124,26 @@ internal fun parseHarnessModelCatalog(value: JsonObject): HarnessModelCatalogUiR
             modelCapabilitySources = modelCapabilitySources,
             modelAdvertisedContextWindows = modelAdvertisedContextWindows,
             modelBackendLimits = modelBackendLimits,
+            modelAvailability = modelAvailability,
+            modelStatuses = modelStatuses,
+            modelErrorCodes = modelErrorCodes,
         )
+    }.toMutableList().apply {
+        // DSH omits groups whose model list is empty. Keep the registered
+        // managed provider discoverable so Settings can open server management
+        // and show an explicit empty-provider state without inventing a model
+        // or runtime readiness.
+        if ("adt-llama-server" in routable && none { it.id == "adt-llama-server" }) {
+            add(
+                HarnessProviderOption(
+                    id = "adt-llama-server",
+                    name = "ADT-llamacpp",
+                    configured = true,
+                    canEdit = true,
+                    canDelete = false,
+                )
+            )
+        }
     }
     val failures = value.objectArray("failures").mapNotNull failure@{ row ->
         val id = row.string("id") ?: return@failure null
@@ -155,7 +189,7 @@ internal fun parseHarnessLocalModelCatalog(value: JsonObject): List<HarnessProvi
             }
             val providerName = when (owner) {
                 "adt-litert" -> "ADT LiteRT"
-                "adt-llama-server" -> "ADT llama.cpp"
+                "adt-llama-server" -> "ADT-llamacpp"
                 "adt-ollama" -> "ADT Ollama"
                 else -> owner
             }
@@ -180,6 +214,11 @@ internal fun parseHarnessLocalModelCatalog(value: JsonObject): List<HarnessProvi
             val sources = values.associate { (_, id, row) ->
                 id to (row.string("capabilitySource") ?: if (contexts[id] != null) "detected" else "unknown")
             }
+            val availability = values.associate { (_, id, row) -> id to row.boolean("available") }
+            val statuses = values.associate { (_, id, row) -> id to row.string("status") }
+            val errorCodes = values.associate { (_, id, row) ->
+                id to (row.string("errorCode") ?: row.string("error_code"))
+            }
             val backendLimits = values.associate { (_, id, row) ->
                 id to HarnessModelBackendLimitsUi(
                     backend = row.string("effective_backend"),
@@ -200,6 +239,9 @@ internal fun parseHarnessLocalModelCatalog(value: JsonObject): List<HarnessProvi
                 modelCapabilitySources = sources,
                 modelAdvertisedContextWindows = advertisedContexts,
                 modelBackendLimits = backendLimits,
+                modelAvailability = availability,
+                modelStatuses = statuses,
+                modelErrorCodes = errorCodes,
                 configured = true,
                 detail = "Android-managed provider",
                 // Android-owned rows use the native capability editor. DSH
@@ -232,11 +274,42 @@ internal fun mergeHarnessLocalModelProviders(
                 modelCapabilitySources = existing.modelCapabilitySources + local.modelCapabilitySources,
                 modelAdvertisedContextWindows = existing.modelAdvertisedContextWindows + local.modelAdvertisedContextWindows,
                 modelBackendLimits = existing.modelBackendLimits + local.modelBackendLimits,
+                modelAvailability = existing.modelAvailability + local.modelAvailability,
+                modelStatuses = existing.modelStatuses + local.modelStatuses,
+                modelErrorCodes = existing.modelErrorCodes + local.modelErrorCodes,
                 detail = existing.detail ?: local.detail,
             )
         }
     }
     return result
+}
+
+/**
+ * Applies one Android preparation response to the retained local catalog.
+ * Preparation is allowed to discover limits after a managed server starts;
+ * the row is merged by exact wire ID so the existing provider and selection
+ * remain stable while only its capability metadata changes.
+ */
+internal fun updateHarnessPreparedLocalModel(
+    providers: List<HarnessProviderOption>,
+    modelId: String,
+    row: JsonObject,
+    configs: List<HarnessProviderConfigUi> = emptyList(),
+): List<HarnessProviderOption> {
+    val hasId = !row.string("id").isNullOrBlank()
+    val hasOwner = !row.string("owned_by").isNullOrBlank()
+    val normalized = buildJsonObject {
+        row.forEach { (key, value) -> put(key, value) }
+        if (!hasId) put("id", JsonPrimitive(modelId))
+        if (!hasOwner) put("owned_by", JsonPrimitive("adt-llama-server"))
+    }
+    val local = parseHarnessLocalModelCatalog(buildJsonObject {
+        putJsonArray("data") { add(normalized) }
+    })
+    return mergeHarnessSavedModelCapabilities(
+        mergeHarnessLocalModelProviders(providers, local),
+        configs,
+    )
 }
 
 /**
@@ -272,13 +345,15 @@ internal fun mergeHarnessSavedModelCapabilities(
         val names = provider.modelNames.toMutableMap()
         provider.models.forEach { modelId ->
             val row = overrides[modelId] ?: return@forEach
-            row.positiveLong(
-                "contextWindow", "context_window", "context_length",
-                "contextTokens", "context_tokens", "n_ctx"
-            )?.takeIf { it > 0L }?.let {
-                context[modelId] = it
-                sources[modelId] = "explicit"
-                if (modelId !in advertised) advertised[modelId] = it
+            if (!modelId.startsWith("llama:")) {
+                row.positiveLong(
+                    "contextWindow", "context_window", "context_length",
+                    "contextTokens", "context_tokens", "n_ctx"
+                )?.takeIf { it > 0L }?.let {
+                    context[modelId] = it
+                    sources[modelId] = "explicit"
+                    if (modelId !in advertised) advertised[modelId] = it
+                }
             }
             row.positiveLong(
                 "maxOutputTokens", "max_output_tokens", "maxTokens",
@@ -300,6 +375,34 @@ internal fun mergeHarnessSavedModelCapabilities(
 internal fun harnessModelContextKnown(provider: HarnessProviderOption, modelId: String): Boolean =
     provider.modelContextWindows[modelId]?.let { it > 0L } == true &&
         provider.modelCapabilitySources[modelId] != "unknown"
+
+/** Managed llama models may discover their context while they are prepared. */
+internal fun harnessSelectableModelIds(provider: HarnessProviderOption): List<String> =
+    provider.models.filter { it.startsWith("llama:") || harnessModelContextKnown(provider, it) }
+
+/**
+ * Preparation responses are runtime rows rather than RPC envelopes. A row
+ * with an availability/error/status failure must leave the previous selection
+ * untouched and surface the generic localized recovery notice from the
+ * controller.
+ */
+internal fun harnessPreparedLocalModelIsReady(row: JsonObject): Boolean {
+    if (row.boolean("available") == false) return false
+    if (harnessPreparedLocalModelErrorCode(row) != null) return false
+    return row.string("status")?.trim()?.lowercase() !in setOf(
+        "error",
+        "failed",
+        "unavailable",
+        "stopped",
+        "starting",
+        "loading",
+        "stopping",
+    )
+}
+
+internal fun harnessPreparedLocalModelErrorCode(row: JsonObject): String? =
+    row.string("errorCode")?.takeIf { it.isNotBlank() }
+        ?: row.string("error_code")?.takeIf { it.isNotBlank() }
 
 private fun JsonObject.positiveLong(vararg keys: String): Long? = keys
     .asSequence()

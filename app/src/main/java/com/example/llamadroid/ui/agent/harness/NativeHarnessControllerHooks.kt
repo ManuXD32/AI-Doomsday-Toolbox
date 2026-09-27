@@ -58,7 +58,9 @@ data class NativeHarnessWorkspaceHooks(
 /** Navigation seams that must remain outside the native Harness surface. */
 data class NativeHarnessNavigationHooks(
     val openOriginalWebUi: suspend () -> Unit = {},
-    val openModelManager: suspend () -> Unit = {}
+    val openModelManager: suspend () -> Unit = {},
+    /** Opens the canonical managed llama.cpp server manager. */
+    val openManagedLocalServers: suspend () -> Unit = {},
 )
 
 /** Optional host overrides for the alpha2 Remote Event waterfalls. */

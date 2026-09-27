@@ -55,19 +55,15 @@ object WorldSimulation {
         }
         working = commandResult.state
         if (!commandResult.accepted) {
-            annotateWorldEventContexts(
-                effects = effects,
-                before = state,
-                after = working,
-                beforeNeeds = pet?.needs ?: state.actor.needs,
-                timestamp = safeNow
-            )
+            // Command validation is transactional. A route may have tried to
+            // leave an interior before discovering an invalid destination;
+            // reject the whole candidate, including clock, actor and effects.
             return SimulationResult(
-                state = working,
-                effects = effects,
+                state = state,
+                effects = emptyList(),
                 acceptedCommand = false,
                 rejectionReason = commandResult.reason,
-                observations = observations
+                observations = emptyList()
             )
         }
 
@@ -100,6 +96,11 @@ object WorldSimulation {
             // canonical transaction, without opening a movement loophole.
             if (stationaryCanonicalAction) {
                 working = advancePetAction(working, pet, effects, observations)
+            } else if (working.actor.actorType == ActorType.PET &&
+                working.actor.controlMode == WorldControlMode.ORDER_ACTIVE &&
+                working.actor.explicitOrder != null
+            ) {
+                working = working.copy(actor = working.actor.blockOrder("pet_cannot_move"))
             }
             // NPCs still advance so the world clock remains coherent around
             // the paused pet.
@@ -113,7 +114,11 @@ object WorldSimulation {
                 command is WorldCommand.ReturnHome ||
                 command is WorldCommand.EnterStructure ||
                 command is WorldCommand.LeaveStructure
-            if (!suppressAutonomy && !hadTimedPetAction &&
+            if (!suppressAutonomy && working.actor.controlMode !in setOf(
+                    WorldControlMode.HOLDING,
+                    WorldControlMode.BLOCKED
+                ) &&
+                !hadTimedPetAction &&
                 (working.actor.actionState != ActionState.RUNNING || working.actor.actionTicksRemaining <= 0)
             ) {
                 working = advancePetIntent(working, pet, effects, observations, options.navigationPolicy)
@@ -288,6 +293,69 @@ object WorldSimulation {
         command: WorldCommand,
         pet: CanonicalPetSnapshot?,
         effects: MutableList<WorldEffectRequest>,
+        observations: MutableList<String>,
+        preserveOrderId: String? = null,
+        preserveOrderOutcome: WorldOrderOutcome? = null
+    ): CommandApplication {
+        if (command is WorldCommand.Retry) {
+            if (state.actor.actorType != ActorType.PET) {
+                return CommandApplication(state, false, "actor_type_not_allowed")
+            }
+            val order = state.actor.explicitOrder
+                ?: return CommandApplication(state, false, "no_blocked_order")
+            if (state.actor.controlMode != WorldControlMode.BLOCKED ||
+                state.actor.orderStatus != WorldOrderStatus.BLOCKED
+            ) {
+                return CommandApplication(state, false, "order_not_blocked")
+            }
+            return applyCommand(
+                state,
+                order.toWorldCommand(),
+                pet,
+                effects,
+                observations,
+                preserveOrderId = state.actor.explicitOrderId,
+                preserveOrderOutcome = order.outcome
+            )
+        }
+        // Explicit order lifecycle is a user-pet contract. NPCs still use
+        // this command path for scheduled actions, but their executor state
+        // must remain schedule-owned and cannot enter a persistent HOLDING
+        // state after an action completes.
+        val order = if (state.actor.actorType == ActorType.PET) command.toWorldOrder()?.let { commandOrder ->
+            if (preserveOrderOutcome == null) commandOrder
+            else commandOrder.copy(outcome = preserveOrderOutcome)
+        } else null
+        val applied = applyCommandUnchecked(state, command, pet, effects, observations)
+        if (!applied.accepted || order == null) return applied
+        val orderId = preserveOrderId ?: "${state.actor.actorId}:${state.tick + 1L}"
+        val activated = applied.state.actor.activateOrder(order, orderId).copy(pendingActivity = null)
+        val immediatelyComplete = order.kind in setOf(
+            WorldOrderKind.ENTER_STRUCTURE,
+            WorldOrderKind.LEAVE_STRUCTURE,
+            WorldOrderKind.RETURN_HOME
+        ) && activated.actionState == ActionState.COMPLETED && activated.pendingStructureId == null
+        val held = if (immediatelyComplete) {
+            activated.holdOrder().let { heldActor ->
+                if (order.kind == WorldOrderKind.RETURN_HOME && heldActor.presence == PresenceMode.HOME) {
+                    heldActor.copy(goal = GoalId.RETURN_HOME)
+                } else {
+                    heldActor
+                }
+            }
+        } else {
+            activated
+        }
+        return applied.copy(state = applied.state.copy(
+            actor = held
+        ))
+    }
+
+    private fun applyCommandUnchecked(
+        state: WorldState,
+        command: WorldCommand,
+        pet: CanonicalPetSnapshot?,
+        effects: MutableList<WorldEffectRequest>,
         observations: MutableList<String>
     ): CommandApplication {
         return when (command) {
@@ -319,7 +387,11 @@ object WorldSimulation {
             val home = state.structures.firstOrNull { it.type == StructureType.HOME }
                 ?: return CommandApplication(state, false, "home_structure_missing")
             if (state.actor.presence == PresenceMode.HOME) {
-                CommandApplication(state.copy(actor = state.actor.copy(goal = GoalId.RETURN_HOME, action = ActionId.WAIT)), true)
+                CommandApplication(state.copy(actor = state.actor.copy(
+                    goal = GoalId.RETURN_HOME,
+                    action = ActionId.WAIT,
+                    actionState = ActionState.COMPLETED
+                )), true)
             } else {
                 deliberateTravel(
                     state,
@@ -335,8 +407,19 @@ object WorldSimulation {
         }
         is WorldCommand.EnterStructure -> enterStructure(state, command.structureId, pet, effects, observations)
         WorldCommand.LeaveStructure -> leaveStructure(state, pet, effects, observations)
+        // Retry is handled by applyCommand so it can validate and preserve
+        // the persisted order identity before reaching this unchecked path.
+        WorldCommand.Retry -> CommandApplication(state, false, "order_not_blocked")
         WorldCommand.Stop -> CommandApplication(
-            state.copy(actor = state.actor.copy(
+            state = state,
+            accepted = false,
+            reason = "external_activity_active"
+        ).takeIf { state.actor.pendingActivity?.blocksPetSimulation == true }
+            ?: run {
+                if (pet?.sleeping == true || pet?.activity?.let { it != PetActivity.NONE } == true) {
+                    effects += WorldEffectRequest.Activity(PetActivity.NONE, "world:stop")
+                }
+                CommandApplication(state.copy(actor = state.actor.copy(
                 goal = GoalId.IDLE,
                 action = ActionId.WAIT,
                 actionState = ActionState.INTERRUPTED,
@@ -351,10 +434,75 @@ object WorldSimulation {
                 actionArguments = emptyMap(),
                 pendingCommand = null,
                 pendingActivity = null,
+                followTargetId = null,
+                controlMode = WorldControlMode.HOLDING,
+                orderStatus = WorldOrderStatus.CANCELLED,
+                orderBlocker = WorldOrderBlocker.NONE,
+                explicitOrderId = null,
+                explicitOrder = null
+            )), true)
+            }
+        WorldCommand.ResumeAutonomy -> {
+            if (state.actor.pendingActivity?.blocksPetSimulation == true) {
+                CommandApplication(state, false, "external_activity_active")
+            } else if (pet?.autonomy?.level == AutonomyLevel.OFF) {
+                CommandApplication(state, false, "autonomy_disabled")
+            } else if (pet?.activity?.let { it != PetActivity.NONE } == true) {
+                CommandApplication(state, false, "pet_busy")
+            } else if (state.actor.actionState == ActionState.RUNNING && state.actor.actionTicksRemaining > 0) {
+                CommandApplication(state, false, "action_in_progress")
+            } else {
+                CommandApplication(state.copy(actor = state.actor.copy(
+                    goal = GoalId.IDLE,
+                    action = ActionId.WAIT,
+                    actionState = ActionState.IDLE,
+                    actionTicksRemaining = 0,
+                    destinationX = null,
+                    destinationY = null,
+                    pendingStructureId = null,
+                    actionTargetId = null,
+                    actionTargetX = null,
+                    actionTargetY = null,
+                    actionArguments = emptyMap(),
+                    pendingCommand = null,
+                    pendingActivity = null,
+                    path = emptyList(),
+                    followTargetId = null
+                ).clearOrderForAutonomy()), true)
+            }
+        }
+        is WorldCommand.VisitNpc -> {
+            val npc = state.npcs.firstOrNull { it.id == command.targetId }
+                ?: return CommandApplication(state, false, "counterparty_missing")
+            if (pet?.sleeping == true || pet?.activity?.let { it != PetActivity.NONE } == true) {
+                return CommandApplication(state, false, "pet_busy")
+            }
+            if (pet?.cycleFrozen == true || pet?.isEgg == true) {
+                return CommandApplication(state, false, "pet_cannot_move")
+            }
+            var working = state
+            if (working.actor.presence != PresenceMode.WORLD) {
+                val left = leaveStructure(working, pet, effects, observations)
+                if (!left.accepted) return left
+                working = left.state
+            }
+            CommandApplication(working.copy(actor = working.actor.copy(
+                goal = GoalId.VISIT_INTERESTING_PLACE,
+                action = ActionId.WAIT,
+                actionState = ActionState.IDLE,
+                actionTicksRemaining = 0,
+                destinationX = npc.x,
+                destinationY = npc.y,
+                pendingStructureId = null,
+                actionTargetId = npc.id,
+                actionTargetX = npc.x,
+                actionTargetY = npc.y,
+                actionArguments = emptyMap(),
+                pendingCommand = null,
+                path = emptyList(),
                 followTargetId = null
-            )),
-            true
-        )
+            )), true)
+        }
         is WorldCommand.Interact -> beginAction(
             state,
             command.action,
@@ -481,6 +629,12 @@ object WorldSimulation {
         goal: GoalId = GoalId.EXPLORE
     ): CommandApplication {
         if (state.actor.presence != PresenceMode.WORLD) return CommandApplication(state, false, "world_presence_required")
+        if (state.actor.pendingActivity?.blocksPetSimulation == true) {
+            return CommandApplication(state, false, "external_activity_active")
+        }
+        if (state.actor.actionState == ActionState.RUNNING && state.actor.actionTicksRemaining > 0) {
+            return CommandApplication(state, false, "action_in_progress")
+        }
         if (pet?.sleeping == true || pet?.activity?.let { it != PetActivity.NONE } == true) {
             return CommandApplication(state, false, "pet_busy")
         }
@@ -530,6 +684,9 @@ object WorldSimulation {
     ): CommandApplication {
         val structure = state.structures.firstOrNull { it.id == structureId }
             ?: return CommandApplication(state, false, "unknown_structure")
+        if (pet?.activity?.let { it != PetActivity.NONE } == true) {
+            return CommandApplication(state, false, "pet_busy")
+        }
         if (pet?.sleeping == true || pet?.cycleFrozen == true || pet?.isEgg == true) {
             return CommandApplication(state, false, "pet_cannot_enter")
         }
@@ -607,6 +764,9 @@ object WorldSimulation {
         if (state.actor.actionState == ActionState.RUNNING && state.actor.actionTicksRemaining > 0) {
             return CommandApplication(state, false, "action_in_progress")
         }
+        if (pet?.activity?.let { it != PetActivity.NONE } == true) {
+            return CommandApplication(state, false, "pet_busy")
+        }
         if (!SafetyInstincts.canLeaveHome(pet ?: CanonicalPetSnapshot())) return CommandApplication(state, false, "pet_cannot_leave")
         val structure = state.actor.structureId?.let { id -> state.structures.firstOrNull { it.id == id } }
             ?: state.structures.firstOrNull { it.type == StructureType.HOME }
@@ -658,10 +818,14 @@ object WorldSimulation {
         val canonicalAction = baseArguments[CANONICAL_ACTION_ARGUMENT]?.trim()
         val stationaryCanonicalUse = action == ActionId.USE &&
             canonicalAction in setOf("usePotion", "useMedicine")
-        if (pet?.sleeping == true && action != ActionId.WAKE ||
+        val canonicalStop = action == ActionId.WAIT && canonicalAction == "stopActivity"
+        if ((pet?.sleeping == true && action != ActionId.WAKE) ||
             ((pet?.cycleFrozen == true || pet?.isEgg == true) && !stationaryCanonicalUse)
         ) {
             return CommandApplication(state, false, "pet_cannot_act")
+        }
+        if (pet?.activity?.let { it != PetActivity.NONE } == true && action != ActionId.WAKE && !canonicalStop) {
+            return CommandApplication(state, false, "pet_busy")
         }
         if (state.actor.actionState == ActionState.RUNNING && state.actor.actionTicksRemaining > 0) {
             return CommandApplication(state, false, "action_in_progress")
@@ -941,20 +1105,24 @@ object WorldSimulation {
             ActionId.REST, ActionId.SIT, ActionId.SLEEP -> GoalId.IDLE
             else -> actor.goal
         }
-        var next = state.copy(actor = actor.copy(
+        val completedActor = actor.copy(
             actionState = ActionState.COMPLETED,
             actionTicksRemaining = 0,
             goal = completionGoal
-        ))
+        )
+        var next = state.copy(actor = if (
+            actor.controlMode == WorldControlMode.ORDER_ACTIVE && actor.explicitOrder != null
+        ) completedActor.holdOrder() else completedActor)
         if (statefulFailure != null || !validation.valid) {
-            val reason = statefulFailure ?: validation.reason
+            val reason = statefulFailure ?: validation.reason ?: "requirements"
             observations += "action_blocked:${action.name}:$reason"
-            return next.copy(actor = next.actor.copy(
+            val blocked = next.copy(actor = next.actor.copy(
                 actionState = ActionState.BLOCKED,
                 goal = GoalId.RECOVER_STUCK,
                 actionArguments = emptyMap(),
                 pendingCommand = null
             ))
+            return if (actor.explicitOrder != null) blocked.copy(actor = blocked.actor.blockOrder(reason)) else blocked
         }
 
         // Canonical pet operations remain owned by the app's existing
@@ -982,6 +1150,8 @@ object WorldSimulation {
             )
             observations += "action_completed:${action.name}"
             return next.copy(actor = next.actor.copy(
+                controlMode = if (actor.explicitOrder != null) WorldControlMode.HOLDING else next.actor.controlMode,
+                orderStatus = if (actor.explicitOrder != null) WorldOrderStatus.RUNNING else next.actor.orderStatus,
                 actionArguments = emptyMap(),
                 pendingCommand = null
             ))
@@ -1003,7 +1173,16 @@ object WorldSimulation {
             ))
         }
         observations += "action_completed:${action.name}"
+        val adapterBoundary = effects.any {
+            it is WorldEffectRequest.Activity || it is WorldEffectRequest.FarmTransition
+        }
         return next.copy(actor = next.actor.copy(
+            controlMode = if (actor.explicitOrder != null) WorldControlMode.HOLDING else next.actor.controlMode,
+            orderStatus = if (actor.explicitOrder != null && adapterBoundary) {
+                WorldOrderStatus.RUNNING
+            } else {
+                next.actor.orderStatus
+            },
             actionArguments = emptyMap(),
             pendingCommand = null
         ))
@@ -1016,12 +1195,29 @@ object WorldSimulation {
         observations: MutableList<String>,
         navigationPolicy: NavigationPolicy?
     ): WorldState {
-        if (pet == null || pet.cycleFrozen || pet.isEgg || pet.sleeping) return state
+        if (pet == null) return state
+        if (pet.cycleFrozen || pet.isEgg || pet.sleeping || pet.activity != PetActivity.NONE) {
+            if (state.actor.controlMode == WorldControlMode.ORDER_ACTIVE && state.actor.explicitOrder != null) {
+                val reason = when {
+                    pet.cycleFrozen || pet.isEgg -> "pet_cannot_move"
+                    pet.sleeping -> "sleeping"
+                    else -> "pet_busy"
+                }
+                return state.copy(actor = state.actor.blockOrder(reason))
+            }
+            return state
+        }
         val pendingCommand = state.actor.pendingCommand
         // Explicit recovered actions may target an interior. They retain their
         // own prerequisites and must run even when autonomous planning is off.
         if (state.actor.path.isEmpty() && pendingCommand != null) {
             return executePendingCommand(state, pendingCommand, pet, effects, observations)
+        }
+        if (state.actor.controlMode in setOf(WorldControlMode.HOLDING, WorldControlMode.BLOCKED)) return state
+        val explicitOrder = state.actor.explicitOrder
+        val explicitOrderActive = state.actor.controlMode == WorldControlMode.ORDER_ACTIVE && explicitOrder != null
+        if (explicitOrderActive && explicitOrder?.kind == WorldOrderKind.VISIT_NPC) {
+            return advanceVisitIntent(state, effects, observations)
         }
         val followIntent = state.actor.followTargetId != null ||
             state.actor.actionArguments[WorldActionSemantics.FOLLOW_INTENT_ARGUMENT] == "true"
@@ -1047,13 +1243,14 @@ object WorldSimulation {
             val nextCoordinate = actor.path.first()
             val tile = WorldGenerator.tileAt(state, nextCoordinate.x, nextCoordinate.y)
             if (!tile.walkable) {
-                return state.copy(actor = actor.copy(
+                val blocked = state.copy(actor = actor.copy(
                     path = emptyList(),
                     action = ActionId.WAIT,
                     actionState = ActionState.BLOCKED,
                     goal = GoalId.RECOVER_STUCK,
                     stuckTicks = actor.stuckTicks + 1
                 ))
+                return if (explicitOrderActive) blocked.copy(actor = blocked.actor.blockOrder("destination_unreachable")) else blocked
             }
             val remaining = actor.path.drop(1)
             val direction = directionFrom(actor.coordinate, nextCoordinate)
@@ -1074,11 +1271,23 @@ object WorldSimulation {
                     effects,
                     observations
                 )
-                if (entered.accepted) return entered.state
+                if (entered.accepted) {
+                    return if (explicitOrderActive && entered.state.actor.pendingActivity == null) {
+                        entered.state.copy(actor = entered.state.actor.holdOrder())
+                    } else {
+                        entered.state
+                    }
+                }
+                if (explicitOrderActive) {
+                    return state.copy(actor = actor.blockOrder(entered.reason ?: "requirements"))
+                }
             }
             val pendingAfterMove = actor.pendingCommand
             if (remaining.isEmpty() && pendingAfterMove != null) {
                 return executePendingCommand(state.copy(actor = actor), pendingAfterMove, pet, effects, observations)
+            }
+            if (remaining.isEmpty() && explicitOrderActive && actor.destination == actor.coordinate) {
+                return state.copy(actor = actor.holdOrder())
             }
             return state.copy(actor = actor)
         }
@@ -1088,7 +1297,15 @@ object WorldSimulation {
         // a pending approach command is handled above until the actor reaches
         // the target's current vicinity.
         if (followIntent && pendingCommand == null) {
-            return advanceFollowIntent(state, effects, observations)
+            val followed = advanceFollowIntent(state, effects, observations)
+            val explicitFollow = explicitOrderActive &&
+                explicitOrder?.kind == WorldOrderKind.PERFORM_ACTION &&
+                explicitOrder.action in setOf(ActionId.FOLLOW, ActionId.FOLLOW_NPC)
+            return if (explicitFollow && followed.actor.followTargetId == null) {
+                followed.copy(actor = followed.actor.blockOrder("counterparty_missing"))
+            } else {
+                followed
+            }
         }
 
         // A resource's generated coordinate may be solid (for example, a
@@ -1112,13 +1329,29 @@ object WorldSimulation {
                     effects,
                     observations
                 )
-                if (entered.accepted) return entered.state
+                if (entered.accepted) {
+                    return if (explicitOrderActive && entered.state.actor.pendingActivity == null) {
+                        entered.state.copy(actor = entered.state.actor.holdOrder())
+                    } else {
+                        entered.state
+                    }
+                }
+                if (explicitOrderActive) {
+                    return state.copy(actor = actor.blockOrder(entered.reason ?: "requirements"))
+                }
             }
-            return state.copy(actor = actor.copy(destinationX = null, destinationY = null, goal = GoalId.IDLE, action = ActionId.WAIT, actionState = ActionState.COMPLETED))
+            val arrived = state.copy(actor = actor.copy(
+                destinationX = null,
+                destinationY = null,
+                goal = GoalId.IDLE,
+                action = ActionId.WAIT,
+                actionState = ActionState.COMPLETED
+            ))
+            return if (explicitOrderActive) arrived.copy(actor = arrived.actor.holdOrder()) else arrived
         }
 
         val pendingStructure = actor.pendingStructureId?.let { id -> state.structures.firstOrNull { it.id == id } }
-        val retainedDestination = actor.destination.takeIf { actor.goal == GoalId.EXPLORE }
+        val retainedDestination = actor.destination.takeIf { explicitOrderActive || actor.goal == GoalId.EXPLORE }
         // Manual routes and pending structures still replan with autonomy
         // OFF. This matters when a route reaches a known frontier: the
         // destination remains hidden, so another safe known-world plan is
@@ -1128,6 +1361,7 @@ object WorldSimulation {
             pendingStructure == null && retainedDestination == null
         ) return state
         val goal = when {
+            explicitOrderActive -> actor.goal
             pendingStructure?.type == StructureType.HOME -> GoalId.RETURN_HOME
             pendingStructure != null -> actor.goal.takeUnless { it == GoalId.IDLE } ?: GoalId.VISIT_INTERESTING_PLACE
             retainedDestination != null -> actor.goal
@@ -1143,7 +1377,7 @@ object WorldSimulation {
             destinationX = destination.x,
             destinationY = destination.y
         ))
-        val policyDecision = navigationPolicy?.choose(policyState, pet, goal)
+        val policyDecision = if (explicitOrderActive) null else navigationPolicy?.choose(policyState, pet, goal)
         // Adopted navigation may wait or select a route that is useful for a
         // normal goal, but it cannot defer a survival transition. Critical
         // care goals always use the deterministic core route so an always
@@ -1167,8 +1401,9 @@ object WorldSimulation {
             else -> plan.path
         }
         if (path.isEmpty() && destination != actor.coordinate && !plan.reachedTarget) {
-            observations += "known_frontier:${actor.x},${actor.y}"
-            return state.copy(actor = actor.copy(
+            val reason = if (plan.stoppedAtKnownFrontier) "known_frontier" else "destination_unreachable"
+            observations += "$reason:${actor.x},${actor.y}"
+            val blocked = state.copy(actor = actor.copy(
                 goal = goal,
                 destinationX = destination.x,
                 destinationY = destination.y,
@@ -1178,10 +1413,17 @@ object WorldSimulation {
                 pendingStructureId = actor.pendingStructureId ?: structureForGoal(state, goal),
                 navigationMemory = boundedNavigationMemory(policyDecision, actor.navigationMemory)
             ))
+            return if (explicitOrderActive) blocked.copy(actor = blocked.actor.blockOrder(reason)) else blocked
         }
         if (destination != actor.coordinate && path.isEmpty() && !plan.stoppedAtKnownFrontier) {
             val stuck = actor.stuckTicks + 1
-            return state.copy(actor = actor.copy(goal = GoalId.RECOVER_STUCK, action = ActionId.WAIT, actionState = ActionState.BLOCKED, stuckTicks = stuck))
+            val blocked = state.copy(actor = actor.copy(
+                goal = GoalId.RECOVER_STUCK,
+                action = ActionId.WAIT,
+                actionState = ActionState.BLOCKED,
+                stuckTicks = stuck
+            ))
+            return if (explicitOrderActive) blocked.copy(actor = blocked.actor.blockOrder("destination_unreachable")) else blocked
         }
         val run = goal == GoalId.RETURN_HOME && SafetyInstincts.canRun(pet.needs)
         actor = actor.copy(
@@ -1201,10 +1443,6 @@ object WorldSimulation {
         }
         return state.copy(actor = actor)
     }
-
-    private fun isCriticalSurvivalNeed(needs: NeedsProjection): Boolean =
-        setOf(NeedType.HEALTH, NeedType.HUNGER, NeedType.HYDRATION, NeedType.ENERGY)
-            .any { NeedsSystem.isCritical(needs, it) }
 
     /**
      * Resolve the home/interior boundary for autonomous simulation. A pet can
@@ -1329,7 +1567,7 @@ object WorldSimulation {
         )
         if (started.accepted) return started.state
         observations += "pending_action_blocked:${pending.action.name}:${started.reason}"
-        return state.copy(actor = state.actor.copy(
+        val failed = state.copy(actor = state.actor.copy(
             action = ActionId.WAIT,
             actionState = ActionState.BLOCKED,
             actionTicksRemaining = 0,
@@ -1342,6 +1580,11 @@ object WorldSimulation {
             path = emptyList(),
             followTargetId = null
         ))
+        return if (state.actor.explicitOrder != null) {
+            failed.copy(actor = failed.actor.blockOrder(started.reason ?: "requirements"))
+        } else {
+            failed
+        }
     }
 
     private fun actionForGoalAtDestination(
@@ -1408,6 +1651,7 @@ object WorldSimulation {
         effects: MutableList<WorldEffectRequest>
     ): WorldState? {
         if (pet.autonomy.level == AutonomyLevel.OFF) return null
+        if (state.actor.controlMode != WorldControlMode.AUTONOMOUS) return null
         // A queued explicit action or structure visit owns this transition.
         // Do not let the autonomous resource shortcut consume that command.
         if (state.actor.pendingCommand != null || state.actor.pendingStructureId != null) return null
@@ -1742,218 +1986,6 @@ object WorldSimulation {
         }
         return state.copy(deltas = retained + delta)
     }
-
-    private fun inferTargetKind(
-        state: WorldState,
-        targetId: String?,
-        targetX: Int? = null,
-        targetY: Int? = null,
-        action: ActionId? = null
-    ): ActionTargetKind {
-        if (targetId != null) {
-            if (state.structures.any { it.id == targetId }) return ActionTargetKind.STRUCTURE
-            if (state.npcs.any { it.id == targetId }) return ActionTargetKind.ACTOR
-            if (state.objects.any { it.id == targetId }) return ActionTargetKind.OBJECT
-            if (targetId.startsWith("generated_") || targetId.startsWith("natural_water_")) return ActionTargetKind.OBJECT
-            if (state.farmPlots.any { it.id == targetId }) return ActionTargetKind.FARM_PLOT
-            if (action in setOf(ActionId.DROP, ActionId.EAT, ActionId.DRINK, ActionId.USE, ActionId.USE_MEDICINE, ActionId.BUY, ActionId.SELL, ActionId.GIVE_ITEM, ActionId.RECEIVE_ITEM)) return ActionTargetKind.ITEM
-        }
-        if (targetX != null && targetY != null) return ActionTargetKind.TILE
-        return when (action) {
-            ActionId.ENTER_STRUCTURE, ActionId.EXIT_STRUCTURE, ActionId.STUDY, ActionId.WORK,
-            ActionId.TRAIN_BOXING, ActionId.VISIT_HOSPITAL, ActionId.USE_ALCHEMY,
-            ActionId.ENTER_DUNGEON, ActionId.ENTER_ADVENTURE_GATE -> ActionTargetKind.STRUCTURE
-            else -> ActionTargetKind.NONE
-        }
-    }
-
-    private fun actionTarget(
-        state: WorldState,
-        targetId: String?,
-        targetKind: ActionTargetKind,
-        targetX: Int? = null,
-        targetY: Int? = null,
-        arguments: Map<String, String> = emptyMap(),
-        action: ActionId? = null
-    ): ActionTarget {
-        val explicitCoordinate = targetX?.let { x -> targetY?.let { y -> WorldCoordinate(x, y) } }
-        val resolvedCoordinate = explicitCoordinate ?: targetId?.let { targetCoordinate(state, it) }
-        val resolvedObject = targetObject(
-            state,
-            ActionTarget(targetKind, targetId, resolvedCoordinate, arguments = arguments)
-        )
-        val available = targetId == null || action == null || targetAvailable(state, targetId, action, resolvedCoordinate, arguments)
-        return ActionTarget(
-            kind = targetKind,
-            id = targetId,
-            coordinate = resolvedCoordinate,
-            available = available,
-            arguments = arguments,
-            objectType = resolvedObject?.type
-        )
-    }
-
-    private fun targetCoordinate(state: WorldState, targetId: String): WorldCoordinate? =
-        state.structures.firstOrNull { it.id == targetId }?.entrance
-            ?: state.npcs.firstOrNull { it.id == targetId }?.coordinate
-            ?: state.farmPlots.firstOrNull { it.id == targetId }?.let { WorldCoordinate(it.x, it.y) }
-            ?: state.objects.firstOrNull { it.id == targetId }?.let { WorldCoordinate(it.x, it.y) }
-            ?: generatedObjectCoordinate(state, targetId)
-
-    private fun generatedObjectCoordinate(state: WorldState, targetId: String): WorldCoordinate? {
-        if (!targetId.startsWith("generated_") && !targetId.startsWith("natural_water_")) return null
-        val parts = targetId.split('_')
-        if (parts.size < 4) return null
-        val x = parts[parts.lastIndex - 1].toIntOrNull() ?: return null
-        val y = parts.last().toIntOrNull() ?: return null
-        return WorldCoordinate(x, y).takeIf { state.contains(it) && it in state.explored }
-    }
-
-    private fun targetAvailable(
-        state: WorldState,
-        targetId: String?,
-        action: ActionId,
-        targetCoordinate: WorldCoordinate? = null,
-        arguments: Map<String, String> = emptyMap()
-    ): Boolean {
-        if (targetId == null) return action == ActionId.DRINK ||
-            targetCoordinate?.takeIf { it in state.explored }?.let {
-                WorldGenerator.objectAt(state, it.x, it.y) != null
-            } == true
-        if (state.structures.any { it.id == targetId } || state.npcs.any { it.id == targetId } || state.farmPlots.any { it.id == targetId }) return true
-        if (action == ActionId.BUY && WorldActionSemantics.purchaseSelection(
-                ActionTarget(ActionTargetKind.ITEM, targetId, arguments = arguments)
-            ) != null
-        ) return true
-        if (action == ActionId.SELL && WorldActionSemantics.saleSelection(
-                ActionTarget(ActionTargetKind.ITEM, targetId, arguments = arguments)
-            ) != null
-        ) return true
-        if (state.objects.any { it.id == targetId }) {
-            return state.objects.firstOrNull { it.id == targetId }?.let { WorldGenerator.resourceState(state, it) }?.let { objectValue ->
-                objectValue.quantity > 0 && (
-                    objectValue.state.isResourceAvailable() ||
-                        (action == ActionId.HELP_NPC && objectValue.type !in setOf(
-                            WorldObjectType.TREE,
-                            WorldObjectType.FALLEN_LOG,
-                            WorldObjectType.BUSH,
-                            WorldObjectType.FLOWER_MEADOW,
-                            WorldObjectType.BERRY_PATCH,
-                            WorldObjectType.MUSHROOM,
-                            WorldObjectType.HERB_PATCH,
-                            WorldObjectType.STONE,
-                            WorldObjectType.REED,
-                            WorldObjectType.CACTUS,
-                            WorldObjectType.SHELL,
-                            WorldObjectType.GLOWING_PLANT,
-                            WorldObjectType.POND
-                        ))
-                    )
-            } == true
-        }
-        if (targetId.startsWith("natural_water_")) {
-            val coordinate = targetCoordinate ?: generatedObjectCoordinate(state, targetId)
-            return coordinate != null && coordinate in state.explored &&
-                WorldGenerator.tileAt(state, coordinate.x, coordinate.y).kind == TileKind.SHALLOW_WATER
-        }
-        // Inventory water has no world object row. The typed item check in
-        // ActionExecutor still rejects arbitrary IDs; this only lets a
-        // bottled-water target reach that check instead of being marked as a
-        // missing world resource.
-        if (action == ActionId.DRINK) return true
-        if (targetId.startsWith("generated_")) {
-            val coordinate = targetCoordinate ?: generatedObjectCoordinate(state, targetId)
-            return coordinate != null && coordinate in state.explored &&
-                WorldGenerator.objectAt(state, coordinate.x, coordinate.y)
-                    ?.let { it.quantity > 0 && it.state.isResourceAvailable() } == true
-        }
-        return false
-    }
-
-    private fun String.isResourceAvailable(): Boolean = lowercase() in setOf("available", "full", "mature", "ready")
-
-    private fun directionFrom(from: WorldCoordinate, to: WorldCoordinate): Direction {
-        val dx = (to.x - from.x).coerceIn(-1, 1)
-        val dy = (to.y - from.y).coerceIn(-1, 1)
-        return when {
-            dx == 0 && dy < 0 -> Direction.NORTH
-            dx > 0 && dy < 0 -> Direction.NORTH_EAST
-            dx > 0 && dy == 0 -> Direction.EAST
-            dx > 0 && dy > 0 -> Direction.SOUTH_EAST
-            dx == 0 && dy > 0 -> Direction.SOUTH
-            dx < 0 && dy > 0 -> Direction.SOUTH_WEST
-            dx < 0 && dy == 0 -> Direction.WEST
-            dx < 0 && dy < 0 -> Direction.NORTH_WEST
-            else -> Direction.NONE
-        }
-    }
-
-    private fun goalForAction(action: ActionId): GoalId = when (action) {
-        ActionId.EAT, ActionId.FORAGE, ActionId.HARVEST_WILD_PLANT -> GoalId.FIND_FOOD
-        ActionId.DRINK -> GoalId.FIND_WATER
-        ActionId.REST, ActionId.SIT, ActionId.SLEEP -> GoalId.REST
-        ActionId.TALK, ActionId.GREET, ActionId.PLAY_WITH -> GoalId.SOCIALIZE
-        ActionId.EXPLORE, ActionId.WANDER, ActionId.INVESTIGATE -> GoalId.EXPLORE
-        ActionId.GATHER_WOOD, ActionId.CHOP_TREE -> GoalId.GATHER_WOOD
-        ActionId.GATHER_HERB -> GoalId.GATHER_HERBS
-        ActionId.TILL_SOIL, ActionId.PLANT, ActionId.WATER, ActionId.POUR_WATER, ActionId.FERTILIZE,
-        ActionId.HARVEST_CROP,
-        ActionId.REMOVE_DEAD_CROP, ActionId.STORE_PRODUCE -> GoalId.FARM
-        ActionId.STUDY -> GoalId.STUDY
-        ActionId.WORK -> GoalId.WORK
-        ActionId.TRAIN_BOXING -> GoalId.TRAIN
-        else -> GoalId.IDLE
-    }
-
-    private fun hasUsableTool(itemId: String, requiredTool: String): Boolean {
-        val normalizedItem = itemId.trim().lowercase()
-        val normalizedTool = requiredTool.trim().lowercase()
-        return normalizedItem == normalizedTool || normalizedItem.startsWith("${normalizedTool}_")
-    }
-
-    private fun inventoryStackIs(stack: InventoryStack, kind: InventoryKind): Boolean =
-        if (stack.kind == InventoryKind.OTHER) InventoryKinds.infer(stack.itemId) == kind else stack.kind == kind
-
-    private fun inventoryKind(pet: CanonicalPetSnapshot?, itemId: String): InventoryKind? {
-        val stack = pet?.inventory.orEmpty().firstOrNull { stack ->
-            stackMatchesItem(stack, itemId)
-        }
-        return stack?.kind?.takeUnless { it == InventoryKind.OTHER }
-            ?: stack?.let { InventoryKinds.infer(it.itemId) }
-    }
-
-    private fun stackMatchesItem(stack: InventoryStack, requestedItemId: String): Boolean {
-        if (stack.quantity <= 0) return false
-        val requested = requestedItemId.trim().lowercase()
-        val inferred = stack.kind.takeUnless { it == InventoryKind.OTHER }
-            ?: InventoryKinds.infer(stack.itemId)
-        return stack.itemId == requestedItemId ||
-            (requested == "seed" && inferred == InventoryKind.SEED) ||
-            (requested == "water" && inferred == InventoryKind.WATER)
-    }
-
-    private fun CanonicalPetSnapshot?.isFrozenOrEgg(): Boolean = this?.cycleFrozen == true || this?.isEgg == true
-
-    private fun policyPath(state: WorldState, decision: NavigationDecision): List<WorldCoordinate>? {
-        val direction = when (decision.intent) {
-            NavigationIntent.MOVE_N -> WorldCoordinate(0, -1)
-            NavigationIntent.MOVE_NE -> WorldCoordinate(1, -1)
-            NavigationIntent.MOVE_E -> WorldCoordinate(1, 0)
-            NavigationIntent.MOVE_SE -> WorldCoordinate(1, 1)
-            NavigationIntent.MOVE_S -> WorldCoordinate(0, 1)
-            NavigationIntent.MOVE_SW -> WorldCoordinate(-1, 1)
-            NavigationIntent.MOVE_W -> WorldCoordinate(-1, 0)
-            NavigationIntent.MOVE_NW -> WorldCoordinate(-1, -1)
-            NavigationIntent.WAIT, NavigationIntent.INTERACT, NavigationIntent.SEARCH -> return null
-        }
-        val candidate = decision.waypoint ?: (state.actor.coordinate + direction)
-        if (!state.explored.contains(candidate)) return null
-        if (!SafetyInstincts.validDestination(state, candidate, knownOnly = true)) return null
-        return listOf(candidate)
-    }
-
-    private fun boundedNavigationMemory(decision: NavigationDecision?, previous: List<Float>): List<Float> =
-        decision?.nextMemory?.take(64)?.map { if (it.isFinite()) it else 0f } ?: previous
 
     private data class CommandApplication(
         val state: WorldState,

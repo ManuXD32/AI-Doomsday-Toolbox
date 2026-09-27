@@ -6,6 +6,7 @@ import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.Build
 import android.os.PowerManager
+import android.os.SystemClock
 import com.example.llamadroid.tama.world.policy.RecurrentPpoPolicy
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -53,6 +54,8 @@ class TamaBrainController(
     private var curriculum = CurriculumLevel.VISIBLE_TARGET
     private var lastSaveAt = 0L
     private var evaluatedArtifactHash: String? = null
+    private var evaluatedReference: LivingPolicyReference? = null
+    private var guidedClockStartedAt: Long? = null
     private val closed = AtomicBoolean(false)
     /** Set from UI calls before their serialized executor job can reach an active evaluation. */
     private val evaluationCancelRequested = AtomicBoolean(false)
@@ -63,6 +66,7 @@ class TamaBrainController(
                     ensureTrainer()
                     val reason = pauseReason()
                     if (reason != null) {
+                        if (_state.value.guided.phase == BrainGuidedPhase.PRACTICING) commitGuidedClock()
                         trainer?.pause()
                         _state.value = _state.value.copy(running = false, pauseReason = reason)
                     } else {
@@ -71,6 +75,9 @@ class TamaBrainController(
                         // A candidate comparison is valid only for an unchanged candidate. Any
                         // training update makes a previous approval stale.
                         invalidateEvaluation()
+                        if (_state.value.guided.phase == BrainGuidedPhase.PRACTICING) {
+                            guidedClockStartedAt = guidedClockStartedAt ?: SystemClock.elapsedRealtime()
+                        }
                         val snapshot = current.advance(current.config.environmentCount * current.config.rolloutStepsPerEnvironment)
                         val point = BrainMetricSample(
                             step = snapshot.metrics.environmentSteps,
@@ -85,6 +92,12 @@ class TamaBrainController(
                         )
                         _state.value = _state.value.copy(snapshot = snapshot, running = true, pauseReason = null,
                             error = null, history = (_state.value.history + point).takeLast(120))
+                        if (_state.value.guided.phase == BrainGuidedPhase.PRACTICING) {
+                            updateGuidedClock()
+                            if (_state.value.guided.sessionMillis >= _state.value.guided.sessionBudgetMillis) {
+                                finishGuidedNow()
+                            }
+                        }
                         if (System.currentTimeMillis() - lastSaveAt > 30_000L) saveResume()
                     }
                 }
@@ -119,6 +132,15 @@ class TamaBrainController(
             trainer?.let { refreshCurrentComparisonPolicy(it) }
             evaluationCancelRequested.set(false)
             evaluatedArtifactHash = null
+            evaluatedReference = null
+            guidedClockStartedAt = null
+            if (_state.value.guided.phase == BrainGuidedPhase.PRACTICING ||
+                _state.value.guided.phase == BrainGuidedPhase.EVALUATING
+            ) {
+                _state.value = _state.value.copy(
+                    guided = _state.value.guided.copy(phase = BrainGuidedPhase.PAUSED)
+                )
+            }
             _state.value = _state.value.copy(
                 requestedRunning = false,
                 running = false,
@@ -129,6 +151,7 @@ class TamaBrainController(
                 error = null,
                 snapshot = trainer?.snapshot()
             )
+            restoreGuidedEvaluationIfValid()
             saveResume()
         }
     }
@@ -153,6 +176,56 @@ class TamaBrainController(
             evaluationCancelRequested.set(false)
         }
     }
+
+    /** Start or continue the bounded Level 1 world-navigation lesson. */
+    fun startGuidedPractice(): Job {
+        evaluationCancelRequested.set(true)
+        return submit {
+            beginGuidedPractice(resetSession = true)
+            evaluationCancelRequested.set(false)
+        }
+    }
+
+    /** Pause guided practice without consuming additional active-session time. */
+    fun pauseGuidedPractice(): Job {
+        evaluationCancelRequested.set(true)
+        return submit {
+            trainer?.pause()
+            commitGuidedClock()
+            if (_state.value.guided.phase == BrainGuidedPhase.PRACTICING) {
+                _state.value = _state.value.copy(
+                    requestedRunning = false,
+                    running = false,
+                    pauseReason = null,
+                    guided = _state.value.guided.copy(phase = BrainGuidedPhase.PAUSED)
+                )
+            }
+            saveResume()
+            evaluationCancelRequested.set(false)
+        }
+    }
+
+    /** Resume the current guided session, preserving its accumulated active time. */
+    fun resumeGuidedPractice(): Job {
+        evaluationCancelRequested.set(true)
+        return submit {
+            beginGuidedPractice(resetSession = false)
+            evaluationCancelRequested.set(false)
+        }
+    }
+
+    /** Save the exact candidate at a batch boundary and immediately run the fixed holdout. */
+    fun finishGuidedPractice(): Job {
+        evaluationCancelRequested.set(true)
+        return submit {
+            // An explicit Finish supersedes a cancellation requested by an earlier queued
+            // lifecycle action. Once this serialized job starts, a later Pause/close signal can
+            // still set the flag while the holdout is running.
+            evaluationCancelRequested.set(false)
+            finishGuidedNow()
+        }
+    }
+
     fun setSpeed(value: Int) = submit {
         _state.value = _state.value.copy(speed = value.coerceIn(1, 64))
         persistUiState()
@@ -280,35 +353,235 @@ class TamaBrainController(
         }
     }
 
+    /** Select one of the guided, trainable world-navigation lessons (levels 1 through 10). */
+    fun selectGuidedLesson(id: Int): Job {
+        evaluationCancelRequested.set(true)
+        return submit {
+            ensureTrainer()
+            val nextCurriculum = CurriculumLevel.fromId(id)
+            require(nextCurriculum.id in 1..10) { "guided_lesson_invalid" }
+            trainer?.pause()
+            val weights = trainer?.candidatePolicyCheckpoint()
+            saveResume()
+            curriculum = nextCurriculum
+            invalidateEvaluation()
+            _state.value = _state.value.copy(
+                requestedRunning = false,
+                running = false,
+                pauseReason = null,
+                error = null,
+                guided = BrainGuidedRuntimeState(
+                    curriculumId = nextCurriculum.id,
+                    sessionBudgetMillis = GUIDED_PRACTICE_BUDGET_MILLIS
+                )
+            )
+            replaceTrainer(weights)
+            evaluationCancelRequested.set(false)
+        }
+    }
+
     fun saveCheckpoint() = submit {
         ensureTrainer()
-        val current = trainer ?: return@submit
+        saveCheckpointNow()
+        saveResume()
+    }
+
+    private suspend fun beginGuidedPractice(resetSession: Boolean) {
+        ensureTrainer()
+        val guidedCurriculum = CurriculumLevel.fromId(_state.value.guided.curriculumId)
+            .takeUnless { it.id == CurriculumLevel.LOCOMOTION_VALIDATION.id }
+            ?: CurriculumLevel.VISIBLE_TARGET
+        if (curriculum != guidedCurriculum) {
+            trainer?.pause()
+            val weights = trainer?.candidatePolicyCheckpoint()
+            saveResume()
+            curriculum = guidedCurriculum
+            invalidateEvaluation()
+            replaceTrainer(weights)
+        }
+        val previous = _state.value.guided
+        val next = previous.copy(
+            phase = BrainGuidedPhase.PRACTICING,
+            curriculumId = guidedCurriculum.id,
+            sessionMillis = if (resetSession) 0L else previous.sessionMillis,
+            evaluationPassed = false,
+            applied = false,
+            candidateArtifactHash = null,
+            referenceArtifactHash = null,
+            referencePolicyId = BASELINE_LIVING_POLICY_ID,
+            referencePolicyVersion = 0,
+            referenceWasAdopted = false,
+            gateFailure = null,
+            candidateCheckpointId = previous.candidateCheckpointId ?: _state.value.candidateCheckpointId
+        )
+        // The clock starts only in the worker immediately before an eligible trainer batch. A
+        // charging, battery, or thermal wait therefore never consumes guided practice time.
+        guidedClockStartedAt = null
+        invalidateEvaluation()
+        _state.value = _state.value.copy(
+            guided = next,
+            requestedRunning = true,
+            running = false,
+            pauseReason = null,
+            error = null
+        )
+        persistUiState()
+    }
+
+    private suspend fun saveCheckpointNow(): BrainRuntimeCheckpoint? {
+        val current = trainer ?: return null
         val saved = repository?.save(
             current,
             current.candidateInferenceArtifact(),
             parentCheckpointId = _state.value.candidateCheckpointId
-        ) ?: return@submit
+        ) ?: return null
         _state.value = _state.value.copy(
             checkpoints = repository?.index().orEmpty(),
-            candidateCheckpointId = saved.id
+            candidateCheckpointId = saved.id,
+            guided = if (_state.value.guided.phase == BrainGuidedPhase.EVALUATING) {
+                _state.value.guided.copy(candidateCheckpointId = saved.id)
+            } else _state.value.guided
         )
-        saveResume()
+        return saved
+    }
+
+    /** Runs only on the serialized trainer owner, including the automatic budget boundary. */
+    private suspend fun finishGuidedNow() {
+        ensureTrainer()
+        val guided = _state.value.guided
+        if (guided.phase != BrainGuidedPhase.PRACTICING && guided.phase != BrainGuidedPhase.PAUSED) return
+        trainer?.pause()
+        commitGuidedClock()
+        val reason = pauseReason()
+        if (reason != null) {
+            _state.value = _state.value.copy(
+                requestedRunning = false,
+                running = false,
+                pauseReason = reason,
+                guided = _state.value.guided.copy(phase = BrainGuidedPhase.PAUSED)
+            )
+            saveResume()
+            return
+        }
+        val checkpoint = saveCheckpointNow()
+        if (checkpoint == null) {
+            _state.value = _state.value.copy(
+                requestedRunning = false,
+                running = false,
+                guided = _state.value.guided.copy(phase = BrainGuidedPhase.PAUSED)
+            )
+            saveResume()
+            return
+        }
+        _state.value = _state.value.copy(
+            requestedRunning = false,
+            running = false,
+            pauseReason = null,
+            guided = _state.value.guided.copy(
+                phase = BrainGuidedPhase.EVALUATING,
+                candidateCheckpointId = checkpoint.id,
+                gateFailure = null
+            )
+        )
+        evaluateNow(checkpoint.id, guidedEvaluation = true)
+    }
+
+    private suspend fun restoreGuidedEvaluationIfValid() {
+        val guided = _state.value.guided
+        if (guided.phase != BrainGuidedPhase.RESULTS) return
+        val checkpointId = guided.candidateCheckpointId
+        if (checkpointId == null) {
+            if (!guided.applied) {
+                _state.value = _state.value.copy(
+                    guided = guided.copy(
+                        phase = BrainGuidedPhase.PAUSED,
+                        evaluationPassed = false,
+                        gateFailure = "guided_evaluation_stale"
+                    )
+                )
+            }
+            return
+        }
+        val checkpoint = repository?.index()?.firstOrNull { it.id == checkpointId }
+        val evaluation = checkpoint?.evaluation
+        val reference = readLivingPolicyReference()
+        val referenceMatches = reference.id == guided.referencePolicyId &&
+            reference.version == guided.referencePolicyVersion &&
+            reference.inferenceArtifact?.let(TrainingRepository::sha256) == guided.referenceArtifactHash
+        if (checkpoint == null || evaluation == null || checkpoint.modelHash != guided.candidateArtifactHash || !referenceMatches) {
+            _state.value = _state.value.copy(
+                guided = guided.copy(
+                    phase = BrainGuidedPhase.PAUSED,
+                    evaluationPassed = false,
+                    gateFailure = "guided_evaluation_stale"
+                )
+            )
+            return
+        }
+        evaluatedArtifactHash = checkpoint.modelHash
+        evaluatedReference = reference
+        val comparison = PolicyComparison(evaluation.current, evaluation.candidate)
+        val gateFailure = guidedAdoptionGateFailure(comparison, !reference.isBaseline)
+        _state.value = _state.value.copy(
+            comparison = comparison,
+            evaluatedCheckpointId = checkpoint.id,
+            guided = guided.copy(
+                evaluationPassed = gateFailure == null,
+                referenceWasAdopted = !reference.isBaseline,
+                gateFailure = gateFailure
+            )
+        )
+    }
+
+    private fun updateGuidedClock() {
+        val started = guidedClockStartedAt ?: return
+        val now = SystemClock.elapsedRealtime()
+        val delta = (now - started).coerceAtLeast(0L)
+        if (delta == 0L) return
+        val guided = _state.value.guided
+        _state.value = _state.value.copy(
+            guided = guided.copy(
+                activeMillis = guided.activeMillis + delta,
+                sessionMillis = (guided.sessionMillis + delta).coerceAtMost(guided.sessionBudgetMillis)
+            )
+        )
+        guidedClockStartedAt = now
+    }
+
+    private fun commitGuidedClock() {
+        if (_state.value.guided.phase == BrainGuidedPhase.PRACTICING) updateGuidedClock()
+        guidedClockStartedAt = null
     }
 
     fun evaluate(checkpointId: String) = submit {
+        evaluateNow(checkpointId, guidedEvaluation = false)
+    }
+
+    private suspend fun evaluateNow(checkpointId: String, guidedEvaluation: Boolean) {
         ensureTrainer()
         val selected = checkpointId.takeIf { it.isNotBlank() && it != "candidate" }
-        val current = trainer ?: return@submit
+        val current = trainer ?: return
+        if (!guidedEvaluation) {
+            // Advanced evaluation pauses any guided session and invalidates an unapplied result.
+            // The holdout may replace the shared comparison, so the guided Apply action must
+            // require a fresh guided checkpoint/reference pair afterward.
+            invalidateEvaluation(
+                guidedFailure = "guided_evaluation_stale",
+                pauseGuidedPractice = true
+            )
+        }
         current.pause()
         val initialPauseReason = pauseReason()
         if (evaluationCancelRequested.get() || initialPauseReason != null) {
             markEvaluationBlocked(initialPauseReason)
-            return@submit
+            return
         }
         // A resume checkpoint may contain an older current policy than the living-world store.
         // Refresh immediately before freezing the holdout comparison so the UI and adoption hash
         // always describe the artifact the living adapter actually uses.
         refreshCurrentComparisonPolicy(current)
+        val referenceAtStart = readLivingPolicyReference()
+        evaluatedReference = referenceAtStart
         // Evaluation is a frozen operation. requestedRunning must also be cleared, otherwise the
         // worker would mutate the candidate as soon as this callback returns.
         evaluatedArtifactHash = null
@@ -351,7 +624,7 @@ class TamaBrainController(
             val finalPauseReason = evaluationPauseReason ?: pauseReason()
             if (evaluationCancelRequested.get() || finalPauseReason != null) {
                 markEvaluationBlocked(finalPauseReason)
-                return@submit
+                return
             }
             val evaluatedArtifact = if (selected == null) current.candidateInferenceArtifact()
             else repository!!.artifactFile(selected).readBytes()
@@ -381,10 +654,25 @@ class TamaBrainController(
                 )
             }
             val currentSnapshot = current.snapshot()
+            val gateFailure = guidedAdoptionGateFailure(comparison, _state.value.hasAdoptedComparisonPolicy)
+            val guidedResult = if (guidedEvaluation) {
+                _state.value.guided.copy(
+                    phase = BrainGuidedPhase.RESULTS,
+                    candidateCheckpointId = checkpointForEvaluation?.id ?: selected ?: _state.value.candidateCheckpointId,
+                    evaluationPassed = gateFailure == null,
+                    candidateArtifactHash = evaluatedArtifactHash,
+                    referenceArtifactHash = referenceAtStart.inferenceArtifact?.let(TrainingRepository::sha256),
+                    referencePolicyId = referenceAtStart.id,
+                    referencePolicyVersion = referenceAtStart.version,
+                    referenceWasAdopted = !referenceAtStart.isBaseline,
+                    gateFailure = gateFailure
+                )
+            } else _state.value.guided
             _state.value = _state.value.copy(
                 comparison = comparison,
                 evaluating = false,
                 snapshot = currentSnapshot,
+                guided = guidedResult,
                 evaluationHistory = (_state.value.evaluationHistory + BrainMetricSample(
                     step = currentSnapshot.metrics.environmentSteps,
                     reward = comparison.candidate.meanReturn.toFloat(),
@@ -415,6 +703,13 @@ class TamaBrainController(
         val artifact = if (checkpointId.isBlank() || checkpointId == "candidate") current.candidateInferenceArtifact()
             else repository!!.artifactFile(checkpointId).readBytes()
         require(evaluatedArtifactHash == TrainingRepository.sha256(artifact)) { "evaluate_candidate_before_adoption" }
+        val comparison = _state.value.comparison ?: error("evaluate_candidate_before_adoption")
+        require(sameLivingReference(evaluatedReference, readLivingPolicyReference())) {
+            "living_reference_changed_since_evaluation"
+        }
+        guidedAdoptionGateFailure(comparison, _state.value.hasAdoptedComparisonPolicy)?.let { failure ->
+            error(failure)
+        }
         val metadata = buildString {
             append("curriculum=${current.config.curriculum.id};episodes=${current.snapshot().metrics.episodes}")
             checkpointId.takeUnless { it.isBlank() || it == "candidate" }?.let {
@@ -425,7 +720,18 @@ class TamaBrainController(
         if (checkpointId.isBlank() || checkpointId == "candidate") current.adoptCandidate()
         refreshCurrentComparisonPolicy(current)
         evaluatedArtifactHash = null
-        _state.value = _state.value.copy(comparison = null, evaluating = false, evaluatedCheckpointId = null)
+        evaluatedReference = null
+        val guided = _state.value.guided
+        _state.value = _state.value.copy(
+            comparison = null,
+            evaluating = false,
+            evaluatedCheckpointId = null,
+            guided = if (guided.candidateCheckpointId == checkpointId ||
+                (checkpointId.isBlank() || checkpointId == "candidate") && guided.candidateCheckpointId == null
+            ) {
+                guided.copy(phase = BrainGuidedPhase.RESULTS, applied = true)
+            } else guided
+        )
         saveResume()
     }
 
@@ -446,8 +752,11 @@ class TamaBrainController(
 
     private suspend fun restoreAdoptedPolicyNow(id: String) {
         restoreAdopted(id)
+        invalidateEvaluation(
+            guidedFailure = "guided_evaluation_stale",
+            pauseGuidedPractice = true
+        )
         trainer?.let { refreshCurrentComparisonPolicy(it) }
-        evaluatedArtifactHash = null
         _state.value = _state.value.copy(
             requestedRunning = false,
             running = false,
@@ -465,6 +774,10 @@ class TamaBrainController(
             ensureTrainer()
             val saved = repository!!.index().firstOrNull { it.id == id }
             if (saved != null) {
+                invalidateEvaluation(
+                    guidedFailure = "guided_evaluation_stale",
+                    pauseGuidedPractice = true
+                )
                 curriculum = CurriculumLevel.fromId(saved.curriculumId)
                 val restoredProfile = runCatching { TrainerProfile.valueOf(saved.profile) }.getOrDefault(TrainerProfile.ECO)
                 _state.value = _state.value.copy(
@@ -481,7 +794,6 @@ class TamaBrainController(
                     candidateCheckpointId = saved.id,
                     error = null
                 )
-                evaluatedArtifactHash = null
                 trainer?.close()
                 trainer = newTrainer()
                 trainer!!.loadReconfigured(repository!!.checkpointFile(id))
@@ -530,6 +842,11 @@ class TamaBrainController(
             adoptedPolicyId = persisted?.adoptedPolicyId,
             adoptedTrainingCheckpointId = persisted?.adoptedTrainingCheckpointId,
             candidateCheckpointId = persisted?.candidateCheckpointId,
+            guided = (persisted?.guided ?: BrainGuidedRuntimeState()).let { guided ->
+                if (guided.phase == BrainGuidedPhase.PRACTICING || guided.phase == BrainGuidedPhase.EVALUATING) {
+                    guided.copy(phase = BrainGuidedPhase.PAUSED)
+                } else guided
+            },
             hasAdoptedComparisonPolicy = false,
             requestedRunning = false,
             running = false,
@@ -667,7 +984,8 @@ class TamaBrainController(
                 evaluationHistory = _state.value.evaluationHistory.takeLast(120),
                 adoptedPolicyId = _state.value.adoptedPolicyId,
                 adoptedTrainingCheckpointId = _state.value.adoptedTrainingCheckpointId,
-                candidateCheckpointId = _state.value.candidateCheckpointId
+                candidateCheckpointId = _state.value.candidateCheckpointId,
+                guided = _state.value.guided
             )
         )
     }
@@ -682,13 +1000,39 @@ class TamaBrainController(
             .putInt("$id.speed", _state.value.speed).apply()
     }
 
-    private fun invalidateEvaluation() {
+    private fun invalidateEvaluation(
+        guidedFailure: String = "guided_candidate_changed",
+        pauseGuidedPractice: Boolean = false
+    ) {
+        if (pauseGuidedPractice && _state.value.guided.phase == BrainGuidedPhase.PRACTICING) {
+            commitGuidedClock()
+        }
         evaluatedArtifactHash = null
-        _state.value = _state.value.copy(comparison = null, evaluating = false, evaluatedCheckpointId = null)
+        evaluatedReference = null
+        val guided = _state.value.guided
+        val invalidatedGuided = if (
+            pauseGuidedPractice && guided.phase == BrainGuidedPhase.PRACTICING ||
+                guided.phase == BrainGuidedPhase.RESULTS && !guided.applied
+        ) {
+            guided.copy(
+                phase = BrainGuidedPhase.PAUSED,
+                evaluationPassed = false,
+                candidateArtifactHash = null,
+                referenceArtifactHash = null,
+                gateFailure = guidedFailure
+            )
+        } else guided
+        _state.value = _state.value.copy(
+            comparison = null,
+            evaluating = false,
+            evaluatedCheckpointId = null,
+            guided = invalidatedGuided
+        )
     }
 
     private fun markEvaluationBlocked(reason: String?) {
         evaluatedArtifactHash = null
+        evaluatedReference = null
         _state.value = _state.value.copy(
             requestedRunning = false,
             running = false,
@@ -696,9 +1040,19 @@ class TamaBrainController(
             comparison = null,
             evaluatedCheckpointId = null,
             pauseReason = reason,
-            error = null
+            error = null,
+            guided = if (_state.value.guided.phase == BrainGuidedPhase.EVALUATING) {
+                _state.value.guided.copy(phase = BrainGuidedPhase.PAUSED, gateFailure = reason)
+            } else _state.value.guided
         )
     }
+
+    private fun sameLivingReference(
+        expected: LivingPolicyReference?,
+        actual: LivingPolicyReference
+    ): Boolean = expected != null && expected.id == actual.id &&
+        expected.version == actual.version && expected.modelHash == actual.modelHash &&
+        expected.isBaseline == actual.isBaseline
 
     private fun submit(block: suspend () -> Unit): Job {
         if (closed.get()) return Job().also { it.cancel() }
@@ -710,8 +1064,20 @@ class TamaBrainController(
         try { block() } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) {
             evaluatedArtifactHash = null
+            evaluatedReference = null
+            val guided = _state.value.guided
+            if (guided.phase == BrainGuidedPhase.PRACTICING) commitGuidedClock()
+            val recoverableGuided = when {
+                guided.phase == BrainGuidedPhase.PRACTICING || guided.phase == BrainGuidedPhase.EVALUATING ->
+                    guided.copy(phase = BrainGuidedPhase.PAUSED, evaluationPassed = false, gateFailure = failure.message)
+                guided.phase == BrainGuidedPhase.RESULTS && !guided.applied ->
+                    guided.copy(phase = BrainGuidedPhase.PAUSED, evaluationPassed = false, gateFailure = failure.message)
+                else -> guided
+            }
             _state.value = _state.value.copy(running = false, requestedRunning = false, evaluating = false,
-                comparison = null, evaluatedCheckpointId = null, error = failure.message ?: "training_failed")
+                comparison = null, evaluatedCheckpointId = null, error = failure.message ?: "training_failed",
+                guided = recoverableGuided)
+            runCatching { saveResume() }
         }
     }
 

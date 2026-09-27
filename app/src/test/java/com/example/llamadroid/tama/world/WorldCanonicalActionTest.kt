@@ -293,7 +293,8 @@ class WorldCanonicalActionTest {
         assertTrue(rolledBack.inventory.none { it.id == FARM_PLANTING_DRONE_ID })
         assertEquals(pet.money, engine.pet.value!!.money)
         val blocked = WorldStateStore(database).load(pet.id)!!
-        assertEquals("farmMaintenance", blocked.actor.pendingCommand!!.arguments["canonicalAction"])
+        val blockedOrder = requireNotNull(blocked.actor.explicitOrder)
+        assertEquals("farmMaintenance", blockedOrder.arguments["canonicalAction"])
 
         coEvery { farm.buyUpgrade(any(), FARM_PLANTING_DRONE_ID, any(), any()) } coAnswers { callOriginal() }
         engine.world.invalidate()

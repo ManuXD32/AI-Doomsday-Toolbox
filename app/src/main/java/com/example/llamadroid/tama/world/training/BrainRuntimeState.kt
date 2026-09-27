@@ -3,6 +3,42 @@ package com.example.llamadroid.tama.world.training
 import com.example.llamadroid.tama.world.core.AutonomyPolicy
 import kotlinx.serialization.Serializable
 
+const val GUIDED_PRACTICE_BUDGET_MILLIS: Long = 5L * 60L * 1000L
+
+@Serializable
+enum class BrainGuidedPhase {
+    IDLE,
+    PRACTICING,
+    PAUSED,
+    EVALUATING,
+    RESULTS
+}
+
+/**
+ * Resumable presentation metadata for the bounded lesson flow. The trainer checkpoint remains
+ * the source of truth for policy and optimizer state; this record only describes the guided
+ * session around that checkpoint.
+ */
+@Serializable
+data class BrainGuidedRuntimeState(
+    val phase: BrainGuidedPhase = BrainGuidedPhase.IDLE,
+    val curriculumId: Int = CurriculumLevel.VISIBLE_TARGET.id,
+    /** Total active practice accumulated across continued lesson sessions. */
+    val activeMillis: Long = 0L,
+    /** Active time in the current bounded session; pauses do not add time. */
+    val sessionMillis: Long = 0L,
+    val sessionBudgetMillis: Long = GUIDED_PRACTICE_BUDGET_MILLIS,
+    val candidateCheckpointId: String? = null,
+    val evaluationPassed: Boolean = false,
+    val applied: Boolean = false,
+    val candidateArtifactHash: String? = null,
+    val referenceArtifactHash: String? = null,
+    val referencePolicyId: String = BASELINE_LIVING_POLICY_ID,
+    val referencePolicyVersion: Int = 0,
+    val referenceWasAdopted: Boolean = false,
+    val gateFailure: String? = null
+)
+
 /** Presentation data only. None of these training records are adventure events. */
 @Serializable
 data class BrainCheckpointEvaluation(
@@ -77,7 +113,8 @@ internal data class BrainRuntimePersistence(
     val evaluationHistory: List<BrainMetricSample> = emptyList(),
     val adoptedPolicyId: String? = null,
     val adoptedTrainingCheckpointId: String? = null,
-    val candidateCheckpointId: String? = null
+    val candidateCheckpointId: String? = null,
+    val guided: BrainGuidedRuntimeState = BrainGuidedRuntimeState()
 )
 
 data class BrainRuntimeState(
@@ -112,5 +149,6 @@ data class BrainRuntimeState(
     val hasAdoptedComparisonPolicy: Boolean = false,
     val history: List<BrainMetricSample> = emptyList(),
     val evaluationHistory: List<BrainMetricSample> = emptyList(),
-    val autonomy: AutonomyPolicy = AutonomyPolicy()
+    val autonomy: AutonomyPolicy = AutonomyPolicy(),
+    val guided: BrainGuidedRuntimeState = BrainGuidedRuntimeState()
 )

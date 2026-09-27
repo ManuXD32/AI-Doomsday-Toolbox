@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_world_order_title">Orden de la mascota</string>
+    <string name="tama_world_order_status_idle">Sin orden activa</string>
+    <string name="tama_world_order_status_executing">En marcha</string>
+    <string name="tama_world_order_status_completed">Completada</string>
+    <string name="tama_world_order_status_holding">Esperando tu siguiente orden</string>
+    <string name="tama_world_order_status_blocked">Bloqueada</string>
+    <string name="tama_world_order_walk_home">Caminar a casa</string>
+    <string name="tama_world_order_target">Objetivo: %1$s</string>
+    <string name="tama_world_order_reason">Motivo: %1$s</string>
+    <string name="tama_world_order_retry">Reintentar</string>
+    <string name="tama_world_order_cancel">Cancelar orden</string>
+    <string name="tama_world_order_resume_autonomy">Reanudar autonomía</string>
+    <string name="tama_world_order_open_autonomy">Abrir controles de autonomía</string>
+    <string name="tama_world_order_dismiss">Descartar</string>
+    <string name="tama_world_order_outcome_title">Resultado real</string>
+    <string name="tama_world_order_outcome_need">%1$s %2$s</string>
+    <string name="tama_world_order_outcome_item">%1$s %2$s</string>
+    <string name="tama_world_order_outcome_money">Monedas %1$s</string>
+    <string name="tama_world_order_reason_invalid_target">Ese objetivo no está disponible.</string>
+    <string name="tama_world_order_reason_unreachable">No se puede llegar al destino desde el mapa conocido.</string>
+    <string name="tama_world_order_reason_frontier">La mascota espera en el borde conocido del mapa.</string>
+    <string name="tama_world_order_reason_action_progress">Otra acción sigue en curso.</string>
+    <string name="tama_world_order_reason_pet_busy">Tu mascota ya está realizando una actividad. Deténla antes de iniciar otra.</string>
+    <string name="tama_world_order_reason_cannot_move">La mascota no puede moverse ahora.</string>
+    <string name="tama_world_order_reason_sleeping">La mascota está durmiendo.</string>
+    <string name="tama_world_order_reason_frozen">La mascota está congelada o aún es un huevo.</string>
+    <string name="tama_world_order_reason_activity_active">Tu mascota ya está realizando una actividad. Deténla antes de iniciar otra.</string>
+    <string name="tama_world_order_reason_counterparty">Ese NPC ya no está disponible.</string>
+    <string name="tama_world_order_reason_capability">Falta un objeto o herramienta necesaria.</string>
+    <string name="tama_world_order_reason_requirements">La orden no cumple los requisitos actuales.</string>
+    <string name="tama_world_order_reason_effect_failed">No se pudo guardar la acción. Reintenta para continuar.</string>
+    <string name="tama_world_order_reason_session_interrupted">La sesión del mundo se interrumpió. Vuelve a entrar y reintenta esta orden.</string>
+    <string name="tama_world_order_reason_autonomy_disabled">La autonomía está desactivada. Actívala en los controles de práctica del cerebro antes de reanudarla.</string>
+</resources>

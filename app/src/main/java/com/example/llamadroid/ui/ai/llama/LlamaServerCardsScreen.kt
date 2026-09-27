@@ -13,6 +13,7 @@ import com.example.llamadroid.R
 import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppPageHeader
 import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.navigation.Screen
 
 /**
  * Dedicated workspace for independently managed llama.cpp server cards.
@@ -33,7 +34,15 @@ fun LlamaServerCardsScreen(navController: NavController) {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            LlamaServerCardsSection()
+            LlamaServerCardsSection(
+                onOpenChat = { chatId, serverId ->
+                    navController.navigate(Screen.LlamaChat.createRoute(chatId, serverId))
+                },
+                onManageModels = {
+                    navController.navigate(Screen.LLMModels.route)
+                },
+                onOpenSettings = { navController.navigate("settings_llm") }
+            )
         }
     }
 }

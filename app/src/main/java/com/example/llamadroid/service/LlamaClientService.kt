@@ -628,10 +628,27 @@ class LlamaClientService : Service() {
 
         job = serviceScope.launch {
             var assistantMsgId: Long = -1L
+            var managedUsage: LlamaServerUsageLease? = null
             val progress = StreamingProgress()
             try {
-                val server = resolveServerForGeneration(serverId)
+                var server = resolveServerForGeneration(serverId)
                     ?: throw Exception("Server with ID $serverId not found")
+                var managedContext: Int? = null
+                server.managedServerCardId?.let { cardId ->
+                    managedUsage = withContext(Dispatchers.IO) {
+                        LlamaServerUsageLease(applicationContext,
+                            com.example.llamadroid.data.model.LlamaServerCardEntity.sessionIdForCard(cardId), serviceScope)
+                    }
+                    val ready = ManagedLlamaServerCoordinator(applicationContext, database).prepare(cardId) {
+                        updateLocalLlamaServerStartupStatus(chatId, it)
+                    }
+                    val profile = requireNotNull(ready.profile)
+                    server = server.copy(host = managedLlamaConnectHost(profile.host), port = profile.serverPort,
+                        modelName = profile.modelPath.substringAfterLast('/'),
+                        localLaunchProfileJson = LlamaServerLaunchProfile.encodeForPersistence(profile),
+                        supportsVision = profile.visionEnabled, supportsVideo = profile.videoEnabled)
+                    managedContext = ready.contextTokens
+                }
                 if (server.isLiteRtEngine()) {
                     DebugLog.log("LlamaClientService: Using local LiteRT engine for Chat ID $chatId")
                 } else {
@@ -641,7 +658,14 @@ class LlamaClientService : Service() {
                     DebugLog.log("LlamaClientService: handling call-mode turn for Chat ID $chatId")
                 }
 
-                val chat = repository.getChat(chatId) ?: throw Exception("Chat with ID $chatId not found")
+                var chat = repository.getChat(chatId) ?: throw Exception("Chat with ID $chatId not found")
+                managedContext?.let { limit ->
+                    // The linked server owns the maximum; retain a user's smaller conversation budget.
+                    if (chat.contextSize > limit) {
+                        repository.updateChatContextSize(chatId, limit)
+                        chat = chat.copy(contextSize = limit)
+                    }
+                }
                 // A retry/continuation may not carry a new attachment intent, but replayed
                 // history still needs MTMD enabled before the local server is started.
                 val historyVideoPath = videoPath
@@ -822,6 +846,7 @@ class LlamaClientService : Service() {
                     Companion.updateState(GenerationState.Error(e.message ?: "Unknown error", chatId))
                 }
             } finally {
+                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { managedUsage?.close() }
                 releasePowerLocks()
                 notificationTaskId?.let { taskId ->
                     UnifiedNotificationManager.dismissTask(taskId)
@@ -840,6 +865,8 @@ class LlamaClientService : Service() {
         imagePath: String?,
         videoPath: String?
     ) {
+        // Linked cards have already been prepared through the shared keyed-session owner above.
+        if (server.managedServerCardId != null) return
         if (!server.isLlamaServerEngine() || !isNativeChatLoopbackHost(server.host)) return
         val baseUrl = server.baseUrl()
         if (llamaServerChatService.checkConnection(baseUrl)) return

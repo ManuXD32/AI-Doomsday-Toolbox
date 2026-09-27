@@ -79,11 +79,28 @@
     <string name="harness_open_model_manager">Edit Harness models</string>
     <string name="harness_model_editor_title">Harness model settings</string>
     <string name="harness_model_editor_description">Edit each provider model without changing its exact wire ID. Blank capacity fields remove an override.</string>
+    <string name="harness_model_editor_provider">Provider</string>
+    <string name="harness_model_editor_provider_description">Choose a provider first; only its model limits are shown below.</string>
+    <string name="harness_model_editor_provider_empty">This provider has no editable model rows yet.</string>
+    <string name="harness_manage_local_servers">Manage local servers</string>
+    <string name="harness_model_preparing">Preparing the selected model…</string>
+    <string name="harness_retry_model_selection">Retry model selection</string>
+    <string name="harness_model_editor_local_unavailable">This local model is unavailable. Open Manage local servers to repair its preset or model.</string>
+    <string name="harness_model_editor_local_running">Local server is ready.</string>
+    <string name="harness_model_editor_local_starting">Local server is starting.</string>
+    <string name="harness_model_editor_local_loading">Local server is loading the model.</string>
+    <string name="harness_model_editor_local_stopped">Local server is stopped. Select the model to start it.</string>
+    <string name="harness_model_editor_local_status_unknown">Local server status needs attention. Open Manage local servers.</string>
     <string name="harness_model_editor_empty">No provider model rows are available yet. Discover or add models in Providers first.</string>
     <string name="harness_model_editor_wire_id">Wire ID: %1$s</string>
     <string name="harness_model_editor_context">Context window</string>
     <string name="harness_model_editor_output">Max output</string>
     <string name="harness_model_editor_unknown">Unknown; set an override before selecting this model.</string>
+    <string name="harness_model_editor_runtime_context">Context is inherited from server settings and resolved when the local server starts.</string>
+    <plurals name="harness_model_editor_inherited_context">
+        <item quantity="one">Context inherited from server settings: %1$d token</item>
+        <item quantity="other">Context inherited from server settings: %1$d tokens</item>
+    </plurals>
     <string name="harness_model_editor_save">Save model limits</string>
     <string name="harness_model_editor_close">Close model settings</string>
     <string name="harness_open_settings_document">Open settings document</string>
@@ -352,6 +369,7 @@
     <string name="harness_notice_plugin_invalid_result">Harness returned an invalid plugin installation result.</string>
     <string name="harness_notice_plugin_install_cancelled">The plugin installation was cancelled.</string>
     <string name="harness_notice_model_catalog_invalid">Harness returned an invalid model catalog.</string>
+    <string name="harness_notice_model_prepare_failed">The selected local model could not be prepared. Check its server and retry.</string>
     <string name="harness_notice_model_reasoning_invalid">That reasoning effort is not available for this model.</string>
     <string name="harness_notice_model_context_unknown">Set a context window for this model before selecting it.</string>
     <string name="harness_model_context_unknown_count" tools:ignore="PluralsCandidate">%1$d model(s) need a context window override before selection.</string>

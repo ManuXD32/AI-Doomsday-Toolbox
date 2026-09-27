@@ -10,6 +10,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -28,6 +30,15 @@ class LlamaServerSessionService : Service() {
     override fun onCreate() {
         super.onCreate()
         runtime = LlamaServerSessionRuntime(applicationContext)
+        scope.launch {
+            while (isActive) {
+                delay(15_000)
+                commandMutex.withLock {
+                    runCatching { runtime.stopIdleSessions() }
+                    recycleWhenIdle(latestStartId)
+                }
+            }
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -54,7 +65,7 @@ class LlamaServerSessionService : Service() {
                         ?.getIntExtra(EXTRA_PORT, profile.serverPort)
                     scope.launch {
                         commandMutex.withLock {
-                            runtime.start(sessionId, profile, portOverride)
+                            runtime.start(sessionId, profile, portOverride, intent.getBooleanExtra(EXTRA_ENSURE_RUNNING, false))
                                 .onFailure { DebugLog.log("LlamaServerSessionService[$sessionId]: ${it.message}") }
                             recycleWhenIdle(startId)
                         }
@@ -141,6 +152,7 @@ class LlamaServerSessionService : Service() {
         const val EXTRA_SESSION_ID = "LLAMA_SESSION_ID"
         const val EXTRA_PROFILE_JSON = "LLAMA_SESSION_PROFILE_JSON"
         const val EXTRA_PORT = "LLAMA_SESSION_PORT"
+        const val EXTRA_ENSURE_RUNNING = "LLAMA_SESSION_ENSURE_RUNNING"
         const val EXTRA_LEASE_TOKEN = LlamaOcrExclusiveLeaseStore.TOKEN_EXTRA
     }
 }

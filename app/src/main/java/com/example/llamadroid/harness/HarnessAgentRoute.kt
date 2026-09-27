@@ -341,6 +341,11 @@ fun HarnessAgentRoute(navController: NavController, initialConversationId: Long?
                 },
                 openLegacyHistory = { withContext(Dispatchers.Main) { showLegacy = true } }
             ),
+            prepareLocalModel = { wireId ->
+                withContext(Dispatchers.IO) {
+                    Json.parseToJsonElement(runtime.models.prepare(wireId).toString()).jsonObject
+                }
+            },
             localModelCatalog = {
                 runCatching {
                     runtime.localModelCapabilities.apply(
@@ -361,7 +366,8 @@ fun HarnessAgentRoute(navController: NavController, initialConversationId: Long?
                 openOriginalWebUi = { withContext(Dispatchers.Main) { showOriginal = true } },
                 // `models` is a legacy alias and is not registered in the
                 // current graph. Route directly to the canonical Model Hub.
-                openModelManager = { withContext(Dispatchers.Main) { navController.navigate(Screen.ModelHub.route) } }
+                openModelManager = { withContext(Dispatchers.Main) { navController.navigate(Screen.ModelHub.route) } },
+                openManagedLocalServers = { withContext(Dispatchers.Main) { navController.navigate(Screen.LlamaServers.route) } }
             ),
             providerAuth = nativeHarnessProviderAuthHooks({ runtime.client }, context),
             handleExternalAction = { action ->

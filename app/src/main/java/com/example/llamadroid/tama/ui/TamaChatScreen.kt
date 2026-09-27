@@ -136,7 +136,8 @@ fun TamaChatScreen(
     // Auto-scroll to bottom
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
+            // The scrollable gameplay guidance occupies the first list item.
+            listState.animateScrollToItem(messages.size)
         }
     }
 
@@ -371,6 +372,14 @@ fun TamaChatScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp)
         ) {
+            item(key = "gameplay_controls_guidance") {
+                Text(
+                    text = stringResource(R.string.tama_chat_gameplay_limits),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TamaMutedText,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
+                )
+            }
             items(messages, key = { it.id ?: UUID.randomUUID().toString() }) { message ->
                 TamaChatBubble(message) {
                     agentService.deleteMessage(message.id!!)

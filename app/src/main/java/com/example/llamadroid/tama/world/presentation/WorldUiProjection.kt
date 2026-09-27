@@ -1,5 +1,6 @@
 package com.example.llamadroid.tama.world.presentation
 
+import com.example.llamadroid.R
 import com.example.llamadroid.tama.data.FarmTile
 import com.example.llamadroid.tama.data.TileStatus
 import com.example.llamadroid.tama.world.core.ActionId
@@ -12,11 +13,16 @@ import com.example.llamadroid.tama.world.core.NpcRole
 import com.example.llamadroid.tama.world.core.PresenceMode
 import com.example.llamadroid.tama.world.core.StructureType
 import com.example.llamadroid.tama.world.core.TileKind
+import com.example.llamadroid.tama.world.core.WorldControlMode
 import com.example.llamadroid.tama.world.core.WorldCommand
 import com.example.llamadroid.tama.world.core.WorldCoordinate
 import com.example.llamadroid.tama.world.core.WorldGenerator
 import com.example.llamadroid.tama.world.core.WorldObject
 import com.example.llamadroid.tama.world.core.WorldObjectType
+import com.example.llamadroid.tama.world.core.WorldOrderBlocker
+import com.example.llamadroid.tama.world.core.WorldOrderKind
+import com.example.llamadroid.tama.world.core.WorldOrder
+import com.example.llamadroid.tama.world.core.WorldOrderStatus
 import com.example.llamadroid.tama.world.core.WorldState
 import com.example.llamadroid.tama.world.persistence.WorldBuildingLayouts
 import com.example.llamadroid.tama.world.ui.DEFAULT_WORLD_ASSET_MANIFEST_PATH
@@ -38,6 +44,10 @@ import com.example.llamadroid.tama.world.ui.WorldInspectorUi
 import com.example.llamadroid.tama.world.ui.WorldMiniMapMarkerUi
 import com.example.llamadroid.tama.world.ui.WorldMiniMapTileUi
 import com.example.llamadroid.tama.world.ui.WorldMiniMapUi
+import com.example.llamadroid.tama.world.ui.WorldCommandFeedbackUi
+import com.example.llamadroid.tama.world.ui.WorldOrderOutcomeUi
+import com.example.llamadroid.tama.world.ui.WorldOrderPhase
+import com.example.llamadroid.tama.world.ui.WorldOrderUi
 import com.example.llamadroid.tama.world.ui.WorldPetCommand
 import com.example.llamadroid.tama.world.ui.WorldPetStatusUi
 import com.example.llamadroid.tama.world.ui.WorldPointUi
@@ -84,9 +94,11 @@ data class WorldUiLabels(
     val roleName: (NpcRole) -> String = ::humanize,
     val structureName: (StructureType) -> String = ::humanize,
     val objectName: (WorldObjectType) -> String = ::humanize,
+    val itemName: (String) -> String = ::humanize,
     val needName: (NeedType) -> String = ::humanize,
     val presenceName: (PresenceMode) -> String = ::humanize,
     val stateName: (String) -> String = { value -> humanize(value) },
+    val orderBlockerName: (WorldOrderBlocker) -> String = { blocker -> humanize(blocker.name) },
     val inspectorFieldName: (String) -> String = { value -> humanize(value) },
     val timeName: (Long) -> String = { timestamp ->
         formatWorldTime(
@@ -112,6 +124,11 @@ fun projectWorldState(
     relationshipByNpc: Map<String, WorldRelationshipUi> = emptyMap(),
     inspectorTarget: WorldInspectTarget? = null,
     activeCommand: WorldPetCommandKind? = null,
+    /** Last deliberate order retained by the route host for Retry and status copy. */
+    lastOrderKind: WorldPetCommandKind? = null,
+    retryAvailable: Boolean = false,
+    orderOutcome: WorldOrderOutcomeUi? = null,
+    commandFeedback: WorldCommandFeedbackUi? = null,
     assetReadiness: WorldAssetReadinessUi = WorldAssetReadinessUi(
         manifestPath = DEFAULT_WORLD_ASSET_MANIFEST_PATH,
         schemaVersion = null,
@@ -186,7 +203,9 @@ fun projectWorldState(
                 structure = structure != null,
                 npc = npc,
                 hazard = false,
-                goalMarker = state.actor.destination?.let { destination -> destination.x == x && destination.y == y } == true,
+                goalMarker = orderTargetCoordinate(state)?.let { destination ->
+                    destination.x == x && destination.y == y
+                } == true,
                 farmTile = farmTile
             )
         }
@@ -226,6 +245,13 @@ fun projectWorldState(
     val inspector = inspectorTarget?.let {
         projectInspector(state, map, it, labels, petSpeciesId, petStage, relationshipByNpc, farmTilesByCoordinate)
     }
+    val order = projectWorldOrder(
+        state = state,
+        labels = labels,
+        lastOrderKind = lastOrderKind,
+        retryAvailable = retryAvailable,
+        outcome = orderOutcome
+    )
     return WorldUiState(
         worldSeed = state.seed,
         generatorVersion = state.generatorVersion,
@@ -242,8 +268,130 @@ fun projectWorldState(
         activeCommand = activeCommand,
         assetReadiness = assetReadiness,
         isLoading = false,
+        order = order,
+        commandFeedback = commandFeedback,
         farmTiles = allFarmTiles
     )
+}
+
+private fun projectWorldOrder(
+    state: WorldState,
+    labels: WorldUiLabels,
+    lastOrderKind: WorldPetCommandKind?,
+    retryAvailable: Boolean,
+    outcome: WorldOrderOutcomeUi?
+): WorldOrderUi {
+    val actor = state.actor
+    val explicitOrder = actor.explicitOrder
+    val explicitStructureId = explicitOrder?.structureId
+        ?: explicitOrder?.takeIf { it.kind == WorldOrderKind.RETURN_HOME }
+            ?.let { state.structures.firstOrNull { structure -> structure.type == StructureType.HOME }?.id }
+    val targetId = explicitOrder?.targetId
+        ?: explicitStructureId
+        ?: actor.pendingCommand?.targetId
+        ?: actor.actionTargetId
+        ?: actor.followTargetId
+    val targetNpc = targetId?.let { id -> state.npcs.firstOrNull { it.id == id } }
+    val targetStructure = targetId?.let { id -> state.structures.firstOrNull { it.id == id } }
+    val targetPoint = orderTargetCoordinate(state)?.let { WorldPointUi(it.x.toFloat(), it.y.toFloat()) }
+    val phase = when (actor.orderStatus) {
+        WorldOrderStatus.QUEUED, WorldOrderStatus.RUNNING -> WorldOrderPhase.EXECUTING
+        WorldOrderStatus.COMPLETED -> WorldOrderPhase.COMPLETED
+        WorldOrderStatus.BLOCKED -> WorldOrderPhase.BLOCKED
+        WorldOrderStatus.CANCELLED -> WorldOrderPhase.HOLDING
+        // NONE is autonomous ownership. Its internal ActionState must not
+        // appear as a player order in the map card.
+        WorldOrderStatus.NONE -> WorldOrderPhase.IDLE
+    }
+    // Armed targeting is shown by the target banner. Keep the card anchored to
+    // the persisted order so a rejected new selection cannot relabel it.
+    val command = explicitOrder?.kind.toUiCommandKind()
+        ?: lastOrderKind
+        ?: actorCommandKind(actor).takeIf { actor.orderStatus != WorldOrderStatus.NONE }
+    val commandLabel = explicitOrder?.let { orderCommandLabel(it, labels) }
+    val targetLabel = targetNpc?.name
+        ?: targetStructure?.let { labels.structureName(it.type) }
+        ?: targetPoint?.let { "${it.x.toInt()}, ${it.y.toInt()}" }
+    val reason = when (phase) {
+        WorldOrderPhase.BLOCKED -> actor.orderBlocker
+            .takeUnless { it == WorldOrderBlocker.NONE }
+            ?.let(labels.orderBlockerName)
+            ?: labels.stateName(actor.goal.name)
+        WorldOrderPhase.HOLDING -> labels.stateName("waiting_for_order")
+        else -> null
+    }
+    val canonicalOutcome = explicitOrder?.outcome?.let { outcomeValue ->
+        WorldOrderOutcomeUi(
+            needDeltas = outcomeValue.needDeltas.mapKeys { (need, _) -> labels.needName(need) },
+            moneyDelta = outcomeValue.moneyDelta,
+            inventoryDeltas = outcomeValue.inventoryDeltas.mapKeys { (itemId, _) -> labels.itemName(itemId) }
+        )
+    }
+    return WorldOrderUi(
+        phase = phase,
+        command = command,
+        commandLabel = commandLabel,
+        targetId = targetId,
+        targetLabel = targetLabel,
+        target = targetPoint,
+        reason = reason,
+        canRetry = (retryAvailable || explicitOrder != null) && phase == WorldOrderPhase.BLOCKED,
+        // A canonical activity may deliberately hold control while its order
+        // remains RUNNING; Stop must still be available in that state.
+        canCancel = phase == WorldOrderPhase.EXECUTING || phase == WorldOrderPhase.BLOCKED,
+        canResumeAutonomy = actor.orderStatus !in setOf(
+            WorldOrderStatus.QUEUED,
+            WorldOrderStatus.RUNNING
+        ) && (actor.controlMode == WorldControlMode.HOLDING ||
+            phase == WorldOrderPhase.HOLDING || phase == WorldOrderPhase.COMPLETED),
+        outcome = outcome ?: canonicalOutcome
+    )
+}
+
+private fun orderTargetCoordinate(state: WorldState): WorldCoordinate? {
+    val actor = state.actor
+    val explicit = actor.explicitOrder
+    val explicitTarget = explicit?.targetId?.let { id -> state.npcs.firstOrNull { it.id == id }?.coordinate }
+    val explicitStructureTarget = (explicit?.structureId
+        ?: explicit?.takeIf { it.kind == WorldOrderKind.RETURN_HOME }
+            ?.let { state.structures.firstOrNull { structure -> structure.type == StructureType.HOME }?.id })
+        ?.let { id -> state.structures.firstOrNull { it.id == id }?.entrance }
+    val explicitCoordinate = explicit?.x?.let { x -> explicit.y?.let { y -> WorldCoordinate(x, y) } }
+    return explicitTarget
+        ?: explicitStructureTarget
+        ?: explicitCoordinate
+        ?: explicit?.targetX?.let { x -> explicit.targetY?.let { y -> WorldCoordinate(x, y) } }
+        ?: actor.destination
+        ?: actor.actionTargetX?.let { x -> actor.actionTargetY?.let { y -> WorldCoordinate(x, y) } }
+        ?: actor.pendingCommand?.let { pending ->
+            pending.targetX?.let { x -> pending.targetY?.let { y -> WorldCoordinate(x, y) } }
+        }
+        ?: actor.followTargetId?.let { id -> state.npcs.firstOrNull { it.id == id }?.coordinate }
+}
+
+private fun WorldOrderKind?.toUiCommandKind(): WorldPetCommandKind? = when (this) {
+    WorldOrderKind.GO_TO -> WorldPetCommandKind.GO_HERE
+    WorldOrderKind.GO_TO_STRUCTURE -> WorldPetCommandKind.EXPLORE
+    WorldOrderKind.RETURN_HOME -> WorldPetCommandKind.WALK_HOME
+    WorldOrderKind.VISIT_NPC -> WorldPetCommandKind.VISIT_NPC
+    WorldOrderKind.ENTER_STRUCTURE, WorldOrderKind.LEAVE_STRUCTURE,
+    WorldOrderKind.INTERACT, WorldOrderKind.PERFORM_ACTION, null -> null
+}
+
+private fun actorCommandKind(actor: com.example.llamadroid.tama.world.core.WorldActor): WorldPetCommandKind? = when {
+    actor.goal == GoalId.RETURN_HOME -> WorldPetCommandKind.WALK_HOME
+    actor.goal == GoalId.EXPLORE -> WorldPetCommandKind.EXPLORE
+    else -> null
+}
+
+private fun orderCommandLabel(order: WorldOrder, labels: WorldUiLabels): String? = when (order.kind) {
+    WorldOrderKind.GO_TO -> labels.actionName(if (order.run) ActionId.RUN else ActionId.WALK)
+    WorldOrderKind.GO_TO_STRUCTURE -> labels.actionName(ActionId.WALK)
+    WorldOrderKind.RETURN_HOME -> null
+    WorldOrderKind.ENTER_STRUCTURE -> labels.actionName(ActionId.ENTER_STRUCTURE)
+    WorldOrderKind.LEAVE_STRUCTURE -> labels.actionName(ActionId.EXIT_STRUCTURE)
+    WorldOrderKind.INTERACT, WorldOrderKind.PERFORM_ACTION -> order.action?.let(labels.actionName)
+    WorldOrderKind.VISIT_NPC -> null
 }
 
 /**
@@ -330,6 +478,8 @@ fun WorldUiCommand.toCoreCommand(
     inspector: WorldInspectorUi? = null
 ): WorldCommand? = when (this) {
     is WorldUiCommand.IssuePetCommand -> command.toCoreCommand(state)
+    WorldUiCommand.RetryLastOrder -> WorldCommand.Retry
+    WorldUiCommand.ResumeAutonomy -> WorldCommand.ResumeAutonomy
     is WorldUiCommand.InspectorAction -> inspector
         ?.takeIf { it.targetId == targetId }
         ?.let { inspectorCommand(it, actionId) }
@@ -345,7 +495,7 @@ private fun WorldPetCommand.toCoreCommand(state: WorldState): WorldCommand? = wh
     is WorldPetCommand.GoHere -> WorldCommand.GoTo(x, y)
     is WorldPetCommand.Explore -> WorldCommand.GoTo(x, y)
     is WorldPetCommand.VisitNpc -> state.npcs.firstOrNull { it.id == actorId }?.let {
-        WorldCommand.GoTo(it.x, it.y)
+        WorldCommand.VisitNpc(targetId = it.id)
     }
     WorldPetCommand.Rest -> WorldCommand.PerformAction(ActionId.REST)
     WorldPetCommand.Stop -> WorldCommand.Stop
@@ -604,7 +754,7 @@ private fun projectInspector(
                 water = tile.kind.isWater(),
                 crop = farmTile?.hasCrop == true,
                 structure = state.structures.any { it.contains(WorldCoordinate(target.x, target.y)) },
-                goalMarker = state.actor.destination?.let { it.x == target.x && it.y == target.y } == true,
+                goalMarker = orderTargetCoordinate(state)?.let { it.x == target.x && it.y == target.y } == true,
                 farmTile = farmTile
             )
             WorldInspectorUi.Tile(
@@ -751,6 +901,25 @@ private fun structureIsKnown(state: WorldState, structure: com.example.llamadroi
 private fun goalReason(state: WorldState, labels: WorldUiLabels): String {
     val lowest = lowestNeed(state.actor.needs)
     return "${labels.needName(lowest)} ${state.actor.needs.valueOf(lowest).percent()}%"
+}
+
+/** Resource mapping for route-host rejection and durable blocker copy. */
+fun worldOrderBlockerLabelRes(blocker: WorldOrderBlocker): Int = when (blocker) {
+    WorldOrderBlocker.NONE -> R.string.tama_world_order_status_idle
+    WorldOrderBlocker.INVALID_TARGET -> R.string.tama_world_order_reason_invalid_target
+    WorldOrderBlocker.DESTINATION_UNREACHABLE -> R.string.tama_world_order_reason_unreachable
+    WorldOrderBlocker.KNOWN_FRONTIER -> R.string.tama_world_order_reason_frontier
+    WorldOrderBlocker.ACTION_IN_PROGRESS -> R.string.tama_world_order_reason_action_progress
+    WorldOrderBlocker.PET_BUSY -> R.string.tama_world_order_reason_pet_busy
+    WorldOrderBlocker.PET_CANNOT_MOVE -> R.string.tama_world_order_reason_cannot_move
+    WorldOrderBlocker.SLEEPING -> R.string.tama_world_order_reason_sleeping
+    WorldOrderBlocker.FROZEN -> R.string.tama_world_order_reason_frozen
+    WorldOrderBlocker.CANONICAL_ACTIVITY_ACTIVE -> R.string.tama_world_order_reason_activity_active
+    WorldOrderBlocker.COUNTERPARTY_MISSING -> R.string.tama_world_order_reason_counterparty
+    WorldOrderBlocker.CAPABILITY_MISSING -> R.string.tama_world_order_reason_capability
+    WorldOrderBlocker.REQUIREMENTS -> R.string.tama_world_order_reason_requirements
+    WorldOrderBlocker.EFFECT_FAILED -> R.string.tama_world_order_reason_effect_failed
+    WorldOrderBlocker.SESSION_INTERRUPTED -> R.string.tama_world_order_reason_session_interrupted
 }
 
 private fun nextNeed(state: WorldState, labels: WorldUiLabels): String =

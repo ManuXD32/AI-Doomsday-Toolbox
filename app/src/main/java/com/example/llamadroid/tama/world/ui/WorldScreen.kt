@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -84,6 +85,7 @@ import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import java.util.Locale
 
 private const val WORLD_TILE_LOGICAL_SIZE = 32f
 private const val WORLD_CANVAS_MARGIN_TILES = 2
@@ -191,6 +193,10 @@ fun WorldScreen(
                 .verticalScroll(rememberScrollState())
         ) {
             WorldHud(state.hud, callbacks, homeActionLabelRes)
+            WorldOrderCard(state.order, callbacks)
+            state.commandFeedback?.let { feedback ->
+                WorldCommandFeedbackCard(feedback, callbacks)
+            }
 
             Box(
                 modifier = Modifier
@@ -237,7 +243,7 @@ fun WorldScreen(
                 WorldCommandTargetBanner(state.activeCommand, callbacks)
             }
             WorldAssetReadinessBanner(readiness)
-            WorldShortcutRow(state, callbacks, exitShortcutLabelRes)
+            WorldShortcutRow(state, callbacks, exitShortcutLabelRes, homeActionLabelRes)
             WorldCommandRow(state, callbacks)
             WorldPetStatusBar(state.hud.petStatus)
         }
@@ -333,6 +339,246 @@ private fun WorldHud(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+            }
+        }
+    }
+}
+
+const val WORLD_ORDER_CARD_TEST_TAG = "tama_world_order_card"
+const val WORLD_ORDER_FEEDBACK_TEST_TAG = "tama_world_order_feedback"
+
+@Composable
+private fun WorldOrderCard(
+    order: WorldOrderUi,
+    callbacks: WorldUiCallbacks
+) {
+    if (order.phase == WorldOrderPhase.IDLE && order.command == null &&
+        order.commandLabel == null && order.outcome == null
+    ) return
+    val phaseColor = when (order.phase) {
+        WorldOrderPhase.BLOCKED -> MaterialTheme.colorScheme.errorContainer
+        WorldOrderPhase.HOLDING -> MaterialTheme.colorScheme.tertiaryContainer
+        else -> MaterialTheme.colorScheme.primaryContainer
+    }
+    val phaseContentColor = when (order.phase) {
+        WorldOrderPhase.BLOCKED -> MaterialTheme.colorScheme.onErrorContainer
+        WorldOrderPhase.HOLDING -> MaterialTheme.colorScheme.onTertiaryContainer
+        else -> MaterialTheme.colorScheme.onPrimaryContainer
+    }
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 5.dp)
+            .testTag(WORLD_ORDER_CARD_TEST_TAG),
+        shape = RoundedCornerShape(14.dp),
+        color = phaseColor,
+        contentColor = phaseContentColor
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.tama_world_order_title),
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = stringResource(order.phase.labelRes),
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                val commandLabel = order.commandLabel ?: order.command?.let { command ->
+                    stringResource(command.labelRes)
+                }
+                commandLabel?.takeIf { it.isNotBlank() }?.let { label ->
+                    Text(
+                        text = label,
+                        modifier = Modifier.widthIn(max = 136.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            order.targetLabel?.takeIf { it.isNotBlank() }?.let { label ->
+                Text(
+                    text = stringResource(R.string.tama_world_order_target, label),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            order.reason?.takeIf { it.isNotBlank() }?.let { reason ->
+                Text(
+                    text = stringResource(R.string.tama_world_order_reason, reason),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            order.outcome?.let { outcome ->
+                WorldOrderOutcome(outcome)
+            }
+            if (order.canRetry || order.canCancel || order.canResumeAutonomy) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (order.canRetry) {
+                        OutlinedButton(
+                            onClick = { callbacks.onCommand(WorldUiCommand.RetryLastOrder) },
+                            modifier = Modifier.heightIn(min = 48.dp)
+                        ) {
+                            Icon(Icons.Default.Refresh, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.tama_world_order_retry), maxLines = 2)
+                        }
+                    }
+                    if (order.canCancel) {
+                        OutlinedButton(
+                            onClick = {
+                                callbacks.onCommand(
+                                    WorldUiCommand.IssuePetCommand(WorldPetCommand.Stop)
+                                )
+                            },
+                            modifier = Modifier.heightIn(min = 48.dp)
+                        ) {
+                            Icon(Icons.Default.Close, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.tama_world_order_cancel), maxLines = 2)
+                        }
+                    }
+                    if (order.canResumeAutonomy) {
+                        OutlinedButton(
+                            onClick = { callbacks.onCommand(WorldUiCommand.ResumeAutonomy) },
+                            modifier = Modifier.heightIn(min = 48.dp)
+                        ) {
+                            Icon(Icons.Default.Refresh, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.tama_world_order_resume_autonomy), maxLines = 2)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorldOrderOutcome(outcome: WorldOrderOutcomeUi) {
+    val hasValues = outcome.needDeltas.isNotEmpty() ||
+        outcome.inventoryDeltas.isNotEmpty() ||
+        outcome.moneyDelta != 0L
+    if (!hasValues) return
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            text = stringResource(R.string.tama_world_order_outcome_title),
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        outcome.needDeltas.entries.take(4).forEach { (need, delta) ->
+            Text(
+                text = stringResource(R.string.tama_world_order_outcome_need, need, signedNumber(delta)),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        outcome.inventoryDeltas.entries.take(4).forEach { (item, delta) ->
+            Text(
+                text = stringResource(R.string.tama_world_order_outcome_item, item, signedNumber(delta)),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (outcome.moneyDelta != 0L) {
+            Text(
+                text = stringResource(R.string.tama_world_order_outcome_money, signedNumber(outcome.moneyDelta)),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+private fun signedNumber(value: Float): String = when {
+    value > 0f -> "+${value.cleanNumber()}"
+    else -> value.cleanNumber()
+}
+
+private fun signedNumber(value: Int): String = signedNumber(value.toLong())
+
+private fun signedNumber(value: Long): String = if (value > 0L) {
+    "+$value"
+} else {
+    value.toString()
+}
+
+private fun Float.cleanNumber(): String = if (this % 1f == 0f) {
+    toInt().toString()
+} else {
+    String.format(Locale.ROOT, "%.1f", this)
+}
+
+@Composable
+private fun WorldCommandFeedbackCard(
+    feedback: WorldCommandFeedbackUi,
+    callbacks: WorldUiCallbacks
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .testTag(WORLD_ORDER_FEEDBACK_TEST_TAG),
+        shape = RoundedCornerShape(12.dp),
+        color = if (feedback.isError) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = if (feedback.isError) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = feedback.message,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                feedback.action?.let { action ->
+                    if (action == WorldCommandFeedbackAction.OPEN_AUTONOMY_CONTROLS) {
+                        TextButton(onClick = { callbacks.onCommand(WorldUiCommand.OpenBrainTraining) }) {
+                            Text(stringResource(R.string.tama_world_order_open_autonomy), maxLines = 2)
+                        }
+                    }
+                }
+                TextButton(onClick = { callbacks.onCommand(WorldUiCommand.DismissCommandFeedback) }) {
+                    Text(stringResource(R.string.tama_world_order_dismiss))
+                }
             }
         }
     }
@@ -1110,7 +1356,8 @@ private fun WorldAssetReadinessBanner(readiness: WorldAssetReadinessUi) {
 private fun WorldShortcutRow(
     state: WorldUiState,
     callbacks: WorldUiCallbacks,
-    exitShortcutLabelRes: Int?
+    exitShortcutLabelRes: Int?,
+    homeActionLabelRes: Int
 ) {
     Row(
         modifier = Modifier
@@ -1133,7 +1380,7 @@ private fun WorldShortcutRow(
         }
         AssistChip(
             onClick = { callbacks.onCommand(WorldUiCommand.OpenHome) },
-            label = { Text(stringResource(R.string.tama_world_shortcut_home), maxLines = 1) },
+            label = { Text(stringResource(homeActionLabelRes), maxLines = 2, overflow = TextOverflow.Ellipsis) },
             leadingIcon = { Icon(Icons.Default.Home, null, Modifier.size(18.dp)) }
         )
         AssistChip(
@@ -1197,13 +1444,24 @@ private fun WorldCommandRow(
     ) {
         val selectedNpc = state.inspector as? WorldInspectorUi.Npc
         if (selectedNpc != null) {
-            WorldCommandButton(WorldPetCommandKind.VISIT_NPC, Icons.Default.CenterFocusStrong) {
-                callbacks.onCommand(
-                    WorldUiCommand.SetCameraMode(WorldCameraMode.FOLLOW_NPC, selectedNpc.actor.id)
+            OutlinedButton(
+                onClick = {
+                    callbacks.onCommand(
+                        WorldUiCommand.SetCameraMode(WorldCameraMode.FOLLOW_NPC, selectedNpc.actor.id)
+                    )
+                },
+                modifier = Modifier.heightIn(min = 48.dp)
+            ) {
+                Icon(Icons.Default.CenterFocusStrong, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    stringResource(R.string.tama_world_camera_follow_npc),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
-        WorldCommandButton(WorldPetCommandKind.COME_HOME, Icons.Default.Home) {
+        WorldCommandButton(WorldPetCommandKind.WALK_HOME, Icons.Default.Home) {
             callbacks.onCommand(WorldUiCommand.IssuePetCommand(WorldPetCommand.ComeHome))
         }
         WorldCommandButton(WorldPetCommandKind.GO_HERE, Icons.Default.CenterFocusStrong) {

@@ -15,7 +15,8 @@ import androidx.room.PrimaryKey
     tableName = "llama_server_cards",
     indices = [
         Index(value = ["savedCommandId"]),
-        Index(value = ["updatedAt"])
+        Index(value = ["updatedAt"]),
+        Index(value = ["easyModelId"], unique = true)
     ]
 )
 data class LlamaServerCardEntity(
@@ -37,7 +38,9 @@ data class LlamaServerCardEntity(
      */
     val allowWearStart: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    /** Canonical models.filename identity; null for manually configured cards. */
+    @androidx.room.ColumnInfo(defaultValue = "NULL") val easyModelId: String? = null
 ) {
     val sessionId: String get() = sessionIdForCard(id)
 

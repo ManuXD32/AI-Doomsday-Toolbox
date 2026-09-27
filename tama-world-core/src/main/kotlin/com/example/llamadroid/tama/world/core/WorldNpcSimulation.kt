@@ -201,7 +201,17 @@ object WorldNpcSimulation {
         var actor = npc.execution ?: WorldActor(actorId = npc.id, actorType = ActorType.NPC, x = npc.x, y = npc.y,
             preciseX = npc.preciseX, preciseY = npc.preciseY, presence = PresenceMode.WORLD,
             structureId = null, needs = npc.needs)
-        actor = actor.copy(needs = npc.needs)
+        // NPC execution is schedule-owned. Clear any explicit pet-control
+        // fields that may have been persisted by an older shared-command
+        // transition before the schedule chooses or advances its next route.
+        actor = actor.copy(
+            needs = npc.needs,
+            controlMode = WorldControlMode.AUTONOMOUS,
+            orderStatus = WorldOrderStatus.NONE,
+            orderBlocker = WorldOrderBlocker.NONE,
+            explicitOrderId = null,
+            explicitOrder = null
+        )
         var current = growFields(npc, world.tick)
         var command: WorldCommand? = null
         val phaseChanged = phase != npc.scheduleState && npc.scheduleState !in setOf("eating", "drinking", "resting", "sleeping")

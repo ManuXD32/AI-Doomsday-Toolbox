@@ -139,7 +139,7 @@ class TamaWorldController(
         now: Long = System.currentTimeMillis()
     ): SimulationResult = TamaActionGate.run {
         val current = ensure(pet, now)
-        if (_error.value != null) {
+        if (_error.value != null && current.actor.orderStatus != WorldOrderStatus.BLOCKED) {
             return@run SimulationResult(current, acceptedCommand = false, rejectionReason = _error.value)
         }
         if (_adventureActive.value) return@run SimulationResult(current)
@@ -201,14 +201,27 @@ class TamaWorldController(
             // A malformed imported snapshot must still have a safe direct
             // escape. Keep its rows, cancel receipts, and close only the
             // process-local session; never delete or regenerate the world.
+            val stopped = current.copy(actor = current.actor.copy(
+                goal = GoalId.IDLE, action = ActionId.WAIT, actionState = ActionState.IDLE,
+                actionTicksRemaining = 0, path = emptyList(), pendingCommand = null,
+                pendingActivity = null, followTargetId = null, destinationX = null,
+                destinationY = null, pendingStructureId = null, actionArguments = emptyMap(),
+                controlMode = WorldControlMode.HOLDING, orderStatus = WorldOrderStatus.CANCELLED,
+                orderBlocker = WorldOrderBlocker.NONE
+            ), lastSimulatedAt = now)
             TamaCommitEffects.afterCommit {
                 database.withTransaction {
                     cancelActiveReceipts(pet.id, now)
+                    store.save(stopped, current)
                     database.tamaDao().savePet(PetMapper.toEntity(homePet))
                 }
             }
+            saved = stopped
+            pendingEffects = emptyList()
+            _state.value = stopped
+            _error.value = null
             _adventureActive.value = false
-            return@run SimulatedWorldExit(current, pet = homePet, changed = true)
+            return@run SimulatedWorldExit(stopped, pet = homePet, changed = true)
         }
         val entrance = home.entrance
         val next = current.copy(
@@ -234,6 +247,9 @@ class TamaWorldController(
                 pendingCommand = null,
                 pendingActivity = null,
                 followTargetId = null,
+                controlMode = WorldControlMode.HOLDING,
+                orderStatus = WorldOrderStatus.CANCELLED,
+                orderBlocker = WorldOrderBlocker.NONE,
                 needs = pet.stats.worldNeeds(),
                 stuckTicks = 0
             ),
@@ -299,7 +315,10 @@ class TamaWorldController(
                 actionArguments = emptyMap(),
                 pendingCommand = null,
                 pendingActivity = null,
-                followTargetId = null
+                followTargetId = null,
+                controlMode = WorldControlMode.HOLDING,
+                orderStatus = WorldOrderStatus.CANCELLED,
+                orderBlocker = WorldOrderBlocker.NONE
             ),
             lastSimulatedAt = now
         )
@@ -382,7 +401,13 @@ class TamaWorldController(
         accept(current, next, pet, force = !visible)
     }
 
-    suspend fun command(command: WorldCommand): SimulationResult = TamaActionGate.run {
+    suspend fun command(command: WorldCommand): SimulationResult = submitCommand(command)
+
+    /** Route admission and its eventual canonical activity share one durable commit. */
+    private suspend fun submitCommand(
+        command: WorldCommand,
+        queuedActivity: PendingActivityIntent? = null
+    ): SimulationResult = TamaActionGate.run {
         flush()
         val pet = database.tamaDao().getActivePet()?.let(PetMapper::toDomain) ?: error("pet_missing")
         val current = ensure(pet, System.currentTimeMillis())
@@ -410,10 +435,16 @@ class TamaWorldController(
         }
         val projection = pet.worldProjection(current, farm, database.worldDao().relationships(pet.id), current.autonomy,
             (command as? WorldCommand.PerformAction)?.arguments?.get("canonicalAction"))
-        val next = WorldSimulation.step(current.copy(actor = current.actor.copy(pendingActivity = null,
-            actionArguments = current.actor.actionArguments - FAILURE_KEY)), command, projection,
+        val result = WorldSimulation.step(current, command, projection,
             now = maxOf(System.currentTimeMillis(), current.lastSimulatedAt + DEFAULT_TICK_MILLIS),
             options = WorldSimulationOptions(navigationPolicy = navigationPolicy))
+        // Admission must inspect the intact activity/order. A rejected replacement
+        // cannot abandon queued work, leave a building, or erase retry arguments.
+        if (!result.acceptedCommand) return@run result.copy(state = current, effects = emptyList())
+        val next = result.copy(state = result.state.copy(actor = result.state.actor.copy(
+            actionArguments = result.state.actor.actionArguments - FAILURE_KEY,
+            pendingActivity = queuedActivity ?: result.state.actor.pendingActivity
+        )))
         accept(current, next, pet, force = true)
     }
 
@@ -436,6 +467,9 @@ class TamaWorldController(
     suspend fun retry(): SimulationResult = TamaActionGate.run {
         val pet = database.tamaDao().getActivePet()?.let(PetMapper::toDomain) ?: error("pet_missing")
         val current = _state.value ?: ensure(pet, System.currentTimeMillis())
+        if (current.actor.explicitOrder != null && current.actor.orderStatus == WorldOrderStatus.BLOCKED) {
+            return@run submitCommand(WorldCommand.Retry, current.actor.pendingActivity)
+        }
         val arcadeLeaseActive = TamaArcadeWorldActions.leaseSessionId(current) != null
         val clean = current.copy(actor = current.actor.copy(
             actionArguments = current.actor.actionArguments - FAILURE_KEY,
@@ -462,16 +496,11 @@ class TamaWorldController(
         }
     }
 
-    suspend fun queueActivity(intent: PendingActivityIntent): SimulationResult = TamaActionGate.run {
-        val result = command(if (intent.destinationId == LegacyLocationAliases.HOME) WorldCommand.ReturnHome
-            else WorldCommand.GoToStructure(intent.destinationId))
-        if (!result.acceptedCommand) return@run result
-        val next = result.state.copy(actor = result.state.actor.copy(pendingActivity = intent))
-        store.save(next, saved)
-        saved = next
-        _state.value = next
-        result.copy(state = next)
-    }
+    suspend fun queueActivity(intent: PendingActivityIntent): SimulationResult = submitCommand(
+        command = if (intent.destinationId == LegacyLocationAliases.HOME) WorldCommand.ReturnHome
+            else WorldCommand.GoToStructure(intent.destinationId),
+        queuedActivity = intent
+    )
 
     suspend fun queueAction(action: ActionId, targetId: String?, arguments: Map<String, String>,
                             destinationId: String? = null): SimulationResult = TamaActionGate.run {
@@ -965,6 +994,13 @@ class TamaWorldController(
                 store.save(restored, loaded)
                 loaded = restored
             }
+            if (!_adventureActive.value) {
+                val interrupted = loaded.copy(actor = loaded.actor.interruptRestoredOrder())
+                if (interrupted != loaded) {
+                    store.save(interrupted, loaded)
+                    loaded = interrupted
+                }
+            }
         }
         if (loaded.actor.policyVersion != navigationVersion) {
             loaded = loaded.copy(actor = loaded.actor.copy(policyVersion = navigationVersion, navigationMemory = emptyList()))
@@ -976,11 +1012,18 @@ class TamaWorldController(
         return loaded
     }
 
-    private suspend fun accept(before: WorldState, result: SimulationResult, pet: TamaPet, force: Boolean): SimulationResult {
+    private suspend fun accept(
+        before: WorldState,
+        result: SimulationResult,
+        pet: TamaPet,
+        force: Boolean,
+        resumePendingActivity: Boolean = true
+    ): SimulationResult {
         if (!result.acceptedCommand) return result
         val allEffects = WorldFoodEffects.normalize(pendingEffects + result.effects + WorldNpcEncounters.effects(before, result.state))
         val important = allEffects.any { it !is WorldEffectRequest.NeedDelta } ||
-            before.actor.presence != result.state.actor.presence || before.actor.actionState != result.state.actor.actionState
+            before.actor.presence != result.state.actor.presence || before.actor.actionState != result.state.actor.actionState ||
+            before.actor.orderStatus != result.state.actor.orderStatus || before.actor.controlMode != result.state.actor.controlMode
         val shouldSave = force || important || result.state.lastSimulatedAt - (saved?.lastSimulatedAt ?: 0) >= 1_000L
         return try {
             var next = result.state
@@ -993,7 +1036,9 @@ class TamaWorldController(
                             before, next, allEffects, parkReceiptStore, next.lastSimulatedAt
                         )
                         val pending = next.actor.pendingActivity?.takeIf {
-                            it.action != TamaArcadeWorldActions.LEASE_ACTION &&
+                            resumePendingActivity && it.action != TamaArcadeWorldActions.LEASE_ACTION &&
+                                next.actor.controlMode != WorldControlMode.BLOCKED &&
+                                next.actor.actionState != ActionState.BLOCKED &&
                                 next.actor.presence != PresenceMode.WORLD &&
                                 next.actor.structureId == it.destinationId
                         }
@@ -1001,6 +1046,8 @@ class TamaWorldController(
                         var updatedPet = effects.commit(latest, next, allEffects)
                         if (pending != null) {
                             if (pending.action == "WORLD_ACTION") {
+                                val journeyOrder = next.actor.explicitOrder
+                                val journeyOrderId = next.actor.explicitOrderId
                                 val started = WorldSimulation.step(next, WorldCommand.PerformAction(
                                     ActionId.valueOf(pending.arguments.getValue("actionId")),
                                     pending.arguments["targetId"]?.takeIf { it.isNotEmpty() },
@@ -1009,14 +1056,25 @@ class TamaWorldController(
                                     next.lastSimulatedAt + DEFAULT_TICK_MILLIS,
                                     WorldSimulationOptions(navigationPolicy = navigationPolicy, simulateNpcs = false))
                                 check(started.acceptedCommand) { started.rejectionReason ?: "world_action_failed" }
-                                next = started.state
+                                next = started.state.copy(actor = started.state.actor.copy(
+                                    explicitOrderId = journeyOrderId ?: started.state.actor.explicitOrderId,
+                                    explicitOrder = started.state.actor.explicitOrder?.copy(outcome = journeyOrder?.outcome)
+                                ))
                                 updatedPet = effects.commit(updatedPet, next, started.effects)
-                            } else effects.resumeActivity(pending)
+                            } else {
+                                effects.resumeActivity(pending)
+                                if (next.actor.explicitOrder != null) next = next.copy(actor = next.actor.copy(
+                                    controlMode = WorldControlMode.HOLDING,
+                                    orderStatus = WorldOrderStatus.RUNNING
+                                ))
+                            }
                             updatedPet = database.tamaDao().getPet(pet.id)?.let(PetMapper::toDomain) ?: updatedPet
                         }
                         val canonicalRelationships = database.worldDao().relationships(pet.id).associateBy { it.npcId }
                         next = next.copy(
-                            actor = next.actor.copy(needs = updatedPet.stats.worldNeeds()),
+                            actor = next.actor.copy(needs = updatedPet.stats.worldNeeds())
+                                .settleCommittedOrder(updatedPet)
+                                .withCommittedOrderOutcome(latest, updatedPet),
                             npcs = next.npcs.map { npc ->
                                 val relationship = canonicalRelationships[npc.id] ?: return@map npc
                                 npc.copy(relationships = npc.relationships + (pet.id to RelationshipProjection(
@@ -1068,6 +1126,11 @@ class TamaWorldController(
             val recoverable = rolledBack.copy(actor = rolledBack.actor.copy(actionState = ActionState.BLOCKED,
                 actionTicksRemaining = 0, pendingCommand = pending,
                 pendingActivity = failedActor.pendingActivity ?: before.actor.pendingActivity,
+                controlMode = WorldControlMode.BLOCKED,
+                orderStatus = WorldOrderStatus.BLOCKED,
+                orderBlocker = WorldOrderBlocker.EFFECT_FAILED,
+                explicitOrderId = failedActor.explicitOrderId ?: before.actor.explicitOrderId,
+                explicitOrder = failedActor.explicitOrder ?: before.actor.explicitOrder,
                 actionArguments = rolledBack.actor.actionArguments + (FAILURE_KEY to _error.value!!)))
             _state.value = recoverable
             try {
@@ -1087,7 +1150,9 @@ class TamaWorldController(
         val current = _state.value ?: return@run
         if (_error.value != null) return@run
         val pet = database.tamaDao().getPet(current.petId)?.let(PetMapper::toDomain) ?: return@run
-        accept(saved ?: current, SimulationResult(current), pet, force = true)
+        // A flush persists effects already produced by the simulation. It must
+        // not start queued work before a replacement/Stop has been admitted.
+        accept(saved ?: current, SimulationResult(current), pet, force = true, resumePendingActivity = false)
         Unit
     }
 

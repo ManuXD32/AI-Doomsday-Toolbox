@@ -62,6 +62,7 @@ class BrainTrainingWorkflowUiConnectedTest {
         )
 
         scrollLazyToTag("brain_active_policy")
+        openAdvancedControls()
         scrollLazyToTag("brain_candidate_workflow")
         scrollLazyToTag("brain_save_checkpoint")
         compose.onNodeWithTag("brain_save_checkpoint").performClick()
@@ -93,6 +94,7 @@ class BrainTrainingWorkflowUiConnectedTest {
     @Test
     fun noCandidateKeepsEvaluateActionDisabled() {
         setContent(state = workflowState(candidateId = null), callbacks = callbacks())
+        openAdvancedControls()
         scrollLazyToTag("brain_evaluate_candidate")
         compose.onNodeWithTag("brain_evaluate_candidate").assertIsNotEnabled()
     }
@@ -101,6 +103,7 @@ class BrainTrainingWorkflowUiConnectedTest {
     fun activeEvaluationShowsProgressAndDisablesCandidateActions() {
         setContent(state = workflowState(candidateId = "candidate-1").copy(isEvaluating = true), callbacks = callbacks())
 
+        openAdvancedControls()
         scrollLazyToTag("brain_evaluating")
         scrollLazyToTag("brain_save_checkpoint")
         compose.onNodeWithTag("brain_save_checkpoint").assertIsNotEnabled()
@@ -118,6 +121,14 @@ class BrainTrainingWorkflowUiConnectedTest {
         compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex))
             .onFirst().performScrollToNode(hasText(text))
         compose.onNodeWithText(text).assertIsDisplayed()
+    }
+
+    private fun openAdvancedControls() {
+        val context = compose.activity
+        scrollLazyToTag("brain_manual_workflow_details")
+        compose.onNodeWithText(
+            context.getString(R.string.tama_world_brain_advanced_controls_title)
+        ).performClick()
     }
 
     private fun setContent(

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="managed_llama_starting">Starting your model…</string>
+    <string name="managed_llama_verifying">Model started. Checking the connection…</string>
+    <string name="managed_llama_owner_unavailable">The model started, but its process could not be verified. Stop this server and retry. Your settings are saved.</string>
+    <string name="managed_llama_card_missing">This server was removed. Choose another server or open server management.</string>
+    <string name="managed_llama_preset_missing">This server’s settings are missing. Open server management to choose a saved profile.</string>
+    <string name="managed_llama_model_missing">The model file is unavailable. Download or import it again in Models.</string>
+    <string name="managed_llama_port_busy">The server port is busy. Open server management to change it, then retry.</string>
+    <string name="managed_llama_timeout">The model is taking too long to start. Check its server status and retry.</string>
+    <string name="managed_llama_context_unknown">The server did not report its context size. Set a context size in its server settings and retry.</string>
+    <string name="managed_llama_start_failed">The server could not start. Check its settings and logs in server management, then retry.</string>
+    <string name="managed_llama_idle_stopped">Stopped after 10 minutes of inactivity</string>
+    <string name="managed_llama_idle_retry">Automatic shutdown could not finish. The app will retry while this server remains idle.</string>
+    <string name="managed_llama_open_server_management">Open server management</string>
+</resources>

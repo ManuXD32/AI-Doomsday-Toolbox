@@ -121,6 +121,19 @@ class HarnessBridgeOperations(
             return@withContext credential(method, args)
         }
         if (method == "provider.models") return@withContext models.models()
+        if (method == "provider.prepare") return@withContext try {
+            models.prepare(args.getString("model"))
+        } catch (error: com.example.llamadroid.service.ManagedLlamaServerException) {
+            throw IllegalStateException(error.code)
+        }
+        if (method == "provider.usage") {
+            val id = args.getString("model").takeIf { it.startsWith("llama:") }
+                ?.removePrefix("llama:")?.toLongOrNull()?.takeIf { it > 0 }
+                ?: error("MANAGED_MODEL_NOT_FOUND")
+            com.example.llamadroid.service.LlamaServerUsageStore(context, "card:$id")
+                .write(args.getString("token"), args.getBoolean("active"))
+            return@withContext JSONObject().put("ok", true)
+        }
         if (method == "provider.discover") return@withContext discoverProvider(args)
         // JSONL can publish a new/forked session before its native index exists.
         // This capability is constrained to that session's private store, not a workspace.

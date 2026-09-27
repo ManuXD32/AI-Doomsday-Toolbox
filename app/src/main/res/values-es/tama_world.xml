@@ -71,7 +71,6 @@
     <string name="tama_world_canvas_description">Mapa del mundo vivo. Arrastra para mover, pellizca para ampliar y toca para inspeccionar.</string>
     <string name="tama_world_minimap_description">Minimapa del mundo conocido</string>
     <string name="tama_world_close_inspector">Cerrar inspector</string>
-    <string name="tama_world_shortcut_home">Casa</string>
     <string name="tama_world_shortcut_room">Habitación</string>
     <string name="tama_world_shortcut_world">Mundo</string>
     <string name="tama_world_shortcut_inventory">Inventario</string>

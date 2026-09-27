@@ -75,7 +75,6 @@
     <string name="tama_world_canvas_description">Living world map. Drag to pan, pinch to zoom, tap to inspect.</string>
     <string name="tama_world_minimap_description">Known world minimap</string>
     <string name="tama_world_close_inspector">Close inspector</string>
-    <string name="tama_world_shortcut_home">Home</string>
     <string name="tama_world_shortcut_room">Room</string>
     <string name="tama_world_shortcut_world">World</string>
     <string name="tama_world_shortcut_inventory">Inventory</string>

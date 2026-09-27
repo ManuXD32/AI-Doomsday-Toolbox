@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_chat_gameplay_limits">Chat is for conversation. Use Care or the World controls to feed, move, or direct your pet.</string>
+    <string name="tama_world_shared_pet_guidance">Explore with the same pet: needs, coins, inventory, and activity rewards carry between the room and this optional world. Practice improves autonomous navigation. Training is optional; your orders work immediately.</string>
+    <string name="tama_world_back_to_room">Return to room</string>
+</resources>

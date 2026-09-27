@@ -4,6 +4,97 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WorldNpcSimulationTest {
+    @Test
+    fun completedNpcActionDoesNotPersistPetHoldIntoScheduledRoute() {
+        val generated = WorldGenerator.generate(7_711L)
+        val source = generated.npcs.first { !it.stationary }
+        val target = generated.npcs.first { it.id != source.id }.copy(
+            id = "schedule_target",
+            x = source.x + 1,
+            y = source.y,
+            preciseX = source.x + 1.0,
+            preciseY = source.y.toDouble()
+        )
+        val origin = WorldCoordinate(source.x, source.y)
+        val destination = listOf(
+            origin + WorldCoordinate(1, 0),
+            origin + WorldCoordinate(-1, 0),
+            origin + WorldCoordinate(0, 1),
+            origin + WorldCoordinate(0, -1)
+        ).first { generated.contains(it) && Pathfinder.walkable(generated, it) }
+        val path = Pathfinder.findPath(generated, origin, destination)
+        assertTrue("The fixture needs a one-step scheduled route", path.isNotEmpty())
+        val actor = WorldActor(
+            actorId = source.id,
+            actorType = ActorType.NPC,
+            x = origin.x,
+            y = origin.y,
+            preciseX = origin.x.toDouble(),
+            preciseY = origin.y.toDouble(),
+            presence = PresenceMode.WORLD,
+            structureId = null,
+            needs = source.needs
+        )
+        val actionWorld = generated.copy(
+            actor = actor,
+            npcs = listOf(target),
+            petId = ""
+        )
+        val projection = CanonicalPetSnapshot(
+            petId = source.id,
+            needs = source.needs,
+            autonomy = AutonomyPolicy(level = AutonomyLevel.OFF)
+        )
+        val completed = WorldSimulation.step(
+            actionWorld,
+            WorldCommand.PerformAction(ActionId.GREET, target.id, target.x, target.y),
+            projection,
+            now = DEFAULT_TICK_MILLIS,
+            options = WorldSimulationOptions(simulateNpcs = false, observeRadius = 0)
+        )
+        assertTrue("The scheduled social action should be accepted", completed.acceptedCommand)
+        assertEquals(ActionState.COMPLETED, completed.state.actor.actionState)
+        assertEquals(WorldControlMode.AUTONOMOUS, completed.state.actor.controlMode)
+        assertNull(completed.state.actor.explicitOrder)
+
+        val routeActor = completed.state.actor.copy(
+            path = path,
+            destinationX = destination.x,
+            destinationY = destination.y,
+            action = ActionId.WALK,
+            actionState = ActionState.RUNNING,
+            actionTicksRemaining = 0,
+            goal = GoalId.WORK
+        )
+        val scheduledNpc = source.copy(
+            x = origin.x,
+            y = origin.y,
+            preciseX = origin.x.toDouble(),
+            preciseY = origin.y.toDouble(),
+            lastSimulatedAt = 0L,
+            lastDecisionAt = Long.MAX_VALUE,
+            scheduleState = "home",
+            path = path,
+            destinationX = destination.x,
+            destinationY = destination.y,
+            execution = routeActor
+        )
+        val scheduled = completed.state.copy(
+            actor = routeActor,
+            npcs = listOf(scheduledNpc),
+            petId = "",
+            lastSimulatedAt = DEFAULT_TICK_MILLIS,
+            tick = 1L
+        )
+        val advanced = WorldNpcSimulation.advance(scheduled, simulationRadius = 32)
+        assertEquals(
+            "A scheduled route must advance after the completed action",
+            path.first(),
+            advanced.npcs.single().coordinate
+        )
+        assertEquals(WorldControlMode.AUTONOMOUS, advanced.npcs.single().execution?.controlMode)
+    }
+
     @Test fun pixelPopGreetsThroughTheExecutorWithoutMovingOrAddingAResident() {
         val generated = WorldGenerator.generate(71)
         val pixel = generated.npcs.first { it.stationary }

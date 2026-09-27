@@ -192,6 +192,12 @@ fun TamaMapView(
             LegendItem(UNKNOWN_LOCATION_ICON_ASSET, stringResource(R.string.tama_location_unknown))
             DevelopmentLegendItem()
         }
+        Text(
+            text = stringResource(R.string.tama_world_shared_pet_guidance),
+            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+            fontSize = 12.sp,
+            color = TamaDark
+        )
     }
 }
 

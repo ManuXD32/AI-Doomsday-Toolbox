@@ -234,10 +234,10 @@ class AuditRemediationRuntimeTest {
             configuration.setLocale(locale)
             return context.createConfigurationContext(configuration).getString(resourceId)
         }
-        assertEquals("Home", localizedString(Locale.ENGLISH, R.string.responsive_nav_home))
+        assertEquals("Home", localizedString(Locale.ENGLISH, R.string.studio_nav_home))
         assertEquals("More", localizedString(Locale.ENGLISH, R.string.responsive_nav_more))
         val spanish = Locale.forLanguageTag("es")
-        assertEquals("Inicio", localizedString(spanish, R.string.responsive_nav_home))
+        assertEquals("Inicio", localizedString(spanish, R.string.studio_nav_home))
         assertEquals("Más", localizedString(spanish, R.string.responsive_nav_more))
     }
 

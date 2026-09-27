@@ -38,7 +38,7 @@ data class LlamaServerCardSnapshot(
     /** Resolve the profile at start time; never cache a stale copy in the card. */
     fun resolveProfile(): LlamaServerLaunchProfile? = preset
         ?.takeIf { it.scope == SavedCommandScopes.GENERAL }
-        ?.launchProfileForCardPort(card.port)
+        ?.launchProfileForCard(card)
 }
 
 /**
@@ -102,6 +102,17 @@ class LlamaServerCardRepository(
 /** Map a saved GENERAL command to a card launch, overriding only the card port. */
 fun SavedCommand.launchProfileForCardPort(port: Int): LlamaServerLaunchProfile =
     launchProfile().copy(serverPort = port)
+
+/** Easy-mode lifecycle stays attached to its card when the shared preset is edited or reused. */
+fun SavedCommand.launchProfileForCard(card: LlamaServerCardEntity): LlamaServerLaunchProfile {
+    val profile = launchProfileForCardPort(card.port)
+    return if (card.easyModelId == null) profile.copy(idleStopSeconds = null)
+    else profile.copy(
+        host = "127.0.0.1",
+        idleStopSeconds = 600,
+        customFlags = "${profile.customFlags.orEmpty()} --slots --metrics".trim()
+    )
+}
 
 /**
  * Small durable fallback used by the dashboard until the central Room database adds

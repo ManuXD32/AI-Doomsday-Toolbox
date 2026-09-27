@@ -4,6 +4,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.example.llamadroid.tama.world.core.NpcRole
+import com.example.llamadroid.tama.world.core.WorldCommand
+import com.example.llamadroid.tama.world.core.WorldNpc
 import com.example.llamadroid.tama.world.core.WorldState
 import com.example.llamadroid.tama.world.presentation.toCoreCommand
 
@@ -56,6 +59,28 @@ class WorldUiContractsTest {
         )
         assertNull(
             WorldUiCommand.Inspect(WorldInspectTarget.Actor(state.actor.actorId)).toCoreCommand(state)
+        )
+    }
+
+    @Test
+    fun visitNpcRetainsTheNpcIdentityForTheCoreOrder() {
+        val npc = WorldNpc("npc-1", "Milo", NpcRole.PARK_RESIDENT, x = 3, y = 4)
+        val state = WorldState(seed = 1L, npcs = listOf(npc))
+
+        assertEquals(
+            WorldCommand.VisitNpc("npc-1"),
+            WorldUiCommand.IssuePetCommand(WorldPetCommand.VisitNpc("npc-1")).toCoreCommand(state)
+        )
+    }
+
+    @Test
+    fun orderRecoveryCommandsStayOnTheCoreCommandBoundary() {
+        val state = WorldState(seed = 1L)
+
+        assertEquals(WorldCommand.Retry, WorldUiCommand.RetryLastOrder.toCoreCommand(state))
+        assertEquals(
+            WorldCommand.ResumeAutonomy,
+            WorldUiCommand.ResumeAutonomy.toCoreCommand(state)
         )
     }
 }

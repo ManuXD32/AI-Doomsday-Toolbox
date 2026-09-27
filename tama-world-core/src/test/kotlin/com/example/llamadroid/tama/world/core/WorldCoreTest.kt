@@ -259,6 +259,33 @@ class WorldCoreTest {
         )
         assertTrue(wake.acceptedCommand)
         assertTrue(wake.effects.any { it is WorldEffectRequest.Activity && it.activity == PetActivity.NONE })
+
+        val sleepingWithProjectedActivity = WorldSimulation.step(
+            state,
+            WorldCommand.PerformAction(ActionId.WAKE),
+            CanonicalPetSnapshot(sleeping = true, activity = PetActivity.SLEEPING),
+            now = 500L,
+            options = WorldSimulationOptions(simulateNpcs = false)
+        )
+        assertTrue(sleepingWithProjectedActivity.acceptedCommand)
+        assertTrue(sleepingWithProjectedActivity.effects.any {
+            it is WorldEffectRequest.Activity && it.activity == PetActivity.NONE
+        })
+
+        val stopWhileWorking = WorldSimulation.step(
+            state,
+            WorldCommand.PerformAction(
+                ActionId.WAIT,
+                arguments = mapOf("canonicalAction" to "stopActivity")
+            ),
+            CanonicalPetSnapshot(activity = PetActivity.WORK),
+            now = 600L,
+            options = WorldSimulationOptions(simulateNpcs = false)
+        )
+        assertTrue(stopWhileWorking.acceptedCommand)
+        assertTrue(stopWhileWorking.effects.any {
+            it is WorldEffectRequest.CanonicalAction && it.action == "stopActivity"
+        })
     }
 
     @Test

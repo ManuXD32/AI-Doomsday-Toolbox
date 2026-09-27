@@ -283,5 +283,3 @@ private fun WorldObjectType.isResourceObject(): Boolean = this in setOf(
     WorldObjectType.GLOWING_PLANT,
     WorldObjectType.POND
 )
-
-private fun String.isResourceAvailable(): Boolean = lowercase() in setOf("available", "full", "mature", "ready")

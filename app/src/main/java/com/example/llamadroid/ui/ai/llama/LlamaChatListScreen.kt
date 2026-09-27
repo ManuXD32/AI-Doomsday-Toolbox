@@ -39,6 +39,7 @@ import com.example.llamadroid.data.model.LlamaChatFolderEntity
 import com.example.llamadroid.data.model.LlamaChatPromptProfileEntity
 import com.example.llamadroid.data.model.LlamaServerEntity
 import com.example.llamadroid.data.repository.LlamaRepository
+import com.example.llamadroid.data.repository.easyChatDisabledTools
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
@@ -67,6 +68,14 @@ private const val WEAR_TOOL_IMAGES = "image_generation"
 
 private fun formatLlamaChatListString(template: String, vararg args: Any?): String =
     String.format(Locale.getDefault(), template, *args)
+
+/** New managed chats start with every tool disabled; the linked server keeps its allowlist. */
+internal fun newChatApiParamsForServer(server: LlamaServerEntity?): String? =
+    if (server?.managedServerCardId != null) {
+        JSONObject(easyChatDisabledTools().toParamMap()).toString()
+    } else {
+        server?.defaultApiParams?.takeIf { it.isNotBlank() }
+    }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -743,7 +752,7 @@ fun LlamaChatListScreen(
                                 title = title,
                                 contextSize = 0,
                                 systemPrompt = systemPrompt.ifBlank { null },
-                                apiParams = servers.firstOrNull()?.defaultApiParams?.takeIf { it.isNotBlank() },
+                                apiParams = newChatApiParamsForServer(servers.firstOrNull()),
                                 folderId = newChatFolderId
                             ) { newId ->
                                 showNewChatDialog = false

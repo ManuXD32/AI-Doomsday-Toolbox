@@ -337,13 +337,15 @@ object LlamaServerLauncher {
         sessionId: String,
         profile: LlamaServerLaunchProfile,
         portOverride: Int? = null,
-        leaseToken: String? = null
+        leaseToken: String? = null,
+        ensureRunning: Boolean = false
     ): Result<Unit> = dispatchSessionCommand(
         context,
         Intent(context.applicationContext, LlamaServerSessionService::class.java).apply {
             action = LlamaServerSessionService.ACTION_START
             putExtra(LlamaServerSessionService.EXTRA_SESSION_ID, sessionId)
             putExtra(LlamaServerSessionService.EXTRA_PROFILE_JSON, LlamaServerLaunchProfile.encodeForRuntime(profile))
+            putExtra(LlamaServerSessionService.EXTRA_ENSURE_RUNNING, ensureRunning)
             portOverride?.let { putExtra(LlamaServerSessionService.EXTRA_PORT, it) }
             leaseToken?.let { putExtra(LlamaServerSessionService.EXTRA_LEASE_TOKEN, it) }
         }

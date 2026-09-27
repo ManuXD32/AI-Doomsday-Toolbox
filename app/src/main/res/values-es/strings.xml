@@ -26,10 +26,10 @@
     <string name="dashboard_memory">Memoria RAM</string>
     <string name="dashboard_storage">Almacenamiento</string>
     <string name="llama_cards_title">Servidores llama.cpp</string>
-    <string name="llama_cards_subtitle">Ejecuta servidores locales independientes desde comandos GENERALES guardados.</string>
+    <string name="llama_cards_subtitle">Elige un modelo, inicia un servidor y chatea en tu dispositivo.</string>
     <string name="llama_cards_add">Añadir servidor</string>
     <string name="llama_cards_empty">Aún no hay tarjetas de servidores llama.cpp.</string>
-    <string name="llama_cards_add_first">Añade una tarjeta y elige un comando GENERAL guardado.</string>
+    <string name="llama_cards_add_first">Pulsa Añadir servidor y elige un modelo instalado.</string>
     <string name="llama_card_name">Nombre del servidor</string>
     <string name="llama_card_name_hint">p. ej., Modelo principal</string>
     <string name="llama_card_preset">Preset GENERAL</string>

@@ -7,7 +7,7 @@ import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.launchProfile
 import com.example.llamadroid.data.model.LlamaServerSessionIds
-import com.example.llamadroid.data.repository.launchProfileForCardPort
+import com.example.llamadroid.data.repository.launchProfileForCard
 import com.example.llamadroid.util.NativeProcessCleanup
 import com.example.llamadroid.util.DebugLog
 import kotlinx.coroutines.Dispatchers
@@ -282,7 +282,7 @@ internal class LlamaOcrRuntimeCoordinator(private val context: Context) {
             val profile = owner?.launchProfileJson
                 ?.let(LlamaServerLaunchProfile::decode)
                 ?.copy(serverPort = port)
-                ?: preset.launchProfileForCardPort(port)
+                ?: preset.launchProfileForCard(card.copy(port = port))
             require(profile.hasModel()) {
                 "Cannot pause server card ${card.id}: its saved llama preset has no model."
             }

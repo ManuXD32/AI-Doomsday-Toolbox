@@ -6,7 +6,7 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import com.example.llamadroid.data.HttpEndpointUrlSupport
 
-@Entity(tableName = "llama_servers")
+@Entity(tableName = "llama_servers", indices = [Index(value = ["managedServerCardId"], unique = true)])
 data class LlamaServerEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
@@ -26,7 +26,9 @@ data class LlamaServerEntity(
     val localLaunchProfileJson: String? = null,
     val lastUsed: Long = System.currentTimeMillis(),
     @androidx.room.ColumnInfo(defaultValue = "0")
-    val supportsVideo: Boolean = false
+    val supportsVideo: Boolean = false,
+    /** Linked cards own their profile and endpoint; never use the legacy global launcher. */
+    @androidx.room.ColumnInfo(defaultValue = "NULL") val managedServerCardId: Long? = null
 ) {
     fun normalizedEngine(): String = normalizeLlamaServerEngine(engine)
 

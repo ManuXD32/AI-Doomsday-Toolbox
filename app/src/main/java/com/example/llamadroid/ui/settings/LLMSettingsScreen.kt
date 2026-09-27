@@ -2399,77 +2399,18 @@ fun LLMSettingsScreen(navController: NavController) {
         )
     }
 
-    // Command Editor Preview Dialog
+    // Shared with the server manager; edits remain attached to the same saved profile.
     showCommandPreview?.let { cmd ->
-        val commandProfile = remember(cmd.id, cmd.launchProfileJson) { cmd.launchProfile() }
-        var editName by remember(cmd.id) { mutableStateOf(cmd.name) }
-        var editTemplate by remember(cmd.id, cmd.launchProfileJson) {
-            mutableStateOf(commandProfile.commandTemplate.orEmpty())
-        }
-        var editFlags by remember(cmd.id, cmd.launchProfileJson) {
-            mutableStateOf(commandProfile.customFlags.orEmpty())
-        }
-        
-        AlertDialog(
-            onDismissRequest = { showCommandPreview = null },
-            title = { Text(stringResource(R.string.dist_edit_command)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = editName,
-                        onValueChange = { editName = it },
-                        label = { Text(stringResource(R.string.dist_command_preset_name)) },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = editTemplate,
-                        onValueChange = { editTemplate = it },
-                        label = { Text(stringResource(R.string.command_template_label)) },
-                        modifier = Modifier.fillMaxWidth(),
-                        minLines = 3,
-                        maxLines = 6,
-                        supportingText = {
-                            Text(stringResource(R.string.command_template_placeholders))
-                        }
-                    )
-                    OutlinedTextField(
-                        value = editFlags,
-                        onValueChange = { editFlags = it },
-                        label = { Text(stringResource(R.string.dist_advanced_custom_flags)) },
-                        modifier = Modifier.fillMaxWidth(),
-                        maxLines = 3
-                    )
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    val updatedProfile = commandProfile.copy(
-                        commandTemplate = editTemplate.takeIf { it.isNotBlank() },
-                        customFlags = editFlags.takeIf { it.isNotBlank() }
-                    )
-                    scope.launch {
-                        db.savedCommandDao().insertCommand(
-                            savedCommandFromLaunchProfile(
-                                name = editName.trim(),
-                                profile = updatedProfile,
-                                id = cmd.id
-                            )
-                        )
-                    }
-                    android.widget.Toast.makeText(context, resources.getString(R.string.saved_command_overwritten), android.widget.Toast.LENGTH_SHORT).show()
-                    showCommandPreview = null
-                }, enabled = editName.isNotBlank()) {
-                    Text(stringResource(R.string.dist_save_command))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCommandPreview = null }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
+        SavedLlamaCommandEditor(command = cmd, onDismiss = { showCommandPreview = null }) { name, profile ->
+            scope.launch {
+                db.savedCommandDao().insertCommand(savedCommandFromLaunchProfile(name, profile, id = cmd.id))
             }
-        )
+            android.widget.Toast.makeText(context, resources.getString(R.string.saved_command_overwritten),
+                android.widget.Toast.LENGTH_SHORT).show()
+            showCommandPreview = null
+        }
     }
-    
+
     // Model Selector Dialog
     if (showLlmSelector) {
         AlertDialog(

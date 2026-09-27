@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="managed_llama_verifying">Modelo iniciado. Comprobando la conexión…</string>
+    <string name="managed_llama_owner_unavailable">El modelo se inició, pero no se pudo verificar su proceso. Detén este servidor y vuelve a intentarlo. Tus ajustes están guardados.</string>
+    <string name="managed_llama_starting">Iniciando tu modelo…</string>
+    <string name="managed_llama_card_missing">Este servidor se eliminó. Elige otro o abre la administración de servidores.</string>
+    <string name="managed_llama_preset_missing">Faltan los ajustes de este servidor. Abre la administración de servidores para elegir un perfil guardado.</string>
+    <string name="managed_llama_model_missing">El archivo del modelo no está disponible. Descárgalo o impórtalo de nuevo en Modelos.</string>
+    <string name="managed_llama_port_busy">El puerto del servidor está ocupado. Cámbialo en la administración de servidores y vuelve a intentarlo.</string>
+    <string name="managed_llama_timeout">El modelo tarda demasiado en iniciarse. Comprueba el estado del servidor y vuelve a intentarlo.</string>
+    <string name="managed_llama_context_unknown">El servidor no indicó su tamaño de contexto. Configúralo en sus ajustes y vuelve a intentarlo.</string>
+    <string name="managed_llama_start_failed">No se pudo iniciar el servidor. Comprueba sus ajustes y registros en la administración de servidores y vuelve a intentarlo.</string>
+    <string name="managed_llama_idle_stopped">Detenido tras 10 minutos de inactividad</string>
+    <string name="managed_llama_open_server_management">Abrir administración de servidores</string>
+    <string name="managed_llama_idle_retry">El cierre automático no se pudo completar. La aplicación lo reintentará mientras este servidor siga inactivo.</string>
+</resources>

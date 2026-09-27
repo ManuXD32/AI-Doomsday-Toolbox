@@ -26,7 +26,8 @@ object GGUFParser {
         val embeddingLength: Int,
         val architecture: String,
         val sizeLabel: String,
-        val quantType: String
+        val quantType: String,
+        val contextLengthDetected: Boolean = false
     )
     
     /**
@@ -69,6 +70,7 @@ object GGUFParser {
                 // Parse KV pairs to find layer count
                 var layerCount = 32 // Default
                 var contextLength = 4096
+                var contextLengthDetected = false
                 var embeddingLength = 4096
                 var architecture = "unknown"
                 var sizeLabel = ""
@@ -92,6 +94,7 @@ object GGUFParser {
                         key.endsWith(".context_length") || key.contains("n_ctx") -> {
                             if (valueType == 4L) {
                                 contextLength = readU32(raf).toInt()
+                                contextLengthDetected = contextLength > 0
                             } else {
                                 skipValue(raf, valueType)
                             }
@@ -131,7 +134,7 @@ object GGUFParser {
                     }
                 }
                 
-                ModelInfo(layerCount, contextLength, embeddingLength, architecture, sizeLabel, quantType)
+                ModelInfo(layerCount, contextLength, embeddingLength, architecture, sizeLabel, quantType, contextLengthDetected)
             }
         } catch (e: Exception) {
             DebugLog.log("[GGUFParser] Error parsing GGUF: ${e.message}")
