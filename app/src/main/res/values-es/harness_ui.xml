@@ -84,6 +84,7 @@
     <string name="harness_model_editor_provider_empty">Este proveedor todavía no tiene filas de modelos editables.</string>
     <string name="harness_manage_local_servers">Gestionar servidores locales</string>
     <string name="harness_model_preparing">Preparando el modelo seleccionado…</string>
+    <string name="harness_model_needs_context">Define la ventana de contexto en los ajustes del modelo</string>
     <string name="harness_retry_model_selection">Reintentar selección del modelo</string>
     <string name="harness_model_editor_local_unavailable">Este modelo local no está disponible. Abre Gestionar servidores locales para reparar su ajuste preestablecido o modelo.</string>
     <string name="harness_model_editor_local_running">El servidor local está listo.</string>

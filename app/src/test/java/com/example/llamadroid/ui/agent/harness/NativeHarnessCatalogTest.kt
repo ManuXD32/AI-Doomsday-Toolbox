@@ -484,4 +484,26 @@ class NativeHarnessCatalogTest {
         assertEquals("failed", harnessPluginInstallCancellationPhase("not-running"))
         assertEquals("failed", harnessPluginInstallCancellationPhase("unexpected"))
     }
+
+    @Test
+    fun sessionModelGroupsListEveryProviderSelectedFirst() {
+        val providers = listOf(
+            HarnessProviderOption(id = "deepseek-official", name = "DeepSeek", models = listOf("reasoner"),
+                modelContextWindows = mapOf("reasoner" to 128000L)),
+            HarnessProviderOption(id = "adt-llama-server", name = "ADT llama.cpp", models = listOf("llama:7"),
+                modelCapabilitySources = mapOf("llama:7" to "unknown")),
+            HarnessProviderOption(id = "adt-managed", name = "ADT LiteRT", models = listOf("litert:1", "litert:2"),
+                modelContextWindows = mapOf("litert:1" to 4096L)),
+            HarnessProviderOption(id = "custom", name = "Custom", models = listOf("m1"),
+                modelContextWindows = mapOf("m1" to 8192L)),
+            HarnessProviderOption(id = "empty", name = "Empty"),
+        )
+        val groups = harnessSessionModelGroups(providers, "adt-managed")
+        assertEquals(listOf("adt-managed", "deepseek-official", "adt-llama-server", "custom"), groups.map { it.provider.id })
+        assertEquals(listOf("litert:1"), groups[0].selectable)
+        assertEquals(listOf("litert:2"), groups[0].needsContext)
+        assertEquals(listOf("llama:7"), groups[2].selectable)
+        assertTrue(groups[2].needsContext.isEmpty())
+        assertEquals(listOf("m1"), groups[3].selectable)
+    }
 }

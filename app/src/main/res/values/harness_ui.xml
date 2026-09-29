@@ -84,6 +84,7 @@
     <string name="harness_model_editor_provider_empty">This provider has no editable model rows yet.</string>
     <string name="harness_manage_local_servers">Manage local servers</string>
     <string name="harness_model_preparing">Preparing the selected model…</string>
+    <string name="harness_model_needs_context">Set a context window in model settings</string>
     <string name="harness_retry_model_selection">Retry model selection</string>
     <string name="harness_model_editor_local_unavailable">This local model is unavailable. Open Manage local servers to repair its preset or model.</string>
     <string name="harness_model_editor_local_running">Local server is ready.</string>

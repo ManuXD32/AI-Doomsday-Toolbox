@@ -380,6 +380,34 @@ internal fun harnessModelContextKnown(provider: HarnessProviderOption, modelId: 
 internal fun harnessSelectableModelIds(provider: HarnessProviderOption): List<String> =
     provider.models.filter { it.startsWith("llama:") || harnessModelContextKnown(provider, it) }
 
+internal data class HarnessSessionModelGroup(
+    val provider: HarnessProviderOption,
+    val selectable: List<String>,
+    val needsContext: List<String>,
+)
+
+/** Every provider with models, selected provider first, then DeepSeek official, then by name. */
+internal fun harnessSessionModelGroups(
+    providers: List<HarnessProviderOption>,
+    selectedProviderId: String?,
+): List<HarnessSessionModelGroup> =
+    providers
+        .filter { it.models.isNotEmpty() }
+        .sortedWith(
+            compareBy<HarnessProviderOption> { it.id != selectedProviderId }
+                .thenBy { it.id != "deepseek-official" }
+                .thenBy { it.name.lowercase() }
+                .thenBy { it.id }
+        )
+        .map { provider ->
+            val selectable = harnessSelectableModelIds(provider)
+            HarnessSessionModelGroup(
+                provider = provider,
+                selectable = selectable,
+                needsContext = provider.models.filter { it !in selectable },
+            )
+        }
+
 /**
  * Preparation responses are runtime rows rather than RPC envelopes. A row
  * with an availability/error/status failure must leave the previous selection

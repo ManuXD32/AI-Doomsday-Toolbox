@@ -734,17 +734,34 @@ private fun HarnessComposerSessionControls(
                         enabled = false,
                     )
                 }
-                selectedProvider?.let { provider ->
-                    val selectableModels = harnessSelectableModelIds(provider)
+                harnessSessionModelGroups(state.provider.providers, state.provider.selectedProviderId).forEach { group ->
+                    val provider = group.provider
                     DropdownMenuItem(
                         text = { Text(provider.name, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         onClick = {},
                         enabled = false,
                     )
-                    selectableModels.forEach { id ->
+                    group.selectable.forEach { id ->
                         DropdownMenuItem(
                             text = { Text(harnessModelOptionLabel(provider, id), maxLines = 2, overflow = TextOverflow.Ellipsis) },
                             onClick = { onSelectModel(provider.id, id); onModelExpandedChange(false) },
+                        )
+                    }
+                    group.needsContext.forEach { id ->
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(harnessModelOptionLabel(provider, id), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(
+                                        stringResource(R.string.harness_model_needs_context),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            },
+                            onClick = {},
+                            enabled = false,
                         )
                     }
                 }
