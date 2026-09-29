@@ -32,7 +32,7 @@ class HarnessWorkspaceFiles(
     private suspend fun <T> perform(fallback: suspend () -> Result<T>, action: suspend (HarnessWorkspaceScope) -> T): Result<T> {
         if (conversationId == null) return fallback()
         return withContext(Dispatchers.IO) {
-            try { Result.success(action(capture())) }
+            try { Result.success(HarnessInstallationManager.get(context).withFiles(runtime.runtimeId) { action(capture()) }) }
             catch (cancel: CancellationException) { throw cancel }
             catch (error: Exception) {
                 runtime.diagnostics.eventForConversation(conversationId, "workspace_file_action", "FAILED", errorCode = error.javaClass.simpleName)

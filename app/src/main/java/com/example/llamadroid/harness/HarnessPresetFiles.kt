@@ -36,7 +36,7 @@ internal suspend fun openHarnessPresetFiles(
         is HarnessRpcResult.Success -> result.value as? JsonObject ?: error("PRESET_DIRECTORY_UNAVAILABLE")
     }
     val path = value["path"]?.jsonPrimitive?.contentOrNull ?: error("PRESET_DIRECTORY_UNAVAILABLE")
-    val rootfs = AgentProotEnvironmentPaths.rootfs(context, HarnessRuntimePaths.SHARED_ENVIRONMENT_ID)
+    val rootfs = AgentProotEnvironmentPaths.rootfs(context, com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context))
     val host = resolveHarnessPresetGuestPath(path, listOf(
         "/root/.dsh" to HarnessRuntimePaths.harnessHome(context),
         "/workspace/projects" to HarnessRuntimePaths.projects(context),

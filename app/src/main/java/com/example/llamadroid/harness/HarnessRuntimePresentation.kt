@@ -158,6 +158,9 @@ private fun runtimeEventText(event: String): Int = when (event) {
     "process_launched", "process_identity_ready" -> R.string.harness_event_process_launched
     "readiness_waiting" -> R.string.harness_event_readiness_waiting
     "readiness_ready", "started" -> R.string.harness_event_ready
+    "catalog_updating" -> R.string.harness_installation_phase_catalog
+    "client_connecting" -> R.string.harness_connection_connecting
+    "client_connected" -> R.string.harness_connection_connected
     "startup_output" -> R.string.harness_event_startup_output
     "process_exited" -> R.string.harness_event_process_exited
     "app_start_failed", "start_failed", "app_operation_failed" -> R.string.harness_event_failed

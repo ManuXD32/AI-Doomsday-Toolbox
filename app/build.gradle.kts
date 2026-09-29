@@ -471,6 +471,8 @@ dependencies {
     implementation("io.airlift:aircompressor:2.0.2")
     implementation("commons-pool:commons-pool:1.6")
     implementation("com.github.luben:zstd-jni:1.5.6-6")
+    implementation(libs.zip4j)
+    implementation(libs.snakeyaml)
     implementation("org.apache.hadoop:hadoop-client-api:3.4.1")
     implementation("org.apache.hadoop:hadoop-client-runtime:3.4.1")
 

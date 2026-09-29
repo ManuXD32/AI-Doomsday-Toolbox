@@ -4198,7 +4198,8 @@ object Migrations {
         HarnessMigration.MIGRATION_122_123,
         GenerationQueueMigration.MIGRATION_123_124,
         GenerationQueueMigration.MIGRATION_124_125,
-        EasyLlamaChatMigration.MIGRATION_125_126
+        EasyLlamaChatMigration.MIGRATION_125_126,
+        HarnessInstallationsMigration.MIGRATION_126_127
     )
     /**
      * Check if a column exists in a table.

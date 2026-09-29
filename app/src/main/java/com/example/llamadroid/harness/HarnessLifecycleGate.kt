@@ -17,7 +17,7 @@ internal class HarnessLifecycleGate {
     private val starts = ConcurrentHashMap.newKeySet<Job>()
     private val stopping = AtomicInteger()
 
-    suspend fun runStart(action: suspend () -> Unit) = coroutineScope {
+    suspend fun <T> runStart(action: suspend () -> T): T = coroutineScope {
         val job = requireNotNull(currentCoroutineContext()[Job])
         starts.add(job)
         try {

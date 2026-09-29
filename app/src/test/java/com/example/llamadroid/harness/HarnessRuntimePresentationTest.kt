@@ -8,6 +8,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class HarnessRuntimePresentationTest {
+    @Test fun filesystemFailuresRetainTheirCategoryWithoutPrivatePaths() {
+        val failures = listOf(
+            java.nio.file.AccessDeniedException("/private/project") to "HARNESS_FILESYSTEM_ACCESS_DENIED",
+            java.nio.file.NoSuchFileException("/private/project") to "HARNESS_FILESYSTEM_ENTRY_MISSING",
+            java.nio.file.FileSystemException("/private/project") to "HARNESS_FILESYSTEM_ERROR",
+        )
+        failures.forEach { (error, code) ->
+            assertEquals(code, harnessLifecycleErrorCode(error))
+            assertEquals(code, harnessDiagnosticErrorClass(code))
+            assertFalse(harnessLifecycleErrorCode(error).contains("private"))
+        }
+    }
+
     @Test fun authenticatedEndpointPublishesWebUiWithoutASeparateSetupForm() {
         val endpoint = com.example.llamadroid.harness.runtime.HarnessEndpoint("http://127.0.0.1:43127", "dsh-session=private-cookie")
         val web = endpoint.toWebUiPresentation()

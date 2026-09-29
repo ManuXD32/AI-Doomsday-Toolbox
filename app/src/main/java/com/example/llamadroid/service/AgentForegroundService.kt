@@ -233,6 +233,20 @@ class AgentForegroundService : Service() {
             start(context, status, startSource = "retain_runtime")
         }
 
+        /** A separate counted lease for installation work; never initializes legacy execution. */
+        fun retainHarnessMaintenance(context: Context, status: String) {
+            runtimeRetainCount.incrementAndGet()
+            try {
+                context.startForegroundService(Intent(context, AgentForegroundService::class.java).apply {
+                    action = ACTION_START_HARNESS
+                    putExtra(EXTRA_STATUS, status)
+                })
+            } catch (error: Exception) {
+                runtimeRetainCount.updateAndGet { (it - 1).coerceAtLeast(0) }
+                throw error
+            }
+        }
+
         /** Keeps the shared Harness alive without constructing or recovering the retired agent loop. */
         fun retainHarness(context: Context, status: String) {
             val acquired = harnessRetained.compareAndSet(false, true)

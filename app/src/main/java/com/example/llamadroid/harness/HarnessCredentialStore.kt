@@ -51,6 +51,41 @@ class HarnessCredentialStore(context: Context) {
         commitPreferences { clear() }
     }
 
+    /** Called only while building an explicitly password-protected user transfer. */
+    @Synchronized
+    internal fun exportTransferRecords(includeProviders: Boolean, workspaceIds: Set<String>): JSONObject = JSONObject().apply {
+        preferences.all.keys.sorted().forEach { key ->
+            val workspaceId = key.removePrefix("record:adt-ssh/")
+            val include = when {
+                key.startsWith("record:adt-ssh-cleanup/") -> false
+                key.startsWith("record:adt-ssh/") -> workspaceId in workspaceIds
+                key.startsWith("ref:") || key.startsWith("record:") -> includeProviders
+                else -> false
+            }
+            if (include) read(key)?.let { put(key, it) }
+        }
+    }
+
+    /** Values are re-encrypted using this device's key; the source ciphertext never travels. */
+    @Synchronized
+    internal fun importTransferRecords(records: JSONObject, workspaceIds: Map<String, String>) {
+        require(records.length() <= 4096) { "HARNESS_CREDENTIAL_TRANSFER_INVALID" }
+        val validated = records.keys().asSequence().map { key ->
+            val target = when {
+                key.startsWith("ref:") -> key.also { validateReference(it.removePrefix("ref:")) }
+                key.startsWith("record:adt-ssh-cleanup/") -> error("HARNESS_CREDENTIAL_TRANSFER_INVALID")
+                key.startsWith("record:adt-ssh/") -> "record:adt-ssh/" + requireNotNull(workspaceIds[key.removePrefix("record:adt-ssh/")])
+                key.startsWith("record:") -> key.also { validateRecordKey(it.removePrefix("record:")) }
+                else -> error("HARNESS_CREDENTIAL_TRANSFER_INVALID")
+            }
+            val value = JSONObject(records.getJSONObject(key).toString())
+            require(value.toString().length <= MAX_SECRET_LENGTH) { "HARNESS_CREDENTIAL_TRANSFER_INVALID" }
+            if (target.startsWith("record:")) value.put("revision", UUID.randomUUID().toString())
+            target to value
+        }.toList()
+        validated.forEach { (key, value) -> write(key, value) }
+    }
+
     @Synchronized
     internal fun readRecord(key: String): JSONObject? {
         validateRecordKey(key)

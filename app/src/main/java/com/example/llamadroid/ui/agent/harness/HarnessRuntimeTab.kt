@@ -61,7 +61,9 @@ internal fun HarnessRuntimeTab(
     runtime: HarnessRuntimeUiState,
     onAction: (NativeHarnessUiAction) -> Unit,
     modifier: Modifier = Modifier,
-    onReinstallRuntime: (() -> Unit)? = null
+    onReinstallRuntime: (() -> Unit)? = null,
+    installations: HarnessRuntimeInstallationsUiState? = null,
+    onInstallationAction: (HarnessRuntimeInstallationAction) -> Unit = {},
 ) {
     LazyColumn(
         modifier = modifier
@@ -70,13 +72,19 @@ internal fun HarnessRuntimeTab(
         contentPadding = PaddingValues(vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        if (installations != null) item(key = "runtime-installations") {
+            HarnessRuntimeInstallationsHost(
+                state = installations,
+                onAction = onInstallationAction,
+            )
+        }
         item(key = "runtime-lifecycle") {
             HarnessRuntimeHeader(runtime = runtime, onAction = onAction)
         }
         item(key = "runtime-lan-access") {
             HarnessLanAccessPanel(runtime = runtime)
         }
-        if (onReinstallRuntime != null) item(key = "runtime-reinstall") {
+        if (onReinstallRuntime != null && installations == null) item(key = "runtime-reinstall") {
             HarnessRuntimeReinstallPanel(onReinstallRuntime)
         }
         item(key = "runtime-diagnostics") {

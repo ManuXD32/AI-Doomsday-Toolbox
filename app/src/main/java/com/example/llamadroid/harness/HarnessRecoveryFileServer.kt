@@ -155,13 +155,17 @@ class HarnessRecoveryFileServer private constructor(context: Context) {
         private const val TAG = "HarnessRecoverySftp"
         private const val PASSWORD_BYTES = 24
 
-        @Volatile
-        private var instance: HarnessRecoveryFileServer? = null
-
-        fun get(context: Context): HarnessRecoveryFileServer =
-            instance ?: synchronized(this) {
-                instance ?: HarnessRecoveryFileServer(context.applicationContext).also { instance = it }
+        private val instances = java.util.concurrent.ConcurrentHashMap<String, HarnessRecoveryFileServer>()
+        fun get(context: Context): HarnessRecoveryFileServer {
+            val captured = HarnessInstallationManager.capture(context)
+            return instances.getOrPut(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(captured)) {
+                HarnessRecoveryFileServer(captured)
             }
+        }
+        internal suspend fun stopAllForMaintenance() {
+            instances.values.toList().forEach { it.stop().getOrThrow() }
+            instances.clear()
+        }
     }
 
     private val appContext = context.applicationContext
@@ -173,7 +177,12 @@ class HarnessRecoveryFileServer private constructor(context: Context) {
     val state: StateFlow<HarnessRecoveryFileServerState> = _state.asStateFlow()
 
     /** Prepares the managed environment and binds a random TCP port on all local interfaces. */
-    suspend fun start(): Result<HarnessRecoveryFileServerState> = withContext(Dispatchers.IO) {
+    suspend fun start(): Result<HarnessRecoveryFileServerState> = HarnessInstallationManager.lifecycle.runStart {
+        HarnessInstallationManager.get(appContext).requireSelected(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(appContext))
+        startOwned()
+    }
+
+    private suspend fun startOwned(): Result<HarnessRecoveryFileServerState> = withContext(Dispatchers.IO) {
         operationLock.withLock {
             // Keep environment preparation inside the same lock as bind/stop. Otherwise a
             // retry can finish after a stop request and overwrite its DISABLED state.
@@ -184,7 +193,7 @@ class HarnessRecoveryFileServer private constructor(context: Context) {
                 )
             )
             val pathsResult = runCatching {
-                environmentProvider.prepare(HarnessRuntimePaths.SHARED_ENVIRONMENT_ID)
+                environmentProvider.prepare(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(appContext))
             }
             if (pathsResult.isFailure) {
                 val failure = pathsResult.exceptionOrNull()!!
@@ -207,7 +216,11 @@ class HarnessRecoveryFileServer private constructor(context: Context) {
     /** Starts the server against already prepared paths; useful when the runtime screen has them. */
     suspend fun start(paths: HarnessEnvironmentPaths): Result<HarnessRecoveryFileServerState> =
         withContext(Dispatchers.IO) {
-            operationLock.withLock { startPrepared(paths) }
+            HarnessInstallationManager.lifecycle.runStart {
+                HarnessInstallationManager.get(appContext).requireSelected(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(appContext))
+                require(paths.environmentId == com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(appContext))
+                operationLock.withLock { startPrepared(paths) }
+            }
         }
 
     private fun startPrepared(paths: HarnessEnvironmentPaths): Result<HarnessRecoveryFileServerState> {
@@ -237,9 +250,8 @@ class HarnessRecoveryFileServer private constructor(context: Context) {
                     require(paths.rootfs.isDirectory) { "The managed Debian rootfs is unavailable." }
                     val password = generatePassword()
                     phase = HarnessRecoveryFileServerPhase.GENERATING_HOST_KEY
-                    val hostKey = File(
-                        appContext.filesDir,
-                        "agent_harness/recovery/ssh_host_key.ser"
+                    val hostKey = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.dataFile(
+                        appContext, "agent_harness/recovery/ssh_host_key.ser"
                     )
                     hostKey.parentFile?.mkdirs()
                     require(hostKey.parentFile?.isDirectory == true) {
@@ -249,7 +261,7 @@ class HarnessRecoveryFileServer private constructor(context: Context) {
                         "The recovery SFTP host-key path is a symbolic link."
                     }
                     phase = HarnessRecoveryFileServerPhase.INITIALIZING_SERVICE
-                    val sshdUserHome = resolveRecoverySshdUserHome(appContext.filesDir)
+                    val sshdUserHome = resolveRecoverySshdUserHome(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.dataFile(appContext, "agent_harness/recovery").apply { mkdirs() })
                     HarnessSshdPlatform.configure(sshdUserHome)
                     val ssh = SshServer.setUpDefaultServer().apply {
                         // Use the Android-supported transport directly; R8 must not have to

@@ -2,6 +2,7 @@ package com.example.llamadroid.service
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import com.example.llamadroid.harness.HarnessInstallationManager
 import android.content.Context
 import android.system.Os
 import android.system.OsConstants
@@ -119,14 +120,17 @@ class HarnessRecoveryTerminalSessionManager private constructor(context: Context
         private const val TERM_GRACE_STEP_MS = 100L
         private const val MAX_LOG_CHARS = 512
 
-        @Volatile
-        private var instance: HarnessRecoveryTerminalSessionManager? = null
-
-        fun get(context: Context): HarnessRecoveryTerminalSessionManager =
-            instance ?: synchronized(this) {
-                instance ?: HarnessRecoveryTerminalSessionManager(context.applicationContext)
-                    .also { instance = it }
+        private val instances = java.util.concurrent.ConcurrentHashMap<String, HarnessRecoveryTerminalSessionManager>()
+        fun get(context: Context): HarnessRecoveryTerminalSessionManager {
+            val captured = HarnessInstallationManager.capture(context)
+            return instances.getOrPut(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(captured)) {
+                HarnessRecoveryTerminalSessionManager(captured)
             }
+        }
+        internal suspend fun closeAllForMaintenance() {
+            instances.values.toList().forEach { it.close().getOrThrow() }
+            instances.clear()
+        }
     }
 
     private val appContext = context.applicationContext
@@ -222,7 +226,12 @@ class HarnessRecoveryTerminalSessionManager private constructor(context: Context
     }
 
     /** Opens the shell, preparing only the verified Debian rootfs and its persistent mounts. */
-    suspend fun open(): Result<HarnessRecoveryTerminalState> = withContext(Dispatchers.IO) {
+    suspend fun open(): Result<HarnessRecoveryTerminalState> = HarnessInstallationManager.lifecycle.runStart {
+        HarnessInstallationManager.get(appContext).requireSelected(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(appContext))
+        openOwned()
+    }
+
+    private suspend fun openOwned(): Result<HarnessRecoveryTerminalState> = withContext(Dispatchers.IO) {
         lifecycleLock.withLock {
             var startupPhase = HarnessRecoveryTerminalPhase.PREPARING_ENVIRONMENT
             var guestReadyReceipt: AgentProotGuestReadyReceipt? = null
@@ -254,7 +263,7 @@ class HarnessRecoveryTerminalSessionManager private constructor(context: Context
                     openedAt = System.currentTimeMillis(),
                 )
                 publish(openingState)
-                val paths = environmentProvider.prepare(HarnessRuntimePaths.SHARED_ENVIRONMENT_ID)
+                val paths = environmentProvider.prepare(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(appContext))
                 startupPhase = HarnessRecoveryTerminalPhase.BUILDING_LAUNCH
                 publish(_state.value.copy(phase = startupPhase))
                 val sessionId = "recovery_${UUID.randomUUID()}"

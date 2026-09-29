@@ -6,6 +6,18 @@
 # Keep Kotlin data classes for serialization
 -keep class com.example.llamadroid.data.** { *; }
 
+# Portable runtime metadata and crash-recovery plans are durable Gson contracts.
+-keep class com.example.llamadroid.harness.HarnessTransferMetadata$* { *; }
+-keep class com.example.llamadroid.harness.HarnessTransferPublication$* { *; }
+
+# SnakeYAML 2.4 detects absent JavaBeans support and uses field access on Android.
+# Runtime transfers use SafeConstructor data maps; desktop bean introspection is optional.
+-dontwarn java.beans.BeanInfo
+-dontwarn java.beans.FeatureDescriptor
+-dontwarn java.beans.IntrospectionException
+-dontwarn java.beans.Introspector
+-dontwarn java.beans.PropertyDescriptor
+
 # The Agent remote worker exchanges Gson DTOs through app-private files. Keep
 # this graph explicitly: a broad `service.**.*` rule did not retain Kotlin
 # generic element signatures under R8, so List<ChatMessage> was restored as a

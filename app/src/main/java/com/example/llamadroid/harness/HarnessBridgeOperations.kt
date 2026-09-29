@@ -147,7 +147,7 @@ class HarnessBridgeOperations(
             return@withContext JSONArray(files.retryCleanup(sessionId = ownedSession))
         }
         if (method == "workspace.prepare") {
-            val workspace = requireNotNull(database.harnessDao().workspace(args.getString("workspaceId"))) { "WORKSPACE_NOT_FOUND" }
+            val workspace = requireNotNull(database.harnessDao(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context)).workspace(args.getString("workspaceId"))) { "WORKSPACE_NOT_FOUND" }
             require(workspace.guestPath == args.getString("guestPath") && workspace.backend == args.getString("backend")) { "WORKSPACE_IDENTITY_MISMATCH" }
             if (workspace.backend == "REMOTE_SSH") {
                 check(workspaces.sshSummary(workspace.id).getBoolean("configured")) { "SSH_CONFIGURATION_REQUIRED" }

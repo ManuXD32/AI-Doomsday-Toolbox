@@ -11,7 +11,10 @@ import androidx.room.PrimaryKey
  */
 @Entity(
     tableName = "agent_conversations",
-    indices = [Index("prootEnvironmentId")]
+    indices = [
+        Index("prootEnvironmentId"),
+        Index("runtimeId")
+    ]
 )
 data class AgentConversationEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -46,7 +49,10 @@ data class AgentConversationEntity(
     val directReanchorReason: String? = null,
     val directReanchoredAt: Long? = null,
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    /** Runtime ownership for Harness history; pre-runtime rows stay in the legacy scope. */
+    @ColumnInfo(defaultValue = "'deepseek-harness-shared'")
+    val runtimeId: String = HarnessRuntimeIds.LEGACY
 )
 
 /**
@@ -170,6 +176,7 @@ data class AgentProjectRunEntity(
         Index(value = ["storageKey"], unique = true),
         Index("status"),
         Index("sharingMode"),
+        Index("purpose"),
         Index("updatedAt")
     ]
 )
@@ -187,8 +194,26 @@ data class AgentProotEnvironmentEntity(
     val sizeBytes: Long = 0L,
     val lastUsedAt: Long? = null,
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    /** Catalog ownership: generic Proot rows are LEGACY; Harness rows are HARNESS. */
+    @ColumnInfo(defaultValue = "'LEGACY'")
+    val purpose: String = HarnessInstallationPurpose.LEGACY,
+    /** Filesystem layout marker used by runtime path and migration code. */
+    @ColumnInfo(defaultValue = "'SCOPED'")
+    val dataLayout: String = HarnessInstallationDataLayout.SCOPED
 )
+
+/** Purpose marker values stored on the shared Proot environment catalog. */
+object HarnessInstallationPurpose {
+    const val HARNESS = "HARNESS"
+    const val LEGACY = "LEGACY"
+}
+
+/** Filesystem layout marker used by runtime path helpers during migration and removal. */
+object HarnessInstallationDataLayout {
+    const val SCOPED = "SCOPED"
+    const val LEGACY = "LEGACY"
+}
 
 /** Environment sharing semantics shown by the Agent environment manager. */
 object AgentProotEnvironmentSharingMode {

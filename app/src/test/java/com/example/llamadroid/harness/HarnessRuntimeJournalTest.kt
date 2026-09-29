@@ -10,6 +10,15 @@ import org.junit.rules.TemporaryFolder
 class HarnessRuntimeJournalTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun appStartupFailureRetainsItsPostReadinessPhaseAcrossRestart() {
+        val file = temporary.newFolder().resolve("diagnostics.json")
+        HarnessRuntimeJournal(file).record(event("app_start_failed").copy(
+            phase = "catalog_updating", errorCode = "HARNESS_FILESYSTEM_ENTRY_MISSING"))
+        val row = HarnessRuntimeJournal(file).also { it.load() }.entries.value.single()
+        assertEquals("catalog_updating", row.phase)
+        assertEquals("HARNESS_FILESYSTEM_ENTRY_MISSING", row.errorCode)
+    }
+
     @Test fun webBootCountsSurviveRestartWithoutArbitraryFields() {
         val file = temporary.newFolder().resolve("diagnostics.json")
         HarnessRuntimeJournal(file).recordConnection("webview", "webview", "interface", "failure",

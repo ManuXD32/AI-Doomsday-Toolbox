@@ -6,6 +6,7 @@ import androidx.room.withTransaction
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.harness.HarnessWorkspaceAccess.Companion.readBounded
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -33,7 +34,7 @@ internal data class HarnessSessionDeletionReceipt(
 
 /** Durable maintenance receipts are independent of the UI and contain no conversation content. */
 internal class HarnessSessionDeletionStore(context: Context) {
-    private val root = File(context.filesDir, "agent_harness/session-deletions")
+    private val root = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.dataFile(context, "agent_harness/session-deletions")
     private fun file(id: String) = AtomicFile(File(root, sessionDeletionKey(id) + ".json"))
 
     @Synchronized fun read(id: String): HarnessSessionDeletionReceipt? = readFile(file(id))
@@ -74,6 +75,7 @@ class HarnessSessionDeletion internal constructor(
     private val mutablePending = MutableStateFlow<List<HarnessSessionDeletionState>>(emptyList())
     val pending = mutablePending.asStateFlow()
     private var worker: Job? = null
+    @Volatile private var paused = false
 
     init { wake() }
 
@@ -81,13 +83,14 @@ class HarnessSessionDeletion internal constructor(
         require(validDeletionId(sessionId)) { "SESSION_DELETE_INVALID" }
         val previous = store.read(sessionId)
         if (previous?.removed == true) return
-        val mapping = requireNotNull(database.harnessDao().session(sessionId)) { "SESSION_NOT_FOUND" }
+        val mapping = requireNotNull(database.harnessDao(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context)).session(sessionId)) { "SESSION_NOT_FOUND" }
         store.write((previous ?: HarnessSessionDeletionReceipt(sessionId, mapping.conversationId)).copy(error = false))
         mutablePending.value = store.all().filterNot { it.removed }.map { HarnessSessionDeletionState(it.id, it.error) }
         wake()
     }
 
     @Synchronized fun wake() {
+        paused = false
         if (worker?.isActive == true) return
         val launched = scope.launch(Dispatchers.IO) {
             do {
@@ -111,8 +114,13 @@ class HarnessSessionDeletion internal constructor(
             // A new request can arrive just as the final loop snapshot empties.
             // Restart only durable non-error work; failed work needs explicit retry.
             synchronized(this) { if (worker === launched) worker = null }
-            if (store.all().any { !it.removed && !it.error } && scope.isActive) wake()
+            if (!paused && store.all().any { !it.removed && !it.error } && scope.isActive) wake()
         }
+    }
+
+    internal suspend fun pause() {
+        paused = true
+        worker?.cancelAndJoin()
     }
 
     internal fun prepared(row: HarnessSessionDeletionReceipt, directory: String, index: String?): HarnessSessionDeletionReceipt =
@@ -120,7 +128,7 @@ class HarnessSessionDeletion internal constructor(
 
     /** Must run under the runtime's stopped maintenance lock, after confirmed listener/process cleanup. */
     internal suspend fun removeStopped(row: HarnessSessionDeletionReceipt) {
-        val home = File(context.filesDir, "agent_harness/dsh_home").canonicalFile
+        val home = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.dataFile(context, "agent_harness/dsh_home").canonicalFile
         val path = checkedSessionDeletionPath(home, requireNotNull(row.directory))
         require(path.name == row.id && path.parentFile != home) { "SESSION_DELETE_OUTSIDE_STORE" }
         // Delete only this persistence directory. Forks own independent directories;
@@ -128,7 +136,7 @@ class HarnessSessionDeletion internal constructor(
         if (Files.exists(path.toPath(), LinkOption.NOFOLLOW_LINKS)) deleteSessionTree(path)
         row.index?.let { removeDerivedIndex(checkedSessionDeletionPath(home, it)) }
         database.withTransaction {
-            database.harnessDao().session(row.id)?.let { mapping ->
+            database.harnessDao(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context)).session(row.id)?.let { mapping ->
                 check(mapping.conversationId == row.conversationId)
                 database.agentChatDao().deleteConversationById(mapping.conversationId)
             }

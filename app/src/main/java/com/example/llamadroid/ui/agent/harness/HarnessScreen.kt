@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Refresh
@@ -134,6 +135,10 @@ fun NativeHarnessScreen(
     onOpenRecoveryFileServer: (() -> Unit)? = null,
     onReinstallRuntime: (() -> Unit)? = null,
     onOpenAppToolsSettings: (() -> Unit)? = null,
+    installations: HarnessRuntimeInstallationsUiState? = null,
+    onInstallationAction: (HarnessRuntimeInstallationAction) -> Unit = {},
+    /** Opens the canonical runtime transfer UI with the current project/session context selected. */
+    onOpenRuntimeTransfer: ((HarnessRuntimeTransferSelectionUi) -> Unit)? = null,
 ) {
     // The navigation stack belongs to this Harness entry, not to a mutable
     // workspace label that changes as projects and sessions are selected.
@@ -257,6 +262,17 @@ fun NativeHarnessScreen(
         // should not make Back walk through stale copies of the same screen.
         navigationKeys = navigationKeys.filterNot { it == destinationKey } + destinationKey
         applyNavigationLocation(destination)
+    }
+
+    // Maintenance temporarily replaces this screen. On return, keep a failed or
+    // cancelled installation visible beside its Retry and runtime stop controls.
+    val installationResult = installations?.operation
+    LaunchedEffect(installationResult?.runtimeId, installationResult?.kind,
+        installationResult?.canRetry, installationResult?.errorCode) {
+        if (installationResult?.busy == false &&
+            (installationResult.canRetry || installationResult.errorCode != null)) {
+            navigateTo(HarnessNavigationLocation(selectedProjectId, HarnessSurfaceTab.RUNTIME))
+        }
     }
 
     LaunchedEffect(initialAttentionTab, initialProjectId, projects.map { it.id }) {
@@ -448,6 +464,33 @@ fun NativeHarnessScreen(
                         )
                     }
                 }
+                onOpenRuntimeTransfer?.let { openTransfer ->
+                    if (selectedTab != HarnessSurfaceTab.RUNTIME &&
+                        (selectedProject != null || projectState.selectedSessionId != null)
+                    ) {
+                        IconButton(
+                            onClick = {
+                                val selection = HarnessRuntimeTransferSelectionUi(
+                                    projectIds = selectedProject?.id?.let { setOf(it) }.orEmpty(),
+                                    sessionIds = projectState.selectedSessionId?.let { setOf(it) }.orEmpty(),
+                                )
+                                navigateTo(
+                                    HarnessNavigationLocation(
+                                        selectedProjectId,
+                                        HarnessSurfaceTab.RUNTIME,
+                                    )
+                                )
+                                openTransfer(selection)
+                            },
+                            modifier = Modifier.testTag("harness_context_runtime_transfer"),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.FileDownload,
+                                contentDescription = stringResource(R.string.harness_installations_context_export),
+                            )
+                        }
+                    }
+                }
                 HarnessSecondaryDestinationMenu(
                     onSelected = { navigateTo(HarnessNavigationLocation(selectedProjectId, it)) },
                     onProjects = if (projectNavigationEnabled) ::navigateToProjects else null,
@@ -586,6 +629,8 @@ fun NativeHarnessScreen(
                         runtime = projectState.runtime,
                         onAction = onAction,
                         onReinstallRuntime = onReinstallRuntime,
+                        installations = installations,
+                        onInstallationAction = onInstallationAction,
                         modifier = Modifier.weight(1f).fillMaxWidth()
                     )
                 }

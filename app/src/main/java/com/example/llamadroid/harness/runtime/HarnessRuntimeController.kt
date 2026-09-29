@@ -99,7 +99,8 @@ class HarnessRuntimeController(
     private val portAllocator: HarnessPortAllocator,
     private val logger: HarnessRuntimeMetadataLogger = NoopHarnessRuntimeMetadataLogger,
     private val now: () -> Long = { System.currentTimeMillis() },
-    private val listenerProbe: suspend (Int) -> Boolean = ::isLoopbackListenerOpen
+    private val listenerProbe: suspend (Int) -> Boolean = ::isLoopbackListenerOpen,
+    private val defaultEnvironmentId: String = HarnessRuntimeRecord.DEFAULT_ENVIRONMENT_ID,
 ) {
     private val lifecycleLock = Mutex()
     private var activeStart: StartSession? = null
@@ -319,6 +320,7 @@ class HarnessRuntimeController(
         val generation = UUID.randomUUID().toString()
         val port = portAllocator.allocate(request.preferredPort)
         val starting = HarnessRuntimeRecord(
+            runtimeId = request.environmentId,
             environmentId = request.environmentId,
             state = HarnessRuntimeState.STARTING,
             generation = generation,
@@ -1258,7 +1260,8 @@ class HarnessRuntimeController(
     }
 
     private fun stoppedRecord(): HarnessRuntimeRecord = HarnessRuntimeRecord(
-        environmentId = HarnessRuntimeRecord.DEFAULT_ENVIRONMENT_ID,
+        runtimeId = defaultEnvironmentId,
+        environmentId = defaultEnvironmentId,
         state = HarnessRuntimeState.STOPPED,
         generation = UUID.randomUUID().toString(),
         endedAt = now(),
@@ -1298,21 +1301,22 @@ class HarnessRuntimeController(
                 binaries = binaries,
                 processLauncher = AndroidHarnessProcessLauncher(context),
                 readinessProbe = HttpHarnessReadinessProbe(readinessReceipt = File(
-                    HarnessRuntimePaths.runtimeRoot(context, HarnessRuntimeRecord.DEFAULT_ENVIRONMENT_ID),
+                    HarnessRuntimePaths.runtimeRoot(context, HarnessRuntimeScope.id(context)),
                     "run/harness-ready.json"
                 )),
                 processSupervisor = AndroidHarnessProcessSupervisor(
                     ledgerFile = File(
                         HarnessRuntimePaths.runtimeRoot(
                             context,
-                            HarnessRuntimeRecord.DEFAULT_ENVIRONMENT_ID
+                            HarnessRuntimeScope.id(context)
                         ),
                         "run/harness-processes.ledger"
                     ).canonicalFile
                 ),
                 hooks = hooks,
                 portAllocator = AndroidHarnessPortAllocator(),
-                logger = logger
+                logger = logger,
+                defaultEnvironmentId = HarnessRuntimeScope.id(context),
             )
         }
     }

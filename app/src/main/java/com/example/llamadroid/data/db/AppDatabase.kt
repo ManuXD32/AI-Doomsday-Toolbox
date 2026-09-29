@@ -99,6 +99,7 @@ class Converters {
         HarnessRuntimeEntity::class,
         HarnessWorkspaceEntity::class,
         HarnessSessionEntity::class,
+        HarnessTransferImportReceiptEntity::class,
         AgentProjectEventEntity::class,
         AgentMessagePartEntity::class,
         AgentTurnContextEntity::class,
@@ -180,8 +181,8 @@ class Converters {
         com.example.llamadroid.data.model.library.ModelDeletionJournalPathEntity::class,
         GenerationQueueItemEntity::class,
         GenerationQueueControlEntity::class
-    ], 
-    version = 126,
+    ],
+    version = 127,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -202,6 +203,10 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun agentProotEnvironmentDao(): AgentProotEnvironmentDao
     abstract fun agentProotRunDao(): AgentProotRunDao
     abstract fun harnessDao(): HarnessDao
+    /** Room metadata access used by Harness runtime transfer import/export. */
+    abstract fun harnessTransferDao(): com.example.llamadroid.harness.HarnessTransferDao
+    /** Runtime installation catalog backed by the shared PRoot environment table. */
+    abstract fun harnessInstallationDao(): HarnessInstallationDao
     abstract fun agentWorkflowDao(): AgentWorkflowDao
     abstract fun customToolDao(): CustomToolDao
     abstract fun customAgentDao(): CustomAgentDao
@@ -235,6 +240,9 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun audioLibraryDao(): com.example.llamadroid.audio.library.AudioLibraryDao
     abstract fun modelDeletionJournalDao(): com.example.llamadroid.data.model.library.ModelDeletionJournalDao
     abstract fun generationQueueDao(): GenerationQueueDao
+
+    /** Capture runtime ownership once; the global process-owner row remains available on the facade. */
+    fun harnessDao(runtimeId: String): HarnessRuntimeDao = HarnessRuntimeDao(harnessDao(), runtimeId)
 
     companion object {
         @Volatile

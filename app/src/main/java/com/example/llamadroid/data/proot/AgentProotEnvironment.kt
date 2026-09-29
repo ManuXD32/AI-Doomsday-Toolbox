@@ -63,7 +63,9 @@ object AgentProotEnvironmentPaths {
     fun environmentRoot(context: Context, environmentId: String): File {
         val safeId = requireSafeEnvironmentId(environmentId)
         val root = storageRoot(context)
-        val target = File(root, safeId).canonicalFile
+        val lexical = File(root, safeId)
+        require(!java.nio.file.Files.isSymbolicLink(lexical.toPath())) { "PROOT_ENVIRONMENT_LINK_INVALID" }
+        val target = lexical.canonicalFile
         require(isDescendantOrSame(target, root)) {
             "PRoot environment path escaped the app-private storage root."
         }
@@ -71,7 +73,9 @@ object AgentProotEnvironmentPaths {
     }
 
     fun rootfs(context: Context, environmentId: String): File =
-        File(environmentRoot(context, environmentId), ROOTFS_DIRECTORY).canonicalFile.also {
+        File(environmentRoot(context, environmentId), ROOTFS_DIRECTORY).also {
+            require(!java.nio.file.Files.isSymbolicLink(it.toPath())) { "PROOT_ROOTFS_LINK_INVALID" }
+        }.canonicalFile.also {
             require(isDescendantOrSame(it, environmentRoot(context, environmentId)))
         }
 
@@ -397,7 +401,11 @@ object AgentProotRootfsExtractor {
 class AgentProotEnvironmentManager(private val context: Context) {
     private val locks = ConcurrentHashMap<String, Any>()
 
-    suspend fun prepare(spec: AgentProotEnvironmentSpec, forceRefresh: Boolean = false): Result<File> =
+    suspend fun prepare(
+        spec: AgentProotEnvironmentSpec,
+        forceRefresh: Boolean = false,
+        progress: (AgentProotPreparationPhase) -> Unit = {},
+    ): Result<File> =
         withContext(Dispatchers.IO) {
             val coroutineContext = currentCoroutineContext()
             val cancellation = AgentProotCancellation { coroutineContext.ensureActive() }
@@ -406,7 +414,7 @@ class AgentProotEnvironmentManager(private val context: Context) {
                 val id = AgentProotEnvironmentPaths.requireSafeEnvironmentId(spec.id)
                 Result.success(
                     synchronized(locks.getOrPut(id) { Any() }) {
-                        prepareBlocking(spec.copy(id = id), forceRefresh, cancellation)
+                        prepareBlocking(spec.copy(id = id), forceRefresh, cancellation, progress)
                     }
                 )
             } catch (cancelled: CancellationException) {
@@ -442,7 +450,8 @@ class AgentProotEnvironmentManager(private val context: Context) {
     private fun prepareBlocking(
         spec: AgentProotEnvironmentSpec,
         forceRefresh: Boolean,
-        cancellation: AgentProotCancellation
+        cancellation: AgentProotCancellation,
+        progress: (AgentProotPreparationPhase) -> Unit,
     ): File {
         cancellation.check()
         require(spec.imageId == DebianAssetPack.IMAGE_ID) {
@@ -467,12 +476,14 @@ class AgentProotEnvironmentManager(private val context: Context) {
         staging.mkdirs()
         val archive = File(staging, "rootfs.tar.xz")
         try {
+            progress(AgentProotPreparationPhase.COPY)
             cancellation.check()
             DebianAssetPack.open(context, DebianAssetPack.ROOTFS_ASSET)?.use { input ->
                 archive.outputStream().use { output ->
                     copyProotCancellable(input, output, cancellation)
                 }
             } ?: error("Debian rootfs archive is missing from the asset pack")
+            progress(AgentProotPreparationPhase.CHECKSUM)
             val expected = DebianBootstrapChecksum.expected(
                 spec.imageSha256, DebianAssetPack.readExpectedRootfsSha256(context)
             )
@@ -481,6 +492,7 @@ class AgentProotEnvironmentManager(private val context: Context) {
             }
 
             val extracted = File(staging, ROOTFS_STAGE_NAME).canonicalFile
+            progress(AgentProotPreparationPhase.EXTRACT)
             AgentProotRootfsExtractor.extract(archive, extracted, cancellation)
             cancellation.check()
             require(rootfsReady(extracted)) { "Extracted Debian rootfs is incomplete" }
@@ -495,6 +507,7 @@ class AgentProotEnvironmentManager(private val context: Context) {
                     .toString(),
                 Charsets.UTF_8
             )
+            progress(AgentProotPreparationPhase.ACTIVATE)
             environment.mkdirs()
             val previous = File(environment, ".rootfs.previous-${UUID.randomUUID()}").canonicalFile
             val hadPrevious = rootfs.exists()
@@ -528,3 +541,5 @@ class AgentProotEnvironmentManager(private val context: Context) {
         const val ENVIRONMENT_MARKER = ".adt-environment.json"
     }
 }
+
+enum class AgentProotPreparationPhase { COPY, CHECKSUM, EXTRACT, ACTIVATE }

@@ -46,6 +46,7 @@ object DatabaseBackupManager {
         "video_upscale_output",
         "video_gen_output",
         "agent_local_workspaces",
+        "agent_harness",
         "workflow_media_inputs",
         "workflow_media_translation",
         "workflow_subtitle_translation",
@@ -80,7 +81,14 @@ object DatabaseBackupManager {
      * @param destinationUri SAF URI where the ZIP file will be written
      * @return Result with the backup filename on success, or error message on failure
      */
-    suspend fun createBackup(context: Context, destinationUri: Uri): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun createBackup(context: Context, destinationUri: Uri): Result<String> = try {
+        com.example.llamadroid.harness.HarnessInstallationManager.get(context).execute("EXPORT_ALL", null) {
+            createStoppedBackup(context, destinationUri)
+        }
+    } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+    catch (failure: Exception) { Result.failure(failure) }
+
+    private suspend fun createStoppedBackup(context: Context, destinationUri: Uri): Result<String> = withContext(Dispatchers.IO) {
         try {
             DebugLog.log("$TAG Starting backup...")
             
@@ -243,7 +251,12 @@ object DatabaseBackupManager {
             val root = File(filesDir, rootName)
             if (!root.isDirectory) return@flatMap emptyList()
             root.walkTopDown()
-                .filter { it.isFile }
+                .onEnter { directory ->
+                    !java.nio.file.Files.isSymbolicLink(directory.toPath()) &&
+                        (rootName != "agent_harness" || directory.name !in setOf("installation-operations", "transfers", "reset-quarantine") &&
+                            !directory.name.startsWith("stage-"))
+                }
+                .filter { it.isFile && !java.nio.file.Files.isSymbolicLink(it.toPath()) }
                 .mapNotNull { file ->
                     val relative = runCatching {
                         root.toPath().relativize(file.toPath()).toString()
