@@ -6,6 +6,7 @@ sealed class Screen(val route: String) {
     object Library : Screen("library")
     object AllMediaGallery : Screen("all_media_gallery") // Shared saved image and video gallery
     object ModelManager : Screen("models")       // Now goes to Model Hub
+    object Chats : Screen("chats")               // Chats root: native chats + Agent projects
     object Chat : Screen("chat")
     object Settings : Screen("settings")
     object Stats : Screen("settings_stats")

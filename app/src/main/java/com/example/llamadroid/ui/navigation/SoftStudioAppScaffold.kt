@@ -148,7 +148,7 @@ fun SoftStudioAppScaffold(
             topBar = {
                 if (presentation.isRoot) {
                     TopAppBar(
-                        title = { Text(stringResource(R.string.studio_nav_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        title = { Text(presentation.parent?.let { rootLabel(destinations, it) } ?: stringResource(R.string.studio_nav_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         navigationIcon = {
                             if (isDrawer) IconButton(
                                 onClick = { scope.launch { drawerState.open() } },
@@ -227,3 +227,6 @@ fun SoftStudioAppScaffold(
         }
     }
 }
+
+private fun rootLabel(destinations: List<AppNavigationDestination>, root: AppRootDestination): String? =
+    destinations.firstOrNull { it.route == root.route }?.label

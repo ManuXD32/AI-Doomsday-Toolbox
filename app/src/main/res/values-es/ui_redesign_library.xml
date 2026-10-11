@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ui_library_models_title">Modelos</string>
+    <string name="ui_library_task_chat">Para chat</string>
+    <string name="ui_library_task_chat_desc">Modelos de lenguaje para chats y agentes.</string>
+    <string name="ui_library_task_images">Para imágenes y vídeo</string>
+    <string name="ui_library_task_images_desc">Checkpoints de Stable Diffusion, LoRAs y modelos de vídeo.</string>
+    <string name="ui_library_task_voice">Para voz</string>
+    <string name="ui_library_task_voice_desc">Modelos de voz, transcripción y música.</string>
+    <string name="ui_library_task_documents">Para documentos y búsqueda</string>
+    <string name="ui_library_task_documents_desc">Modelos de embeddings y reranking para bases de conocimiento.</string>
+    <string name="ui_library_all_managers">Todos los gestores de modelos</string>
+    <string name="ui_library_knowledge_title">Conocimiento y notas</string>
+    <string name="ui_library_knowledge_bases">Bases de conocimiento</string>
+    <string name="ui_library_notes">Notas</string>
+    <string name="ui_library_creations_title">Mis creaciones</string>
+    <string name="ui_library_link_storage">Almacenamiento y fuentes</string>
+    <string name="ui_library_link_share">Compartir modelos</string>
+    <string name="ui_sd_group_base">Modelos base</string>
+    <string name="ui_sd_group_components">Componentes</string>
+    <string name="ui_sd_group_adapters">Adaptadores</string>
+    <string name="ui_sd_group_upscalers">Escaladores y detectores</string>
+</resources>

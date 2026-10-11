@@ -24,7 +24,7 @@ import com.example.llamadroid.ui.navigation.Screen
 @Composable
 fun LlamaServerCardsScreen(navController: NavController) {
     AppScreenScaffold(
-        title = stringResource(R.string.ai_chat_manage_servers),
+        title = stringResource(R.string.chats_local_servers_title),
         subtitle = stringResource(R.string.llama_cards_subtitle),
         onBack = { navController.popBackStack() }
     ) {
@@ -41,7 +41,8 @@ fun LlamaServerCardsScreen(navController: NavController) {
                 onManageModels = {
                     navController.navigate(Screen.LLMModels.route)
                 },
-                onOpenSettings = { navController.navigate("settings_llm") }
+                onOpenSettings = { navController.navigate("settings_llm") },
+                onOpenWebUi = { port -> navController.navigate("chat?port=$port") }
             )
         }
     }

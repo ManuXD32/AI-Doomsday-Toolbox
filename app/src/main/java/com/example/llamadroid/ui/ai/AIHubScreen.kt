@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,6 +16,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -41,11 +41,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -65,9 +63,6 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
-import com.example.llamadroid.data.db.AppDatabase
-import com.example.llamadroid.data.model.LlamaChatEntity
-import com.example.llamadroid.data.model.LlamaServerEntity
 import com.example.llamadroid.ui.components.AppChromeDefaults
 import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppPageBackground
@@ -78,10 +73,7 @@ import com.example.llamadroid.ui.settings.ImageGenSettingsContent
 import com.example.llamadroid.ui.settings.PDFSettingsContent
 import com.example.llamadroid.ui.settings.VideoUpscalerSettingsContent
 import com.example.llamadroid.ui.ai.llama.RunningLlamaChatServerUi
-import com.example.llamadroid.ui.ai.llama.EasyLlamaChatEntryCard
-import com.example.llamadroid.ui.ai.llama.rememberRunningLlamaChatServers
 import com.example.llamadroid.ui.settings.WhisperSettingsContent
-import kotlinx.coroutines.launch
 
 private const val PINNED_TOOLS_PREFS = "ai_tool_pins"
 private const val PINNED_TOOLS_KEY = "pinned_tool_ids"
@@ -91,14 +83,6 @@ private const val PINNED_TOOLS_KEY = "pinned_tool_ids"
 fun AIHubScreen(navController: NavController) {
     val context = LocalContext.current
     val settingsRepo = remember { SettingsRepository(context) }
-    val database = remember { AppDatabase.getDatabase(context) }
-    val pinnedChats by remember(database) {
-        database.llamaChatDao().getPinnedAiHubChats()
-    }.collectAsState(initial = emptyList())
-    val servers by remember(database) {
-        database.llamaServerDao().getAllServers()
-    }.collectAsState(initial = emptyList())
-    val scope = rememberCoroutineScope()
     val pinPrefs = remember {
         context.getSharedPreferences(PINNED_TOOLS_PREFS, android.content.Context.MODE_PRIVATE)
     }
@@ -108,11 +92,8 @@ fun AIHubScreen(navController: NavController) {
         mutableStateOf(pinPrefs.getStringSet(PINNED_TOOLS_KEY, emptySet()).orEmpty())
     }
     var selectedSettingsTool by remember { mutableStateOf<AIToolDefinition?>(null) }
-    var showChatServerPicker by rememberSaveable { mutableStateOf(false) }
-    val runningChatServers = rememberRunningLlamaChatServers()
-
     val categoryTitles = ToolCategory.entries.associateWith { stringResource(it.titleRes) }
-    val toolUiItems = ToolCatalog.tools.map { tool ->
+    val toolUiItems = ToolCatalog.tools.filter { it.showInHub }.map { tool ->
         ToolUiItem(
             definition = tool,
             title = stringResource(tool.titleRes),
@@ -137,17 +118,6 @@ fun AIHubScreen(navController: NavController) {
         if (tools.isEmpty()) null else category to tools
     }
     val pinnedTools = filteredTools.filter { it.definition.id in pinnedToolIds }
-    val pinnedChatItems = remember(query, pinnedChats, servers) {
-        val serversById = servers.associateBy { it.id }
-        val normalizedQuery = query.trim().lowercase()
-        pinnedChats.map { chat ->
-            val server = chat.pinnedServerId?.let(serversById::get)
-            PinnedChatUiItem(chat, server)
-        }.filter { item ->
-            normalizedQuery.isBlank() || item.searchText.contains(normalizedQuery)
-        }
-    }
-
     fun setToolPinned(toolId: String, pinned: Boolean) {
         val next = if (pinned) {
             pinnedToolIds + toolId
@@ -158,24 +128,8 @@ fun AIHubScreen(navController: NavController) {
         pinPrefs.edit().putStringSet(PINNED_TOOLS_KEY, next.toSet()).apply()
     }
 
-    fun openChat(server: RunningLlamaChatServerUi) {
-        navController.navigate("${Screen.Chat.route}?port=${server.port}")
-    }
-
-    fun openChatOrChoose() {
-        when (runningChatServers.size) {
-            0 -> navController.navigate(Screen.LlamaServers.route)
-            1 -> openChat(runningChatServers.single())
-            else -> showChatServerPicker = true
-        }
-    }
-
     fun openTool(item: ToolUiItem) {
-        if (item.definition.id == "chat") {
-            openChatOrChoose()
-        } else {
-            navController.navigate(item.definition.route)
-        }
+        navController.navigate(item.definition.route)
     }
 
     selectedSettingsTool?.let { tool ->
@@ -194,24 +148,11 @@ fun AIHubScreen(navController: NavController) {
         }
     }
 
-    if (showChatServerPicker) {
-        ChatServerPickerDialog(
-            servers = runningChatServers,
-            onDismiss = { showChatServerPicker = false },
-            onServerSelected = { server ->
-                showChatServerPicker = false
-                openChat(server)
-            }
-        )
-    }
-
     val tourTargets = LocalWalkthroughTargets.current
     val toolListState = rememberLazyListState()
     val tourKeys = buildList {
         add("tools.search")
-        add("easy-chat")
-        if (pinnedChatItems.isEmpty() && pinnedTools.isEmpty() && groupedTools.isEmpty()) add("empty")
-        if (pinnedChatItems.isNotEmpty()) { add("pinned.chat.header"); pinnedChatItems.forEach { add("chat.${it.chat.id}") } }
+        if (pinnedTools.isEmpty() && groupedTools.isEmpty()) add("empty")
         if (pinnedTools.isNotEmpty()) { add("pinned.tool.header"); pinnedTools.forEach { add("tool.${it.definition.id}") } }
         groupedTools.forEach { (category, tools) -> add("category.$category"); tools.forEach { add("tool.${it.definition.id}") } }
     }
@@ -230,7 +171,7 @@ fun AIHubScreen(navController: NavController) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 AppPageHeader(
                     title = stringResource(R.string.studio_nav_tools),
-                    subtitle = stringResource(R.string.ai_hub_subtitle)
+                    subtitle = stringResource(R.string.ui_redesign_tools_subtitle)
                 )
                 OutlinedTextField(
                     value = query,
@@ -260,20 +201,7 @@ fun AIHubScreen(navController: NavController) {
                 )
                             }
             }
-            item(key = "easy-chat") {
-                EasyLlamaChatEntryCard(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .walkthroughTarget("easy-chat"),
-                    onChatOpened = { chatId, serverId ->
-                        navController.navigate(Screen.LlamaChat.createRoute(chatId, serverId))
-                    },
-                    onManageModels = {
-                        navController.navigate(Screen.LLMModels.route)
-                    }
-                )
-            }
-                if (pinnedChatItems.isEmpty() && pinnedTools.isEmpty() && groupedTools.isEmpty()) {
+                if (pinnedTools.isEmpty() && groupedTools.isEmpty()) {
                     item {
                         AppSectionCard {
                             Text(
@@ -287,30 +215,6 @@ fun AIHubScreen(navController: NavController) {
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                    }
-                }
-
-                if (pinnedChatItems.isNotEmpty()) {
-                    item {
-                        ToolCategoryHeader(
-                            title = stringResource(R.string.ai_tools_category_pinned_chats),
-                            count = pinnedChatItems.size
-                        )
-                    }
-                    items(pinnedChatItems, key = { "pinned-chat-${it.chat.id}" }) { item ->
-                        PinnedChatHubCard(
-                            chat = item.chat,
-                            server = item.server,
-                            onOpen = {
-                                val serverId = item.chat.pinnedServerId ?: return@PinnedChatHubCard
-                                navController.navigate(Screen.LlamaChat.createRoute(item.chat.id, serverId))
-                            },
-                            onUnpin = {
-                                scope.launch {
-                                    database.llamaChatDao().updateAiHubPin(item.chat.id, false, null, null)
-                                }
-                            }
-                        )
                     }
                 }
 
@@ -431,19 +335,6 @@ internal fun ChatServerPickerDialog(
     )
 }
 
-private data class PinnedChatUiItem(
-    val chat: LlamaChatEntity,
-    val server: LlamaServerEntity?
-) {
-    val searchText: String = buildString {
-        append(chat.title.lowercase())
-        append(' ')
-        append(server?.name.orEmpty().lowercase())
-        append(' ')
-        append(server?.modelName.orEmpty().lowercase())
-    }
-}
-
 private data class ToolUiItem(
     val definition: AIToolDefinition,
     val title: String,
@@ -511,12 +402,11 @@ private fun ToolHubCard(
     onTogglePinned: () -> Unit
 ) {
     val accent = when (category) {
-        ToolCategory.CONVERSATION -> MaterialTheme.colorScheme.primary
         ToolCategory.CREATE -> MaterialTheme.colorScheme.tertiary
         ToolCategory.VOICE -> MaterialTheme.colorScheme.secondary
-        ToolCategory.DOCS -> MaterialTheme.colorScheme.primary
-        ToolCategory.ORGANIZER -> MaterialTheme.colorScheme.tertiary
-        ToolCategory.INFRASTRUCTURE -> MaterialTheme.colorScheme.secondary
+        ToolCategory.DOCUMENTS -> MaterialTheme.colorScheme.primary
+        ToolCategory.SHARE_NETWORK -> MaterialTheme.colorScheme.tertiary
+        ToolCategory.ADVANCED -> MaterialTheme.colorScheme.secondary
     }
     Card(
         modifier = Modifier
@@ -586,86 +476,6 @@ private fun ToolHubCard(
                     )
                 }
             }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PinnedChatHubCard(
-    chat: LlamaChatEntity,
-    server: LlamaServerEntity?,
-    onOpen: () -> Unit,
-    onUnpin: () -> Unit
-) {
-    val serverAvailable = server != null
-    val subtitle = server?.let {
-        buildList {
-            add(it.name)
-            it.modelName?.takeIf { modelName -> modelName.isNotBlank() }?.let(::add)
-        }.joinToString(" · ")
-    } ?: stringResource(R.string.ai_pinned_chat_server_missing)
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(enabled = serverAvailable, onClick = onOpen),
-        shape = AppChromeDefaults.InnerCardShape,
-        colors = CardDefaults.cardColors(
-            containerColor = if (serverAvailable) {
-                MaterialTheme.colorScheme.surface
-            } else {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
-            }
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = AppChromeDefaults.CardElevation)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            IconButton(
-                onClick = onUnpin,
-                modifier = Modifier.size(48.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Star,
-                    contentDescription = stringResource(R.string.ai_tools_unpin_cd, chat.title),
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            }
-
-            Column(
-                modifier = Modifier
-                    .weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                Text(
-                    text = stringResource(R.string.ai_pinned_chat_label),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = chat.title,
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (serverAvailable) {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    } else {
-                        MaterialTheme.colorScheme.error
-                    },
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
             }
         }
     }

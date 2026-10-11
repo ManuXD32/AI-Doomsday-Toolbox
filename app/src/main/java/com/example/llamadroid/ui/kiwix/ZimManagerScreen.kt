@@ -1,5 +1,6 @@
 package com.example.llamadroid.ui.kiwix
 
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 
 import android.content.Intent
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -52,6 +54,7 @@ import com.example.llamadroid.util.AssetPackManagerUtil
 import com.example.llamadroid.util.AssetPackManagerUtil.AssetPack
 import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.ui.components.AppScrollableTabRow
+import com.example.llamadroid.ui.dashboard.DashboardKiwixCard
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import java.io.File
@@ -71,22 +74,9 @@ fun ZimManagerScreen(navController: NavController) {
     // ZIM folder state - removed folder picker, always use internal storage
     val zimFolderUri = null // Using internal app storage
     
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = {
-            TopAppBar(
-                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
-                title = { Text(stringResource(R.string.zim_title)) },
-                navigationIcon = {
-                    IconButton(
-                        onClick = { navController.popBackStack() },
-                        modifier = Modifier.walkthroughTarget("back")
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
-                    }
-                }
-            )
-        }
+    AppScreenScaffold(
+        title = stringResource(R.string.zim_title),
+        onBack = { navController.popBackStack() }
     ) { padding ->
         AppPageBackground(modifier = Modifier.padding(padding)) {
             Column(modifier = Modifier.fillMaxSize()) {
@@ -414,10 +404,12 @@ fun InstalledZimsTab(repo: ZimRepository, navController: NavController) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                DashboardKiwixCard(navController)
+                Spacer(modifier = Modifier.height(32.dp))
                     Icon(
                         Icons.AutoMirrored.Filled.List,
                     contentDescription = null,
@@ -442,6 +434,7 @@ fun InstalledZimsTab(repo: ZimRepository, navController: NavController) {
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                item(key = "kiwix-server-card") { DashboardKiwixCard(navController) }
                 items(installedZims) { zim ->
                     ZimCard(
                         zim = zim,

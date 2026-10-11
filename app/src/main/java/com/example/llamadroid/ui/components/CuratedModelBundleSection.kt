@@ -71,6 +71,9 @@ import com.example.llamadroid.data.model.CuratedModelBundle
 import com.example.llamadroid.data.model.DownloadProgressHolder
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.data.model.PendingDownloadHolder
+import com.example.llamadroid.data.model.QuickSetupBundleCatalog
+import com.example.llamadroid.data.model.QuickSetupState
+import com.example.llamadroid.data.repository.QuickSetupServerWatcher
 import com.example.llamadroid.data.model.buildDownloadTaskId
 import com.example.llamadroid.data.model.calculateBundleProgressSnapshot
 import com.example.llamadroid.data.model.curatedVisionRepairTargets
@@ -173,6 +176,11 @@ internal fun requestCuratedBundleDownload(
         .toMap()
     var requested = 0
     var failed = 0
+    // Durable opt-in for the starter bundle's automatic MTP server (survives backgrounding).
+    if (bundle.id == QuickSetupBundleCatalog.BUNDLE_ID) {
+        QuickSetupState.markRequested(context)
+        QuickSetupServerWatcher.ensureStarted(context)
+    }
     resolveCuratedFiles(bundle, prefix, installedModels, taskByProgressKey, progressMap).forEach { resolved ->
         if (resolved.installed) return@forEach
         requested += 1
@@ -206,6 +214,10 @@ internal fun requestCuratedBundleDownload(
                     filename = resolved.file.remotePath,
                     type = resolved.file.type,
                     isVision = bundle.runtimeIsVision(resolved.file),
+                    sdCapabilities = resolved.file.sdCapabilities,
+                    sdFamily = resolved.file.sdFamily,
+                    sdVariant = resolved.file.sdVariant,
+                    sdCompatProfiles = resolved.file.sdCompatProfiles,
                     downloadUrlOverride = resolved.file.downloadUrl,
                     localFilenameOverride = resolved.expectedName,
                     artifactFamily = resolved.file.audioFamily,
@@ -710,11 +722,13 @@ private fun CuratedModelBundleDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(stringResource(bundle.descriptionRes))
-                Text(
-                    stringResource(R.string.sd_bundle_prefix_note, prefix),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
+                if (bundle.files.any { it.fixedInstallPrefix == null }) {
+                    Text(
+                        stringResource(R.string.sd_bundle_prefix_note, prefix),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
                 if (prefixInvalid) {
                     Text(
                         stringResource(R.string.audio_models_prefix_invalid),
@@ -828,5 +842,7 @@ private fun curatedBundleModelTypeLabel(type: ModelType): String = when (type) {
     ModelType.SD_ADETAILER -> stringResource(R.string.curated_bundle_type_adetailer_detector)
     ModelType.LLAMA_TTS,
     ModelType.LLAMA_TTS_COMPANION -> stringResource(R.string.model_promote_audio_tts)
+    ModelType.SD_CHECKPOINT -> stringResource(R.string.quick_setup_type_image_model)
+    ModelType.WHISPER -> stringResource(R.string.quick_setup_type_whisper)
     else -> type.name
 }

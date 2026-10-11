@@ -59,9 +59,7 @@
     <string name="llama_card_allow_wear_start_hint">Solo un servidor puede iniciarse desde el reloj. Activarlo aqui lo desactiva en los demas.</string>
     
     <!-- AI Hub -->
-    <string name="ai_hub_subtitle">Inferencia IA en tu dispositivo</string>
     <string name="ai_tools_search_label">Buscar herramientas</string>
-    <string name="ai_tools_category_pinned_chats">Chats fijados</string>
     <string name="ai_pinned_chat_label">Chat</string>
     <string name="ai_pinned_chat_server_missing">El servidor recordado no está disponible</string>
     <string name="ai_tools_open_settings_cd">Abrir ajustes de %1$s</string>
@@ -81,7 +79,6 @@
     <string name="ai_chat_servers_many">Elige un servidor activo para Chat.</string>
     <string name="ai_chat_choose_server">Elegir servidor</string>
     <string name="ai_chat_open">Abrir Chat</string>
-    <string name="ai_chat_manage_servers">Gestionar servidores llama.cpp</string>
     <string name="ai_chat_server_port">Puerto %1$d</string>
     <string name="deployment_checking">Verificando componentes...</string>
     <string name="deployment_downloading">Descargando componentes adicionales...</string>
@@ -181,7 +178,6 @@
     <string name="chat_title">Chat</string>
     <string name="chat_placeholder">Escribe un mensaje…</string>
     <string name="chat_send">Enviar</string>
-    <string name="chat_clear">Recargar chat</string>
     <string name="chat_copy">Copiar</string>
     <string name="chat_regenerate">Regenerar</string>
     <string name="chat_stop_generating">Detener</string>
@@ -528,7 +524,6 @@
     <!-- PDF Tools -->
     <string name="pdf_toolbox_title">Herramientas PDF</string>
     <string name="pdf_shared_file_ready">PDF compartido listo</string>
-    <string name="pdf_tools_header">📄 Herramientas PDF</string>
     <string name="pdf_merge">Unir PDFs</string>
     <string name="pdf_merge_desc">Combina varios archivos PDF en uno solo</string>
     <string name="pdf_split">Dividir PDF</string>
@@ -861,17 +856,14 @@
     <string name="settings_general_desc">Carpeta, tema, idioma</string>
     <string name="settings_llm">LLM / Chat</string>
     <string name="settings_llm_desc">Modelo, hilos, contexto</string>
-    <string name="settings_imagegen">Imágenes</string>
     <string name="settings_imagegen_desc">Modelo SD, sampler</string>
     <string name="settings_whisper">Whisper</string>
     <string name="settings_whisper_desc">Modelo, idioma</string>
     <string name="settings_upscaler">Escalador</string>
     <string name="settings_upscaler_desc">Modelo, hilos</string>
-    <string name="settings_pdf">PDF IA</string>
     <string name="settings_pdf_desc">Modelo, prompts</string>
     <string name="settings_prompts">Prompts</string>
     <string name="settings_prompts_desc">Prompts del sistema</string>
-    <string name="settings_debug">Depuración</string>
     <string name="settings_debug_desc">Logs, binarios</string>
     <string name="settings_stats">Estadísticas</string>
     <string name="settings_stats_desc">Historial y gráficos del dispositivo</string>
@@ -1479,7 +1471,7 @@
     <!-- Native Llama Client -->
     <string name="llama_client_title">Chat Llama Nativo</string>
     <string name="llama_client_desc">Conexión directa a llama-server</string>
-    <string name="llama_servers_title">Servidores Llama</string>
+    <string name="llama_servers_title">Conexiones de servidor</string>
     <string name="llama_add_server">Añadir Servidor</string>
     <string name="llama_server_name_hint">Nombre Servidor (ej. Mi PC)</string>
     <string name="llama_server_host_hint">IP Host (ej. 192.168.1.5)</string>
@@ -2186,17 +2178,6 @@
     <string name="pdf_translation_language_japanese">Japonés</string>
     <string name="pdf_translation_language_korean">Coreano</string>
     <string name="pdf_translation_language_chinese_simplified">Chino (simplificado)</string>
-    <string name="pdf_translation_settings_title">Ajustes de Traducción PDF</string>
-    <string name="pdf_translation_settings_subtitle">Backend, prompt, idioma y contexto con captura de página</string>
-    <string name="pdf_translation_backend_title">Backend de Traducción PDF</string>
-    <string name="pdf_translation_prompt_label">Prompt de traducción</string>
-    <string name="pdf_translation_prompt_desc">La app añade IDs de bloques, geometría e instrucciones de JSON estricto alrededor de este prompt de sistema.</string>
-    <string name="pdf_translation_screenshot_context_title">Enviar captura de página como contexto</string>
-    <string name="pdf_translation_screenshot_context_desc">Adjunta una imagen comprimida de la página completa cuando el backend seleccionado acepte entrada visual.</string>
-    <string name="pdf_translation_screenshot_max_side_label">Lado máximo de captura</string>
-    <string name="pdf_translation_screenshot_quality_label">Calidad JPEG de captura</string>
-    <string name="pdf_translation_text_fallback_title">Reserva solo texto</string>
-    <string name="pdf_translation_text_fallback_desc">Reintenta la traducción JSON por página sin captura si la entrada de imagen falla o no es compatible.</string>
     <string name="pdf_translation_quality_title">Calidad de traducción</string>
     <string name="pdf_translation_quality_best">Mejor calidad</string>
     <string name="pdf_translation_quality_balanced">Equilibrado</string>
@@ -2206,43 +2187,18 @@
     <string name="pdf_translation_quality_faster_desc">Ruta más rápida: mantiene traducción por fragmentos en una pasada y limpieza ligera, pero el diálogo puede sonar menos natural.</string>
     <string name="pdf_translation_llm_role_title">LLM de traducción</string>
     <string name="pdf_translation_llm_role_desc">Elige el modelo de texto que escribe el documento traducido. Es independiente del modelo de visión OCR de abajo.</string>
-    <string name="pdf_ocr_provider_title">Proveedor de OCR</string>
     <string name="pdf_ocr_provider_mlkit">ML Kit</string>
     <string name="pdf_ocr_provider_llama_cpp">OCR GGUF con llama.cpp</string>
     <string name="pdf_ocr_vision_role_title">Modelo de visión OCR</string>
     <string name="pdf_ocr_vision_role_desc">Elige un GGUF multimodal descargado y su proyector correspondiente para reconocer texto en imágenes. Unlimited-OCR pertenece aquí, no al LLM de traducción.</string>
     <string name="pdf_ocr_llama_pause_restore_notice">Al iniciar el OCR GGUF, las tarjetas llama-server activas de la app se pausan temporalmente para mantener un solo modelo local residente. Se restauran después del OCR; los runtimes distribuidos no se detienen automáticamente.</string>
-    <string name="pdf_ocr_bubble_guided_title">Detectar bocadillos antes del OCR</string>
-    <string name="pdf_ocr_bubble_guided_desc">Experimental: recorta posibles bocadillos y zonas de texto antes del OCR para que el texto de manga se mezcle menos entre bocadillos.</string>
-    <string name="pdf_ocr_llama_model_path_label">Ruta del modelo GGUF de OCR</string>
-    <string name="pdf_ocr_llama_mmproj_path_label">Ruta del mmproj de OCR</string>
-    <string name="pdf_ocr_llama_mmproj_path_desc">Obligatorio para OCR de imágenes; el modelo GGUF de OCR no se ejecutará sin su proyector correspondiente.</string>
-    <string name="pdf_ocr_llama_prompt_preset_title">Preajuste de prompt OCR</string>
-    <string name="pdf_ocr_llama_preset_unlimited">Unlimited-OCR (prueba recomendada)</string>
-    <string name="pdf_ocr_llama_preset_glm">GLM-OCR</string>
-    <string name="pdf_ocr_llama_preset_deepseek">DeepSeek-OCR</string>
-    <string name="pdf_ocr_llama_preset_hunyuan">HunyuanOCR</string>
-    <string name="pdf_ocr_llama_preset_paddleocr_vl">PaddleOCR-VL</string>
-    <string name="pdf_ocr_llama_preset_dots">Dots.OCR</string>
-    <string name="pdf_ocr_llama_preset_lighton">LightOnOCR</string>
-    <string name="pdf_ocr_llama_preset_qianfan">Qianfan-OCR</string>
-    <string name="pdf_ocr_llama_preset_generic">OCR genérico</string>
     <string name="pdf_ocr_llama_prompt_label">Prompt OCR</string>
     <string name="pdf_ocr_llama_context_label">Tamaño de contexto OCR</string>
     <string name="pdf_ocr_llama_context_warning">El contexto OCR es de %1$d tokens. Los valores superiores a 8.192 usan más memoria y pueden inestabilizar el servidor OCR; redúcelo si aparecen fallos.</string>
     <string name="pdf_ocr_llama_max_tokens_label">Tokens máximos OCR</string>
     <string name="pdf_ocr_llama_port_label">Puerto del servidor OCR</string>
-    <string name="pdf_ocr_llama_cache_ram_label">RAM de caché OCR</string>
-    <string name="pdf_ocr_llama_parallel_label">Ranuras paralelas OCR</string>
-    <string name="pdf_ocr_llama_flash_attention_title">Flash attention para OCR</string>
-    <string name="pdf_ocr_llama_flash_attention_desc">Actívalo solo con modelos OCR y dispositivos que sepas que funcionan con ello.</string>
-    <string name="pdf_ocr_llama_replace_server_title">Reemplazar temporalmente llama-server en ejecución</string>
-    <string name="pdf_ocr_llama_replace_server_desc">Pausa el servidor llama.cpp de la app seleccionado o el primer servidor detectado si no coincide ninguna selección mientras se ejecuta el OCR. También se pausa otro servidor de la app que ocupe el puerto OCR cuando sea necesario. Todos los perfiles pausados se restauran antes de continuar; los runtimes distribuidos nunca se detienen automáticamente.</string>
-    <string name="pdf_ocr_llama_expert_show">Mostrar ajustes expertos</string>
-    <string name="pdf_ocr_llama_expert_hide">Ocultar ajustes expertos</string>
     <string name="pdf_ocr_llama_projector_manual_required">No se encontró un proyector coincidente sin ambigüedad. Elige el proyector explícitamente antes de ejecutar el OCR.</string>
     <string name="pdf_ocr_llama_custom_flags_label">Flags personalizadas OCR</string>
-    <string name="pdf_ocr_llama_command_template_label">Plantilla de comando OCR</string>
     <string name="pdf_ocr_llama_error_missing_model">Elige un modelo GGUF de OCR antes de ejecutar OCR con llama.cpp.</string>
     <string name="pdf_ocr_llama_error_missing_mmproj">Elige el mmproj de OCR correspondiente antes de ejecutar OCR con llama.cpp.</string>
     <string name="pdf_ocr_runtime_distributed_active">Hay un maestro o trabajador llama distribuido activo. Detenlo antes de usar OCR GGUF; los runtimes distribuidos nunca se pausan automáticamente.</string>
@@ -2407,35 +2363,14 @@
     <string name="agent_console_last_saved">Último guardado</string>
     <string name="agent_console_running">Ejecutando</string>
     <string name="agent_console_ready">Listo</string>
-    <string name="agent_console_recovering">Recuperando</string>
-    <string name="agent_console_connected">Conectado</string>
-    <string name="agent_console_disconnected">Desconectado</string>
-    <string name="agent_console_connecting">Conectando</string>
-    <string name="agent_console_endpoint_configured">Configurado · %1$s</string>
-    <string name="agent_console_endpoint_missing">Endpoint guardado no disponible</string>
     <string name="agent_console_context_unknown">Aún sin medir</string>
     <string name="agent_console_context_value">%1$d%% · %2$d/%3$d tokens</string>
     <string name="agent_console_last_saved_unknown">Sin checkpoint todavía</string>
     <string name="agent_console_last_saved_value">A las %1$s</string>
-    <string name="agent_console_backend_ollama">Ollama</string>
-    <string name="agent_console_backend_llama_server">Servidor llama.cpp</string>
-    <string name="agent_console_backend_llama_swap">llama-swap</string>
-    <string name="agent_console_backend_litert">LiteRT</string>
-    <string name="agent_console_backend_openai">Compatible con OpenAI</string>
-    <string name="agent_console_model_unknown">Ningún modelo seleccionado</string>
-    <string name="agent_conversations_sheet_subtitle">Cambia de proyecto o empieza un espacio nuevo.</string>
     <string name="agent_restored_project">🏠 Proyecto restaurado: %s</string>
-    <string name="agent_restored_messages">📜 Restaurados %d mensajes del historial</string>
     <string name="agent_plan_approved">✅ Plan aprobado por el usuario</string>
     <string name="agent_plan_approved_msg">Plan aprobado por el usuario. Proceder con la implementación.</string>
     <string name="agent_plan_rejected">❌ Plan rechazado por el usuario</string>
-    <string name="agent_denied_execution">El usuario denegó la ejecución de %s. Por favor, detente o intenta de otra manera.</string>
-    <string name="agent_deny_reason_title">Denegar Acción</string>
-    <string name="agent_deny_reason_desc">Opcionalmente explica por qué estás denegando esta acción. Esto ayuda a la IA a entender y ajustarse.</string>
-    <string name="agent_deny_reason_hint">Razón (opcional)</string>
-    <string name="agent_deny_skip_reason">Omitir</string>
-    <string name="agent_project_default_prefix">proyecto_</string>
-    <string name="agent_ready_msg">🤖 Agente IA listo para el proyecto **%1$s** (/workspace/%2$s/).\n\nConéctate al espacio de trabajo del agente para empezar a programar.</string>
     <string name="agent_new_project_title">Nuevo proyecto</string>
     <string name="agent_project_name_label">Nombre del proyecto</string>
     <string name="agent_welcome_title">Te damos la bienvenida al Agente IA</string>
@@ -2504,15 +2439,7 @@
     <string name="agent_request_proot_run">La IA quiere ejecutar este proyecto en su entorno Debian local.</string>
     <string name="agent_request_proot_force_stop">La IA quiere forzar la detención de este proyecto en su entorno Debian local.</string>
     <string name="agent_request_python_dependency">La IA quiere instalar o registrar la dependencia Python: %1$s</string>
-    <string name="agent_dashboard_title">Proyectos de agente</string>
     <string name="agent_dashboard_return">Volver al panel de proyectos</string>
-    <string name="agent_dashboard_subtitle">Abre un proyecto guardado o crea un espacio de trabajo.</string>
-    <string name="agent_dashboard_empty">Aun no hay proyectos. Crea un proyecto o una carpeta para empezar.</string>
-    <string name="agent_dashboard_running">Ejecutando</string>
-    <string name="agent_dashboard_llm_working">LLM trabajando</string>
-    <string name="agent_dashboard_folder_actions">Acciones de carpeta: %1$s</string>
-    <string name="agent_dashboard_project_actions">Acciones de proyecto: %1$s</string>
-    <string name="agent_dashboard_item_options">Opciones del elemento</string>
     <string name="agent_project_backend_label">Tipo de espacio</string>
     <string name="agent_project_backend_remote">SSH remoto / Termux</string>
     <string name="agent_project_backend_remote_desc">Usa el espacio Termux/proot existente y herramientas de shell.</string>
@@ -2520,13 +2447,6 @@
     <string name="agent_project_backend_local_desc">Usa archivos privados de la app y runners locales Python/WebView sin acceso a shell Termux.</string>
     <string name="agent_planning_mode">Modo de planificacion</string>
     <string name="agent_send_guidance">Enviar guia</string>
-    <string name="agent_guidance_interrupting">Guia recibida. Interrumpiendo la ejecucion activa y continuando desde la nueva instruccion.</string>
-    <string name="agent_retry_debug_start">Reintento solicitado. Comprobando backend LLM: %1$s.</string>
-    <string name="agent_retry_debug_ssh">El proyecto remoto tambien necesita SSH. Reintentando %1$s:%2$d.</string>
-    <string name="agent_retry_debug_ssh_not_required">no necesario para este proyecto</string>
-    <string name="agent_retry_debug_no_detail">sin detalle adicional</string>
-    <string name="agent_retry_debug_status">Estado del reintento: backend LLM %1$s conectado=%2$s; SSH requerido=%3$s; estado SSH=%4$s; detalle=%5$s.</string>
-    <string name="agent_retry_debug_done">Reintento terminado. Si el aviso sigue, abre la consola de depuracion para ver el error del backend y el estado de conexion.</string>
     <string name="agent_status_needs_direction">Necesita direccion</string>
     <string name="agent_needs_direction_message">Pausado porque el agente podria estar en bucle: %1$s</string>
     <string name="agent_needs_direction_interrupted_message">El agente se ha pausado y necesita tu atención: %1$s</string>
@@ -2538,22 +2458,7 @@
     <string name="agent_resume_reason_interrupted">La ejecucion anterior se interrumpio antes de terminar.</string>
     <string name="agent_recovery_interrupted_reason">Interrumpido porque la aplicacion o el servicio en primer plano del Agente se detuvo. Revisa la actividad restaurada antes de continuar.</string>
     <string name="agent_recovery_waiting_continue">Interrumpido — esperando a que pulses Continuar</string>
-    <string name="agent_resume_reason_needs_direction">La ejecucion anterior se pauso porque necesitaba direccion.</string>
-    <string name="agent_resume_reason_generic">La ejecucion anterior no termino.</string>
-    <string name="agent_resume_system_note">Continua este proyecto desde el estado anterior sin terminar. Motivo: %1$s</string>
-    <string name="agent_folder_create_title">Crear carpeta</string>
-    <string name="agent_folder_create_short">Nueva carpeta</string>
-    <string name="agent_folder_name_label">Nombre de carpeta</string>
     <string name="agent_folder_toggle">Expandir o contraer carpeta</string>
-    <string name="agent_folder_root">Raiz</string>
-    <string name="agent_folder_go_up">Subir una carpeta</string>
-    <string name="agent_folder_move_invalid">Una carpeta no puede moverse dentro de si misma.</string>
-    <string name="agent_folder_delete_not_empty">Solo se pueden eliminar carpetas vacias.</string>
-    <string name="agent_rename_title">Renombrar</string>
-    <string name="agent_rename_label">Nombre</string>
-    <string name="agent_move_to_folder_title">Mover a carpeta</string>
-    <string name="agent_move_up">Mover arriba</string>
-    <string name="agent_move_down">Mover abajo</string>
     <string name="action_rename">Renombrar</string>
     <string name="agent_parent_folder">Carpeta superior</string>
     <string name="agent_empty_folder">Carpeta vacía</string>
@@ -2570,7 +2475,6 @@
     <string name="agent_error_prefix">Error: %1$s</string>
     <string name="agent_reconnecting">Reconectando…</string>
     <string name="agent_connecting">Conectando…</string>
-    <string name="agent_ollama_offline">Ollama está offline</string>
     <string name="agent_disconnected">Agente desconectado</string>
     <string name="agent_selected_count">%d seleccionados</string>
     <string name="agent_ready_to">listo para %s</string>
@@ -2589,9 +2493,7 @@
     <string name="agent_custom_tools_title">🔧 Herramientas Personalizadas</string>
     <string name="agent_custom_agents_title">🤖 Agentes Personalizados</string>
     <string name="agent_add_tool">Añadir Herramienta</string>
-    <string name="agent_add_agent">Añadir Agente</string>
     <string name="agent_no_tools">No hay herramientas personalizadas aún</string>
-    <string name="agent_no_custom_agents">No hay agentes personalizados aún</string>
     <string name="agent_tap_plus_hint">Toca + para crear uno</string>
     <string name="agent_edit_tool">Editar Herramienta</string>
     <string name="agent_new_tool">Nueva Herramienta</string>
@@ -2613,52 +2515,19 @@
     <string name="agent_tool_save_changes">Guardar Cambios</string>
     <string name="agent_tool_create_btn">Crear Herramienta</string>
     
-    <string name="agent_edit_agent">Editar Agente</string>
-    <string name="agent_new_agent">Nuevo Agente</string>
-    <string name="agent_agent_emoji_label">Emoji</string>
-    <string name="agent_agent_name_label">Nombre*</string>
-    <string name="agent_agent_name_hint">DEBUGGER</string>
-    <string name="agent_agent_display_name_label">Nombre para Mostrar*</string>
-    <string name="agent_agent_display_name_hint">ej: Depurador</string>
     <string name="agent_prompt_label">Instrucción del Sistema*</string>
-    <string name="agent_agent_prompt_hint">Eres el agente Depurador. Tu trabajo es...</string>
     <string name="agent_model_label">Sobrescribir Modelo (opcional)</string>
     <string name="agent_agent_model_hint">Dejar vacío para predeterminado</string>
-    <string name="agent_agent_example_label">Ejemplo de Uso</string>
-    <string name="agent_agent_example_desc">Ayuda al Orquestador a entender cuándo usar este agente</string>
-    <string name="agent_agent_delegate_label">Puede Delegar a Otros Agentes</string>
-    <string name="agent_agent_create_btn">Crear Agente</string>
     
     <string name="agent_disabled_label">Deshabilitado</string>
     <string name="agent_tool_example_template_title">Cargar Ejemplo</string>
     <string name="agent_tool_example_template_desc">Cargar un esquema predefinido para aprender a crear una herramienta.</string>
-    <string name="agent_agent_example_template_title">Cargar Ejemplo</string>
     <string name="agent_agent_example_template_desc">Cargar un esquema predefinido para aprender a crear un agente.</string>
 
     <!-- Project Management -->
     <string name="agent_project_mgmt_title">📦 Gestión del Proyecto</string>
-    <string name="agent_export_success">✅ ¡Exportación exitosa!</string>
-    <string name="agent_export_failed">❌ Exportación fallida: %1$s</string>
-    <string name="agent_import_success">✅ ¡Importación exitosa! Proyecto actual reemplazado.</string>
-    <string name="agent_import_failed">❌ Importación fallida: %1$s</string>
-    <string name="agent_current_project">Proyecto Actual</string>
-    <string name="agent_export_import_header">📤 Exportar / Importar</string>
-    <string name="agent_export_zip">Exportar ZIP</string>
-    <string name="agent_import_zip">Importar ZIP</string>
-    <string name="agent_snapshots_header">📸 Instantáneas (Deshacer/Retroceder)</string>
-    <string name="agent_no_snapshots">No hay instantáneas aún</string>
-    <string name="agent_rollback_hint">Crea una para permitir el retroceso</string>
     <string name="agent_files_count">%1$d archivos</string>
     <string name="agent_restore_btn">Restaurar</string>
-    <string name="agent_create_snapshot_title">📸 Crear Instantánea</string>
-    <string name="agent_snapshot_desc_label">Introduce una descripción para esta instantánea:</string>
-    <string name="agent_snapshot_success">✅ ¡Instantánea creada correctamente!</string>
-    <string name="agent_snapshot_failed">❌ Error al crear la instantánea</string>
-    <string name="agent_snapshot_deleted">Instantánea eliminada</string>
-    <string name="agent_rollback_failed">❌ Fallo al restablecer</string>
-    <string name="agent_files_count_label">archivos</string>
-    <string name="agent_snapshot_desc_placeholder">ej: Antes de refactorizar</string>
-    <string name="agent_snapshot_default_name">Instantánea %1$d</string>
 
     <!-- Agent Dialogs & Settings -->
     <string name="agent_select_model">Seleccionar Modelo</string>
@@ -2671,7 +2540,6 @@
     <string name="agent_unit_mb">MB</string>
     <string name="agent_unit_kb">KB</string>
     <string name="agent_unit_b">B</string>
-    <string name="agent_generic_tool">la herramienta</string>
     <string name="agent_downloading_model">Descargando %s...</string>
     <string name="agent_model_ready">¡%s listo!</string>
     <string name="agent_recommended_models">💡 Modelos Recomendados:</string>
@@ -2735,9 +2603,6 @@
     <string name="agent_auto_reflection_toggle_desc">Cuando está activada, los agentes ejecutan reflection antes de finalizar el trabajo.</string>
     <string name="agent_tool_toggle_desc">Permitir esta herramienta en futuros turnos del agente.</string>
     <string name="agent_reset_default">Restablecer Predeterminados</string>
-    <string name="agent_conversations_title">📚 Conversaciones</string>
-    <string name="agent_loading_project_title">Cargando proyecto</string>
-    <string name="agent_loading_project_desc">Recargando la conversación y el espacio de trabajo del proyecto seleccionado…</string>
     <string name="agent_no_project_loaded_title">No hay proyecto cargado</string>
     <string name="agent_no_project_loaded_desc">Selecciona o crea una conversación de proyecto para empezar a trabajar con el agente de IA.</string>
     <string name="agent_workspace_no_project_desc">Selecciona o crea una conversación de proyecto antes de explorar el espacio de trabajo.</string>
@@ -2802,12 +2667,8 @@
     <string name="agent_backend_desc">Elige la API. Ollama ofrece gestión local; llama-server y llama-swap usan chat compatible con OpenAI.</string>
     <string name="agent_llama_server_url">URL de llama-server</string>
     <string name="agent_llama_server_note">Nota: El modelo, los hilos y otros ajustes de GPU se gestionan en llama-server mediante argumentos CLI, no desde aquí.</string>
-    <string name="agent_llama_server_offline">llama-server está desconectado</string>
-    <string name="agent_llama_server_reconnecting">Actualizando el estado de llama-server…</string>
     <string name="agent_llama_swap_url">URL de llama-swap</string>
     <string name="agent_llama_swap_note">Selecciona los modelos por rol después de actualizar los modelos de llama-swap desde /v1/models.</string>
-    <string name="agent_llama_swap_offline">llama-swap está desconectado</string>
-    <string name="agent_llama_swap_reconnecting">Actualizando el estado de llama-swap…</string>
     <string name="agent_llama_server_value_unavailable">No disponible</string>
     <string name="agent_llama_server_role_model_note">Este rol usa el modelo activo de llama-server: %1$s.</string>
 
@@ -2896,7 +2757,6 @@
     <string name="agent_system_prompt">Instrucción del Sistema</string>
     <string name="agent_install_cmd_label">comando de instalación</string>
     <string name="agent_start_cmd_label">comando de inicio</string>
-    <string name="agent_snapshot_item_desc">%1$s • %2$d %3$s</string>
     <string name="agent_workspace_project_label">Espacio de trabajo: %s</string>
     <string name="agent_workspace_last_updated">Última actualización: %s</string>
     <string name="agent_workspace_created">Creado: %s</string>
@@ -2966,7 +2826,6 @@
     <string name="agent_reflection_blocked_summary">La reflexión detectó trabajo faltante o riesgos sin resolver, así que por ahora se bloquea la finalización.</string>
     <string name="agent_reflection_blocked_hint">Resuelve los elementos faltantes, actualiza la memoria si hace falta, verifica los archivos o comandos cambiados y solo entonces intenta terminar otra vez.</string>
     <string name="agent_reflection_recovery_instruction">Antes de terminar, usa el resultado de reflection para resolver los elementos del plan que faltan y los riesgos. Lee plan.md, changed_files.md y los archivos o salidas de comandos relevantes, haz el trabajo pendiente y luego vuelve a intentar reflection o finish_task.</string>
-    <string name="agent_ollama_reconnecting">Reconectando con Ollama…</string>
     <string name="agent_stream_interrupted_suffix">[Conexión interrumpida: %1$s]</string>
     <string name="agent_process_stopped">🛑 **Proceso detenido por el usuario.**</string>
     <string name="agent_executing_tool">Ejecutando %s…</string>
@@ -2985,23 +2844,11 @@
     <string name="agent_custom_agent_header">Agente personalizado: %s</string>
 
 
-    <string name="agent_welcome_desc">Empieza con un proyecto:</string>
-    <string name="agent_welcome_step1">1. Selecciona Nuevo proyecto y elige un espacio de trabajo local o remoto por SSH.</string>
-    <string name="agent_welcome_step2">2. Ponle un nombre para mantener juntos sus archivos y conversaciones.</string>
-    <string name="agent_welcome_step3">3. Abre los ajustes del modelo para elegir el motor y empieza a conversar.</string>
-    <string name="agent_welcome_note">El proyecto le indica a la IA dónde están tus archivos.</string>
     <string name="agent_conversations_menu">Conversaciones</string>
     <string name="agent_new_project_btn">Nuevo Proyecto</string>
     <string name="agent_no_conversations">No hay conversaciones todavía</string>
-    <string name="agent_delete_project_title">¿Eliminar Proyecto?</string>
-    <string name="agent_delete_project_desc">Esto eliminará permanentemente el historial de la conversación.</string>
     <string name="agent_delete_files_warning">🚨 TAMBIÉN SE ELIMINARÁN LOS ARCHIVOS EN EL ENTORNO PROOT:</string>
-    <string name="agent_delete_remote_files_warning">Tambien se eliminara la carpeta remota del espacio:</string>
-    <string name="agent_delete_local_files_warning">Tambien se eliminara la carpeta del sandbox local:</string>
     <string name="action_create">Crear</string>
-    <string name="action_got_it">¡Entendido!</string>
-    <string name="action_delete_everything">Eliminar todo</string>
-    <string name="icon_warning_desc">Advertencia</string>
     <string name="agent_tool_label">🔧 %s</string>
     <string name="agent_custom_agent_label">🤖 %s</string>
     <string name="agent_role_label">👷 %s</string>
@@ -3226,7 +3073,6 @@
     <string name="sd_models_quick_search">Sugerencias de Búsqueda Rápida</string>
     <string name="sd_models_tap_to_search">Toca para buscar en HuggingFace</string>
     <string name="sd_models_search_results">Resultados de Búsqueda (%d)</string>
-    <string name="sd_models_search_label">Búsqueda: \"%s\"</string>
     <string name="sd_models_error_source_not_found">Archivo de origen no encontrado</string>
     <string name="sd_models_export_success">Exportado: %s</string>
     <string name="sd_models_export_failed">Fallo al exportar: %s</string>
@@ -3245,7 +3091,6 @@
     <string name="onnx_models_permission_action">Conceder Acceso</string>
     <string name="onnx_models_tab_installed">Instalados (%1$d)</string>
     <string name="onnx_models_tab_downloading">Descargando</string>
-    <string name="onnx_models_tab_catalog">Catálogo</string>
     <string name="onnx_models_importing">Importando bundle…</string>
     <string name="onnx_models_empty">Todavía no hay bundles ONNX de imagen instalados. Si desapareció una instalación antigua en almacenamiento compartido, impórtala o descárgala de nuevo.</string>
     <string name="onnx_models_provider_title">Proveedor del catálogo</string>
@@ -4138,8 +3983,6 @@
     <string name="action_downloading_status">Descargando...</string>
     <string name="action_send">Enviar</string>
     <string name="action_settings">Ajustes</string>
-    <string name="action_new">Nuevo</string>
-    <string name="action_restore">Restaurar</string>
     <string name="action_more">Más</string>
     <string name="action_hide">Ocultar</string>
     <string name="action_show">Mostrar</string>
@@ -6064,9 +5907,6 @@
     <string name="agent_tool_working_dir_label">Directorio de trabajo</string>
     <string name="agent_tool_working_dir_hint">., app, scripts u otra ruta dentro del proyecto actual</string>
     <string name="agent_tool_working_dir_desc">Las herramientas personalizadas quedan confinadas al proyecto actual. Usa el prefijo shell: solo cuando realmente necesites el modo shell de alto riesgo.</string>
-    <string name="agent_agent_allowed_tools_label">JSON de herramientas permitidas</string>
-    <string name="agent_agent_allowed_tools_hint">["read_file", "search_code", "finish_task"]</string>
-    <string name="agent_agent_allowed_tools_desc">Proporciona un array JSON con nombres de herramientas. Déjalo vacío para usar el conjunto seguro por defecto de los agentes personalizados.</string>
     <string name="agent_vision_enabled">Visión activada</string>
     <string name="agent_vision_enabled_desc">Permite que este agente inspeccione imágenes cuando el modelo del backend soporte visión.</string>
     <string name="agent_image_generation_settings_title">Herramienta de generación de imágenes</string>
@@ -6099,7 +5939,6 @@
     <string name="native_chat_bgr_input_missing">No se encontró la imagen de entrada para quitar fondo.</string>
     <string name="native_chat_bgr_input_unsupported">Quitar fondo admite imágenes PNG, JPG, JPEG, WEBP y BMP.</string>
     <string name="agent_attach_image">Adjuntar imagen</string>
-    <string name="agent_attach_image_failed">No se pudo adjuntar la imagen seleccionada.</string>
     <string name="agent_image_attachment_title">Imagen adjunta</string>
     <string name="agent_create_folder_tool_name">Crear carpeta</string>
     <string name="agent_generate_image_tool_name">Generación de imagen</string>
@@ -8289,10 +8128,6 @@
     <string name="binary_catalog_custom_info_body">Los paquetes ARM64 experimentales deben compilarse con Android NDK para API 26 o posterior. Coloca manifest.json en la raíz del ZIP y los objetos compartidos en lib/arm64-v8a/. El punto de entrada LLM debe ser libllama_server.so; Stable Diffusion debe usar libsd.so. Incluye todas las bibliotecas compartidas no pertenecientes al sistema que muestre readelf -d, declara cada archivo en libraries y crea el ZIP con: zip -r package.zip manifest.json lib/. Los paquetes se validan antes de instalarse y se pueden eliminar desde este catálogo.</string>
     <string name="binary_catalog_custom_example">manifest.json\n{\n  \"schemaVersion\": 1,\n  \"id\": \"mi-compilacion-llama\",\n  \"name\": \"Mi servidor llama.cpp\",\n  \"version\": \"b1234\",\n  \"family\": \"llm_server\",\n  \"entrypoint\": \"lib/arm64-v8a/libllama_server.so\",\n  \"libraries\": [\n    \"lib/arm64-v8a/libllama_server.so\",\n    \"lib/arm64-v8a/libllama.so\",\n    \"lib/arm64-v8a/libggml.so\",\n    \"lib/arm64-v8a/libggml-base.so\",\n    \"lib/arm64-v8a/libggml-cpu.so\",\n    \"lib/arm64-v8a/libmtmd.so\"\n  ]\n}</string>
     <string name="binary_catalog_custom_picker_detail">Paquete del usuario · %1$s</string>
-    <string name="agent_batch_select">Seleccionar proyectos</string>
-    <string name="agent_batch_selected_count">%1$d proyectos seleccionados</string>
-    <string name="agent_batch_delete_title">¿Eliminar los proyectos seleccionados?</string>
-    <string name="agent_batch_delete_message">¿Eliminar permanentemente %1$d proyectos seleccionados y sus chats?</string>
     <string name="logs_generation_diag_app_version">Versión de la app: %1$s</string>
     <string name="logs_generation_diag_process">Proceso: %1$s · PID %2$s · estado %3$d · importancia %4$d</string>
     <string name="logs_generation_diag_process_memory">Memoria al salir: PSS %1$s KB · RSS %2$s KB</string>
@@ -8470,7 +8305,6 @@
     <string name="agent_skill_imports_title">Importaciones avanzadas</string>
     <string name="agent_skill_scripts_warning">Los scripts de habilidades importadas o del proyecto nunca se ejecutan automáticamente. Cada ejecución requiere aprobación y validación del entorno aislado.</string>
     <string name="agent_command_help">Comandos: /plan, /build, /compact, /details, /skills, /todos, /agents, /custom-agents, /custom-tools, /commands, /help. Escribe @ para seleccionar un agente.</string>
-    <string name="agent_compaction_requested">La compactación del contexto se ejecutará en el siguiente límite seguro de turno raíz.</string>
     <string name="agent_plan_approved_switch_build">Plan aprobado. ¿Cambiar al modo Construir?</string>
     <string name="agent_switch_to_build">Cambiar a Construir</string>
     <string name="agent_question_invalid">Esta pregunta no se pudo mostrar de forma segura. El proyecto se ha pausado.</string>
@@ -8485,8 +8319,6 @@
     <string name="agent_command_skill_help">Carga esta habilidad instalada para el siguiente turno</string>
     <string name="agent_command_agent_help">Selecciona este agente para la siguiente tarea</string>
     <string name="agent_skill_import_zip">Importar ZIP local</string>
-    <string name="agent_skill_import_success">Habilidad instalada: %1$s</string>
-    <string name="agent_skill_import_failed">No se pudo importar la habilidad: %1$s</string>
     <string name="agent_skill_version_license">v%1$s · %2$s</string>
     <string name="agent_skill_license_missing">Licencia no especificada</string>
     <string name="agent_skill_version_unknown">Versión desconocida</string>
@@ -8494,14 +8326,7 @@
     <string name="agent_skill_install_complete">Habilidad instalada o actualizada.</string>
     <string name="agent_skill_permission_saved">Permiso de la habilidad guardado.</string>
     <string name="agent_skill_uninstall_complete">Habilidad desinstalada.</string>
-    <string name="agent_active_message_title">El agente sigue trabajando</string>
-    <string name="agent_active_message_body">Elige cuándo debe recibir el agente este mensaje.</string>
-    <string name="agent_active_message_queue">Poner en cola tras la herramienta</string>
-    <string name="agent_active_message_queue_desc">Mantiene el trabajo actual en ejecución. Tu mensaje se insertará justo después del siguiente resultado de herramienta completado y se marcará como urgente.</string>
-    <string name="agent_active_message_interrupt">Detener y enviar ahora</string>
-    <string name="agent_active_message_interrupt_desc">Cancela el trabajo actual, libera su estado obsoleto e inicia un nuevo turno raíz con tu mensaje.</string>
     <string name="agent_message_queued">Mensaje en cola para la siguiente llamada de herramienta completada.</string>
-    <string name="agent_messages_queued_count">%1$d mensaje(s) urgente(s) en cola para el siguiente límite de herramienta</string>
     <string name="agent_queued_guidance_prompt_prefix">El resultado de la herramienta anterior ya está confirmado. No lo descartes, olvides ni pierdas de vista. El usuario envió esta indicación mientras el trabajo continuaba; tenla en cuenta antes de decidir el siguiente paso:\n\n%1$s</string>
     <string name="agent_queued_guidance_model_instruction">El resultado de la herramienta anterior ya está confirmado. No lo descartes, olvides ni pierdas de vista. Lo siguiente es un mensaje real del usuario enviado mientras el trabajo continuaba; tenlo en cuenta antes de decidir el siguiente paso.</string>
     <string name="agent_guidance_state_queued">En cola · se aplicará después del paso actual</string>
@@ -8586,8 +8411,6 @@
     <string name="agent_command_commands_help">Muestra los comandos disponibles durante una ejecución</string>
     <string name="agent_command_custom_agents_help">Abre la gestión de agentes personalizados</string>
     <string name="agent_command_custom_tools_help">Abre la gestión de herramientas personalizadas</string>
-    <string name="agent_guidance_queued">La guía se puso en cola para el siguiente paso seguro.</string>
-    <string name="agent_workflow_command_queued">Comando en cola para ejecutarse después del paso actual.</string>
     <string name="agent_invocation_interrupted_result">%1$s se interrumpió al detenerse el proceso de la aplicación. Se restauró el trabajo confirmado; usa Continuar para revisar el estado antes de seguir.</string>
     <string name="agent_checkpoint_failed_continue">No se pudo guardar de forma segura el resultado confirmado de la herramienta. Continúa después de revisar el estado de persistencia.</string>
     <string name="agent_checkpoint_error_failed_continue">No se pudo guardar de forma segura el error de la herramienta. Continúa después de revisar el estado de persistencia.</string>
@@ -8694,9 +8517,6 @@
     <string name="sd_models_clip_vision_label">Codificadores CLIP-Vision (%1$d)</string>
     <string name="sd_models_ip_adapter_label">Modelos IP-Adapter (%1$d)</string>
     <string name="sd_models_adetailer_label">Detectores ADetailer / YOLO (%1$d)</string>
-    <string name="sd_models_ip_adapter_search_sd15">🖼️ IP-Adapter para SD 1.5</string>
-    <string name="sd_models_ip_adapter_search_sdxl">🖼️ IP-Adapter para SDXL</string>
-    <string name="sd_models_clip_vision_search">👁️ Codificadores CLIP-Vision</string>
     <string name="imagegen_ip_adapter_title">IP-Adapter</string>
     <string name="imagegen_ip_adapter_desc">Guía la apariencia con una imagen de referencia independiente</string>
     <string name="imagegen_ip_adapter_unsupported_summary">Disponible para checkpoints SD 1.5 y SDXL</string>
@@ -8714,6 +8534,7 @@
     <string name="imagegen_ip_adapter_strength">Intensidad de IP-Adapter</string>
     <string name="imagegen_ip_adapter_strength_hint">0,6–0,8 es un buen punto de partida; 1,0 es el valor predeterminado de upstream.</string>
     <string name="imagegen_ip_adapter_manage_models">Gestionar modelos</string>
+    <string name="common_get_models_link">Obtener modelos</string>
     <string name="imagegen_ip_adapter_clear">Restablecer</string>
     <string name="imagegen_error_ip_adapter_unsupported">IP-Adapter solo es compatible con checkpoints SD 1.5 y SDXL.</string>
     <string name="imagegen_error_ip_adapter_missing_adapter">Elige los pesos de IP-Adapter antes de generar.</string>
@@ -9075,4 +8896,5 @@
     <string name="generation_queue_retry_files_discarded">Se descartaron los archivos guardados para reintentar</string>
     <string name="generation_queue_start_blocked_title">La cola de generación necesita atención</string>
     <string name="generation_queue_start_blocked_message">Android no pudo iniciar el procesamiento en segundo plano. Abre la aplicación y ejecuta la cola.</string>
+    <string name="onnx_models_tab_catalog">Catálogo</string>
 </resources>

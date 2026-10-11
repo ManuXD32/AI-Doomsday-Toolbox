@@ -25,6 +25,7 @@ object ExternalRouteResolver {
     private val staticRoutes = setOf(
         Screen.Dashboard.route,
         Screen.Library.route,
+        Screen.Chats.route,
         Screen.Settings.route,
         Screen.Stats.route,
         Screen.Logs.route,

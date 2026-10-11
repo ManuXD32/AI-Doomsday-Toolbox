@@ -33,7 +33,18 @@ data class CuratedBundleFile(
     /** Native speech language metadata, when the checkpoint fixes one. */
     val audioLanguage: String? = null,
     /** Optional semantic identity shared by equivalent files across bundles. */
-    val sharedArtifactKey: String? = null
+    val sharedArtifactKey: String? = null,
+    /**
+     * Fixed install prefix for cross-family bundles (for example the ADT starter bundle) whose
+     * files must land under the same names as the canonical family bundles. Blank means no
+     * prefix. Null follows the bundle prefix.
+     */
+    val fixedInstallPrefix: String? = null,
+    /** Optional Stable Diffusion registration metadata passed to the shared downloader. */
+    val sdCapabilities: String? = null,
+    val sdFamily: String? = null,
+    val sdVariant: String? = null,
+    val sdCompatProfiles: String? = null
 ) {
     init {
         require(id.isNotBlank())
@@ -75,7 +86,7 @@ data class CuratedBundleFile(
             type == ModelType.MMPROJ || type == ModelType.VISION
 
     fun installedFilename(prefix: String): String {
-        val cleanPrefix = sanitizeCuratedBundlePrefix(prefix)
+        val cleanPrefix = sanitizeCuratedBundlePrefix(fixedInstallPrefix ?: prefix)
         // Shared components use a digest-derived canonical name so a second
         // bundle reuses the already verified payload instead of downloading a
         // prefix-specific copy. Main model names retain their bundle prefix.

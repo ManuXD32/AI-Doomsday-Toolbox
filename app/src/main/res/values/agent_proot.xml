@@ -34,9 +34,6 @@
     <string name="agent_proot_isolated_environment_detail">Existing isolated · %1$s</string>
     <string name="agent_proot_no_shared_environments">No existing shared environments are available.</string>
     <string name="agent_proot_manage_action">Manage Debian environments</string>
-    <string name="agent_proot_reassign_title">Change Debian environment?</string>
-    <string name="agent_proot_reassign_message">This project will use the selected environment on its next run. Active commands must be stopped first.</string>
-    <string name="agent_proot_reassign_confirm">Change environment</string>
     <string name="agent_proot_backend_label">Local Debian</string>
     <string name="agent_proot_backend_desc">Run commands in an app-managed Debian environment through the packaged PRoot broker. SSH is optional.</string>
     <string name="agent_proot_mode_isolated">Isolated</string>

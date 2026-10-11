@@ -13,14 +13,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
@@ -229,22 +227,9 @@ fun VideoSumupScreen(navController: NavController) {
         )
     }
 
-    Scaffold(
-        modifier = Modifier.imePadding(),
-        topBar = {
-            TopAppBar(
-                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
-                title = { Text(stringResource(R.string.video_sumup_title)) },
-                navigationIcon = {
-                    IconButton(
-                        onClick = { navController.popBackStack() },
-                        modifier = Modifier.walkthroughTarget("back")
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
-                    }
-                }
-            )
-        }
+    com.example.llamadroid.ui.components.AppScreenScaffold(
+        title = stringResource(R.string.video_sumup_title),
+        onBack = { navController.popBackStack() }
     ) { padding ->
         Column(
             modifier = Modifier
@@ -430,6 +415,9 @@ fun VideoSumupScreen(navController: NavController) {
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            TextButton(onClick = { navController.navigate("llm_models") }) {
+                                Text(stringResource(R.string.common_get_models_link))
+                            }
                         }
                     }
 
@@ -578,6 +566,9 @@ fun VideoSumupScreen(navController: NavController) {
                                 )
                             }
                         }
+                    }
+                    TextButton(onClick = { navController.navigate("whisper_models") }) {
+                        Text(stringResource(R.string.common_get_models_link))
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     var languageExpanded by remember { mutableStateOf(false) }

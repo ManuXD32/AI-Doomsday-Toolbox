@@ -91,6 +91,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -2390,9 +2392,21 @@ private fun SdDistributedPage(
     content: @Composable () -> Unit
 ) {
     AppScreenScaffold(title = title, onBack = { navController.popBackStack() }) {
-        AppContentColumn(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-            content()
+        CompositionLocalProvider(LocalSdGetModels provides { navController.navigate(Screen.SDModels.route) }) {
+            AppContentColumn(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                content()
+            }
         }
+    }
+}
+
+private val LocalSdGetModels = compositionLocalOf<(() -> Unit)?> { null }
+
+@Composable
+private fun SdGetModelsButton() {
+    val onGetModels = LocalSdGetModels.current ?: return
+    TextButton(onClick = onGetModels) {
+        Text(stringResource(R.string.common_get_models_link), maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -3696,6 +3710,7 @@ private fun ModelPicker(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selectedName = models.firstOrNull { it.path == selectedPath }?.filename ?: stringResource(R.string.sd_dist_select_model)
+    Column {
     ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
         OutlinedTextField(
             value = selectedName,
@@ -3721,6 +3736,8 @@ private fun ModelPicker(
                 }
             }
         }
+    }
+    SdGetModelsButton()
     }
 }
 
@@ -3981,6 +3998,7 @@ private fun ComponentModelPicker(
             style = MaterialTheme.typography.bodySmall,
             color = RenderFarmPalette.orange
         )
+        SdGetModelsButton()
         return
     }
     var expanded by remember { mutableStateOf(false) }

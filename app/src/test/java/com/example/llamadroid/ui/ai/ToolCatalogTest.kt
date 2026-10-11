@@ -71,13 +71,31 @@ class ToolCatalogTest {
         val byId = ToolCatalog.tools.associateBy { it.id }
 
         assertEquals(ToolCategory.CREATE, byId.getValue("onnx_image_generation").category)
-        assertEquals(ToolCategory.VOICE, byId.getValue("onnx_tts").category)
-        assertEquals(ToolCategory.ORGANIZER, byId.getValue("organizer").category)
-        assertEquals(ToolCategory.ORGANIZER, byId.getValue("offline_library").category)
-        assertEquals(ToolCategory.INFRASTRUCTURE, byId.getValue("distributed_llm").category)
-        assertEquals(ToolCategory.INFRASTRUCTURE, byId.getValue("distributed_media").category)
-        assertEquals(ToolCategory.INFRASTRUCTURE, byId.getValue("model_library").category)
+        assertEquals(ToolCategory.VOICE, byId.getValue("audio_workspace").category)
+        assertEquals(ToolCategory.DOCUMENTS, byId.getValue("pdf_tools").category)
+        assertEquals(ToolCategory.SHARE_NETWORK, byId.getValue("servers_hub").category)
+        assertEquals(ToolCategory.SHARE_NETWORK, byId.getValue("distributed_llm").category)
+        assertEquals(ToolCategory.SHARE_NETWORK, byId.getValue("distributed_media").category)
+        assertEquals(ToolCategory.ADVANCED, byId.getValue("quadtrix").category)
         assertTrue("ONNX search keyword was dropped", byId.getValue("onnx_tts").keywords.contains("onnx"))
         assertTrue("File sharing is not searchable", byId.getValue("file_server").keywords.contains("share"))
+    }
+
+    @Test
+    fun `tools moved to other tabs are hidden from hub but keep route ownership`() {
+        val byId = ToolCatalog.tools.associateBy { it.id }
+        listOf("chat", "agent", "native_llama", "organizer", "knowledge", "model_library", "onnx_tts").forEach {
+            assertTrue("$it should be hidden from the hub", !byId.getValue(it).showInHub)
+        }
+        assertTrue(ToolCatalog.matchesRoute(Screen.Agent.route))
+        assertTrue(ToolCatalog.matchesRoute(Screen.OnnxTts.route))
+        assertTrue(byId.getValue("file_server").showInHub)
+    }
+
+    @Test
+    fun `visible tiles use distinct icons`() {
+        val visible = ToolCatalog.tools.filter { it.showInHub }
+        val duplicates = visible.groupBy { it.icon }.filterValues { it.size > 1 }
+        assertTrue("Duplicate icons: ${duplicates.values.map { l -> l.map { it.id } }}", duplicates.isEmpty())
     }
 }

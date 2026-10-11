@@ -2866,6 +2866,10 @@ fun MasterModeScreen(navController: NavController) {
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        TextButton(onClick = {
+                            showModelPicker = false
+                            navController.navigate(Screen.LLMModels.route)
+                        }) { Text(stringResource(R.string.common_get_models_link)) }
                     }
                 } else {
                     LazyColumn {
@@ -2918,7 +2922,15 @@ fun MasterModeScreen(navController: NavController) {
                 TextButton(onClick = { showModelPicker = false }) {
                      Text(stringResource(R.string.action_close))
                 }
-            }
+            },
+            dismissButton = if (llmModels.isNotEmpty()) {
+                {
+                    TextButton(onClick = {
+                        showModelPicker = false
+                        navController.navigate(Screen.LLMModels.route)
+                    }) { Text(stringResource(R.string.common_get_models_link), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                }
+            } else null
         )
     }
 
@@ -2928,6 +2940,12 @@ fun MasterModeScreen(navController: NavController) {
             title = { Text(stringResource(R.string.dist_step_mmproj)) },
             text = {
                 LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+                    item {
+                        TextButton(onClick = {
+                            showMmprojPicker = false
+                            navController.navigate(Screen.LLMModels.route)
+                        }) { Text(stringResource(R.string.common_get_models_link)) }
+                    }
                     item {
                         Surface(
                             onClick = { selectedMmprojPath = null; showMmprojPicker = false },
@@ -2981,6 +2999,10 @@ fun MasterModeScreen(navController: NavController) {
                         Text("📦", style = MaterialTheme.typography.displayMedium)
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(stringResource(R.string.dist_no_models))
+                        TextButton(onClick = {
+                            showDraftModelPicker = false
+                            navController.navigate(Screen.LLMModels.route)
+                        }) { Text(stringResource(R.string.common_get_models_link)) }
                     }
                 } else {
                     LazyColumn {

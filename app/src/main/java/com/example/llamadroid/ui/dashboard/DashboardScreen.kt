@@ -1,58 +1,49 @@
 package com.example.llamadroid.ui.dashboard
 
-import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.ui.navigation.navigateToRoot
+import android.content.SharedPreferences
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Chat
-import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Memory
-import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.SmartToy
-import androidx.compose.material.icons.filled.Storage
-import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material.icons.filled.Queue
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import android.content.SharedPreferences
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.saveable.rememberSaveable
-import com.example.llamadroid.ui.ai.ToolCatalog
-import com.example.llamadroid.ui.ai.ChatServerPickerDialog
-import com.example.llamadroid.ui.ai.llama.rememberRunningLlamaChatServers
-import com.example.llamadroid.ui.ai.llama.EasyLlamaChatEntryCard
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -62,51 +53,63 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.AppDatabase
-import com.example.llamadroid.data.model.LlamaChatEntity
-import com.example.llamadroid.data.model.LlamaServerEntity
-import com.example.llamadroid.data.repository.KnowledgeBaseRepository
-import com.example.llamadroid.service.ServerState
+import com.example.llamadroid.service.GenerationQueueRepository
+import com.example.llamadroid.ui.ai.ChatServerPickerDialog
+import com.example.llamadroid.ui.ai.ToolCatalog
+import com.example.llamadroid.ui.ai.llama.EasyLlamaChatEntryCard
+import com.example.llamadroid.ui.ai.llama.rememberRunningLlamaChatServers
 import com.example.llamadroid.ui.components.AppChromeDefaults
 import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.ui.components.AppPageHeader
-import com.example.llamadroid.ui.components.AppAdvancedSection
 import com.example.llamadroid.ui.components.AppSectionCard
 import com.example.llamadroid.ui.components.AppSectionTitle
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.util.SystemMonitor
 
+private const val CHATS_ROUTE = "chats"
+private const val MAX_CONTINUE_ITEMS = 5
+
+/** A Start-row shortcut: pinned tools first, then unpinned defaults. */
+private data class HomeStartAction(
+    val key: String,
+    val icon: ImageVector,
+    val label: String,
+    val onClick: () -> Unit
+)
+
+/** One entry of the merged Continue list, ordered by [timestamp] (newest first). */
+private data class HomeContinueItem(
+    val key: String,
+    val icon: ImageVector,
+    val title: String,
+    val supporting: String?,
+    val timestamp: Long,
+    val onClick: () -> Unit
+)
+
 /**
- * Soft Studio Home. The page is intentionally a small set of live hand-offs:
- * durable pins, recent project state, runtime status, and links to the owners
- * of detailed model, knowledge, offline, and output workflows.
+ * Soft Studio Home: Easy chat, a Start row of shortcuts, a merged Continue list and one compact
+ * Status row. Infrastructure (file server, Kiwix, distributed) lives in Tools.
  */
 @Composable
 fun DashboardScreen(navController: NavController) {
     val context = LocalContext.current
     val database = remember { AppDatabase.getDatabase(context) }
-    val knowledgeRepository = remember { KnowledgeBaseRepository(context, database) }
     val systemMonitor = remember(context) { SystemMonitor(context) }
     val viewModel: DashboardViewModel = viewModel(
         factory = DashboardViewModelFactory(systemMonitor)
     )
+    val queueRepository = remember(context) { GenerationQueueRepository(context) }
 
-    val serverState by viewModel.serverState.collectAsStateWithLifecycle()
     val pinnedChats by database.llamaChatDao().getPinnedAiHubChats()
         .collectAsStateWithLifecycle(initialValue = emptyList())
     val servers by database.llamaServerDao().getAllServers()
         .collectAsStateWithLifecycle(initialValue = emptyList())
     val projects by database.agentChatDao().getAllConversations()
         .collectAsStateWithLifecycle(initialValue = emptyList())
-    val knowledgeBases by knowledgeRepository.observeKnowledgeBases()
-        .collectAsStateWithLifecycle(initialValue = emptyList())
-    val knowledgeSources by knowledgeRepository.observeSourceCount()
-        .collectAsStateWithLifecycle(initialValue = 0)
-    val knowledgeChunks by knowledgeRepository.observeChunkCount()
-        .collectAsStateWithLifecycle(initialValue = 0)
-    val organizerEvents by database.organizerDao().getAllEvents()
-        .collectAsStateWithLifecycle(initialValue = emptyList())
-    val noteCount by database.noteDao().getNoteCount()
+    val pendingJobs by queueRepository.pendingCountFlow
         .collectAsStateWithLifecycle(initialValue = 0)
 
     val pinPrefs = remember(context) { context.getSharedPreferences("ai_tool_pins", android.content.Context.MODE_PRIVATE) }
@@ -126,6 +129,65 @@ fun DashboardScreen(navController: NavController) {
             navController.navigate("chat?port=${it.port}")
         })
     }
+
+    // Start row: pinned tools first, then defaults that are not already pinned.
+    val pinnedTools = ToolCatalog.tools.filter { it.id in pinnedToolIds }
+    val startActions = buildList {
+        pinnedTools.forEach { tool ->
+            add(HomeStartAction("tool:${tool.id}", tool.icon, stringResource(tool.titleRes)) {
+                if (tool.id == "chat") {
+                    when (runningChatServers.size) {
+                        0 -> navController.navigate(Screen.LlamaServers.route)
+                        1 -> navController.navigate("chat?port=${runningChatServers.single().port}")
+                        else -> showChatServerPicker = true
+                    }
+                } else navController.navigate(tool.route)
+            })
+        }
+        fun addDefault(toolId: String?, route: String, icon: ImageVector, label: String) {
+            if (toolId != null && toolId in pinnedToolIds) return
+            add(HomeStartAction("default:$route", icon, label) {
+                if (route == CHATS_ROUTE) navController.navigateToRoot(route) else navController.navigate(route)
+            })
+        }
+        addDefault(null, CHATS_ROUTE, Icons.AutoMirrored.Filled.Chat, stringResource(R.string.soft_studio_home_new_chat))
+        addDefault("agent", Screen.Agent.route, Icons.Default.AccountTree, stringResource(R.string.ui_home_agent_short))
+        addDefault("image_generation", Screen.ImageGen.route, Icons.Default.Image, stringResource(R.string.ai_image_gen))
+        addDefault("organizer", Screen.NotesManager.route, Icons.Default.CalendarMonth, stringResource(R.string.soft_studio_home_organizer))
+    }
+
+    // Continue: pinned native chats and Agent projects merged by recency.
+    val untitledChat = stringResource(R.string.ai_pinned_chat_label)
+    val missingServer = stringResource(R.string.ai_pinned_chat_server_missing)
+    val continueItems = buildList {
+        pinnedChats.forEach { chat ->
+            val server = chat.pinnedServerId?.let { id -> servers.firstOrNull { it.id == id } }
+            add(HomeContinueItem(
+                key = "chat:${chat.id}",
+                icon = Icons.AutoMirrored.Filled.Chat,
+                title = chat.title.ifBlank { untitledChat },
+                supporting = server?.name ?: missingServer,
+                timestamp = maxOf(chat.pinnedAt ?: 0L, chat.lastModified)
+            ) {
+                val serverId = chat.pinnedServerId
+                if (serverId == null || servers.none { it.id == serverId }) {
+                    navController.navigate(Screen.LlamaServers.route)
+                } else {
+                    navController.navigate(Screen.LlamaChat.createRoute(chat.id, serverId))
+                }
+            })
+        }
+        projects.forEach { project ->
+            add(HomeContinueItem(
+                key = "project:${project.id}",
+                icon = Icons.Default.AccountTree,
+                title = project.title.ifBlank { project.projectFolder },
+                supporting = project.projectFolder,
+                timestamp = project.updatedAt
+            ) { navController.navigate(Screen.Agent.createRoute(project.id)) })
+        }
+    }.sortedByDescending { it.timestamp }.take(MAX_CONTINUE_ITEMS)
+
     val scrollState = rememberScrollState()
     AppPageBackground {
         AppContentColumn(
@@ -136,11 +198,11 @@ fun DashboardScreen(navController: NavController) {
         ) {
             AppPageHeader(
                 title = stringResource(R.string.soft_studio_home_title),
-                modifier = Modifier.walkthroughTarget("home.summary"),
-                trailing = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() }
+                modifier = Modifier.walkthroughTarget("home.summary")
             )
 
             EasyLlamaChatEntryCard(
+                showQuickSetup = true,
                 onChatOpened = { chatId, serverId ->
                     navController.navigate(Screen.LlamaChat.createRoute(chatId, serverId))
                 },
@@ -149,337 +211,158 @@ fun DashboardScreen(navController: NavController) {
                 }
             )
 
-            val pinnedTools = ToolCatalog.tools.filter { it.id in pinnedToolIds }
-            if (pinnedTools.isNotEmpty()) {
-                AppSectionCard {
-                    AppSectionTitle(title = stringResource(R.string.soft_studio_tools_pinned))
-                    pinnedTools.forEach { tool ->
-                        DashboardLinkRow(tool.icon, stringResource(tool.titleRes), stringResource(tool.descriptionRes)) {
-                            if (tool.id == "chat") {
-                                when (runningChatServers.size) {
-                                    0 -> navController.navigate(Screen.LlamaServers.route)
-                                    1 -> navController.navigate("chat?port=${runningChatServers.single().port}")
-                                    else -> showChatServerPicker = true
-                                }
-                            } else navController.navigate(tool.route)
-                        }
+            DashboardStartRow(startActions)
+
+            DashboardContinueCard(
+                items = continueItems,
+                pendingJobs = pendingJobs,
+                onQueue = { navController.navigate(Screen.GenerationQueue.route) },
+                onSeeAll = { navController.navigateToRoot(CHATS_ROUTE) }
+            )
+
+            DashboardStatusRow(
+                viewModel = viewModel,
+                runningServers = runningChatServers.size,
+                onMemory = { navController.navigate(Screen.Stats.route) },
+                onServers = { navController.navigate(Screen.LlamaServers.route) }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun DashboardStartRow(actions: List<HomeStartAction>) {
+    AppSectionCard {
+        AppSectionTitle(title = stringResource(R.string.ui_home_start_title))
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            actions.forEach { action ->
+                Surface(
+                    modifier = Modifier.clickable(onClick = action.onClick),
+                    shape = RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .heightIn(min = 40.dp)
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(action.icon, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                        Text(
+                            text = action.label,
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Medium),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 200.dp)
+                        )
                     }
                 }
-            }
-
-            if (pinnedTools.isEmpty()) DashboardQuickActions(navController)
-
-            if (pinnedChats.isNotEmpty()) DashboardPinnedChats(
-                chats = pinnedChats,
-                servers = servers,
-                onOpen = { chat ->
-                    val serverId = chat.pinnedServerId
-                    if (serverId == null || servers.none { it.id == serverId }) {
-                        navController.navigate(Screen.LlamaServers.route)
-                    } else {
-                        navController.navigate(Screen.LlamaChat.createRoute(chat.id, serverId))
-                    }
-                }
-            )
-
-            if (projects.isNotEmpty()) DashboardRecentProjects(
-                projects = projects,
-                onOpen = { projectId -> navController.navigate(Screen.Agent.createRoute(projectId)) }
-            )
-
-            DashboardDeviceStatus(viewModel, onOpen = { navController.navigate(Screen.Stats.route) })
-            DashboardServerCard(
-                state = serverState,
-                onOpen = { navController.navigate(Screen.LlamaServers.route) }
-            )
-
-
-            DashboardDomainState(
-                knowledgeBaseCount = knowledgeBases.size,
-                sourceCount = knowledgeSources,
-                chunkCount = knowledgeChunks,
-                organizerEventCount = organizerEvents.size,
-                noteCount = noteCount,
-                onKnowledge = { navController.navigate(Screen.KnowledgeBase.route) },
-                onOrganizer = { navController.navigate(Screen.NotesManager.route) }
-            )
-
-            AppAdvancedSection(title = stringResource(R.string.soft_studio_home_infrastructure)) {
-                DashboardFileServerCard()
-                DashboardInfrastructureLinks(navController)
-                DashboardKiwixCard(navController)
             }
         }
     }
 }
 
 @Composable
-private fun DashboardDeviceStatus(viewModel: DashboardViewModel, onOpen: () -> Unit) {
+private fun DashboardContinueCard(
+    items: List<HomeContinueItem>,
+    pendingJobs: Int,
+    onQueue: () -> Unit,
+    onSeeAll: () -> Unit
+) {
+    AppSectionCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                AppSectionTitle(title = stringResource(R.string.ui_home_continue_title))
+            }
+            TextButton(onClick = onSeeAll) {
+                Text(stringResource(R.string.ui_home_see_all), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        if (items.isEmpty()) {
+            Text(
+                text = stringResource(R.string.ui_home_continue_empty),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        items.forEach { item ->
+            DashboardLinkRow(item.icon, item.title, item.supporting, item.onClick)
+        }
+        if (pendingJobs > 0) {
+            DashboardLinkRow(
+                icon = Icons.Default.Queue,
+                title = pluralStringResource(R.plurals.ui_home_queue_pending, pendingJobs, pendingJobs),
+                onClick = onQueue
+            )
+        }
+    }
+}
+
+@Composable
+private fun DashboardStatusRow(
+    viewModel: DashboardViewModel,
+    runningServers: Int,
+    onMemory: () -> Unit,
+    onServers: () -> Unit
+) {
     val stats by viewModel.stats.collectAsStateWithLifecycle()
     val numberFormat = remember { java.text.NumberFormat.getNumberInstance().apply { maximumFractionDigits = 1 } }
-    Surface(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen),
-        shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surfaceContainerLow
-    ) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Icon(Icons.Default.Memory, null, tint = MaterialTheme.colorScheme.secondary)
-            Text(if (stats.totalRamGb > 0f) stringResource(R.string.studio_home_memory_available,
-                numberFormat.format(stats.freeRamGb), numberFormat.format(stats.totalRamGb))
-                else stringResource(R.string.dashboard_memory),
-                modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-            Icon(Icons.Default.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-private fun DashboardServerCard(
-    state: ServerState,
-    onOpen: () -> Unit
-) {
-    val colors = MaterialTheme.colorScheme
-    val statusText = when (state) {
-        ServerState.Stopped -> stringResource(R.string.soft_studio_home_status_stopped)
-        ServerState.Starting -> stringResource(R.string.soft_studio_home_status_starting)
-        is ServerState.Loading -> stringResource(R.string.soft_studio_home_status_loading)
-        is ServerState.Running -> stringResource(R.string.soft_studio_home_status_running, state.port)
-        is ServerState.Error -> stringResource(R.string.soft_studio_home_status_error)
-    }
-    val statusColor = when (state) {
-        ServerState.Stopped -> colors.onSurfaceVariant
-        ServerState.Starting, is ServerState.Loading -> colors.primary
-        is ServerState.Running -> colors.tertiary
-        is ServerState.Error -> colors.error
-    }
-
-    AppSectionCard(
-        modifier = Modifier.clickable(onClick = onOpen),
-        containerColor = colors.primaryContainer.copy(alpha = 0.52f)
-    ) {
-        Row(
+    AppSectionCard {
+        AppSectionTitle(title = stringResource(R.string.ui_home_status_title))
+        Surface(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            shape = AppChromeDefaults.InnerCardShape,
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f)
         ) {
-            Surface(
-                modifier = Modifier.size(44.dp),
-                shape = RoundedCornerShape(14.dp),
-                color = colors.primary.copy(alpha = 0.12f)
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.Terminal,
-                    contentDescription = null,
-                    modifier = Modifier.padding(10.dp),
-                    tint = colors.primary
-                )
-            }
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = stringResource(R.string.soft_studio_home_server_title),
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                )
-                Text(
-                    text = statusText,
-                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
-                    color = statusColor
-                )
-            }
-            Icon(
-                imageVector = Icons.Default.KeyboardArrowRight,
-                contentDescription = null,
-                tint = colors.onPrimaryContainer
-            )
-        }
-    }
-}
-
-@Composable
-private fun DashboardPinnedChats(
-    chats: List<LlamaChatEntity>,
-    servers: List<LlamaServerEntity>,
-    onOpen: (LlamaChatEntity) -> Unit
-) {
-    AppSectionCard {
-        AppSectionTitle(title = stringResource(R.string.soft_studio_home_pinned_title))
-        if (chats.isEmpty()) {
-            Text(
-                text = stringResource(R.string.soft_studio_home_pinned_empty),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        } else {
-            chats.take(3).forEach { chat ->
-                val server = chat.pinnedServerId?.let { id -> servers.firstOrNull { it.id == id } }
-                val chatTitle = if (chat.title.isBlank()) {
-                    stringResource(R.string.ai_pinned_chat_label)
-                } else {
-                    chat.title
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable(onClick = onMemory)
+                        .heightIn(min = 48.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(Icons.Default.Memory, null, tint = MaterialTheme.colorScheme.secondary)
+                    Text(
+                        text = if (stats.totalRamGb > 0f) stringResource(
+                            R.string.ui_home_status_memory,
+                            numberFormat.format((stats.totalRamGb - stats.freeRamGb).coerceAtLeast(0f)),
+                            numberFormat.format(stats.totalRamGb)
+                        ) else stringResource(R.string.dashboard_memory),
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
-                DashboardLinkRow(
-                    icon = Icons.Default.Chat,
-                    title = chatTitle,
-                    supporting = server?.name ?: stringResource(R.string.ai_pinned_chat_server_missing),
-                    onClick = { onOpen(chat) }
-                )
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable(onClick = onServers)
+                        .heightIn(min = 48.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = pluralStringResource(R.plurals.ui_home_status_servers, runningServers, runningServers),
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
-    }
-}
-
-@Composable
-private fun DashboardRecentProjects(
-    projects: List<com.example.llamadroid.data.db.AgentConversationEntity>,
-    onOpen: (Long) -> Unit
-) {
-    AppSectionCard {
-        AppSectionTitle(title = stringResource(R.string.soft_studio_home_recent_projects))
-        if (projects.isEmpty()) {
-            Text(
-                text = stringResource(R.string.soft_studio_home_recent_empty),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        } else {
-            projects.take(3).forEach { project ->
-                DashboardLinkRow(
-                    icon = Icons.Default.AccountTree,
-                    title = project.title.ifBlank { project.projectFolder },
-                    supporting = project.projectFolder,
-                    onClick = { onOpen(project.id) }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun DashboardDomainState(
-    knowledgeBaseCount: Int,
-    sourceCount: Int,
-    chunkCount: Int,
-    organizerEventCount: Int,
-    noteCount: Int,
-    onKnowledge: () -> Unit,
-    onOrganizer: () -> Unit
-) {
-    AppSectionCard {
-        AppSectionTitle(title = stringResource(R.string.soft_studio_home_knowledge_state))
-        DashboardLinkRow(
-            icon = Icons.Default.Search,
-            title = stringResource(R.string.soft_studio_home_knowledge),
-            supporting = stringResource(
-                R.string.soft_studio_home_knowledge_state_desc,
-                knowledgeBaseCount,
-                sourceCount,
-                chunkCount
-            ),
-            onClick = onKnowledge
-        )
-        DashboardLinkRow(
-            icon = Icons.Default.CalendarMonth,
-            title = stringResource(R.string.soft_studio_home_organizer_state),
-            supporting = stringResource(
-                R.string.soft_studio_home_organizer_state_desc,
-                organizerEventCount,
-                noteCount
-            ),
-            onClick = onOrganizer
-        )
-    }
-}
-
-@Composable
-private fun DashboardQuickActions(navController: NavController) {
-    AppSectionCard {
-        AppSectionTitle(title = stringResource(R.string.soft_studio_home_quick_actions))
-        DashboardLinkRow(
-            icon = Icons.Default.Chat,
-            title = stringResource(R.string.soft_studio_home_new_chat),
-            onClick = { navController.navigate(Screen.LlamaChatList.route) }
-        )
-        DashboardLinkRow(
-            icon = Icons.Default.Image,
-            title = stringResource(R.string.ai_image_gen),
-            onClick = { navController.navigate(Screen.ImageGen.route) }
-        )
-        DashboardLinkRow(
-            icon = Icons.Default.AccountTree,
-            title = stringResource(R.string.soft_studio_home_agent),
-            onClick = { navController.navigate(Screen.Agent.route) }
-        )
-        DashboardLinkRow(
-            icon = Icons.Default.CalendarMonth,
-            title = stringResource(R.string.soft_studio_home_organizer),
-            supporting = stringResource(R.string.soft_studio_home_notes),
-            onClick = { navController.navigate(Screen.NotesManager.route) }
-        )
-    }
-}
-
-@Composable
-private fun DashboardLibraryLinks(navController: NavController) {
-    AppSectionCard {
-        AppSectionTitle(title = stringResource(R.string.soft_studio_home_library))
-        DashboardLinkRow(
-            icon = Icons.Default.Storage,
-            title = stringResource(R.string.soft_studio_home_models),
-            onClick = { navController.navigate(Screen.ModelHub.route) }
-        )
-        DashboardLinkRow(
-            icon = Icons.Default.Search,
-            title = stringResource(R.string.soft_studio_home_knowledge),
-            onClick = { navController.navigate(Screen.KnowledgeBase.route) }
-        )
-        DashboardLinkRow(
-            icon = Icons.Default.Folder,
-            title = stringResource(R.string.soft_studio_home_offline),
-            onClick = { navController.navigate(Screen.ZimManager.route) }
-        )
-        DashboardLinkRow(
-            icon = Icons.Default.Image,
-            title = stringResource(R.string.soft_studio_home_outputs),
-            supporting = stringResource(R.string.soft_studio_library_open_images),
-            onClick = { navController.navigate(Screen.ImageGen.createRoute(startMode = 0, tab = "gallery")) }
-        )
-        DashboardLinkRow(
-            icon = Icons.Default.Movie,
-            title = stringResource(R.string.soft_studio_library_open_videos),
-            onClick = { navController.navigate(Screen.VideoGen.createRoute(tab = "gallery")) }
-        )
-        DashboardLinkRow(
-            icon = Icons.Default.Description,
-            title = stringResource(R.string.soft_studio_library_open_notes),
-            onClick = { navController.navigate(Screen.NotesManager.route) }
-        )
-    }
-}
-
-@Composable
-private fun DashboardInfrastructureLinks(navController: NavController) {
-    AppSectionCard {
-        AppSectionTitle(
-            title = stringResource(R.string.soft_studio_home_infrastructure),
-            supporting = stringResource(R.string.soft_studio_home_infrastructure_desc)
-        )
-        DashboardLinkRow(
-            icon = Icons.Default.SmartToy,
-            title = stringResource(R.string.soft_studio_home_tools),
-            onClick = { navController.navigate(Screen.AIHub.route) }
-        )
-        DashboardLinkRow(
-            icon = Icons.Default.Share,
-            title = stringResource(R.string.soft_studio_home_distributed_llm),
-            supporting = stringResource(R.string.dashboard_setup_distributed_desc),
-            onClick = { navController.navigate(Screen.DistributedHub.route) }
-        )
-        DashboardLinkRow(
-            icon = Icons.Default.Hub,
-            title = stringResource(R.string.soft_studio_home_distributed_media),
-            supporting = stringResource(R.string.dashboard_sd_distributed_desc),
-            onClick = { navController.navigate(Screen.SdDistributedHub.route) }
-        )
     }
 }
 

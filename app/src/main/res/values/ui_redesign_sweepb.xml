@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ui_sweepb_generation_queue">Generation queue</string>
+    <string name="ui_sweepb_generation_queue_desc">Pending, running and finished generation jobs</string>
+</resources>

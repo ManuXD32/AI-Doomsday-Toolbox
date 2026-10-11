@@ -6,6 +6,7 @@ import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -258,6 +259,10 @@ fun KnowledgeBaseScreen(navController: NavController) {
         }
     }
 
+    BackHandler(enabled = showDiagnostics || selectedBase != null) {
+        if (showDiagnostics) showDiagnostics = false else selectedBaseId = null
+    }
+
     AppScreenScaffold(
         title = if (showDiagnostics) stringResource(R.string.kb_logs_title)
             else selectedBase?.name ?: stringResource(R.string.kb_title),
@@ -391,7 +396,8 @@ fun KnowledgeBaseScreen(navController: NavController) {
                         },
                         onEmbeddingBatchSizeChange = settingsRepository::setKnowledgeEmbeddingBatchSize,
                         onEmbeddingThreadsChange = settingsRepository::setKnowledgeEmbeddingThreads,
-                        onNetworkVisibleChange = settingsRepository::setKnowledgeEmbeddingNetworkVisible
+                        onNetworkVisibleChange = settingsRepository::setKnowledgeEmbeddingNetworkVisible,
+                        onOpenModels = { navController.navigate(com.example.llamadroid.ui.navigation.Screen.LLMModels.route) }
                     )
                 }
 
@@ -852,7 +858,8 @@ private fun KnowledgeEmbeddingPanel(
     onChunkSizeChange: (Int) -> Unit,
     onEmbeddingBatchSizeChange: (Int) -> Unit,
     onEmbeddingThreadsChange: (Int) -> Unit,
-    onNetworkVisibleChange: (Boolean) -> Unit
+    onNetworkVisibleChange: (Boolean) -> Unit,
+    onOpenModels: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -877,7 +884,11 @@ private fun KnowledgeEmbeddingPanel(
                     Text(stringResource(R.string.kb_local_embedding_desc), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (embeddingModels.isEmpty()) {
                         Text(stringResource(R.string.kb_no_embedding_models), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                    } else {
+                    }
+                    TextButton(onClick = onOpenModels) {
+                        Text(stringResource(R.string.common_get_models_link), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (embeddingModels.isNotEmpty()) {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             embeddingModels.forEach { model ->
                                 FilterChip(

@@ -22,6 +22,7 @@ import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.PlayArrow
@@ -148,7 +149,8 @@ fun LlamaServerCardsSection(
     compact: Boolean = false,
     onOpenChat: (chatId: Long, serverId: Long) -> Unit = { _, _ -> },
     onManageModels: () -> Unit = {},
-    onOpenSettings: () -> Unit = {}
+    onOpenSettings: () -> Unit = {},
+    onOpenWebUi: ((port: Int) -> Unit)? = null
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val database = remember(context) { AppDatabase.getDatabase(context) }
@@ -351,6 +353,7 @@ fun LlamaServerCardsSection(
                         onCancel = { actionJob?.cancel() },
                         onDelete = { cardToDelete = card },
                         onChat = { openCardChat(card) },
+                        onOpenWebUi = onOpenWebUi,
                         onRetry = {
                             when (chatErrorAction?.takeIf { it.first == card.id }?.second) {
                                 CardErrorAction.START -> startCard(card)
@@ -490,6 +493,7 @@ private fun LlamaServerCard(
     onCancel: () -> Unit,
     onDelete: () -> Unit,
     onChat: () -> Unit,
+    onOpenWebUi: ((port: Int) -> Unit)? = null,
     onRetry: () -> Unit,
     onManageModels: () -> Unit,
     isStarting: Boolean,
@@ -649,6 +653,20 @@ private fun LlamaServerCard(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
+            }
+            if (status == LlamaServerSessionStatus.RUNNING && onOpenWebUi != null) {
+                androidx.compose.material3.OutlinedButton(
+                    onClick = { onOpenWebUi(snapshot?.port ?: card.port) },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Language, contentDescription = null)
+                    Spacer(modifier = Modifier.size(6.dp))
+                    Text(
+                        text = stringResource(R.string.chats_open_web_ui),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
             if (isStarting || isChatOpening) {
                 TextButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {

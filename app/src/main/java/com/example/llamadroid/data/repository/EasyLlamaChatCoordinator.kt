@@ -67,7 +67,11 @@ class EasyLlamaChatCoordinator(
     private val context = context.applicationContext
     private val managed = ManagedLlamaServerCoordinator(this.context, database)
 
-    suspend fun createOrReuse(modelId: String, name: String? = null): EasyLlamaChatTarget = withContext(Dispatchers.IO) {
+    suspend fun createOrReuse(
+        modelId: String,
+        name: String? = null,
+        customizeProfile: ((LlamaServerLaunchProfile) -> LlamaServerLaunchProfile)? = null
+    ): EasyLlamaChatTarget = withContext(Dispatchers.IO) {
         ManagedLlamaServerCoordinator.creationLock.withLock {
             val model = database.modelDao().getModelByFilename(modelId)
                 ?.takeIf(::isEasyLlamaChatModel) ?: throw ManagedLlamaServerException(
@@ -77,7 +81,7 @@ class EasyLlamaChatCoordinator(
             val metadata = GGUFParser.readModelInfo(model.path)
             val knownContext = metadata?.contextLength?.takeIf { metadata.contextLengthDetected }
             val profile = easyLlamaProfile(model, managed.allocatePort(), knownContext,
-                Runtime.getRuntime().availableProcessors())
+                Runtime.getRuntime().availableProcessors()).let { customizeProfile?.invoke(it) ?: it }
             database.withTransaction {
                 val displayName = name?.trim()?.takeIf(String::isNotBlank) ?: model.filename.removeSuffix(".gguf")
                 val commandId = database.savedCommandDao().insertCommand(savedCommandFromLaunchProfile(displayName, profile))

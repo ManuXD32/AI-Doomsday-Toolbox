@@ -5,9 +5,7 @@
     <string name="audio_workspace_speech">Speech</string>
     <string name="audio_workspace_voices">Voices</string>
     <string name="audio_workspace_history">History</string>
-    <string name="audio_workspace_speech_title">Create speech</string>
     <string name="audio_workspace_speech_subtitle">Work through the simple flow or open any advanced control at any time.</string>
-    <string name="audio_workspace_local_badge">ON DEVICE</string>
     <string name="audio_workspace_models">Models</string>
     <string name="audio_workspace_manage_models">Manage audio models</string>
     <string name="audio_workspace_guided_title">Guided creation</string>
@@ -127,7 +125,6 @@
     <string name="audio_workspace_sample_rate">Sample rate</string>
     <string name="audio_workspace_include_metadata">Include generation metadata</string>
     <string name="audio_workspace_include_metadata_hint">Store model identity, components, voice, and effective settings with the result.</string>
-    <string name="audio_workspace_voices_title">Voice library</string>
     <string name="audio_workspace_voices_subtitle">Reusable reference recordings for compatible cloning models.</string>
     <string name="audio_workspace_add_voice">Add a voice profile</string>
     <string name="audio_workspace_add_voice_hint">Import an existing recording or capture a short sample with the microphone.</string>

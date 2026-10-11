@@ -5,7 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class AppRoutePresentationTest {
-    @Test fun `only the four root destinations retain global navigation`() {
+    @Test fun `only the five root destinations retain global navigation`() {
         AppRootDestination.entries.forEach {
             assertEquals(AppRoutePresentation(it, true), AppRoutePresentations.forRoute(it.route))
         }
@@ -20,6 +20,12 @@ class AppRoutePresentationTest {
         assertEquals(AppRootDestination.Library, AppRoutePresentations.forRoute("knowledge_chunk/42").parent)
         assertEquals(AppRootDestination.Tama, AppRoutePresentations.forRoute("adventure/FOREST").parent)
         assertEquals(AppRootDestination.Tools, AppRoutePresentations.forRoute("dataset_project/7").parent)
+        assertEquals(AppRootDestination.Chats, AppRoutePresentations.forRoute("llama_chat/3/4").parent)
+        assertEquals(AppRootDestination.Chats, AppRoutePresentations.forRoute("agent?conversationId=1").parent)
+        assertEquals(AppRootDestination.Chats, AppRoutePresentations.forRoute("llama_servers").parent)
+        assertEquals(AppRootDestination.Library, AppRoutePresentations.forRoute("notes_manager").parent)
+        assertEquals(AppRootDestination.Tools, AppRoutePresentations.forRoute("ollama_manager").parent)
+        assertEquals(AppRootDestination.Tools, AppRoutePresentations.forRoute("generation_queue").parent)
         assertEquals(null, AppRoutePresentations.forRoute("settings_general").parent)
         assertFalse(AppRoutePresentations.forRoute(null).isRoot)
     }

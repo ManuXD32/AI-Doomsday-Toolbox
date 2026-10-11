@@ -388,6 +388,9 @@ private val REALESRGAN_ANIME_4X = SdCuratedBundleFile(
 )
 
 object SdCuratedBundleCatalog {
+    /** Smallest curated txt2img checkpoint, shared with the cross-family ADT starter bundle. */
+    val smallestCheckpointFile: SdCuratedBundleFile get() = SD15_Q4
+
     val bundles: List<SdCuratedBundle> = listOf(
         SdCuratedBundle(
             id = "ipa-starter",

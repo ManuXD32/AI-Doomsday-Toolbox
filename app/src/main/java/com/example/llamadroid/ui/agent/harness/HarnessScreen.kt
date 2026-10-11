@@ -36,7 +36,6 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Refresh
@@ -44,7 +43,6 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.Web
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -65,6 +63,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -195,6 +194,14 @@ fun NativeHarnessScreen(
     var selectedTabName by rememberSaveable(navigationStateKey) {
         mutableStateOf(HarnessSurfaceTab.CONVERSATION.name)
     }
+    // Tokens let shortcuts (composer model menu, overflow Environments) ask a destination to
+    // open a specific section once it is composed.
+    var modelSettingsToken by rememberSaveable(navigationStateKey) { mutableIntStateOf(0) }
+    var environmentsScrollToken by rememberSaveable(navigationStateKey) { mutableIntStateOf(0) }
+    val selectedSessionTitle = visibleSessions.firstOrNull { it.isSelected }?.title
+    val activeEnvironmentName = installations?.let { inst ->
+        inst.rows.firstOrNull { it.id == inst.selectedRuntimeId }?.name
+    }
     var initialAttentionApplied by rememberSaveable(navigationStateKey, initialAttentionTab) {
         mutableStateOf(false)
     }
@@ -231,6 +238,8 @@ fun NativeHarnessScreen(
         // project conversation into the global landing route and loses its intended destination.
         if (projectNavigationEnabled && projectsLoaded && !projectSelectionValid) {
             selectedProjectId = null
+            // Installation-wide Settings (deep link or overflow) legitimately has no project.
+            if (selectedTabName == HarnessSurfaceTab.SETTINGS.name) return@LaunchedEffect
             selectedTabName = HarnessSurfaceTab.CONVERSATION.name
             navigationKeys = listOf(
                 harnessNavigationLocationKey(
@@ -280,10 +289,14 @@ fun NativeHarnessScreen(
             "requests" -> HarnessSurfaceTab.REQUESTS
             "plan" -> HarnessSurfaceTab.PLAN
             "conversation" -> HarnessSurfaceTab.CONVERSATION
+            // Settings are installation-wide, so they open without a resolved project.
+            "settings" -> HarnessSurfaceTab.SETTINGS
             else -> null
         }
         if (initialAttentionApplied || requestedAttentionTab == null) return@LaunchedEffect
-        if (projectNavigationEnabled && initialProjectId == null && requestedAttentionTab != HarnessSurfaceTab.CONVERSATION) {
+        if (projectNavigationEnabled && initialProjectId == null &&
+            requestedAttentionTab != HarnessSurfaceTab.CONVERSATION &&
+            requestedAttentionTab != HarnessSurfaceTab.SETTINGS) {
             // The route may still be resolving the notification's project. Keep the deep link
             // pending until the owner supplies that project instead of marking it handled on the
             // landing screen.
@@ -424,78 +437,44 @@ fun NativeHarnessScreen(
 
     Box(modifier = modifier.fillMaxSize()) {
         AppScreenScaffold(
-            title = stringResource(R.string.harness_surface_title),
-            subtitle = stringResource(
-                R.string.harness_surface_subtitle,
-                selectedProject?.title ?: projectState.workspace.projectFolder
+            title = selectedProject?.title?.takeIf { it.isNotBlank() }
+                ?: stringResource(R.string.harness_header_fallback_title),
+            subtitle = harnessHeaderSubtitle(
+                sessionTitle = if (projectLanding) null else selectedSessionTitle,
+                environmentName = activeEnvironmentName,
             ),
             onBack = if (showHarnessBack) ::navigateBack else null,
             modifier = Modifier.fillMaxSize(),
             actions = {
-                IconButton(
-                    onClick = { onAction(NativeHarnessUiAction.OpenOriginalWebUi) },
-                    enabled = projectState.originalWebUi.available,
-                    modifier = Modifier.testTag("harness_open_web_ui")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Web,
-                        contentDescription = stringResource(R.string.harness_open_web_ui)
-                    )
-                }
-                onOpenAppToolsSettings?.let { openAppTools ->
-                    IconButton(
-                        onClick = openAppTools,
-                        modifier = Modifier.testTag(HarnessAppToolsNavigationContract.testTag),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Tune,
-                            contentDescription = stringResource(R.string.harness_app_tools_open),
-                        )
-                    }
-                }
-                if (projectNavigationEnabled && selectedProject != null) {
-                    IconButton(
-                        onClick = ::navigateToProjects,
-                        modifier = Modifier.testTag("harness_back_to_projects"),
-                    ) {
-                        Icon(
-                            Icons.Default.Folder,
-                            contentDescription = stringResource(R.string.harness_back_to_projects),
-                        )
-                    }
-                }
-                onOpenRuntimeTransfer?.let { openTransfer ->
-                    if (selectedTab != HarnessSurfaceTab.RUNTIME &&
-                        (selectedProject != null || projectState.selectedSessionId != null)
-                    ) {
-                        IconButton(
-                            onClick = {
-                                val selection = HarnessRuntimeTransferSelectionUi(
-                                    projectIds = selectedProject?.id?.let { setOf(it) }.orEmpty(),
-                                    sessionIds = projectState.selectedSessionId?.let { setOf(it) }.orEmpty(),
-                                )
-                                navigateTo(
-                                    HarnessNavigationLocation(
-                                        selectedProjectId,
-                                        HarnessSurfaceTab.RUNTIME,
-                                    )
-                                )
-                                openTransfer(selection)
-                            },
-                            modifier = Modifier.testTag("harness_context_runtime_transfer"),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.FileDownload,
-                                contentDescription = stringResource(R.string.harness_installations_context_export),
-                            )
-                        }
-                    }
-                }
+                val canExport = onOpenRuntimeTransfer != null &&
+                    selectedTab != HarnessSurfaceTab.RUNTIME &&
+                    (selectedProject != null || projectState.selectedSessionId != null)
                 HarnessSecondaryDestinationMenu(
                     onSelected = { navigateTo(HarnessNavigationLocation(selectedProjectId, it)) },
                     onProjects = if (projectNavigationEnabled) ::navigateToProjects else null,
                     onRecoveryTerminal = onOpenRecoveryTerminal,
                     onRecoveryFileServer = onOpenRecoveryFileServer,
+                    sessions = if (projectLanding) emptyList() else visibleSessions,
+                    onSelectSession = { onAction(NativeHarnessUiAction.SelectSession(it)) },
+                    onNewSession = { onAction(NativeHarnessUiAction.CreateSession) },
+                    onExport = if (canExport) {
+                        {
+                            val selection = HarnessRuntimeTransferSelectionUi(
+                                projectIds = selectedProject?.id?.let { setOf(it) }.orEmpty(),
+                                sessionIds = projectState.selectedSessionId?.let { setOf(it) }.orEmpty(),
+                            )
+                            navigateTo(HarnessNavigationLocation(selectedProjectId, HarnessSurfaceTab.RUNTIME))
+                            onOpenRuntimeTransfer?.invoke(selection)
+                        }
+                    } else null,
+                    onEnvironments = if (installations != null) {
+                        {
+                            environmentsScrollToken++
+                            navigateTo(HarnessNavigationLocation(selectedProjectId, HarnessSurfaceTab.RUNTIME))
+                        }
+                    } else null,
+                    onAppTools = onOpenAppToolsSettings,
+                    webEnabled = projectState.originalWebUi.available,
                 )
             },
             bottomBar = {
@@ -510,6 +489,10 @@ fun NativeHarnessScreen(
                         // event in Conversation; the Plan tab is only a browser for persisted
                         // plan artifacts and must not steal the command route.
                         onClientCommand = onClientCommand,
+                        onOpenModelSettings = {
+                            modelSettingsToken++
+                            navigateTo(HarnessNavigationLocation(selectedProjectId, HarnessSurfaceTab.SETTINGS))
+                        },
                     )
                 }
             }
@@ -543,13 +526,6 @@ fun NativeHarnessScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                 }
-                if (topContextVisible) {
-                    HarnessSessionStrip(
-                        sessions = visibleSessions,
-                        onAction = onAction
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
                 if (!projectLanding && selectedTab in setOf(
                         HarnessSurfaceTab.CONVERSATION,
                         HarnessSurfaceTab.PLAN,
@@ -564,6 +540,7 @@ fun NativeHarnessScreen(
                     HarnessWorkTabs(
                         selectedTab = selectedTab,
                         onSelected = { navigateTo(HarnessNavigationLocation(selectedProjectId, it)) },
+                        pendingRequests = projectState.questions.size + projectState.approvals.size,
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                 }
@@ -631,6 +608,7 @@ fun NativeHarnessScreen(
                         onReinstallRuntime = onReinstallRuntime,
                         installations = installations,
                         onInstallationAction = onInstallationAction,
+                        scrollToEnvironmentsToken = environmentsScrollToken,
                         modifier = Modifier.weight(1f).fillMaxWidth()
                     )
                 }
@@ -642,6 +620,7 @@ fun NativeHarnessScreen(
                 HarnessSurfaceTab.SETTINGS -> HarnessSettingsTab(
                     state = projectState,
                     onAction = onAction,
+                    openModelToken = modelSettingsToken,
                     modifier = Modifier.weight(1f).fillMaxWidth()
                 )
                 HarnessSurfaceTab.EXTENSIONS -> HarnessExtensionsTab(
@@ -1396,7 +1375,8 @@ internal fun HarnessWorkspaceCard(
 private fun HarnessSettingsTab(
     state: NativeHarnessUiState,
     onAction: (NativeHarnessUiAction) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    openModelToken: Int = 0,
 ) {
     state.settingsDocument?.let { document ->
         HarnessSettingsDocumentDialog(document = document, onAction = onAction)
@@ -1404,7 +1384,8 @@ private fun HarnessSettingsTab(
     HarnessSettingsNavigator(
         state = state,
         onAction = onAction,
-        modifier = modifier
+        modifier = modifier,
+        openModelToken = openModelToken,
     )
 }
 

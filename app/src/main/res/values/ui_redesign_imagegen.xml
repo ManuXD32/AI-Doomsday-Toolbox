@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ui_redesign_gen_settings">Generation settings</string>
+    <string name="ui_redesign_gen_group_style">Style &amp; adapters</string>
+    <string name="ui_redesign_gen_group_components">Model components</string>
+    <string name="ui_redesign_gen_group_performance">Performance</string>
+    <string name="ui_redesign_gen_more_prompt">More prompt options</string>
+    <string name="ui_redesign_gen_blocked_reason">Cannot generate yet: %1$s</string>
+</resources>

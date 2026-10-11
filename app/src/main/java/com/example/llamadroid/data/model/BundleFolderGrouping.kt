@@ -7,6 +7,7 @@ import com.example.llamadroid.data.db.isAudioTtsComponentType
 import com.example.llamadroid.data.db.isStableAudioComponentType
 
 enum class BundleCategory(val titleRes: Int) {
+    STARTER(R.string.bundle_folder_starter),
     NORMAL(R.string.bundle_folder_normal),
     VISION(R.string.bundle_folder_vision),
     SPEECH(R.string.bundle_folder_speech),
@@ -18,6 +19,7 @@ enum class BundleCategory(val titleRes: Int) {
 }
 
 fun CuratedModelBundle.folderCategory(): BundleCategory = when {
+    id == QuickSetupBundleCatalog.BUNDLE_ID -> BundleCategory.STARTER
     videoPolicy != null -> BundleCategory.VIDEO
     files.any { it.type.isStableAudioComponentType() } -> BundleCategory.MUSIC
     files.any { it.type.isAudioTtsComponentType() || it.type == ModelType.WHISPER || it.type == ModelType.ONNX_TTS } -> BundleCategory.SPEECH

@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
@@ -83,6 +84,25 @@ fun LlamaChatListScreen(
     navController: NavController,
     initialFolderId: Long? = null
 ) {
+    LlamaChatListContent(navController = navController, folderId = initialFolderId)
+}
+
+/**
+ * Native chat history body (list, folders, search-free pinned ordering, dialogs). With
+ * [embedded] = false it owns its own Scaffold/top bar (legacy routes); with [embedded] = true it
+ * renders only the body plus a compact action row so the Chats root can host it under its own
+ * header. Incrementing [newChatSignal] opens the new-chat dialog.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LlamaChatListContent(
+    navController: NavController,
+    folderId: Long?,
+    modifier: Modifier = Modifier,
+    embedded: Boolean = false,
+    newChatSignal: Int = 0
+) {
+    val initialFolderId = folderId
     val context = LocalContext.current
     val walkthroughTargets = LocalWalkthroughTargets.current
     val importedChatTitleText = stringResource(R.string.llama_imported_chat_title)
@@ -228,8 +248,69 @@ fun LlamaChatListScreen(
         // OR we just use the most recent one.
     }
 
-    Scaffold(
-        topBar = {
+    LaunchedEffect(newChatSignal) {
+        if (newChatSignal > 0) showNewChatDialog = true
+    }
+
+    val chatActionsMenu: @Composable () -> Unit = {
+                    Box {
+                        IconButton(onClick = { showFabMenu = !showFabMenu }) {
+                            Icon(Icons.Default.Add, contentDescription = stringResource(R.string.llama_new_chat))
+                        }
+                        DropdownMenu(
+                            expanded = showFabMenu,
+                            onDismissRequest = { showFabMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.llama_new_chat)) },
+                                onClick = {
+                                    showFabMenu = false
+                                    showNewChatDialog = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.llama_folder_create)) },
+                                onClick = {
+                                    showFabMenu = false
+                                    showNewFolderDialog = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.llama_folder_manage)) },
+                                onClick = {
+                                    showFabMenu = false
+                                    showManageFoldersDialog = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.llama_prompt_profiles_manage)) },
+                                onClick = {
+                                    showFabMenu = false
+                                    showPromptProfilesDialog = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.wear_quick_chat_settings)) },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Settings, contentDescription = null)
+                                },
+                                onClick = {
+                                    showFabMenu = false
+                                    showWearQuickChatSettings = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.llama_import_chat)) },
+                                onClick = {
+                                    showFabMenu = false
+                                    importLauncher.launch(arrayOf("application/json"))
+                                }
+                            )
+                        }
+                    }
+    }
+
+    val chatListTopBar: @Composable () -> Unit = {
             TopAppBar(
                 title = {
                     Column {
@@ -297,65 +378,12 @@ fun LlamaChatListScreen(
                             )
                         }
                     }
-                    Box {
-                        IconButton(onClick = { showFabMenu = !showFabMenu }) {
-                            Icon(Icons.Default.Add, contentDescription = stringResource(R.string.llama_new_chat))
-                        }
-                        DropdownMenu(
-                            expanded = showFabMenu,
-                            onDismissRequest = { showFabMenu = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.llama_new_chat)) },
-                                onClick = {
-                                    showFabMenu = false
-                                    showNewChatDialog = true
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.llama_folder_create)) },
-                                onClick = {
-                                    showFabMenu = false
-                                    showNewFolderDialog = true
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.llama_folder_manage)) },
-                                onClick = {
-                                    showFabMenu = false
-                                    showManageFoldersDialog = true
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.llama_prompt_profiles_manage)) },
-                                onClick = {
-                                    showFabMenu = false
-                                    showPromptProfilesDialog = true
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.wear_quick_chat_settings)) },
-                                leadingIcon = {
-                                    Icon(Icons.Default.Settings, contentDescription = null)
-                                },
-                                onClick = {
-                                    showFabMenu = false
-                                    showWearQuickChatSettings = true
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.llama_import_chat)) },
-                                onClick = {
-                                    showFabMenu = false
-                                    importLauncher.launch(arrayOf("application/json"))
-                                }
-                            )
-                        }
-                    }
+                    chatActionsMenu()
                 }
             )
-        }
-    ) { padding ->
+    }
+
+    val chatListBody: @Composable (PaddingValues) -> Unit = { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -379,7 +407,13 @@ fun LlamaChatListScreen(
                     modifier = Modifier
                         .weight(1f)
                         .walkthroughTarget("llama.history"),
-                    contentPadding = PaddingValues(16.dp),
+                    // Embedded in the Chats root, leave room for its floating New button.
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        top = 16.dp,
+                        end = 16.dp,
+                        bottom = if (embedded) 88.dp else 16.dp
+                    ),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     if (selectedFolderFilter == LLAMA_FOLDER_FILTER_ALL) {
@@ -447,6 +481,38 @@ fun LlamaChatListScreen(
                 }
             }
         }
+    }
+
+    if (embedded) {
+        Column(modifier = modifier.fillMaxSize()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (selectedFolderFilter > 0) {
+                    IconButton(onClick = { selectedFolderFilter = LLAMA_FOLDER_FILTER_ALL }) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.llama_folder_back_to_root)
+                        )
+                    }
+                }
+                Text(
+                    text = currentFolder?.name ?: stringResource(R.string.llama_chats_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(start = 12.dp)
+                )
+                chatActionsMenu()
+            }
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                chatListBody(PaddingValues(0.dp))
+            }
+        }
+    } else {
+        Scaffold(modifier = modifier, topBar = chatListTopBar, content = chatListBody)
     }
 
     if (showWearQuickChatSettings) {

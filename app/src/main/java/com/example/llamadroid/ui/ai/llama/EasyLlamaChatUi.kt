@@ -13,12 +13,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -215,10 +217,13 @@ internal fun EasyLlamaModelPickerDialog(
 fun EasyLlamaChatEntryCard(
     modifier: Modifier = Modifier,
     onChatOpened: (chatId: Long, serverId: Long) -> Unit,
-    onManageModels: () -> Unit = {}
+    onManageModels: () -> Unit = {},
+    /** Adds the "Quick setup" secondary button that opens the ADT starter bundle sheet. */
+    showQuickSetup: Boolean = false
 ) {
     val context = LocalContext.current
     val database = remember(context) { AppDatabase.getDatabase(context) }
+    var showQuickSetupSheet by remember { mutableStateOf(false) }
     val coordinator = remember(context, database) {
         EasyLlamaChatCoordinator(context, database)
     }
@@ -308,6 +313,20 @@ fun EasyLlamaChatEntryCard(
                 overflow = TextOverflow.Ellipsis
             )
         }
+        if (showQuickSetup) {
+            OutlinedButton(
+                onClick = { showQuickSetupSheet = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.AutoAwesome, contentDescription = null)
+                Spacer(modifier = Modifier.size(6.dp))
+                Text(
+                    text = stringResource(R.string.quick_setup_button),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
         if (isOpening) {
             TextButton(onClick = { openingJob?.cancel(); status = null }, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.action_cancel))
@@ -344,6 +363,10 @@ fun EasyLlamaChatEntryCard(
                 }
             }
         }
+    }
+
+    if (showQuickSetupSheet) {
+        com.example.llamadroid.ui.quicksetup.QuickSetupSheet(onDismiss = { showQuickSetupSheet = false })
     }
 
     if (showPicker) {

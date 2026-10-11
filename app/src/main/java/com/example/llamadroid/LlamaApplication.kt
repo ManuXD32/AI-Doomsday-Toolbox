@@ -96,6 +96,7 @@ class LlamaApplication : Application() {
                     }
                 )
             runRemovedLlmTrainingCleanupOnce()
+            runCatching { com.example.llamadroid.data.repository.QuickSetupServerWatcher.ensureStarted(this@LlamaApplication) }
             pruneLegacyPortableModelRows()
             normalizeLegacyQuadtrixLoraRows()
             installAgentRuntimeProfiles()

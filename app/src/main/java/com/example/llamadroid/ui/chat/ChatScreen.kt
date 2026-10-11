@@ -327,7 +327,7 @@ fun ChatScreen(
                         }
                     }
                     IconButton(onClick = { loadChatUrl() }) {
-                        Icon(Icons.Default.Refresh, stringResource(R.string.chat_clear))
+                        Icon(Icons.Default.Refresh, stringResource(R.string.action_refresh))
                     }
                 }
             )

@@ -1,5 +1,6 @@
 package com.example.llamadroid.ui.pdf
 
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -238,30 +239,20 @@ fun PDFSummaryScreen(navController: NavController) {
         )
     }
 
-    Scaffold(
-        modifier = Modifier.imePadding(),
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.pdf_ai_summary_title)) },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
-                    }
-                },
-                actions = {
-                    com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
-                    IconButton(
-                        onClick = {
-                            scope.launch { PDFSummaryService.refreshBackendMetadata(context) }
-                        }
-                    ) {
-                        Icon(Icons.Default.Refresh, stringResource(R.string.pdf_refresh_backend_info))
-                    }
-                    IconButton(onClick = { navController.navigate(Screen.PDFSettings.route) }) {
-                        Icon(Icons.Default.Settings, stringResource(R.string.nav_settings))
-                    }
+    AppScreenScaffold(
+        title = stringResource(R.string.pdf_ai_summary_title),
+        onBack = { navController.popBackStack() },
+        actions = {
+            IconButton(
+                onClick = {
+                    scope.launch { PDFSummaryService.refreshBackendMetadata(context) }
                 }
-            )
+            ) {
+                Icon(Icons.Default.Refresh, stringResource(R.string.pdf_refresh_backend_info))
+            }
+            IconButton(onClick = { navController.navigate(Screen.PDFSettings.route) }) {
+                Icon(Icons.Default.Settings, stringResource(R.string.nav_settings))
+            }
         }
     ) { padding ->
         Column(

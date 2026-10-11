@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ui_home_start_title">Empezar</string>
+    <string name="ui_home_agent_short">Agente</string>
+    <string name="ui_home_continue_title">Continuar</string>
+    <string name="ui_home_see_all">Ver todo</string>
+    <string name="ui_home_continue_empty">Tus chats fijados y los proyectos recientes del Agente aparecerán aquí.</string>
+    <plurals name="ui_home_queue_pending">
+        <item quantity="one">Cola de generación: %1$d pendiente</item>
+        <item quantity="many">Cola de generación: %1$d pendientes</item>
+        <item quantity="other">Cola de generación: %1$d pendientes</item>
+    </plurals>
+    <string name="ui_home_status_title">Estado</string>
+    <string name="ui_home_status_memory">%1$s de %2$s GB en uso</string>
+    <plurals name="ui_home_status_servers">
+        <item quantity="one">Servidores locales: %1$d activo</item>
+        <item quantity="many">Servidores locales: %1$d activos</item>
+        <item quantity="other">Servidores locales: %1$d activos</item>
+    </plurals>
+</resources>

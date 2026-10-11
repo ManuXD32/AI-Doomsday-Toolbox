@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="quick_setup_button">Configuración rápida</string>
+    <string name="quick_setup_title">Configuración rápida</string>
+    <string name="quick_setup_description">Todo lo que necesita un usuario nuevo en una sola descarga: chat, generación de imágenes y voz a texto.</string>
+    <string name="quick_setup_bundle_title">Paquete inicial de ADT</string>
+    <string name="quick_setup_bundle_desc">Gemma 4 E2B con visión y aceleración MTP, Stable Diffusion 1.5 (pequeño y rápido en teléfonos) y Whisper Small multilingüe.</string>
+    <string name="quick_setup_capability_image">Generación de imágenes</string>
+    <string name="quick_setup_capability_speech">Voz a texto</string>
+    <string name="quick_setup_type_image_model">Modelo de imagen (Stable Diffusion)</string>
+    <string name="quick_setup_type_whisper">Modelo de voz Whisper</string>
+    <string name="quick_setup_server_note">Cuando terminen de descargarse los archivos de Gemma 4, se crea automáticamente un servidor llama.cpp administrado con decodificación especulativa MTP y el proyector de visión. Puedes iniciarlo cuando quieras desde Chatear con un modelo.</string>
+    <string name="quick_setup_server_name">Gemma 4 E2B (MTP)</string>
+    <string name="bundle_folder_starter">Paquete inicial</string>
+</resources>

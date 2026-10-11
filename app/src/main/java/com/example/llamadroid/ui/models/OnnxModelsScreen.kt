@@ -10,6 +10,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -43,7 +44,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
@@ -91,7 +91,7 @@ import com.example.llamadroid.data.model.ModelLibraryManager
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.data.model.library.ModelFamily
 import com.example.llamadroid.ui.components.DownloadTaskSection
-import com.example.llamadroid.ui.components.AppPageBackground
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.data.db.ONNX_CAPABILITY_BACKGROUND_REMOVAL
 import com.example.llamadroid.data.db.ONNX_CAPABILITY_IMG2IMG
 import com.example.llamadroid.data.db.ONNX_CAPABILITY_TTS
@@ -492,53 +492,21 @@ fun OnnxModelsScreen(navController: NavController, initialTab: String? = null) {
         )
     }
 
-    Scaffold(
-        containerColor = Color.Transparent,
-        floatingActionButton = {
-            FloatingActionButton(onClick = { treePicker.launch(null) }) {
-                Icon(Icons.Default.Add, contentDescription = stringResource(R.string.onnx_models_import_bundle))
+    AppScreenScaffold(
+        title = stringResource(R.string.onnx_models_title),
+        subtitle = stringResource(R.string.onnx_models_subtitle),
+        onBack = { navController.popBackStack() },
+        actions = {
+            IconButton(
+                onClick = { navController.navigate("${Screen.ModelSources.route}?family=ONNX&tab=download") },
+                modifier = Modifier.walkthroughTarget("models.download")
+            ) {
+                Icon(Icons.Default.Download, contentDescription = stringResource(R.string.model_library_custom_download_heading))
             }
         }
-    ) { innerPadding ->
-        AppPageBackground(modifier = Modifier.padding(innerPadding)) {
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
             Column(modifier = Modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 8.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(
-                        onClick = { navController.popBackStack() },
-                        modifier = Modifier.walkthroughTarget("back")
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
-                    }
-                    Text(
-                        stringResource(R.string.onnx_models_title),
-                        modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
-                    IconButton(
-                        onClick = { navController.navigate("${Screen.ModelSources.route}?family=ONNX&tab=download") },
-                        modifier = Modifier.walkthroughTarget("models.download")
-                    ) {
-                        Icon(Icons.Default.Download, contentDescription = stringResource(R.string.model_library_custom_download_heading))
-                    }
-                }
-                Text(
-                    stringResource(R.string.onnx_models_subtitle),
-                    modifier = Modifier.padding(start = 52.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
             ModelManagerShortcutRow(
                 navController = navController,
                 family = ModelFamily.ONNX,
@@ -636,6 +604,15 @@ fun OnnxModelsScreen(navController: NavController, initialTab: String? = null) {
                     )
                 }
             }
+            }
+            FloatingActionButton(
+                onClick = { treePicker.launch(null) },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .navigationBarsPadding()
+                    .padding(16.dp)
+            ) {
+                Icon(Icons.Default.Add, contentDescription = stringResource(R.string.onnx_models_import_bundle))
             }
         }
     }

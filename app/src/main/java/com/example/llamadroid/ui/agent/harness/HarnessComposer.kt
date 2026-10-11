@@ -190,6 +190,7 @@ internal fun HarnessComposerSlot(
     references: List<HarnessComposerReferenceUi> = emptyList(),
     onReferenceQuery: (String?) -> Unit = {},
     onClientCommand: (String) -> Unit = {},
+    onOpenModelSettings: () -> Unit = {},
 ) {
     val enabled = state.runtime.status != HarnessRuntimeStatus.STOPPING &&
         state.selectedSessionId != null &&
@@ -223,6 +224,7 @@ internal fun HarnessComposerSlot(
             onRefreshModelCatalog = { onAction(NativeHarnessUiAction.RefreshModelCatalog) },
             onSelectReasoning = { onAction(NativeHarnessUiAction.SelectReasoningEffort(it)) },
             onSelectPermission = { onAction(NativeHarnessUiAction.SelectPermissionPreset(it)) },
+            onOpenModelSettings = onOpenModelSettings,
         )
     }
 }
@@ -248,6 +250,7 @@ private fun HarnessComposer(
     onRefreshModelCatalog: () -> Unit,
     onSelectReasoning: (String?) -> Unit,
     onSelectPermission: (String) -> Unit,
+    onOpenModelSettings: () -> Unit,
 ) {
     val sessionKey = state.selectedSessionId ?: "no-session"
     var draft by rememberSaveable(sessionKey, stateSaver = TextFieldValue.Saver) {
@@ -410,6 +413,7 @@ private fun HarnessComposer(
                 onSelectModel = onSelectModel,
                 onRefreshModelCatalog = onRefreshModelCatalog,
                 onSelectReasoning = onSelectReasoning,
+                onOpenModelSettings = onOpenModelSettings,
                 selectedProvider = selectedProvider,
             )
             Box(modifier = Modifier.fillMaxWidth()) {
@@ -653,6 +657,7 @@ private fun HarnessComposerSessionControls(
     onSelectModel: (providerId: String, modelId: String) -> Unit,
     onRefreshModelCatalog: () -> Unit,
     onSelectReasoning: (String?) -> Unit,
+    onOpenModelSettings: () -> Unit,
 ) {
     val modelId = state.provider.selectedModel
     val modelLabel = selectedProvider?.let { modelId?.let { id -> harnessModelOptionLabel(it, id) } }
@@ -674,8 +679,7 @@ private fun HarnessComposerSessionControls(
                 selected = modelExpanded,
                 onClick = { onModelExpandedChange(true) },
                 enabled = modelPickerEnabled,
-                label = { Text(modelLabel, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                leadingIcon = { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                label = { Text(stringResource(R.string.harness_chip_model, modelLabel), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             )
             DropdownMenu(expanded = modelExpanded, onDismissRequest = { onModelExpandedChange(false) }) {
                 DropdownMenuItem(
@@ -753,15 +757,18 @@ private fun HarnessComposerSessionControls(
                                 Column {
                                     Text(harnessModelOptionLabel(provider, id), maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     Text(
-                                        stringResource(R.string.harness_model_needs_context),
+                                        stringResource(R.string.harness_model_needs_context_open),
                                         style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
                                     )
                                 }
                             },
-                            onClick = {},
-                            enabled = false,
+                            // Rendered enabled (secondary style) so a tap opens the Model editor
+                            // instead of silently doing nothing; it never selects the model.
+                            onClick = { onModelExpandedChange(false); onOpenModelSettings() },
+                            modifier = Modifier.testTag("harness_model_needs_context_${provider.id}"),
                         )
                     }
                 }
@@ -772,7 +779,7 @@ private fun HarnessComposerSessionControls(
                 selected = reasoningExpanded,
                 onClick = { onReasoningExpandedChange(true) },
                 enabled = enabled && efforts.isNotEmpty(),
-                label = { Text(effortLabel, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                label = { Text(stringResource(R.string.harness_chip_reasoning, effortLabel), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             )
             DropdownMenu(expanded = reasoningExpanded, onDismissRequest = { onReasoningExpandedChange(false) }) {
                 DropdownMenuItem(
@@ -792,58 +799,52 @@ private fun HarnessComposerSessionControls(
                 selected = permissionExpanded,
                 onClick = { onPermissionExpandedChange(true) },
                 enabled = enabled && state.permission.options.isNotEmpty(),
-                label = { Text(permissionLabel, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                label = { Text(stringResource(R.string.harness_chip_permission, permissionLabel), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             )
         }
     }
 }
 
-/** Compact Pocket-style session selector shared by conversation and work tabs. */
+/**
+ * Session picker dropdown. It is anchored inside the header overflow (the session strip row was
+ * removed to give the transcript room) and keeps "New session" as its first entry.
+ */
 @Composable
-internal fun HarnessSessionStrip(
+internal fun HarnessSessionPickerMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
     sessions: List<HarnessSessionUiState>,
-    onAction: (NativeHarnessUiAction) -> Unit,
+    onSelectSession: (String) -> Unit,
+    onNewSession: (() -> Unit)?,
 ) {
-    var expanded by rememberSaveable { mutableStateOf(false) }
-    val selected = sessions.firstOrNull { it.isSelected }
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Box(modifier = Modifier.weight(1f)) {
-            OutlinedButton(
-                onClick = { expanded = true },
-                enabled = sessions.isNotEmpty(),
-                modifier = Modifier.fillMaxWidth().testTag("harness_session_selector"),
-            ) {
-                Text(
-                    selected?.title ?: stringResource(R.string.harness_choose_session),
-                    modifier = Modifier.weight(1f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text("⌄")
-            }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                sessions.forEach { session ->
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text(session.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(session.projectFolder, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                        },
-                        leadingIcon = if (session.isSelected) { { Icon(Icons.Default.Check, null) } } else null,
-                        onClick = { expanded = false; onAction(NativeHarnessUiAction.SelectSession(session.id)) },
-                    )
-                }
-            }
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        if (onNewSession != null) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.harness_new_session), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                leadingIcon = { Icon(Icons.Default.Add, null) },
+                onClick = { onDismiss(); onNewSession() },
+                modifier = Modifier.testTag("harness_new_session"),
+            )
         }
-        IconButton(
-            onClick = { onAction(NativeHarnessUiAction.CreateSession) },
-            modifier = Modifier.testTag("harness_new_session"),
-        ) { Icon(Icons.Default.Add, stringResource(R.string.harness_new_session)) }
+        if (sessions.isEmpty()) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.harness_choose_session)) },
+                onClick = {},
+                enabled = false,
+            )
+        }
+        sessions.forEach { session ->
+            DropdownMenuItem(
+                text = {
+                    Column {
+                        Text(session.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(session.projectFolder, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                },
+                leadingIcon = if (session.isSelected) { { Icon(Icons.Default.Check, null) } } else null,
+                onClick = { onDismiss(); onSelectSession(session.id) },
+            )
+        }
     }
 }
 

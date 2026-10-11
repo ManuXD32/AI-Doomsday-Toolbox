@@ -1,5 +1,6 @@
 package com.example.llamadroid.ui
 
+import com.example.llamadroid.ui.navigation.navigateToRoot
 import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 
 import com.example.llamadroid.ui.walkthrough.*
@@ -496,11 +497,7 @@ fun LlamaApp(
     }
     
     fun navigateFromAppNavigation(root: AppRootDestination) {
-        navController.navigate(root.route) {
-            popUpTo(navController.graph.startDestinationId) { saveState = true }
-            launchSingleTop = true
-            restoreState = true
-        }
+        navController.navigateToRoot(root.route)
     }
 
     fun returnToPetHome() {
@@ -511,6 +508,7 @@ fun LlamaApp(
 
     val directNavigationDestinations = listOf(
         Triple(AppRootDestination.Home, R.string.studio_nav_home, Icons.Default.Home),
+        Triple(AppRootDestination.Chats, R.string.studio_nav_chats, Icons.Default.Forum),
         Triple(AppRootDestination.Tools, R.string.studio_nav_tools, Icons.Default.GridView),
         Triple(AppRootDestination.Library, R.string.studio_nav_library, Icons.Default.FolderOpen),
         Triple(AppRootDestination.Tama, R.string.studio_nav_tama, Icons.Default.FavoriteBorder)
@@ -624,6 +622,7 @@ fun LlamaApp(
             composable(Screen.Logs.route) { LogsScreen(navController) }
             // AI screens
             composable(Screen.AIHub.route) { AIHubScreen(navController) }
+            composable(Screen.Chats.route) { com.example.llamadroid.ui.chat.ChatsHomeScreen(navController) }
             composable(Screen.Library.route) { LibraryScreen(navController) }
             composable(Screen.AllMediaGallery.route) { AllMediaGalleryScreen(navController) }
             composable(Screen.AiServersHub.route) { AiServersHubScreen(navController) }
@@ -756,7 +755,12 @@ fun LlamaApp(
             composable("settings_whisper") { WhisperSettingsScreen(navController) }
             composable("settings_upscaler") { VideoUpscalerSettingsScreen(navController) }
             composable("settings_prompts") { SystemPromptsSettingsScreen(navController) }
-            composable("settings_logs") { LogsScreen(navController) }
+            composable("settings_logs") {
+                // Legacy alias: forward to the canonical logs route.
+                androidx.compose.runtime.LaunchedEffect(Unit) {
+                    navController.navigate(Screen.Logs.route) { popUpTo("settings_logs") { inclusive = true } }
+                }
+            }
             // PDF screens
             composable(Screen.PDFToolbox.route) { PDFToolboxScreen(navController) }
             composable(Screen.PDFSummary.route) { PDFSummaryScreen(navController) }

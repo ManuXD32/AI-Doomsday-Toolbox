@@ -58,9 +58,7 @@
     <string name="llama_card_allow_wear_start_hint">Only one server can be started from the watch. Enabling this turns it off on the others.</string>
     
     <!-- AI Hub -->
-    <string name="ai_hub_subtitle">Your local AI assistant</string>
     <string name="ai_tools_search_label">Search tools</string>
-    <string name="ai_tools_category_pinned_chats">Pinned chats</string>
     <string name="ai_pinned_chat_label">Chat</string>
     <string name="ai_pinned_chat_server_missing">Remembered server unavailable</string>
     <string name="ai_tools_open_settings_cd">Open settings for %1$s</string>
@@ -80,7 +78,6 @@
     <string name="ai_chat_servers_many">Choose a running server for Chat.</string>
     <string name="ai_chat_choose_server">Choose server</string>
     <string name="ai_chat_open">Open Chat</string>
-    <string name="ai_chat_manage_servers">Manage llama.cpp servers</string>
     <string name="ai_chat_server_port">Port %1$d</string>
     <string name="ai_image_gen">Image Generation</string>
     <string name="ai_image_gen_desc">Create with Stable Diffusion</string>
@@ -175,7 +172,6 @@
     <string name="chat_title">Chat</string>
     <string name="chat_placeholder">Type a message…</string>
     <string name="chat_send">Send</string>
-    <string name="chat_clear">Clear chat</string>
     <string name="chat_copy">Copy</string>
     <string name="chat_regenerate">Regenerate</string>
     <string name="chat_stop_generating">Stop generating</string>
@@ -506,7 +502,6 @@
     <!-- PDF Tools -->
     <string name="pdf_toolbox_title">PDF Toolbox</string>
     <string name="pdf_shared_file_ready">Shared PDF ready</string>
-    <string name="pdf_tools_header">📄 PDF Tools</string>
     <string name="pdf_merge">Merge PDFs</string>
     <string name="pdf_merge_desc">Combine multiple PDF files into one</string>
     <string name="pdf_split">Split PDF</string>
@@ -828,17 +823,14 @@
     <string name="settings_general_desc">Output, theme</string>
     <string name="settings_llm">LLM / Chat</string>
     <string name="settings_llm_desc">Threads, context</string>
-    <string name="settings_imagegen">Image Gen</string>
     <string name="settings_imagegen_desc">SD, Enhancer</string>
     <string name="settings_whisper">Whisper</string>
     <string name="settings_whisper_desc">Transcription</string>
     <string name="settings_upscaler">Upscaler</string>
     <string name="settings_upscaler_desc">Video threads</string>
-    <string name="settings_pdf">PDF AI</string>
     <string name="settings_pdf_desc">Summary model</string>
     <string name="settings_prompts">Prompts</string>
     <string name="settings_prompts_desc">System prompts</string>
-    <string name="settings_debug">Debug</string>
     <string name="settings_debug_desc">Logs, binaries</string>
     <string name="settings_stats">Stats</string>
     <string name="settings_stats_desc">Device history, charts</string>
@@ -1462,7 +1454,7 @@
     <!-- Native Llama Client -->
     <string name="llama_client_title">Native Llama Chat</string>
     <string name="llama_client_desc">Direct connection to llama-server</string>
-    <string name="llama_servers_title">Llama Servers</string>
+    <string name="llama_servers_title">Server connections</string>
     <string name="llama_add_server">Add Server</string>
     <string name="llama_server_name_hint">Server Name (e.g. My PC)</string>
     <string name="llama_server_host_hint">Host IP (e.g. 192.168.1.5)</string>
@@ -2037,17 +2029,6 @@
     <string name="pdf_translation_language_japanese">Japanese</string>
     <string name="pdf_translation_language_korean">Korean</string>
     <string name="pdf_translation_language_chinese_simplified">Chinese (Simplified)</string>
-    <string name="pdf_translation_settings_title">PDF Translation Settings</string>
-    <string name="pdf_translation_settings_subtitle">Backend, prompt, language, and page screenshot context</string>
-    <string name="pdf_translation_backend_title">PDF Translation Backend</string>
-    <string name="pdf_translation_prompt_label">Translation prompt</string>
-    <string name="pdf_translation_prompt_desc">The app adds page block IDs, geometry, and strict JSON instructions around this system prompt.</string>
-    <string name="pdf_translation_screenshot_context_title">Send page screenshot context</string>
-    <string name="pdf_translation_screenshot_context_desc">Attach a compressed full-page image when the selected backend accepts vision input.</string>
-    <string name="pdf_translation_screenshot_max_side_label">Screenshot max side</string>
-    <string name="pdf_translation_screenshot_quality_label">Screenshot JPEG quality</string>
-    <string name="pdf_translation_text_fallback_title">Text-only fallback</string>
-    <string name="pdf_translation_text_fallback_desc">Retry page JSON translation without the screenshot if image input fails or is unsupported.</string>
     <string name="pdf_translation_quality_title">Translation quality</string>
     <string name="pdf_translation_quality_best">Best Quality</string>
     <string name="pdf_translation_quality_balanced">Balanced</string>
@@ -2057,43 +2038,18 @@
     <string name="pdf_translation_quality_faster_desc">Fastest path: keeps one-pass chunk translation and lighter cleanup, but dialogue may be less natural.</string>
     <string name="pdf_translation_llm_role_title">Translation LLM</string>
     <string name="pdf_translation_llm_role_desc">Choose the text model that writes the translated document. This is separate from the OCR vision model below.</string>
-    <string name="pdf_ocr_provider_title">OCR provider</string>
     <string name="pdf_ocr_provider_mlkit">ML Kit</string>
     <string name="pdf_ocr_provider_llama_cpp">llama.cpp GGUF OCR</string>
     <string name="pdf_ocr_vision_role_title">OCR vision model</string>
     <string name="pdf_ocr_vision_role_desc">Choose a downloaded multimodal GGUF and its matching projector for image text recognition. Unlimited-OCR belongs here, not in Translation LLM.</string>
     <string name="pdf_ocr_llama_pause_restore_notice">When GGUF OCR starts, active app-owned llama-server cards pause temporarily so only one local model is resident. They are restored after OCR; distributed runtimes are not stopped automatically.</string>
-    <string name="pdf_ocr_bubble_guided_title">Detect text bubbles before OCR</string>
-    <string name="pdf_ocr_bubble_guided_desc">Experimental: crops likely speech bubbles and text regions before OCR so manga text is less likely to merge across bubbles.</string>
-    <string name="pdf_ocr_llama_model_path_label">OCR GGUF model path</string>
-    <string name="pdf_ocr_llama_mmproj_path_label">OCR mmproj path</string>
-    <string name="pdf_ocr_llama_mmproj_path_desc">Required for image OCR; the GGUF OCR model will not run without its matching projector.</string>
-    <string name="pdf_ocr_llama_prompt_preset_title">OCR prompt preset</string>
-    <string name="pdf_ocr_llama_preset_unlimited">Unlimited-OCR (recommended test)</string>
-    <string name="pdf_ocr_llama_preset_glm">GLM-OCR</string>
-    <string name="pdf_ocr_llama_preset_deepseek">DeepSeek-OCR</string>
-    <string name="pdf_ocr_llama_preset_hunyuan">HunyuanOCR</string>
-    <string name="pdf_ocr_llama_preset_paddleocr_vl">PaddleOCR-VL</string>
-    <string name="pdf_ocr_llama_preset_dots">Dots.OCR</string>
-    <string name="pdf_ocr_llama_preset_lighton">LightOnOCR</string>
-    <string name="pdf_ocr_llama_preset_qianfan">Qianfan-OCR</string>
-    <string name="pdf_ocr_llama_preset_generic">Generic OCR</string>
     <string name="pdf_ocr_llama_prompt_label">OCR prompt</string>
     <string name="pdf_ocr_llama_context_label">OCR context size</string>
     <string name="pdf_ocr_llama_context_warning">OCR context is %1$d tokens. Values above 8,192 use more memory and can make the OCR server unstable; reduce it if you see failures.</string>
     <string name="pdf_ocr_llama_max_tokens_label">OCR max tokens</string>
     <string name="pdf_ocr_llama_port_label">OCR server port</string>
-    <string name="pdf_ocr_llama_cache_ram_label">OCR cache RAM</string>
-    <string name="pdf_ocr_llama_parallel_label">OCR parallel slots</string>
-    <string name="pdf_ocr_llama_flash_attention_title">OCR flash attention</string>
-    <string name="pdf_ocr_llama_flash_attention_desc">Enable only for OCR models and devices that are known to work with it.</string>
-    <string name="pdf_ocr_llama_replace_server_title">Temporarily replace running llama-server</string>
-    <string name="pdf_ocr_llama_replace_server_desc">Pause the selected app-owned llama.cpp server, or the first detected server when no selection matches, while OCR runs. A different app-owned OCR-port occupant is also paused when required. Every paused profile is restored before continuing; distributed runtimes are never stopped automatically.</string>
-    <string name="pdf_ocr_llama_expert_show">Show Expert settings</string>
-    <string name="pdf_ocr_llama_expert_hide">Hide Expert settings</string>
     <string name="pdf_ocr_llama_projector_manual_required">No unambiguous projector match was found. Choose the projector explicitly before running OCR.</string>
     <string name="pdf_ocr_llama_custom_flags_label">OCR custom flags</string>
-    <string name="pdf_ocr_llama_command_template_label">OCR command template</string>
     <string name="pdf_ocr_llama_error_missing_model">Choose an OCR GGUF model before running llama.cpp OCR.</string>
     <string name="pdf_ocr_llama_error_missing_mmproj">Choose the matching OCR mmproj before running llama.cpp OCR.</string>
     <string name="pdf_ocr_runtime_distributed_active">A distributed llama master or worker is active. Stop it before using GGUF OCR; distributed runtimes are never paused automatically.</string>
@@ -2270,35 +2226,14 @@
     <string name="agent_console_last_saved">Last saved</string>
     <string name="agent_console_running">Running</string>
     <string name="agent_console_ready">Ready</string>
-    <string name="agent_console_recovering">Recovering</string>
-    <string name="agent_console_connected">Connected</string>
-    <string name="agent_console_disconnected">Disconnected</string>
-    <string name="agent_console_connecting">Connecting</string>
-    <string name="agent_console_endpoint_configured">Configured · %1$s</string>
-    <string name="agent_console_endpoint_missing">Saved endpoint unavailable</string>
     <string name="agent_console_context_unknown">Not measured yet</string>
     <string name="agent_console_context_value">%1$d%% · %2$d/%3$d tokens</string>
     <string name="agent_console_last_saved_unknown">No checkpoint yet</string>
     <string name="agent_console_last_saved_value">At %1$s</string>
-    <string name="agent_console_backend_ollama">Ollama</string>
-    <string name="agent_console_backend_llama_server">llama.cpp server</string>
-    <string name="agent_console_backend_llama_swap">llama-swap</string>
-    <string name="agent_console_backend_litert">LiteRT</string>
-    <string name="agent_console_backend_openai">OpenAI-compatible</string>
-    <string name="agent_console_model_unknown">No model selected</string>
-    <string name="agent_conversations_sheet_subtitle">Switch projects or start a fresh workspace.</string>
     <string name="agent_restored_project">🏠 Restored project: %s</string>
-    <string name="agent_restored_messages">📜 Restored %d messages from history</string>
     <string name="agent_plan_approved">✅ Plan approved by user</string>
     <string name="agent_plan_approved_msg">Plan approved by user. Proceed with implementation.</string>
     <string name="agent_plan_rejected">❌ Plan rejected by user</string>
-    <string name="agent_denied_execution">User denied execution of %s. Please stop or try another way.</string>
-    <string name="agent_deny_reason_title">Deny Action</string>
-    <string name="agent_deny_reason_desc">Optionally explain why you are denying this action. This helps the AI understand and adjust.</string>
-    <string name="agent_deny_reason_hint">Reason (optional)</string>
-    <string name="agent_deny_skip_reason">Skip</string>
-    <string name="agent_project_default_prefix">project_</string>
-    <string name="agent_ready_msg">🤖 AI Agent ready for project **%1$s** (/workspace/%2$s/).\n\nConnect to the agent workspace to start coding.</string>
     <string name="agent_new_project_title">New project</string>
     <string name="agent_project_name_label">Project Name</string>
     <string name="agent_welcome_title">Welcome to AI Agent</string>
@@ -2367,15 +2302,7 @@
     <string name="agent_request_proot_run">The AI wants to run this project in its Local Debian environment.</string>
     <string name="agent_request_proot_force_stop">The AI wants to force stop this project in its Local Debian environment.</string>
     <string name="agent_request_python_dependency">The AI wants to install or register Python dependency: %1$s</string>
-    <string name="agent_dashboard_title">Agent projects</string>
     <string name="agent_dashboard_return">Back to project dashboard</string>
-    <string name="agent_dashboard_subtitle">Open a saved project or create a workspace.</string>
-    <string name="agent_dashboard_empty">No projects yet. Create a project or folder to get started.</string>
-    <string name="agent_dashboard_running">Running</string>
-    <string name="agent_dashboard_llm_working">LLM working</string>
-    <string name="agent_dashboard_folder_actions">Folder actions: %1$s</string>
-    <string name="agent_dashboard_project_actions">Project actions: %1$s</string>
-    <string name="agent_dashboard_item_options">Item options</string>
     <string name="agent_project_backend_label">Workspace type</string>
     <string name="agent_project_backend_remote">Remote SSH / Termux</string>
     <string name="agent_project_backend_remote_desc">Uses the existing Termux/proot workspace and shell tools.</string>
@@ -2383,13 +2310,6 @@
     <string name="agent_project_backend_local_desc">Uses app-private files and local Python/WebView runners without Termux shell access.</string>
     <string name="agent_planning_mode">Planning Mode</string>
     <string name="agent_send_guidance">Send guidance</string>
-    <string name="agent_guidance_interrupting">Guidance received. Interrupting the active run and continuing from the new instruction.</string>
-    <string name="agent_retry_debug_start">Retry requested. Checking LLM backend: %1$s.</string>
-    <string name="agent_retry_debug_ssh">Remote project also needs SSH. Retrying %1$s:%2$d.</string>
-    <string name="agent_retry_debug_ssh_not_required">not required for this project</string>
-    <string name="agent_retry_debug_no_detail">no extra detail reported</string>
-    <string name="agent_retry_debug_status">Retry status: LLM backend %1$s connected=%2$s; SSH required=%3$s; SSH status=%4$s; detail=%5$s.</string>
-    <string name="agent_retry_debug_done">Retry finished. If the warning remains, open Debug Console for the backend error and connection state.</string>
     <string name="agent_status_needs_direction">Needs direction</string>
     <string name="agent_needs_direction_message">Paused because the agent may be looping: %1$s</string>
     <string name="agent_needs_direction_interrupted_message">Agent paused and needs your attention: %1$s</string>
@@ -2401,22 +2321,7 @@
     <string name="agent_resume_reason_interrupted">The previous run was interrupted before completion.</string>
     <string name="agent_recovery_interrupted_reason">Interrupted because the app or Agent foreground service stopped. Review the restored activity before continuing.</string>
     <string name="agent_recovery_waiting_continue">Interrupted — waiting for explicit Continue</string>
-    <string name="agent_resume_reason_needs_direction">The previous run paused because it needed direction.</string>
-    <string name="agent_resume_reason_generic">The previous run did not finish.</string>
-    <string name="agent_resume_system_note">Continue this project from the previous unfinished state. Reason: %1$s</string>
-    <string name="agent_folder_create_title">Create folder</string>
-    <string name="agent_folder_create_short">New folder</string>
-    <string name="agent_folder_name_label">Folder name</string>
     <string name="agent_folder_toggle">Expand or collapse folder</string>
-    <string name="agent_folder_root">Root</string>
-    <string name="agent_folder_go_up">Up one folder</string>
-    <string name="agent_folder_move_invalid">A folder cannot be moved inside itself.</string>
-    <string name="agent_folder_delete_not_empty">Only empty folders can be deleted.</string>
-    <string name="agent_rename_title">Rename</string>
-    <string name="agent_rename_label">Name</string>
-    <string name="agent_move_to_folder_title">Move to folder</string>
-    <string name="agent_move_up">Move up</string>
-    <string name="agent_move_down">Move down</string>
     <string name="action_rename">Rename</string>
     <string name="agent_parent_folder">Parent folder</string>
     <string name="agent_empty_folder">Empty folder</string>
@@ -2433,7 +2338,6 @@
     <string name="agent_error_prefix">Error: %1$s</string>
     <string name="agent_reconnecting">Reconnecting…</string>
     <string name="agent_connecting">Connecting…</string>
-    <string name="agent_ollama_offline">Ollama is offline</string>
     <string name="agent_disconnected">Agent disconnected</string>
     <string name="agent_selected_count">%d selected</string>
     <string name="agent_ready_to">ready to %s</string>
@@ -2452,9 +2356,7 @@
     <string name="agent_custom_tools_title">🔧 Custom Tools</string>
     <string name="agent_custom_agents_title">🤖 Custom Agents</string>
     <string name="agent_add_tool">Add Tool</string>
-    <string name="agent_add_agent">Add Agent</string>
     <string name="agent_no_tools">No custom tools yet</string>
-    <string name="agent_no_custom_agents">No custom agents yet</string>
     <string name="agent_tap_plus_hint">Tap + to create one</string>
     <string name="agent_edit_tool">Edit Tool</string>
     <string name="agent_new_tool">New Tool</string>
@@ -2476,53 +2378,20 @@
     <string name="agent_tool_save_changes">Save Changes</string>
     <string name="agent_tool_create_btn">Create Tool</string>
     
-    <string name="agent_edit_agent">Edit Agent</string>
-    <string name="agent_new_agent">New Agent</string>
-    <string name="agent_agent_emoji_label">Emoji</string>
-    <string name="agent_agent_name_label">Name*</string>
-    <string name="agent_agent_name_hint">DEBUGGER</string>
-    <string name="agent_agent_display_name_label">Display Name*</string>
-    <string name="agent_agent_display_name_hint">e.g., Debugger</string>
     <string name="agent_prompt_label">System Prompt*</string>
-    <string name="agent_agent_prompt_hint">You are the Debugger agent. Your job is to...</string>
     <string name="agent_model_label">Model Override (optional)</string>
     <string name="agent_agent_model_hint">Leave empty for default</string>
-    <string name="agent_agent_example_label">Example Usage</string>
-    <string name="agent_agent_example_desc">Helps Orchestrator understand when to use this agent</string>
-    <string name="agent_agent_delegate_label">Can Delegate to Other Agents</string>
-    <string name="agent_agent_create_btn">Create Agent</string>
     
     <string name="agent_disabled_label">Disabled</string>
     <string name="agent_tool_example_template_title">Load Example</string>
     <string name="agent_tool_example_template_desc">Load a pre-made template to learn how to create a custom tool.</string>
-    <string name="agent_agent_example_template_title">Load Example</string>
     <string name="agent_agent_example_template_desc">Load a pre-made template to learn how to create a custom agent.</string>
 
 
     <!-- Project Management -->
     <string name="agent_project_mgmt_title">📦 Project Management</string>
-    <string name="agent_export_success">✅ Export successful!</string>
-    <string name="agent_export_failed">❌ Export failed: %1$s</string>
-    <string name="agent_import_success">✅ Import successful! Current project replaced.</string>
-    <string name="agent_import_failed">❌ Import failed: %1$s</string>
-    <string name="agent_current_project">Current Project</string>
-    <string name="agent_export_import_header">📤 Export / Import</string>
-    <string name="agent_export_zip">Export ZIP</string>
-    <string name="agent_import_zip">Import ZIP</string>
-    <string name="agent_snapshots_header">📸 Snapshots (Undo/Rollback)</string>
-    <string name="agent_no_snapshots">No snapshots yet</string>
-    <string name="agent_rollback_hint">Create one to enable rollback</string>
     <string name="agent_files_count">%1$d files</string>
     <string name="agent_restore_btn">Restore</string>
-    <string name="agent_create_snapshot_title">📸 Create Snapshot</string>
-    <string name="agent_snapshot_desc_label">Enter a description for this snapshot:</string>
-    <string name="agent_snapshot_success">✅ Snapshot created!</string>
-    <string name="agent_snapshot_failed">❌ Failed to create snapshot</string>
-    <string name="agent_snapshot_deleted">Snapshot deleted</string>
-    <string name="agent_rollback_failed">❌ Rollback failed</string>
-    <string name="agent_files_count_label">files</string>
-    <string name="agent_snapshot_desc_placeholder">e.g., Before refactoring</string>
-    <string name="agent_snapshot_default_name">Snapshot %1$d</string>
 
     <!-- Agent Dialogs & Settings -->
     <string name="agent_select_model">Select Model</string>
@@ -2535,7 +2404,6 @@
     <string name="agent_unit_mb">MB</string>
     <string name="agent_unit_kb">KB</string>
     <string name="agent_unit_b">B</string>
-    <string name="agent_generic_tool">the tool</string>
     <string name="agent_downloading_model">Downloading %s...</string>
     <string name="agent_model_ready">%s ready!</string>
     <string name="agent_recommended_models">💡 Recommended Models:</string>
@@ -2599,7 +2467,6 @@
     <string name="agent_auto_reflection_toggle_desc">When enabled, agents run reflection before finalizing work.</string>
     <string name="agent_tool_toggle_desc">Allow this tool in future agent turns.</string>
     <string name="agent_reset_default">Reset to Default</string>
-    <string name="agent_conversations_title">📚 Conversations</string>
     <string name="agent_stop_all">Stop All</string>
     <string name="agent_hide_output">Hide Extra Output</string>
     <string name="agent_show_output">Show Extra Output</string>
@@ -2653,8 +2520,6 @@
     <string name="agent_backend_desc">Choose API. Ollama has local management tools; llama-server and llama-swap use OpenAI-compatible chat.</string>
     <string name="agent_llama_server_url">llama-server URL</string>
     <string name="agent_llama_server_note">Note: Model, Threads and KV settings are managed by llama-server via CLI arguments, not here.</string>
-    <string name="agent_llama_server_offline">llama-server is offline</string>
-    <string name="agent_llama_server_reconnecting">Refreshing llama-server status…</string>
     <string name="agent_llama_server_value_unavailable">Unavailable</string>
     <string name="agent_llama_server_role_model_note">This role uses the active llama-server model: %1$s.</string>
 
@@ -2743,8 +2608,6 @@
     <string name="agent_system_prompt">System Prompt</string>
     <string name="agent_install_cmd_label">install command</string>
     <string name="agent_start_cmd_label">start command</string>
-    <string name="agent_snapshot_item_desc">%1$s • %2$d %3$s</string>
-    <string name="agent_welcome_desc">Start with a project:</string>
     <string name="agent_workspace_project_label">Workspace: %s</string>
     <string name="agent_workspace_last_updated">Last updated: %s</string>
     <string name="agent_workspace_created">Created: %s</string>
@@ -2814,7 +2677,6 @@
     <string name="agent_reflection_blocked_summary">Reflection found missing work or unresolved risks, so finalization is blocked for now.</string>
     <string name="agent_reflection_blocked_hint">Address the missing items, update memory if needed, verify the changed files or commands, and only then try to finish again.</string>
     <string name="agent_reflection_recovery_instruction">Before finishing, use the reflection result to address the missing plan items and risks. Read plan.md, changed_files.md, and any relevant files or command outputs, do the missing work, then retry reflection or finish_task.</string>
-    <string name="agent_ollama_reconnecting">Reconnecting to Ollama…</string>
     <string name="agent_stream_interrupted_suffix">[Connection interrupted: %1$s]</string>
     <string name="agent_process_stopped">🛑 **Process stopped by user.**</string>
     <string name="agent_executing_tool">Executing %s…</string>
@@ -2831,30 +2693,17 @@
     <string name="agent_tool_example_full">Example Tool: %s</string>
     <string name="agent_custom_tool_header">Custom Tool: %s</string>
     <string name="agent_custom_agent_header">Custom Agent: %s</string>
-    <string name="agent_welcome_step1">1. Select New project and choose a local workspace or remote SSH workspace.</string>
-    <string name="agent_welcome_step2">2. Name the project so its files and conversations stay together.</string>
-    <string name="agent_welcome_step3">3. Open model settings to choose your runtime, then start chatting.</string>
-    <string name="agent_welcome_note">The project tells the AI where your files are.</string>
     <string name="agent_conversations_menu">Conversations</string>
     <string name="agent_new_project_btn">New Project</string>
     <string name="agent_no_conversations">No conversations yet</string>
-    <string name="agent_loading_project_title">Loading project</string>
-    <string name="agent_loading_project_desc">Reloading the selected project conversation and workspace…</string>
     <string name="agent_no_project_loaded_title">No project loaded</string>
     <string name="agent_no_project_loaded_desc">Select or create a project conversation to start working with the AI agent.</string>
     <string name="agent_workspace_no_project_desc">Select or create a project conversation before browsing the workspace.</string>
     <string name="agent_workspace_no_project_path">No project path loaded yet</string>
     <string name="agent_ssh_required_title">SSH server required</string>
     <string name="agent_ssh_required_desc">The AI agent needs the SSH server connected before chat and workspace actions can work.</string>
-    <string name="agent_delete_project_title">Delete Project?</string>
-    <string name="agent_delete_project_desc">This will permanently delete the conversation history.</string>
     <string name="agent_delete_files_warning">🚨 ALSO REMOVING FILES IN PROOT ENVIRONMENT:</string>
-    <string name="agent_delete_remote_files_warning">Also removing the remote workspace folder:</string>
-    <string name="agent_delete_local_files_warning">Also removing the local sandbox folder:</string>
     <string name="action_create">Create</string>
-    <string name="action_got_it">Got it!</string>
-    <string name="action_delete_everything">Delete Everything</string>
-    <string name="icon_warning_desc">Warning</string>
     <string name="agent_tool_label">🔧 %s</string>
     <string name="agent_custom_agent_label">🤖 %s</string>
     <string name="agent_role_label">👷 %s</string>
@@ -3103,7 +2952,6 @@
     <string name="sd_models_quick_search">Quick Search Suggestions</string>
     <string name="sd_models_tap_to_search">Tap to search HuggingFace</string>
     <string name="sd_models_search_results">Search Results (%d)</string>
-    <string name="sd_models_search_label">Search: \"%s\"</string>
     <string name="sd_models_error_source_not_found">Source file not found</string>
     <string name="sd_models_export_success">Exported: %s</string>
     <string name="sd_models_export_failed">Export failed: %s</string>
@@ -3122,7 +2970,6 @@
     <string name="onnx_models_permission_action">Grant Access</string>
     <string name="onnx_models_tab_installed">Installed (%1$d)</string>
     <string name="onnx_models_tab_downloading">Downloading</string>
-    <string name="onnx_models_tab_catalog">Catalog</string>
     <string name="onnx_models_importing">Importing bundle…</string>
     <string name="onnx_models_empty">No ONNX image bundles installed yet. If an older shared-storage install disappeared, import or download it again.</string>
     <string name="onnx_models_provider_title">Catalog provider</string>
@@ -4012,8 +3859,6 @@
     <string name="action_downloading_status">Downloading...</string>
     <string name="action_send">Send</string>
     <string name="action_settings">Settings</string>
-    <string name="action_new">New</string>
-    <string name="action_restore">Restore</string>
     <string name="action_more">More</string>
     <string name="action_hide">Hide</string>
     <string name="action_show">Show</string>
@@ -5791,9 +5636,6 @@
     <string name="agent_tool_working_dir_label">Working directory</string>
     <string name="agent_tool_working_dir_hint">., app, scripts, or another path inside the current project</string>
     <string name="agent_tool_working_dir_desc">Custom tools are confined to the current project. Prefix the command template with shell: only when you intentionally need high-risk shell mode.</string>
-    <string name="agent_agent_allowed_tools_label">Allowed tools JSON</string>
-    <string name="agent_agent_allowed_tools_hint">["read_file", "search_code", "finish_task"]</string>
-    <string name="agent_agent_allowed_tools_desc">Provide a JSON array of tool names. Leave it empty to use the safe default tool set for custom agents.</string>
     <string name="agent_vision_enabled">Vision enabled</string>
     <string name="agent_vision_enabled_desc">Allow this agent to inspect images when the backend model supports vision.</string>
     <string name="agent_image_generation_settings_title">Image generation tool</string>
@@ -5826,7 +5668,6 @@
     <string name="native_chat_bgr_input_missing">The background-removal input image could not be found.</string>
     <string name="native_chat_bgr_input_unsupported">Background removal supports PNG, JPG, JPEG, WEBP, and BMP images.</string>
     <string name="agent_attach_image">Attach image</string>
-    <string name="agent_attach_image_failed">Could not attach the selected image.</string>
     <string name="agent_image_attachment_title">Attached image</string>
     <string name="agent_create_folder_tool_name">Create folder</string>
     <string name="agent_generate_image_tool_name">Image generation</string>
@@ -6641,8 +6482,6 @@
     <string name="agent_kb_selector_none">No knowledge base selected for agent tools.</string>
     <string name="agent_kb_selector_title">Project knowledge bases</string>
     <string name="agent_llama_swap_note">Select role models after refreshing llama-swap models from /v1/models.</string>
-    <string name="agent_llama_swap_offline">llama-swap is offline</string>
-    <string name="agent_llama_swap_reconnecting">Refreshing llama-swap status…</string>
     <string name="agent_llama_swap_url">llama-swap URL</string>
     <string name="ai_runtime_recovery_notification_body">Open the app to resume pending AI work (%1$d).</string>
     <string name="ai_runtime_recovery_notification_title">AI jobs paused after restart</string>
@@ -8291,10 +8130,6 @@
     <string name="binary_catalog_custom_info_body">Experimental ARM64 packages must be built with the Android NDK for API 26 or newer. Put manifest.json at the ZIP root and shared objects under lib/arm64-v8a/. The LLM entry point must be libllama_server.so; Stable Diffusion must use libsd.so. Include every non-system shared library reported by readelf -d, declare each file in libraries, then create the ZIP with: zip -r package.zip manifest.json lib/. Packages are validated before installation and can be removed from this catalog.</string>
     <string name="binary_catalog_custom_example">manifest.json\n{\n  \"schemaVersion\": 1,\n  \"id\": \"my-llama-build\",\n  \"name\": \"My llama.cpp server\",\n  \"version\": \"b1234\",\n  \"family\": \"llm_server\",\n  \"entrypoint\": \"lib/arm64-v8a/libllama_server.so\",\n  \"libraries\": [\n    \"lib/arm64-v8a/libllama_server.so\",\n    \"lib/arm64-v8a/libllama.so\",\n    \"lib/arm64-v8a/libggml.so\",\n    \"lib/arm64-v8a/libggml-base.so\",\n    \"lib/arm64-v8a/libggml-cpu.so\",\n    \"lib/arm64-v8a/libmtmd.so\"\n  ]\n}</string>
     <string name="binary_catalog_custom_picker_detail">User package · %1$s</string>
-    <string name="agent_batch_select">Select projects</string>
-    <string name="agent_batch_selected_count">%1$d projects selected</string>
-    <string name="agent_batch_delete_title">Delete selected projects?</string>
-    <string name="agent_batch_delete_message">Permanently delete %1$d selected projects and their chats?</string>
     <string name="logs_generation_diag_app_version">App version: %1$s</string>
     <string name="logs_generation_diag_process">Process: %1$s · PID %2$s · status %3$d · importance %4$d</string>
     <string name="logs_generation_diag_process_memory">Exit memory: PSS %1$s KB · RSS %2$s KB</string>
@@ -8471,7 +8306,6 @@
     <string name="agent_skill_imports_title">Advanced imports</string>
     <string name="agent_skill_scripts_warning">Imported and project skill scripts never run automatically. Every execution requires approval and sandbox validation.</string>
     <string name="agent_command_help">Commands: /plan, /build, /compact, /details, /skills, /todos, /agents, /custom-agents, /custom-tools, /commands, /help. Type @ to select an agent.</string>
-    <string name="agent_compaction_requested">Context compaction will run at the next safe root-turn boundary.</string>
     <string name="agent_plan_approved_switch_build">Plan approved. Switch to Build mode?</string>
     <string name="agent_switch_to_build">Switch to Build</string>
     <string name="agent_question_invalid">This question could not be displayed safely. The project has been paused.</string>
@@ -8486,8 +8320,6 @@
     <string name="agent_command_skill_help">Load this installed skill for the next turn</string>
     <string name="agent_command_agent_help">Select this agent for the next task</string>
     <string name="agent_skill_import_zip">Import local ZIP</string>
-    <string name="agent_skill_import_success">Installed skill: %1$s</string>
-    <string name="agent_skill_import_failed">Skill import failed: %1$s</string>
     <string name="agent_skill_version_license">v%1$s · %2$s</string>
     <string name="agent_skill_license_missing">License not specified</string>
     <string name="agent_skill_version_unknown">Unknown version</string>
@@ -8495,14 +8327,7 @@
     <string name="agent_skill_install_complete">Skill installed or updated.</string>
     <string name="agent_skill_permission_saved">Skill permission saved.</string>
     <string name="agent_skill_uninstall_complete">Skill uninstalled.</string>
-    <string name="agent_active_message_title">The agent is still working</string>
-    <string name="agent_active_message_body">Choose when this message should reach the agent.</string>
-    <string name="agent_active_message_queue">Queue after tool</string>
-    <string name="agent_active_message_queue_desc">Keep the current work running. Your message will be inserted immediately after the next completed tool result and marked urgent.</string>
-    <string name="agent_active_message_interrupt">Stop and send now</string>
-    <string name="agent_active_message_interrupt_desc">Cancel the current work, clear its stale ownership, and start a new root turn with your message.</string>
     <string name="agent_message_queued">Message queued for the next completed tool call.</string>
-    <string name="agent_messages_queued_count">%1$d urgent message(s) queued for the next tool boundary</string>
     <string name="agent_queued_guidance_prompt_prefix">The preceding tool result is committed. Do not discard, forget, or lose track of that result. The user sent this guidance while work was continuing; take it into account before choosing the next step:\n\n%1$s</string>
     <string name="agent_queued_guidance_model_instruction">The preceding tool result is committed. Do not discard, forget, or lose track of it. The following is a real user message sent while work continued; take it into account before choosing the next step.</string>
     <string name="agent_guidance_state_queued">Queued · applies after the current step</string>
@@ -8587,8 +8412,6 @@
     <string name="agent_command_commands_help">Show commands available during a run</string>
     <string name="agent_command_custom_agents_help">Open custom-agent management</string>
     <string name="agent_command_custom_tools_help">Open custom-tool management</string>
-    <string name="agent_guidance_queued">Guidance queued for the next safe step.</string>
-    <string name="agent_workflow_command_queued">Command queued to run after the current step.</string>
     <string name="agent_invocation_interrupted_result">%1$s was interrupted when the app process stopped. Committed work was restored; use Continue to inspect state before proceeding.</string>
     <string name="agent_checkpoint_failed_continue">The committed tool result could not be checkpointed safely. Continue after inspecting persistence state.</string>
     <string name="agent_checkpoint_error_failed_continue">The tool error could not be checkpointed safely. Continue after inspecting persistence state.</string>
@@ -8696,9 +8519,6 @@
     <string name="sd_models_clip_vision_label">CLIP-Vision encoders (%1$d)</string>
     <string name="sd_models_ip_adapter_label">IP-Adapter models (%1$d)</string>
     <string name="sd_models_adetailer_label">ADetailer / YOLO detectors (%1$d)</string>
-    <string name="sd_models_ip_adapter_search_sd15">🖼️ IP-Adapter for SD 1.5</string>
-    <string name="sd_models_ip_adapter_search_sdxl">🖼️ IP-Adapter for SDXL</string>
-    <string name="sd_models_clip_vision_search">👁️ CLIP-Vision encoders</string>
     <string name="imagegen_ip_adapter_title">IP-Adapter</string>
     <string name="imagegen_ip_adapter_desc">Guide appearance from a separate reference image</string>
     <string name="imagegen_ip_adapter_unsupported_summary">Available for SD 1.5 and SDXL checkpoints</string>
@@ -8716,6 +8536,7 @@
     <string name="imagegen_ip_adapter_strength">IP-Adapter strength</string>
     <string name="imagegen_ip_adapter_strength_hint">0.6–0.8 is a good starting range; 1.0 is the upstream default.</string>
     <string name="imagegen_ip_adapter_manage_models">Manage models</string>
+    <string name="common_get_models_link">Get models</string>
     <string name="imagegen_ip_adapter_clear">Reset</string>
     <string name="imagegen_error_ip_adapter_unsupported">IP-Adapter is supported only by SD 1.5 and SDXL checkpoint models.</string>
     <string name="imagegen_error_ip_adapter_missing_adapter">Choose an IP-Adapter weight file before generating.</string>
@@ -9075,4 +8896,5 @@
     <string name="generation_queue_retry_files_discarded">Saved retry files discarded</string>
     <string name="generation_queue_start_blocked_title">Generation queue needs attention</string>
     <string name="generation_queue_start_blocked_message">Android could not start background processing. Open the app and run the queue.</string>
+    <string name="onnx_models_tab_catalog">Catalog</string>
 </resources>

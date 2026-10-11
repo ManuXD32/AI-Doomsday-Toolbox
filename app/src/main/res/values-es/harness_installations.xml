@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="harness_installations_title">Instalaciones de Harness</string>
+    <string name="harness_installations_title">Entornos</string>
     <string name="harness_installations_description">Cada instalación tiene sus propios proyectos, sesiones, ajustes y credenciales.</string>
     <string name="harness_installations_create">Crear</string>
     <string name="harness_installations_import">Importar ZIP</string>
@@ -35,7 +35,6 @@
     <string name="harness_installations_delete_name_hint">Escribe «%1$s» para confirmar.</string>
 
     <string name="harness_installations_export_title">Exportar instalación de Harness</string>
-    <string name="harness_installations_context_export">Exportar datos seleccionados del proyecto o la sesión</string>
     <string name="harness_installations_export_description">Crea un ZIP para transferir «%1$s». Las credenciales se excluyen salvo que las incluyas explícitamente.</string>
     <string name="harness_installations_import_title">Importar ZIP de Harness</string>
     <string name="harness_installations_import_description">Elige si este ZIP añade datos portátiles o restaura un rootfs completo.</string>

@@ -97,6 +97,13 @@ fun ModelHubScreen(navController: NavController) {
             )
 
             ModelFeatureCard(
+                title = stringResource(R.string.audio_models_title),
+                description = stringResource(R.string.audio_models_subtitle),
+                icon = Icons.Default.GraphicEq,
+                onClick = { navController.navigate(Screen.AudioModels.route) }
+            )
+
+            ModelFeatureCard(
                 title = stringResource(R.string.model_library_hub_title),
                 description = stringResource(R.string.model_library_hub_desc),
                 icon = Icons.Default.Link,

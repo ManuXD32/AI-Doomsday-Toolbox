@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="harness_tab_runtime">Entorno</string>
+    <string name="harness_tab_runtime">Tiempo de ejecución</string>
     <string name="harness_runtime_shortcut">Entorno: %1$s</string>
     <string name="harness_runtime_open_tab">Abrir</string>
     <string name="harness_runtime_error_code">Código de error: %1$s</string>

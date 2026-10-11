@@ -1,29 +1,35 @@
 package com.example.llamadroid.ui.ai
 
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.Create
-import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.ModelTraining
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.SlowMotionVideo
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material.icons.filled.Summarize
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.Web
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.example.llamadroid.R
@@ -31,12 +37,11 @@ import com.example.llamadroid.ui.navigation.Screen
 
 /** The task a person is trying to complete, rather than the engine used underneath it. */
 enum class ToolCategory(val titleRes: Int) {
-    CONVERSATION(R.string.soft_studio_tools_category_conversation),
     CREATE(R.string.soft_studio_tools_category_create),
     VOICE(R.string.soft_studio_tools_category_voice),
-    DOCS(R.string.soft_studio_tools_category_docs),
-    ORGANIZER(R.string.soft_studio_tools_category_organizer),
-    INFRASTRUCTURE(R.string.soft_studio_tools_category_infrastructure)
+    DOCUMENTS(R.string.ui_redesign_tools_category_documents),
+    SHARE_NETWORK(R.string.ui_redesign_tools_category_share_network),
+    ADVANCED(R.string.ui_redesign_tools_category_advanced)
 }
 
 enum class ToolSettingsSheet {
@@ -66,7 +71,9 @@ data class AIToolDefinition(
     val route: String,
     val routePatterns: List<String> = listOf(route),
     val settingsAction: ToolSettingsAction = ToolSettingsAction.None,
-    val keywords: List<String> = emptyList()
+    val keywords: List<String> = emptyList(),
+    /** False for tools that now live in another root tab (Chats, Library, Audio). Routes still resolve. */
+    val showInHub: Boolean = true
 )
 
 private fun tool(
@@ -78,7 +85,8 @@ private fun tool(
     route: String,
     routePatterns: List<String> = listOf(route),
     settingsAction: ToolSettingsAction = ToolSettingsAction.None,
-    keywords: List<String> = emptyList()
+    keywords: List<String> = emptyList(),
+    showInHub: Boolean = true
 ) = AIToolDefinition(
     id = id,
     category = category,
@@ -88,7 +96,8 @@ private fun tool(
     route = route,
     routePatterns = routePatterns,
     settingsAction = settingsAction,
-    keywords = keywords
+    keywords = keywords,
+    showInHub = showInHub
 )
 
 object ToolCatalog {
@@ -98,15 +107,15 @@ object ToolCatalog {
      * search for "onnx" still finds every relevant action.
      */
     val tools: List<AIToolDefinition> = listOf(
-        tool("chat", ToolCategory.CONVERSATION, Icons.Default.Chat, R.string.ai_chat, R.string.ai_chat_desc, Screen.Chat.route,
+        tool("chat", ToolCategory.ADVANCED, Icons.AutoMirrored.Filled.Chat, R.string.ai_chat, R.string.ai_chat_desc, Screen.Chat.route,
             routePatterns = listOf(Screen.Chat.route, "${Screen.Chat.route}?port={serverPort}"),
-            settingsAction = ToolSettingsAction.Navigate("settings_llm"), keywords = listOf("chat", "conversation", "llm")),
-        tool("agent", ToolCategory.CONVERSATION, Icons.Default.SmartToy, R.string.hub_agent, R.string.hub_agent_desc, Screen.Agent.route,
+            settingsAction = ToolSettingsAction.Navigate("settings_llm"), keywords = listOf("chat", "conversation", "llm"), showInHub = false),
+        tool("agent", ToolCategory.ADVANCED, Icons.Default.SmartToy, R.string.hub_agent, R.string.hub_agent_desc, Screen.Agent.route,
             routePatterns = listOf(Screen.Agent.route, "${Screen.Agent.route}?conversationId={conversationId}", Screen.AgentWorkspace.route, Screen.AgentProotTerminal.route, Screen.AgentInvocation.route),
-            keywords = listOf("agent", "coding", "workspace", "project")),
-        tool("native_llama", ToolCategory.CONVERSATION, Icons.Default.Memory, R.string.llama_client_title, R.string.llama_client_desc, Screen.LlamaServerList.route,
+            keywords = listOf("agent", "coding", "workspace", "project"), showInHub = false),
+        tool("native_llama", ToolCategory.ADVANCED, Icons.Default.Memory, R.string.llama_client_title, R.string.llama_client_desc, Screen.LlamaServerList.route,
             routePatterns = listOf(Screen.LlamaServerList.route, Screen.LlamaChatList.route, Screen.LlamaChatList.folderRoute, Screen.LlamaScheduler.route, Screen.LlamaChat.route),
-            settingsAction = ToolSettingsAction.Navigate("settings_llm"), keywords = listOf("llama", "native", "server", "scheduler")),
+            settingsAction = ToolSettingsAction.Navigate("settings_llm"), keywords = listOf("llama", "native", "server", "scheduler"), showInHub = false),
         tool("image_generation", ToolCategory.CREATE, Icons.Default.Image, R.string.ai_image_gen, R.string.ai_image_gen_desc, Screen.ImageGen.route,
             routePatterns = listOf(
                 Screen.ImageGen.route,
@@ -114,23 +123,23 @@ object ToolCatalog {
                 "${Screen.ImageGen.route}?startMode={startMode}&tab={tab}"
             ),
             settingsAction = ToolSettingsAction.Sheet(ToolSettingsSheet.IMAGE_GENERATION), keywords = listOf("stable diffusion", "sd", "txt2img", "img2img", "image")),
-        tool("video_generation", ToolCategory.CREATE, Icons.Default.Movie, R.string.ai_video_gen, R.string.ai_video_gen_desc, Screen.VideoGen.route,
+        tool("video_generation", ToolCategory.CREATE, Icons.Default.VideoLibrary, R.string.ai_video_gen, R.string.ai_video_gen_desc, Screen.VideoGen.route,
             routePatterns = listOf(Screen.VideoGen.route, "${Screen.VideoGen.route}?tab={tab}"),
             settingsAction = ToolSettingsAction.Sheet(ToolSettingsSheet.IMAGE_GENERATION), keywords = listOf("video", "stable diffusion", "txt2vid", "img2vid")),
-        tool("onnx_image_generation", ToolCategory.CREATE, Icons.Default.Create, R.string.ai_onnx_image_gen, R.string.ai_onnx_image_gen_desc, Screen.OnnxImageGen.route,
+        tool("onnx_image_generation", ToolCategory.CREATE, Icons.Default.Brush, R.string.ai_onnx_image_gen, R.string.ai_onnx_image_gen_desc, Screen.OnnxImageGen.route,
             settingsAction = ToolSettingsAction.Navigate(Screen.OnnxModels.route), keywords = listOf("onnx", "ort", "image", "offline")),
-        tool("onnx_background_removal", ToolCategory.CREATE, Icons.Default.Create, R.string.ai_onnx_bgr, R.string.ai_onnx_bgr_desc, Screen.OnnxBackgroundRemoval.route,
+        tool("onnx_background_removal", ToolCategory.CREATE, Icons.Default.AutoFixHigh, R.string.ai_onnx_bgr, R.string.ai_onnx_bgr_desc, Screen.OnnxBackgroundRemoval.route,
             settingsAction = ToolSettingsAction.Navigate(Screen.OnnxModels.route), keywords = listOf("onnx", "background", "cutout", "bgr")),
-        tool("video_upscaler", ToolCategory.CREATE, Icons.Default.Movie, R.string.ai_video_upscaler, R.string.ai_video_upscaler_desc, Screen.VideoUpscaler.route,
+        tool("video_upscaler", ToolCategory.CREATE, Icons.Default.HighQuality, R.string.ai_video_upscaler, R.string.ai_video_upscaler_desc, Screen.VideoUpscaler.route,
             settingsAction = ToolSettingsAction.Sheet(ToolSettingsSheet.VIDEO_UPSCALER), keywords = listOf("upscale", "video", "realesrgan")),
-        tool("video_interpolation", ToolCategory.CREATE, Icons.Default.Movie, R.string.ai_video_interpolation, R.string.ai_video_interpolation_desc, Screen.VideoInterpolation.route,
+        tool("video_interpolation", ToolCategory.CREATE, Icons.Default.SlowMotionVideo, R.string.ai_video_interpolation, R.string.ai_video_interpolation_desc, Screen.VideoInterpolation.route,
             settingsAction = ToolSettingsAction.Sheet(ToolSettingsSheet.VIDEO_UPSCALER), keywords = listOf("interpolate", "rife", "fps", "smooth", "video")),
-        tool("subtitle_burn", ToolCategory.CREATE, Icons.Default.Description, R.string.subtitle_burn_title, R.string.subtitle_burn_desc, Screen.SubtitleBurn.route,
+        tool("subtitle_burn", ToolCategory.CREATE, Icons.Default.Subtitles, R.string.subtitle_burn_title, R.string.subtitle_burn_desc, Screen.SubtitleBurn.route,
             keywords = listOf("subtitle", "video", "burn")),
         tool("onnx_tts", ToolCategory.VOICE, Icons.Default.GraphicEq, R.string.ai_onnx_tts, R.string.ai_onnx_tts_desc, Screen.OnnxTts.route,
             routePatterns = listOf(Screen.OnnxTts.route, Screen.OnnxTtsGallery.route),
-            settingsAction = ToolSettingsAction.Navigate(Screen.OnnxModels.route), keywords = listOf("onnx", "tts", "voice", "audio")),
-        tool("audio_workspace", ToolCategory.VOICE, Icons.Default.GraphicEq, R.string.audio_workspace_title, R.string.audio_workspace_subtitle, Screen.AudioWorkspace.route,
+            settingsAction = ToolSettingsAction.Navigate(Screen.OnnxModels.route), keywords = listOf("onnx", "tts", "voice", "audio"), showInHub = false),
+        tool("audio_workspace", ToolCategory.VOICE, Icons.Default.GraphicEq, R.string.ui_redesign_tools_audio_studio, R.string.audio_workspace_subtitle, Screen.AudioWorkspace.route,
             routePatterns = listOf(
                 Screen.AudioWorkspace.route,
                 "${Screen.AudioWorkspace.route}?section={section}"
@@ -140,39 +149,39 @@ object ToolCatalog {
             keywords = listOf("translate", "voice", "call", "bilingual")),
         tool("transcription", ToolCategory.VOICE, Icons.Default.Mic, R.string.ai_transcription, R.string.ai_transcription_desc, Screen.AudioTranscription.route,
             settingsAction = ToolSettingsAction.Sheet(ToolSettingsSheet.WHISPER), keywords = listOf("whisper", "transcribe", "audio", "voice")),
-        tool("video_summary", ToolCategory.DOCS, Icons.Default.Movie, R.string.ai_video_sumup, R.string.ai_video_sumup_desc, "video_sumup",
+        tool("video_summary", ToolCategory.DOCUMENTS, Icons.Default.Summarize, R.string.ai_video_sumup, R.string.ai_video_sumup_desc, "video_sumup",
             settingsAction = ToolSettingsAction.Sheet(ToolSettingsSheet.PDF_SUMMARY), keywords = listOf("summary", "video", "transcript", "notes")),
-        tool("pdf_tools", ToolCategory.DOCS, Icons.Default.PictureAsPdf, R.string.ai_pdf_tools, R.string.ai_pdf_tools_desc, Screen.PDFToolbox.route,
+        tool("pdf_tools", ToolCategory.DOCUMENTS, Icons.Default.PictureAsPdf, R.string.ai_pdf_tools, R.string.ai_pdf_tools_desc, Screen.PDFToolbox.route,
             routePatterns = listOf(Screen.PDFToolbox.route, Screen.PDFSummary.route),
             settingsAction = ToolSettingsAction.Sheet(ToolSettingsSheet.PDF_SUMMARY), keywords = listOf("pdf", "ocr", "summary", "translation", "documents")),
-        tool("workflows", ToolCategory.DOCS, Icons.Default.AccountTree, R.string.hub_workflows, R.string.hub_workflows_desc, Screen.Workflows.route,
+        tool("workflows", ToolCategory.DOCUMENTS, Icons.Default.AccountTree, R.string.hub_workflows, R.string.hub_workflows_desc, Screen.Workflows.route,
             settingsAction = ToolSettingsAction.Sheet(ToolSettingsSheet.PDF_SUMMARY), keywords = listOf("workflow", "batch", "summary", "translation")),
-        tool("dataset", ToolCategory.DOCS, Icons.Default.Folder, R.string.hub_dataset, R.string.hub_dataset_desc, Screen.Dataset.route,
+        tool("dataset", ToolCategory.DOCUMENTS, Icons.Default.Folder, R.string.hub_dataset, R.string.hub_dataset_desc, Screen.Dataset.route,
             routePatterns = listOf(Screen.Dataset.route, Screen.DatasetProject.route), keywords = listOf("dataset", "training", "fine tuning", "documents")),
-        tool("organizer", ToolCategory.ORGANIZER, Icons.Default.CalendarMonth, R.string.organizer_title, R.string.organizer_calendar_subtitle, Screen.NotesManager.route,
-            keywords = listOf("organizer", "calendar", "alarms", "notes", "todo")),
-        tool("knowledge", ToolCategory.ORGANIZER, Icons.Default.Search, R.string.kb_title, R.string.kb_folder_subtitle, Screen.KnowledgeBase.route,
-            keywords = listOf("knowledge", "rag", "embedding", "search", "offline")),
-        tool("offline_library", ToolCategory.ORGANIZER, Icons.Default.Storage, R.string.zim_title, R.string.zim_browse_catalog, Screen.ZimManager.route,
-            keywords = listOf("zim", "kiwix", "offline", "wikipedia", "library")),
-        tool("servers_hub", ToolCategory.INFRASTRUCTURE, Icons.Default.Web, R.string.ai_servers_hub_title, R.string.ai_servers_hub_card_desc, Screen.AiServersHub.route,
+        tool("organizer", ToolCategory.DOCUMENTS, Icons.Default.CalendarMonth, R.string.organizer_title, R.string.organizer_calendar_subtitle, Screen.NotesManager.route,
+            keywords = listOf("organizer", "calendar", "alarms", "notes", "todo"), showInHub = false),
+        tool("knowledge", ToolCategory.DOCUMENTS, Icons.Default.Search, R.string.kb_title, R.string.kb_folder_subtitle, Screen.KnowledgeBase.route,
+            keywords = listOf("knowledge", "rag", "embedding", "search", "offline"), showInHub = false),
+        tool("offline_library", ToolCategory.SHARE_NETWORK, Icons.Default.Storage, R.string.ui_redesign_tools_offline_wiki, R.string.zim_browse_catalog, Screen.ZimManager.route,
+            keywords = listOf("zim", "kiwix", "offline", "wikipedia", "library", "wiki")),
+        tool("servers_hub", ToolCategory.SHARE_NETWORK, Icons.Default.Web, R.string.ui_redesign_tools_share_to_browser, R.string.ai_servers_hub_card_desc, Screen.AiServersHub.route,
             keywords = listOf("server", "web", "lan", "infrastructure")),
-        tool("distributed_llm", ToolCategory.INFRASTRUCTURE, Icons.Default.Share, R.string.dashboard_distributed_title, R.string.dashboard_setup_distributed_desc, Screen.DistributedHub.route,
+        tool("distributed_llm", ToolCategory.SHARE_NETWORK, Icons.Default.Share, R.string.dashboard_distributed_title, R.string.dashboard_setup_distributed_desc, Screen.DistributedHub.route,
             keywords = listOf("distributed", "llama", "rpc", "network", "inference")),
-        tool("distributed_media", ToolCategory.INFRASTRUCTURE, Icons.Default.Hub, R.string.dashboard_sd_distributed_title, R.string.dashboard_sd_distributed_desc, Screen.SdDistributedHub.route,
+        tool("distributed_media", ToolCategory.SHARE_NETWORK, Icons.Default.Lan, R.string.dashboard_sd_distributed_title, R.string.dashboard_sd_distributed_desc, Screen.SdDistributedHub.route,
             keywords = listOf("distributed", "stable diffusion", "media", "rpc", "video")),
-        tool("benchmark", ToolCategory.INFRASTRUCTURE, Icons.Default.Speed, R.string.hub_benchmark, R.string.hub_benchmark_desc, Screen.Benchmark.route,
+        tool("benchmark", ToolCategory.ADVANCED, Icons.Default.Speed, R.string.hub_benchmark, R.string.hub_benchmark_desc, Screen.Benchmark.route,
             routePatterns = listOf(Screen.Benchmark.route, Screen.BenchmarkHistory.route), keywords = listOf("benchmark", "threads", "performance")),
-        tool("quadtrix", ToolCategory.INFRASTRUCTURE, Icons.Default.Hub, R.string.quadtrix_title, R.string.quadtrix_hub_desc, Screen.QuadtrixTrainer.route,
+        tool("quadtrix", ToolCategory.ADVANCED, Icons.Default.ModelTraining, R.string.quadtrix_title, R.string.quadtrix_hub_desc, Screen.QuadtrixTrainer.route,
             routePatterns = listOf(Screen.QuadtrixTrainer.route, Screen.QuadtrixWebUi.route), keywords = listOf("quadtrix", "training", "webui", "distributed")),
-        tool("termux", ToolCategory.INFRASTRUCTURE, Icons.Default.Terminal, R.string.hub_termux, R.string.hub_termux_desc, Screen.Termux.route,
+        tool("termux", ToolCategory.ADVANCED, Icons.Default.Terminal, R.string.hub_termux, R.string.hub_termux_desc, Screen.Termux.route,
             routePatterns = listOf(Screen.Termux.route, Screen.TermuxWebView.route, Screen.TermuxFileManager.route), keywords = listOf("termux", "ssh", "files", "infrastructure")),
-        tool("ollama", ToolCategory.INFRASTRUCTURE, Icons.Default.Cloud, R.string.ollama_title, R.string.ollama_desc, Screen.OllamaManager.route,
+        tool("ollama", ToolCategory.SHARE_NETWORK, Icons.Default.Cloud, R.string.ollama_title, R.string.ollama_desc, Screen.OllamaManager.route,
             keywords = listOf("ollama", "server", "model", "infrastructure")),
-        tool("file_server", ToolCategory.INFRASTRUCTURE, Icons.Default.Public, R.string.dashboard_file_server, R.string.soft_studio_home_file_server_desc, Screen.FileServer.route,
+        tool("file_server", ToolCategory.SHARE_NETWORK, Icons.Default.Public, R.string.dashboard_file_server, R.string.soft_studio_home_file_server_desc, Screen.FileServer.route,
             keywords = listOf("file server", "share", "lan", "infrastructure")),
-        tool("model_library", ToolCategory.INFRASTRUCTURE, Icons.Default.Tune, R.string.models_hub, R.string.models_hub_subtitle, Screen.ModelHub.route,
-            keywords = listOf("models", "download", "import", "engine"))
+        tool("model_library", ToolCategory.ADVANCED, Icons.Default.Tune, R.string.models_hub, R.string.models_hub_subtitle, Screen.ModelHub.route,
+            keywords = listOf("models", "download", "import", "engine"), showInHub = false)
     )
 
     val aiRoutePatterns: Set<String> = tools

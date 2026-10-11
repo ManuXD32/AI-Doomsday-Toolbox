@@ -1,5 +1,6 @@
 package com.example.llamadroid.ui.models
 
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 
 import android.net.Uri
@@ -364,35 +365,22 @@ fun WhisperModelsScreen(navController: NavController) {
         )
     }
     
-    Scaffold(
-        containerColor = Color.Transparent,
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.whisper_models_title)) },
-                navigationIcon = {
-                    IconButton(
-                        onClick = { navController.popBackStack() },
-                        modifier = Modifier.walkthroughTarget("back")
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.kiwix_back))
-                    }
-                },
-                actions = {
-                    com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
-                    IconButton(
-                        onClick = { navController.navigate("${Screen.ModelSources.route}?family=WHISPER&tab=download") },
-                        modifier = Modifier.walkthroughTarget("models.download")
-                    ) {
-                        Icon(Icons.Default.Download, contentDescription = stringResource(R.string.model_library_custom_download_heading))
-                    }
-                    IconButton(onClick = { importPicker.launch(arrayOf("*/*")) }) {
-                        Icon(
-                            Icons.Default.Add,
-                            contentDescription = stringResource(R.string.whisper_import_from_storage)
-                        )
-                    }
-                }
-            )
+    AppScreenScaffold(
+        title = stringResource(R.string.whisper_models_title),
+        onBack = { navController.popBackStack() },
+        actions = {
+            IconButton(
+                onClick = { navController.navigate("${Screen.ModelSources.route}?family=WHISPER&tab=download") },
+                modifier = Modifier.walkthroughTarget("models.download")
+            ) {
+                Icon(Icons.Default.Download, contentDescription = stringResource(R.string.model_library_custom_download_heading))
+            }
+            IconButton(onClick = { importPicker.launch(arrayOf("*/*")) }) {
+                Icon(
+                    Icons.Default.Add,
+                    contentDescription = stringResource(R.string.whisper_import_from_storage)
+                )
+            }
         }
     ) { padding ->
         AppPageBackground(modifier = Modifier.padding(padding)) {

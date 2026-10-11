@@ -66,7 +66,7 @@ class SoftStudioNavigationComposeTest {
             CompositionLocalProvider(LocalWindowInfo provides window,
                 LocalDensity provides Density(LocalDensity.current.density, 2f)) {
                 LlamaDroidTheme(dynamicColor = false) {
-                    val labels = listOf(R.string.studio_nav_home, R.string.studio_nav_tools,
+                    val labels = listOf(R.string.studio_nav_home, R.string.studio_nav_chats, R.string.studio_nav_tools,
                         R.string.studio_nav_library, R.string.studio_nav_tama)
                     SoftStudioAppScaffold(route,
                         AppRootDestination.entries.mapIndexed { i, root ->

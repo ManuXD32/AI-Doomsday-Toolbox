@@ -110,7 +110,9 @@ class CuratedBundleSupportTest {
             val names = bundle.files.map { it.installedFilename(bundle.defaultPrefix) }
             assertEquals(names.size, names.distinct().size)
             assertTrue(names.zip(bundle.files).all { (name, file) ->
-                file.sharedArtifactKey != null || name.startsWith("${bundle.defaultPrefix}-")
+                val prefix = file.fixedInstallPrefix ?: bundle.defaultPrefix
+                file.sharedArtifactKey != null ||
+                    if (prefix.isEmpty()) name == file.localFilename else name.startsWith("$prefix-")
             })
         }
     }

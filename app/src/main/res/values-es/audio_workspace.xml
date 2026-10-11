@@ -5,9 +5,7 @@
     <string name="audio_workspace_speech">Voz</string>
     <string name="audio_workspace_voices">Voces</string>
     <string name="audio_workspace_history">Historial</string>
-    <string name="audio_workspace_speech_title">Crear voz</string>
     <string name="audio_workspace_speech_subtitle">Sigue el flujo guiado o abre cualquier control avanzado en cualquier momento.</string>
-    <string name="audio_workspace_local_badge">EN EL DISPOSITIVO</string>
     <string name="audio_workspace_models">Modelos</string>
     <string name="audio_workspace_manage_models">Gestionar modelos de audio</string>
     <string name="audio_workspace_guided_title">Creación guiada</string>
@@ -127,7 +125,6 @@
     <string name="audio_workspace_sample_rate">Frecuencia de muestreo</string>
     <string name="audio_workspace_include_metadata">Incluir metadatos de generación</string>
     <string name="audio_workspace_include_metadata_hint">Guarda identidad de modelo, componentes, voz y ajustes efectivos con el resultado.</string>
-    <string name="audio_workspace_voices_title">Biblioteca de voces</string>
     <string name="audio_workspace_voices_subtitle">Grabaciones de referencia reutilizables para modelos de clonación compatibles.</string>
     <string name="audio_workspace_add_voice">Añadir perfil de voz</string>
     <string name="audio_workspace_add_voice_hint">Importa una grabación o captura una muestra corta con el micrófono.</string>
