@@ -32,7 +32,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,10 +45,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import com.example.llamadroid.LlamaApplication
 import com.example.llamadroid.R
-import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.OrganizerAlarmEntity
-import com.example.llamadroid.ui.theme.LlamaDroidTheme
+import com.example.llamadroid.ui.theme.AppThemeFromSettings
 import com.example.llamadroid.util.DebugLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -67,10 +65,7 @@ class OrganizerAlarmRingActivity : ComponentActivity() {
         prepareAlarmWindow()
 
         setContent {
-            val appearanceSettings = remember { SettingsRepository(applicationContext) }
-            val themeMode by appearanceSettings.themeMode.collectAsState()
-            val dynamicColor by appearanceSettings.dynamicColor.collectAsState()
-            LlamaDroidTheme(themeMode = themeMode, dynamicColor = dynamicColor) {
+            AppThemeFromSettings {
                 var alarm by remember { mutableStateOf<OrganizerAlarmEntity?>(null) }
                 LaunchedEffect(alarmId) {
                     alarm = withContext(Dispatchers.IO) {

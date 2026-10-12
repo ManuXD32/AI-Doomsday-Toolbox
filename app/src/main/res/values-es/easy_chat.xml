@@ -27,16 +27,6 @@
     <string name="easy_chat_starting_server">Iniciando el modelo…</string>
     <string name="easy_chat_starting">Iniciando…</string>
     <string name="easy_chat_open_failed">No se pudo abrir Chat.</string>
-    <string name="easy_chat_save_failed">No se pudo guardar el servidor gestionado.</string>
     <string name="easy_chat_retry">Reintentar</string>
     <string name="easy_chat_manage_models">Gestionar modelos</string>
-    <string name="easy_card_chat">Chat</string>
-    <string name="easy_server_add_title">Añadir servidor de chat</string>
-    <string name="easy_server_add_hint">Elige primero un modelo instalado. La aplicación crea un servidor gestionado y lo mantiene vinculado a ese modelo.</string>
-    <string name="easy_server_name_optional">Nombre del servidor (opcional)</string>
-    <string name="easy_server_no_model">No hay modelo seleccionado</string>
-    <string name="easy_server_choose_model">Elegir modelo instalado</string>
-    <string name="easy_server_advanced_setup">Configuración avanzada del servidor</string>
-    <string name="easy_server_start_chat">Iniciar y abrir Chat</string>
-    <string name="easy_server_save">Guardar servidor</string>
 </resources>

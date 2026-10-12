@@ -77,6 +77,12 @@ internal const val WHISPER_MISSING_MODEL_EXIT_CODE = 3
 internal fun whisperExitCodeIndicatesMissingModel(exitCode: Int): Boolean =
     exitCode == WHISPER_MISSING_MODEL_EXIT_CODE
 
+/** whisper.cpp 7e26d3b+ returns 11 when "N input file(s) failed" (e.g. an output file could not be opened). */
+internal const val WHISPER_INPUT_FAILED_EXIT_CODE = 11
+
+internal fun whisperExitCodeIndicatesInputFailure(exitCode: Int): Boolean =
+    exitCode == WHISPER_INPUT_FAILED_EXIT_CODE
+
 private const val WHISPER_HELP_TIMEOUT_MS = 5_000L
 private const val WHISPER_HELP_OUTPUT_CHARS = 256 * 1024
 

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="native_chat_kv_cache_restoring">Restaurando la caché del chat…</string>
+    <string name="native_chat_kv_cache_restore_failed">No se pudo restaurar la caché guardada del chat. Se continúa sin ella.</string>
+    <string name="native_chat_kv_cache_reason_remote">Solo está disponible para servidores que se ejecutan en este teléfono.</string>
+    <string name="native_chat_kv_cache_reason_engine">Solo está disponible para conexiones de llama-server.</string>
+    <string name="native_chat_kv_cache_reason_restart">Reinicia este servidor para poder guardar la caché en disco.</string>
+    <string name="native_chat_kv_cache_title">Guardar la caché KV en disco para este chat</string>
+    <string name="native_chat_kv_cache_desc">Al volver a este chat no se reprocesa la conversación. Usa espacio en disco: los modelos con contextos grandes pueden ocupar cientos de MB por chat.</string>
+    <string name="native_chat_kv_cache_size">Tamaño de la caché: %1$s</string>
+    <string name="native_chat_kv_cache_size_saved">Tamaño de la caché: %1$s, guardada %2$s</string>
+    <string name="native_chat_kv_cache_empty">Aún no hay caché guardada</string>
+    <string name="native_chat_kv_cache_clear">Borrar caché</string>
+    <string name="native_chat_kv_cache_storage_title">Cachés KV de chats en disco</string>
+    <string name="native_chat_kv_cache_storage_total">Tamaño total: %1$s</string>
+    <string name="native_chat_kv_cache_delete_all">Eliminar todo</string>
+    <string name="native_chat_kv_cache_delete_all_title">¿Eliminar todas las cachés de chats?</string>
+    <string name="native_chat_kv_cache_delete_all_message">Esto libera el espacio en disco de todas las cachés de chats guardadas. Los interruptores de cada chat siguen activados y las cachés se reconstruyen en la próxima respuesta de cada chat.</string>
+    <string name="native_chat_kv_cache_local_only_note">La caché en disco solo funciona con servidores llama.cpp locales iniciados por esta app, no con servidores remotos, Ollama, llama-swap ni LiteRT.</string>
+    <string name="native_chat_kv_cache_generating_reason">Espera a que termine la respuesta actual para cambiar esto.</string>
+    <string name="native_chat_kv_cache_enable_title">¿Guardar la caché KV en disco?</string>
+    <string name="native_chat_kv_cache_enable_message">La caché KV de este chat se guardará en disco para que volver a él no reprocese el prompt. Para aplicarlo, el servidor llama.cpp local de este chat se reiniciará y el modelo se volverá a cargar. Los archivos de caché pueden ocupar cientos de MB.</string>
+    <string name="native_chat_kv_cache_enable_message_no_restart">La caché KV de este chat se guardará en disco para que volver a él no reprocese el prompt. El servidor no está en marcha, así que ahora no hay que reiniciar nada. Los archivos de caché pueden ocupar cientos de MB.</string>
+    <string name="native_chat_kv_cache_enable_confirm">Activar y reiniciar</string>
+    <string name="native_chat_kv_cache_enable_confirm_plain">Activar</string>
+    <string name="native_chat_kv_cache_restarting">Reiniciando el servidor para aplicar la caché en disco…</string>
+</resources>

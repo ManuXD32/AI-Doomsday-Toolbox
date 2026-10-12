@@ -64,7 +64,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.unit.dp
 import com.example.llamadroid.R
+import com.example.llamadroid.ui.components.AppIcon
 import com.example.llamadroid.ui.components.AppNavigationDestination
+import com.example.llamadroid.ui.theme.sprites.AppSpriteKey
 import kotlinx.coroutines.launch
 
 /** Root chrome owns system insets once; deep screens own their contextual top bars and actions. */
@@ -75,6 +77,8 @@ fun SoftStudioAppScaffold(
     destinations: List<AppNavigationDestination>,
     snackbarHostState: SnackbarHostState,
     onSettings: () -> Unit,
+    onUniversalKey: (UniversalKey) -> Unit = {},
+    isFirstRun: Boolean = false,
     onTour: (() -> Unit)? = null,
     onCloseTour: (() -> Unit)? = null,
     walkthroughBar: @Composable () -> Unit = {},
@@ -94,6 +98,8 @@ fun SoftStudioAppScaffold(
     val drawerOpen = drawerState.isOpen
     SideEffect { tourTargets?.drawerOpen = drawerOpen }
     val isDrawer = presentation.isRoot && layout == AppNavigationLayout.Drawer
+    val keysPlacement = universalKeysPlacement(presentation.isRoot, layout, onCloseTour != null, isFirstRun)
+    val baseRoute = currentRoute?.substringBefore('?')?.substringBefore('/')
     LaunchedEffect(isDrawer) { if (!isDrawer) drawerState.close() }
 
     ModalNavigationDrawer(
@@ -105,7 +111,7 @@ fun SoftStudioAppScaffold(
                 Column(Modifier.fillMaxHeight().padding(12.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = { scope.launch { drawerState.close() } }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.studio_nav_close))
+                            AppIcon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.studio_nav_close), sprite = AppSpriteKey.BACK)
                         }
                         Text(stringResource(R.string.studio_nav_title), Modifier.weight(1f),
                             maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleLarge)
@@ -120,7 +126,7 @@ fun SoftStudioAppScaffold(
                         NavigationDrawerItem(
                             label = { Text(destination.label) },
                             selected = destination.isSelected(currentRoute),
-                            icon = { Icon(destination.icon, null) },
+                            icon = { AppIcon(destination.icon, null, sprite = rootSprite(destination.route)) },
                             modifier = Modifier.testTag("studio_drawer_${destination.route}").walkthroughTarget("drawer.root.${destination.route}"),
                             onClick = {
                                 scope.launch {
@@ -133,7 +139,7 @@ fun SoftStudioAppScaffold(
                     NavigationDrawerItem(
                         label = { Text(stringResource(R.string.settings_title)) },
                         selected = false,
-                        icon = { Icon(Icons.Default.Settings, null) },
+                        icon = { AppIcon(Icons.Default.Settings, null, sprite = AppSpriteKey.SETTINGS) },
                         modifier = Modifier.walkthroughTarget("drawer.settings"),
                         onClick = { scope.launch { drawerState.close(); onSettings() } }
                     )
@@ -168,8 +174,14 @@ fun SoftStudioAppScaffold(
                                 }
                             }
                             if (currentRoute != AppRootDestination.Home.route) FeatureGuideAction()
+                            if (keysPlacement == UniversalKeysPlacement.TOP_BAR_ORGANIZER) {
+                                IconButton(onClick = { onUniversalKey(UniversalKey.ORGANIZER) },
+                                    modifier = Modifier.testTag("soft_studio_organizer").walkthroughTarget("universal.organizer")) {
+                                    AppIcon(UniversalKey.ORGANIZER.icon, stringResource(R.string.universal_key_open, stringResource(UniversalKey.ORGANIZER.label)), sprite = UniversalKey.ORGANIZER.sprite)
+                                }
+                            }
                             IconButton(onClick = onSettings, modifier = Modifier.testTag("soft_studio_settings").walkthroughTarget("shell.settings")) {
-                                Icon(Icons.Default.Settings, stringResource(R.string.settings_title))
+                                AppIcon(Icons.Default.Settings, stringResource(R.string.settings_title), sprite = AppSpriteKey.SETTINGS)
                             }
                         },
                         colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -189,13 +201,14 @@ fun SoftStudioAppScaffold(
                             NavigationBarItem(
                                 selected = destination.isSelected(currentRoute),
                                 onClick = destination.onClick,
-                                icon = { Icon(destination.icon, null) },
+                                icon = { AppIcon(destination.icon, null, sprite = rootSprite(destination.route)) },
                                 label = { Text(destination.label, maxLines = 1) },
                                 modifier = Modifier.testTag("studio_bar_${destination.route}").walkthroughTarget("root.${destination.route}")
                             )
                         }
                     }
                 }
+                if (keysPlacement == UniversalKeysPlacement.STRIP) UniversalKeyStrip(baseRoute, onUniversalKey)
                 }
             }
         ) { padding ->
@@ -210,7 +223,7 @@ fun SoftStudioAppScaffold(
                             NavigationRailItem(
                                 selected = destination.isSelected(currentRoute),
                                 onClick = destination.onClick,
-                                icon = { Icon(destination.icon, destination.contentDescription) },
+                                icon = { AppIcon(destination.icon, destination.contentDescription, sprite = rootSprite(destination.route)) },
                                 label = { Text(destination.label, maxLines = 2) },
                                 alwaysShowLabel = true,
                                 modifier = Modifier.testTag("studio_rail_${destination.route}").walkthroughTarget("root.${destination.route}")
@@ -230,3 +243,13 @@ fun SoftStudioAppScaffold(
 
 private fun rootLabel(destinations: List<AppNavigationDestination>, root: AppRootDestination): String? =
     destinations.firstOrNull { it.route == root.route }?.label
+
+/** Pixel sprite for each root destination; unknown routes fall back to the vector-name lookup. */
+private fun rootSprite(route: String): AppSpriteKey? = when (route) {
+    AppRootDestination.Home.route -> AppSpriteKey.HOME
+    AppRootDestination.Chats.route -> AppSpriteKey.CHATS
+    AppRootDestination.Tools.route -> AppSpriteKey.TOOLS
+    AppRootDestination.Library.route -> AppSpriteKey.LIBRARY
+    AppRootDestination.Tama.route -> AppSpriteKey.TAMA
+    else -> null
+}

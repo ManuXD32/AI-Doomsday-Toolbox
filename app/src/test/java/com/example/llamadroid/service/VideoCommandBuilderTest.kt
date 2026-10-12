@@ -119,12 +119,17 @@ class VideoCommandBuilderTest {
         assertEquals("/inputs/reference.png", args[args.indexOf("--ip-adapter-image") + 1])
         assertEquals("[7,8,9]", args[args.indexOf("--skip-layers") + 1])
         assertEquals("[5,6]", args[args.indexOf("--high-noise-skip-layers") + 1])
+        assertEquals(
+            "preset=qwen_layered,resize_before_vae=off",
+            args[args.indexOf("--ref-image-args") + 1]
+        )
+        assertFalse(args.contains("--disable-auto-resize-ref-image"))
         assertTrue(args.containsAll(listOf(
             "--img-cfg-scale", "--guidance", "--slg-scale", "--eta", "--strength",
             "--high-noise-img-cfg-scale", "--high-noise-guidance", "--high-noise-slg-scale",
             "--high-noise-eta", "--moe-boundary", "--vace-strength", "--vae-format",
             "--sigmas", "--ref-image-args", "--extra-sample-args", "--extra-tiling-args",
-            "--increase-ref-index", "--disable-auto-resize-ref-image", "--temporal-tiling",
+            "--increase-ref-index", "--temporal-tiling",
             "--circular", "--circularx", "--circulary"
         )))
     }

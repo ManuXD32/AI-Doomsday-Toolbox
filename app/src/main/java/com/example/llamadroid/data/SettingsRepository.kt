@@ -179,8 +179,18 @@ data class LlamaOcrSettingsSnapshot(
     val baseUrl: String get() = "http://127.0.0.1:$port"
 }
 
-class SettingsRepository(private val context: Context) {
-    private val prefs: SharedPreferences = context.getSharedPreferences("llamadroid_settings", Context.MODE_PRIVATE)
+/**
+ * @param prefsName SharedPreferences file backing this instance. A non-default file is an isolated copy.
+ * @param isProfileDraft true for a throwaway launch-profile draft (per-server editor): skips the
+ *        legacy migrations, visual-style resolution and every reload of the app-wide shared theme
+ *        flows, so building a draft can never disturb global state.
+ */
+class SettingsRepository(
+    private val context: Context,
+    prefsName: String = DEFAULT_PREFS_NAME,
+    private val isProfileDraft: Boolean = false
+) {
+    private val prefs: SharedPreferences = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
     val walkthrough: WalkthroughPreferences = WalkthroughPreferences(prefs)
     @Suppress("unused")
     private val llamaManagedSettingsMigration = migrateLegacyLlamaManagedPreferences()
@@ -188,6 +198,7 @@ class SettingsRepository(private val context: Context) {
     private val directAgentSettingsMigration = migrateDirectAgentSettingsPreferences()
 
     private fun migrateLegacyLlamaManagedPreferences() {
+        if (isProfileDraft) return
         if (prefs.getInt(PREF_LLAMA_MANAGED_SCHEMA, 0) >= LLAMA_MANAGED_SCHEMA) return
 
         val configuredLoadMode = if (prefs.contains(PREF_LLAMA_LOAD_MODE)) {
@@ -232,6 +243,7 @@ class SettingsRepository(private val context: Context) {
      * Orchestrator while Direct tuning starts at the documented recommendations.
      */
     private fun migrateDirectAgentSettingsPreferences() {
+        if (isProfileDraft) return
         if (prefs.getInt(PREF_AGENT_DIRECT_SETTINGS_SCHEMA, 0) >= AGENT_DIRECT_SETTINGS_SCHEMA) return
         prefs.edit().apply {
             if (!prefs.contains(PREF_AGENT_DIRECT_BACKEND)) {
@@ -325,6 +337,13 @@ class SettingsRepository(private val context: Context) {
     }.getOrDefault(emptyList())
 
     init {
+        if (!isProfileDraft) initSharedAppState()
+    }
+
+    private fun initSharedAppState() {
+        // Defensive: Application.onCreate resolves this first, but widgets or tests
+        // may build a repository without it. Idempotent once the key exists.
+        AppVisualStyleSettings.ensureResolved(prefs)
         if (prefs.contains("model_storage_uri")) {
             prefs.edit().remove("model_storage_uri").apply()
         }
@@ -335,6 +354,13 @@ class SettingsRepository(private val context: Context) {
             prefs.getString(PREF_THEME_MODE, null)
         )
         sharedDynamicColor.value = prefs.getBoolean(PREF_DYNAMIC_COLOR, false)
+        sharedVisualStyle.value = AppVisualStyle.fromStorage(
+            prefs.getString(AppVisualStyleSettings.PREF_VISUAL_STYLE, null)
+        )
+        sharedPixelVariant.value = PixelThemeVariant.fromStorage(
+            prefs.getString(AppVisualStyleSettings.PREF_PIXEL_VARIANT, null)
+        )
+        sharedPixelFontEnabled.value = prefs.getBoolean(AppVisualStyleSettings.PREF_PIXEL_FONT_ENABLED, false)
     }
 
     private inline fun <reified T : Enum<T>> enumPref(key: String, defaultValue: T): T {
@@ -2483,6 +2509,9 @@ class SettingsRepository(private val context: Context) {
     // Defaults intentionally keep the device theme and the app's own palette.
     val themeMode: StateFlow<AppThemeMode> = sharedThemeMode.asStateFlow()
     val dynamicColor: StateFlow<Boolean> = sharedDynamicColor.asStateFlow()
+    val visualStyle: StateFlow<AppVisualStyle> = sharedVisualStyle.asStateFlow()
+    val pixelVariant: StateFlow<PixelThemeVariant> = sharedPixelVariant.asStateFlow()
+    val pixelFontEnabled: StateFlow<Boolean> = sharedPixelFontEnabled.asStateFlow()
 
     /** Claim once per local calendar day; callers must use an IO dispatcher for the durable write. */
     @SuppressLint("ApplySharedPref") // Return durable commit success; callers dispatch this claim to IO.
@@ -2499,6 +2528,21 @@ class SettingsRepository(private val context: Context) {
     fun setThemeMode(mode: AppThemeMode) {
         prefs.edit().putString(PREF_THEME_MODE, mode.storageValue).apply()
         sharedThemeMode.value = mode
+    }
+
+    fun setVisualStyle(style: AppVisualStyle) {
+        prefs.edit { putString(AppVisualStyleSettings.PREF_VISUAL_STYLE, style.storageValue) }
+        sharedVisualStyle.value = style
+    }
+
+    fun setPixelVariant(variant: PixelThemeVariant) {
+        prefs.edit { putString(AppVisualStyleSettings.PREF_PIXEL_VARIANT, variant.storageValue) }
+        sharedPixelVariant.value = variant
+    }
+
+    fun setPixelFontEnabled(enabled: Boolean) {
+        prefs.edit { putBoolean(AppVisualStyleSettings.PREF_PIXEL_FONT_ENABLED, enabled) }
+        sharedPixelFontEnabled.value = enabled
     }
 
     fun setDynamicColor(enabled: Boolean) {
@@ -5134,12 +5178,16 @@ class SettingsRepository(private val context: Context) {
     // ========== AI Agent Per-Role System Prompts ==========
     
     companion object {
+        const val DEFAULT_PREFS_NAME = "llamadroid_settings"
         private const val PREF_SUPPORT_LAST_SHOWN_DAY = "support_last_shown_epoch_day"
         private val dailySupportPromptLock = Any()
         private const val PREF_THEME_MODE = "theme_mode"
         private const val PREF_DYNAMIC_COLOR = "dynamic_color"
         private val sharedThemeMode = MutableStateFlow(AppThemeMode.SYSTEM)
         private val sharedDynamicColor = MutableStateFlow(false)
+        private val sharedVisualStyle = MutableStateFlow(AppVisualStyle.SOFT_STUDIO)
+        private val sharedPixelVariant = MutableStateFlow(PixelThemeVariant.CANDY_POP)
+        private val sharedPixelFontEnabled = MutableStateFlow(false)
 
         private const val MANGA_TRANSLATION_CONFIG_KEY = "manga_translation_run_config_v4"
         private const val LLAMA_MANAGED_SCHEMA = 1

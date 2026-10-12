@@ -7,7 +7,6 @@ import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
-import com.example.llamadroid.data.db.savedCommandFromLaunchProfile
 import com.example.llamadroid.data.model.LlamaChatEntity
 import com.example.llamadroid.data.model.LlamaServerCardEntity
 import com.example.llamadroid.data.model.LlamaServerEntity
@@ -16,7 +15,6 @@ import com.example.llamadroid.service.LlamaServerLaunchProfile
 import com.example.llamadroid.service.LlamaServerUsageLease
 import com.example.llamadroid.service.ManagedLlamaServerCoordinator
 import com.example.llamadroid.service.ManagedLlamaServerException
-import com.example.llamadroid.service.managedLlamaConnectHost
 import com.example.llamadroid.service.NativeChatToolConfig
 import com.example.llamadroid.util.GGUFParser
 import kotlinx.coroutines.CompletableDeferred
@@ -66,6 +64,7 @@ class EasyLlamaChatCoordinator(
 ) {
     private val context = context.applicationContext
     private val managed = ManagedLlamaServerCoordinator(this.context, database)
+    private val local = LocalLlamaServerRepository(this.context, database)
 
     suspend fun createOrReuse(
         modelId: String,
@@ -82,30 +81,17 @@ class EasyLlamaChatCoordinator(
             val knownContext = metadata?.contextLength?.takeIf { metadata.contextLengthDetected }
             val profile = easyLlamaProfile(model, managed.allocatePort(), knownContext,
                 Runtime.getRuntime().availableProcessors()).let { customizeProfile?.invoke(it) ?: it }
-            database.withTransaction {
-                val displayName = name?.trim()?.takeIf(String::isNotBlank) ?: model.filename.removeSuffix(".gguf")
-                val commandId = database.savedCommandDao().insertCommand(savedCommandFromLaunchProfile(displayName, profile))
-                val draft = LlamaServerCardEntity(name = displayName, savedCommandId = commandId,
-                    presetNameSnapshot = displayName, port = profile.serverPort, easyModelId = model.filename)
-                val id = database.llamaServerCardDao().insertCard(draft)
-                target(draft.copy(id = id))
-            }
+            val displayName = name?.trim()?.takeIf(String::isNotBlank) ?: model.filename.removeSuffix(".gguf")
+            // Port is already allocated under creationLock (non-reentrant), so pass it explicitly.
+            val ids = local.createLocalServer(displayName, profile, port = profile.serverPort, easyModelId = model.filename)
+            val card = requireNotNull(database.llamaServerCardDao().getCard(ids.cardId))
+            val row = requireNotNull(database.llamaServerDao().getServerById(ids.serverRowId))
+            EasyLlamaChatTarget(card, row)
         }
     }
 
-    private suspend fun target(card: LlamaServerCardEntity, launched: LlamaServerLaunchProfile? = null): EasyLlamaChatTarget {
-        val existing = database.llamaServerDao().getManagedServer(card.id)
-        if (existing != null) return EasyLlamaChatTarget(card, existing)
-        val profile = launched ?: database.savedCommandDao().getGeneralCommandById(card.savedCommandId)?.launchProfileForCard(card)
-            ?: throw ManagedLlamaServerException("MANAGED_PRESET_MISSING", context.getString(R.string.managed_llama_preset_missing))
-        val server = LlamaServerEntity(name = card.name, host = managedLlamaConnectHost(profile.host), port = profile.serverPort,
-            modelName = profile.modelPath.substringAfterLast('/'),
-            supportsVision = profile.visionEnabled,
-            supportsVideo = profile.videoEnabled,
-            managedServerCardId = card.id,
-            defaultApiParams = JSONObject(easyChatAllowedTools().toParamMap()).toString())
-        return EasyLlamaChatTarget(card, server.copy(id = database.llamaServerDao().insertServer(server)))
-    }
+    private suspend fun target(card: LlamaServerCardEntity, launched: LlamaServerLaunchProfile? = null): EasyLlamaChatTarget =
+        EasyLlamaChatTarget(card, requireNotNull(local.ensureLinkedRow(card.id, launched)))
 
     suspend fun openChat(cardId: Long, onStatus: (String) -> Unit = {}): EasyLlamaChatSession = withContext(Dispatchers.IO) {
         val result = CompletableDeferred<EasyLlamaChatSession>()

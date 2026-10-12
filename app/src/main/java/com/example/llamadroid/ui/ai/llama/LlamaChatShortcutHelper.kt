@@ -24,7 +24,7 @@ object LlamaChatShortcutHelper {
             longLabel = chat.title.ifBlank {
                 context.getString(R.string.llama_chat_shortcut_label)
             },
-            route = Screen.LlamaChat.createRoute(chat.id, -1)
+            route = Screen.LlamaChat.createRoute(chat.id, chat.serverId ?: -1L)
         )
     }
 

@@ -37,7 +37,10 @@ data class LlamaChatRequest(
     @SerializedName("return_progress") val returnProgress: Boolean = true,
     @SerializedName("sse_ping_interval") val ssePingInterval: Int = 2,
     @SerializedName("stop") val stop: List<String>? = null,
-    @SerializedName("chat_template_kwargs") val chat_template_kwargs: Map<String, Any>? = null
+    @SerializedName("chat_template_kwargs") val chat_template_kwargs: Map<String, Any>? = null,
+    /** Pinned llama-server slot for per-chat KV persistence; omitted when null. */
+    @SerializedName("id_slot") val idSlot: Int? = null,
+    @SerializedName("cache_prompt") val cachePrompt: Boolean? = null
 )
 
 @Keep

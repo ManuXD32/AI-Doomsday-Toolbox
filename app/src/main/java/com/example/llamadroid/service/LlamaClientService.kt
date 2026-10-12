@@ -165,7 +165,7 @@ internal fun shouldAutoStartLocalLlamaServer(
 ): Boolean =
     server.isLlamaServerEngine() &&
         isNativeChatLoopbackHost(server.host) &&
-        state is ServerState.Stopped
+        (state is ServerState.Stopped || state is ServerState.Error)
 
 internal fun shouldAttachMmprojForLocalAutoStart(
     server: LlamaServerEntity,
@@ -602,6 +602,10 @@ class LlamaClientService : Service() {
         return taskId
     }
 
+    /** Slot pinned by [NativeChatKvCacheCoordinator] for the turn in flight; null otherwise. */
+    @Volatile
+    private var activeKvSlotId: Int? = null
+
     private fun startGeneration(
         chatId: Long,
         serverId: Long,
@@ -616,6 +620,17 @@ class LlamaClientService : Service() {
     ) {
         if (job?.isActive == true) {
             DebugLog.log("LlamaClientService: Generation already in progress")
+            // Surface the in-flight start instead of silently dropping the second send.
+            if (Companion.generationState.value.let {
+                    it is GenerationState.Generating && it.chatId == chatId && it.content.isEmpty() &&
+                        it.promptTotal == 0 && !it.statusText.isNullOrBlank()
+                }
+            ) {
+                updateLocalLlamaServerStartupStatus(
+                    chatId,
+                    getString(R.string.native_chat_server_start_still_starting)
+                )
+            }
             return
         }
         
@@ -659,6 +674,7 @@ class LlamaClientService : Service() {
                 }
 
                 var chat = repository.getChat(chatId) ?: throw Exception("Chat with ID $chatId not found")
+                if (server.id > 0) repository.bindChatServerIfUnbound(chatId, server.id)
                 managedContext?.let { limit ->
                     // The linked server owns the maximum; retain a user's smaller conversation budget.
                     if (chat.contextSize > limit) {
@@ -732,6 +748,16 @@ class LlamaClientService : Service() {
                 val toolConfig = chatToolConfig.effectiveWithServerDefaults(serverToolDefaults)
                 val useNativeTools = !isContinuation && toolConfig.hasEnabledTools()
 
+                // Per-chat disk KV cache: pins a slot (and restores a saved state) for eligible
+                // llama-server chats; every other engine runs with a null slot and no overhead.
+                val kvCache = NativeChatKvCacheCoordinator(applicationContext)
+                val kvSlot = kvCache.withChatSlot(
+                    server = server,
+                    chat = chat,
+                    onStatus = { updateLocalLlamaServerStartupStatus(chatId, it) }
+                ) { slotId ->
+                activeKvSlotId = slotId
+                try {
                 if (useNativeTools) {
                     streamNativeToolResponse(
                         chatId = chatId,
@@ -782,6 +808,13 @@ class LlamaClientService : Service() {
                         progress = progress
                     )
                 }
+                } finally {
+                    activeKvSlotId = null
+                }
+                slotId
+                }
+                // Reached only after a complete reply; cancelled or failed turns throw before here.
+                if (kvSlot != null && !stoppingGeneration.get()) kvCache.scheduleSave(server, chat, kvSlot)
 
                 val finalElapsedMs = progress.generationElapsedMs()
                 val finalElapsed = finalElapsedMs / 1000.0
@@ -867,119 +900,11 @@ class LlamaClientService : Service() {
     ) {
         // Linked cards have already been prepared through the shared keyed-session owner above.
         if (server.managedServerCardId != null) return
-        if (!server.isLlamaServerEngine() || !isNativeChatLoopbackHost(server.host)) return
-        val baseUrl = server.baseUrl()
-        if (llamaServerChatService.checkConnection(baseUrl)) return
-
-        val serverState = LlamaService.state.value
-        if (serverState is ServerState.Starting || serverState is ServerState.Loading) {
-            updateLocalLlamaServerStartupStatus(
-                chatId,
-                getString(R.string.llama_client_status_waiting_local_server)
-            )
-            if (waitForLocalLlamaServerReady(baseUrl = baseUrl)) {
-                return
-            }
-        }
-        if (!shouldAutoStartLocalLlamaServer(server, serverState) || LlamaService.hasRecentStartupFailure()) {
-            throw IllegalStateException(getString(R.string.llama_client_error_local_server_not_running))
-        }
-
-        val savedProfile = LlamaServerLaunchProfile.decode(server.localLaunchProfileJson)
-        val modelPath = savedProfile?.modelPath?.takeIf { it.isNotBlank() }
-            ?: settingsRepo.selectedModelPath.value
-            ?: throw IllegalStateException(getString(R.string.llama_client_error_no_selected_model))
-        val selectedVisionEnabled = savedProfile?.visionEnabled ?: settingsRepo.enableVision.value
-        val selectedMmprojPath = savedProfile?.mmprojPath ?: settingsRepo.selectedMmprojPath.value
-        val videoAutoStartProfile = if (!videoPath.isNullOrBlank()) {
-            (savedProfile ?: LlamaServerLaunchProfile.capture(settingsRepo)).copy(
-                modelPath = modelPath,
-                mmprojPath = savedProfile?.mmprojPath ?: selectedMmprojPath,
-                // A video turn must load the projector even when general vision
-                // chat is disabled in Settings.
-                visionEnabled = true,
-                host = nativeChatLocalHostForServer(server.host),
-                serverPort = server.port
-            )
-        } else {
-            null
-        }
-        // A saved profile represents the exact server configuration. A video-only
-        // turn creates a short-lived profile so LlamaService enables MTMD and its
-        // private media directory for this auto-started process.
-        val profileForRequest = videoAutoStartProfile ?: savedProfile
-        val profileJsonForRequest = profileForRequest?.let(LlamaServerLaunchProfile::encode)
-        val shouldPassVisionProjector = profileForRequest?.let { profile ->
-            (profile.visionEnabled || profile.videoEnabled) && !profile.mmprojPath.isNullOrBlank()
-        } ?: shouldAttachMmprojForLocalAutoStart(
-            server = server,
-            imagePath = imagePath,
-            videoPath = videoPath,
-            visionEnabled = selectedVisionEnabled,
-            selectedMmprojPath = selectedMmprojPath
+        NativeChatLocalServerStarter(applicationContext, settingsRepo, database, llamaServerChatService).ensureReady(
+            server,
+            NativeChatServerStartRequest(chatId = chatId, imagePath = imagePath, videoPath = videoPath),
+            onStatus = { updateLocalLlamaServerStartupStatus(chatId, it) }
         )
-        val startIntent = Intent(applicationContext, LlamaService::class.java).apply {
-            action = LlamaService.ACTION_START
-            putExtra(LlamaService.EXTRA_MODEL_PATH, modelPath)
-            putExtra(LlamaService.EXTRA_SETTINGS_PROFILE, LlamaService.SETTINGS_PROFILE_GENERAL)
-            putExtra(LlamaService.EXTRA_HOST, nativeChatLocalHostForServer(server.host))
-            putExtra(LlamaService.EXTRA_PORT, server.port)
-            putExtra(LlamaService.EXTRA_ALLOW_SETTINGS_MMPROJ, false)
-            profileJsonForRequest?.let { profileJson ->
-                putExtra(LlamaService.EXTRA_LAUNCH_PROFILE_JSON, profileJson)
-            }
-            if (shouldPassVisionProjector) {
-                putExtra(
-                    LlamaService.EXTRA_MMPROJ_PATH,
-                    profileForRequest?.mmprojPath ?: selectedMmprojPath
-                )
-            }
-            if (profileForRequest == null && settingsRepo.speculativeEnabled.value) {
-                val speculativeMode = settingsRepo.speculativeMode.value
-                val shouldPassDraftModel =
-                    speculativeMode.requiresDraftModel ||
-                        (speculativeMode == LlamaSpeculativeMode.DRAFT_MTP && settingsRepo.mtpUseDraftModel.value)
-                if (shouldPassDraftModel) {
-                    putExtra(LlamaService.EXTRA_DRAFT_MODEL_PATH, settingsRepo.draftModelPath.value)
-                }
-                putExtra(LlamaService.EXTRA_DRAFT_MAX, settingsRepo.draftMaxTokens.value)
-                putExtra(LlamaService.EXTRA_DRAFT_MIN, settingsRepo.draftMinTokens.value)
-                putExtra(LlamaService.EXTRA_DRAFT_P_MIN, settingsRepo.draftPMin.value)
-                putExtra(LlamaService.EXTRA_DRAFT_THREADS, settingsRepo.draftThreads.value)
-                putExtra(LlamaService.EXTRA_DRAFT_THREADS_BATCH, settingsRepo.draftThreadsBatch.value)
-            }
-            putExtra(LlamaService.EXTRA_FLASH_ATTENTION, settingsRepo.flashAttentionEnabled.value)
-            putExtra(LlamaService.EXTRA_CUSTOM_FLAGS, settingsRepo.customFlags.value)
-            putExtra(LlamaService.EXTRA_COMMAND_TEMPLATE, settingsRepo.customCommandTemplate.value)
-        }
-
-        updateLocalLlamaServerStartupStatus(
-            chatId,
-            getString(R.string.llama_client_status_starting_local_server)
-        )
-        DebugLog.log("LlamaClientService: Auto-starting local llama-server at $baseUrl")
-        LlamaServerLauncher.startLocalChat(applicationContext, startIntent).getOrThrow()
-        if (videoAutoStartProfile != null && profileJsonForRequest != server.localLaunchProfileJson) {
-            // Keep the video-enabled profile on the server row so a cold retry or Continue
-            // can reconstruct the same MTMD launch without relying on transient intent state.
-            repository.updateServer(server.copy(localLaunchProfileJson = profileJsonForRequest))
-        }
-
-        if (!waitForLocalLlamaServerReady(baseUrl = baseUrl)) {
-            throw IllegalStateException(getString(R.string.llama_client_error_local_server_timeout))
-        }
-    }
-
-    private suspend fun waitForLocalLlamaServerReady(baseUrl: String): Boolean {
-        repeat(LOCAL_SERVER_READY_ATTEMPTS) { attempt ->
-            delay(LOCAL_SERVER_READY_DELAY_MS)
-            currentCoroutineContext().ensureActive()
-            if (llamaServerChatService.checkConnection(baseUrl)) {
-                DebugLog.log("LlamaClientService: local llama-server ready after attempt=${attempt + 1}")
-                return true
-            }
-        }
-        return false
     }
 
     private fun updateLocalLlamaServerStartupStatus(chatId: Long, status: String) {
@@ -2256,7 +2181,9 @@ class LlamaClientService : Service() {
                 mapOf("enable_thinking" to false)
             } else {
                 mapOf("enable_thinking" to true)
-            }
+            },
+            idSlot = activeKvSlotId,
+            cachePrompt = activeKvSlotId?.let { true }
         )
 
         DebugLog.log("LlamaClientService: Sending request to $baseUrl")
@@ -2785,13 +2712,20 @@ class LlamaClientService : Service() {
             effectiveToolConfig,
             knowledgeBaseRoutingGuide
         ).toMutableList()
+        var latestTurnKnowledgeContext: String? = null
         history.lastOrNull { it.role == "user" }?.content?.let { latestUserText ->
             nativeChatToolRuntime.buildAutoKnowledgeContext(latestUserText, effectiveToolConfig)?.let { kbContext ->
                 sourceCitations += extractNativeChatSourceCitations(kbContext)
-                transientSystemMessages += OllamaService.ChatMessage(
-                    role = "system",
-                    content = kbContext
-                )
+                if (chat.persistKvCache) {
+                    // Per-turn retrieval would change the system prompt every turn and defeat the
+                    // saved KV prefix, so a cached chat carries it on the newest user turn instead.
+                    latestTurnKnowledgeContext = kbContext
+                } else {
+                    transientSystemMessages += OllamaService.ChatMessage(
+                        role = "system",
+                        content = kbContext
+                    )
+                }
             }
         }
         // Native tool streaming uses the text-only ChatMessage contract. Resolve video turns
@@ -2828,6 +2762,7 @@ class LlamaClientService : Service() {
         val messages = try {
             buildOllamaMessages(chat, toolHistory, server)
                 .withMergedTransientSystemMessages(transientSystemMessages)
+                .withContextOnLatestUserTurn(latestTurnKnowledgeContext)
                 .toMutableList()
         } finally {
             videoPreparation?.cleanup()
@@ -2920,6 +2855,7 @@ class LlamaClientService : Service() {
                     thinkingEnabled = thinkingEnabled,
                     maxTokens = maxOutputTokens,
                     samplingParams = samplingParams,
+                    requestOptions = LlamaServerRequestOptions(slotId = activeKvSlotId),
                     onPromptProgress = { promptProgress ->
                         progress.promptProcessed = promptProgress.processed
                         progress.promptTotal = promptProgress.total
@@ -4513,6 +4449,22 @@ class LlamaClientService : Service() {
         return messages
     }
 
+    private fun List<OllamaService.ChatMessage>.withContextOnLatestUserTurn(
+        context: String?
+    ): List<OllamaService.ChatMessage> {
+        if (context.isNullOrBlank()) return this
+        val index = indexOfLast { it.role == "user" }
+        if (index < 0) return this
+        return toMutableList().also { messages ->
+            val message = messages[index]
+            messages[index] = message.copy(
+                content = listOf(context.trim(), message.content.trim())
+                    .filter { it.isNotBlank() }
+                    .joinToString("\n\n")
+            )
+        }
+    }
+
     private suspend fun updateStreamingProgress(
         chatId: Long,
         taskId: Int,
@@ -5262,8 +5214,6 @@ class LlamaClientService : Service() {
         }
 
         private const val POWER_DIAGNOSTIC_INTERVAL_MS = 30_000L
-        private const val LOCAL_SERVER_READY_ATTEMPTS = 90
-        private const val LOCAL_SERVER_READY_DELAY_MS = 2_000L
         
         fun resetStateIfIdle() {
             if (_generationState.value !is GenerationState.Generating) {

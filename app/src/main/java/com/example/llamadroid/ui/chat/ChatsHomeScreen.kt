@@ -43,7 +43,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.AppDatabase
-import com.example.llamadroid.ui.ai.llama.EasyLlamaChatEntryCard
 import com.example.llamadroid.ui.ai.llama.LlamaChatListContent
 import com.example.llamadroid.ui.components.AppChromeDefaults
 import com.example.llamadroid.ui.components.AppContentColumn
@@ -63,7 +62,6 @@ fun ChatsHomeScreen(navController: NavController) {
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var newChatSignal by rememberSaveable { mutableIntStateOf(0) }
     var showOverflow by remember { mutableStateOf(false) }
-    var showNewMenu by remember { mutableStateOf(false) }
 
     AppPageBackground {
         AppContentColumn(
@@ -82,12 +80,8 @@ fun ChatsHomeScreen(navController: NavController) {
                         }
                         DropdownMenu(expanded = showOverflow, onDismissRequest = { showOverflow = false }) {
                             DropdownMenuItem(
-                                text = { Text(stringResource(R.string.ui_chats_local_servers), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                text = { Text(stringResource(R.string.srv_screen_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                 onClick = { showOverflow = false; navController.navigate(Screen.LlamaServers.route) }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.ui_chats_server_connections), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                                onClick = { showOverflow = false; navController.navigate(Screen.LlamaServerList.route) }
                             )
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.ui_chats_scheduled_prompts), maxLines = 1, overflow = TextOverflow.Ellipsis) },
@@ -114,13 +108,6 @@ fun ChatsHomeScreen(navController: NavController) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 if (selectedTab == 0) {
                     Column(modifier = Modifier.fillMaxSize()) {
-                        EasyLlamaChatEntryCard(
-                            showQuickSetup = true,
-                            onChatOpened = { chatId, serverId ->
-                                navController.navigate(Screen.LlamaChat.createRoute(chatId, serverId))
-                            },
-                            onManageModels = { navController.navigate(Screen.LLMModels.route) }
-                        )
                         LlamaChatListContent(
                             navController = navController,
                             folderId = null,
@@ -166,30 +153,23 @@ fun ChatsHomeScreen(navController: NavController) {
                     }
                 }
 
-                Box(modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 8.dp)) {
-                    ExtendedFloatingActionButton(
-                        onClick = { showNewMenu = true },
-                        icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                        text = { Text(stringResource(R.string.ui_chats_new), maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                    )
-                    DropdownMenu(expanded = showNewMenu, onDismissRequest = { showNewMenu = false }) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.ui_chats_new_chat), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                            onClick = {
-                                showNewMenu = false
-                                selectedTab = 0
-                                newChatSignal += 1
-                            }
+                // One New action: a chat on the Chats tab, an Agent project on the Agent tab.
+                ExtendedFloatingActionButton(
+                    onClick = {
+                        if (selectedTab == 0) newChatSignal += 1 else navController.navigate(Screen.Agent.route)
+                    },
+                    icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                    text = {
+                        Text(
+                            stringResource(
+                                if (selectedTab == 0) R.string.chats_rework_fab_new_chat else R.string.ui_chats_new_agent
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.ui_chats_new_agent), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                            onClick = {
-                                showNewMenu = false
-                                navController.navigate(Screen.Agent.route)
-                            }
-                        )
-                    }
-                }
+                    },
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 8.dp)
+                )
             }
         }
     }

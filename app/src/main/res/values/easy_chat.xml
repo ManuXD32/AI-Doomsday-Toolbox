@@ -27,16 +27,6 @@
     <string name="easy_chat_starting_server">Starting the model…</string>
     <string name="easy_chat_starting">Starting…</string>
     <string name="easy_chat_open_failed">Could not open Chat.</string>
-    <string name="easy_chat_save_failed">Could not save the managed server.</string>
     <string name="easy_chat_retry">Retry</string>
     <string name="easy_chat_manage_models">Manage models</string>
-    <string name="easy_card_chat">Chat</string>
-    <string name="easy_server_add_title">Add a chat server</string>
-    <string name="easy_server_add_hint">Choose an installed model first. The app creates one managed server and keeps it linked to that model.</string>
-    <string name="easy_server_name_optional">Server name (optional)</string>
-    <string name="easy_server_no_model">No model selected</string>
-    <string name="easy_server_choose_model">Choose installed model</string>
-    <string name="easy_server_advanced_setup">Advanced server setup</string>
-    <string name="easy_server_start_chat">Start and open Chat</string>
-    <string name="easy_server_save">Save server</string>
 </resources>

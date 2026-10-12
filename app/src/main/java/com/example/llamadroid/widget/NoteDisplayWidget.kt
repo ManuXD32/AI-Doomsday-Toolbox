@@ -41,13 +41,12 @@ import androidx.compose.ui.unit.dp
 import com.example.llamadroid.LlamaApplication
 import com.example.llamadroid.MainActivity
 import com.example.llamadroid.R
-import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.NoteEntity
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppSectionCard
 import com.example.llamadroid.ui.navigation.Screen
-import com.example.llamadroid.ui.theme.LlamaDroidTheme
+import com.example.llamadroid.ui.theme.AppThemeFromSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -370,10 +369,7 @@ class NoteDisplayWidgetConfigActivity : ComponentActivity() {
 
         val database = AppDatabase.getDatabase(applicationContext)
         setContent {
-            val appearanceSettings = remember { SettingsRepository(applicationContext) }
-            val themeMode = appearanceSettings.themeMode.collectAsState().value
-            val dynamicColor = appearanceSettings.dynamicColor.collectAsState().value
-            LlamaDroidTheme(themeMode = themeMode, dynamicColor = dynamicColor) {
+            AppThemeFromSettings {
                 val notes by database.noteDao().getAllNotes().collectAsState(initial = emptyList())
                 NoteDisplayWidgetConfigScreen(
                     notes = notes,

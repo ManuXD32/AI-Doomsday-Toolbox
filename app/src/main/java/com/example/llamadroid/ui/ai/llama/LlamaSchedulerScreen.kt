@@ -71,6 +71,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.llamadroid.ui.ai.llama.servers.ServerPickerExtraOption
+import com.example.llamadroid.ui.ai.llama.servers.ServerPickerSheet
+import com.example.llamadroid.ui.ai.llama.servers.ServerRegistryViewModel
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.llamadroid.R
@@ -798,28 +802,33 @@ private fun LlamaScheduledTaskEditorDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Box {
-                    OutlinedButton(onClick = { serverMenuExpanded = true }, modifier = Modifier.fillMaxWidth()) {
-                        Text(servers.firstOrNull { it.id == selectedServerId }?.name ?: stringResource(R.string.llama_scheduler_last_used_server))
-                    }
-                    DropdownMenu(expanded = serverMenuExpanded, onDismissRequest = { serverMenuExpanded = false }) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.llama_scheduler_last_used_server)) },
+                OutlinedButton(onClick = { serverMenuExpanded = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        servers.firstOrNull { it.id == selectedServerId }?.name ?: stringResource(R.string.llama_scheduler_last_used_server),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (serverMenuExpanded) {
+                    val serverRegistry: ServerRegistryViewModel = viewModel()
+                    val lastUsedLabel = stringResource(R.string.llama_scheduler_last_used_server)
+                    ServerPickerSheet(
+                        viewModel = serverRegistry,
+                        selectedRowId = selectedServerId.takeIf { it > 0L },
+                        onDismiss = { serverMenuExpanded = false },
+                        onPick = { rowId ->
+                            selectedServerId = rowId
+                            serverMenuExpanded = false
+                        },
+                        extraOption = ServerPickerExtraOption(
+                            label = lastUsedLabel,
+                            selected = selectedServerId <= 0L,
                             onClick = {
                                 selectedServerId = -1L
                                 serverMenuExpanded = false
                             }
                         )
-                        servers.forEach { server ->
-                            DropdownMenuItem(
-                                text = { Text(server.name) },
-                                onClick = {
-                                    selectedServerId = server.id
-                                    serverMenuExpanded = false
-                                }
-                            )
-                        }
-                    }
+                    )
                 }
                 OutlinedTextField(
                     value = contextSizeText,

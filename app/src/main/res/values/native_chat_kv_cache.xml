@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="native_chat_kv_cache_restoring">Restoring chat cache…</string>
+    <string name="native_chat_kv_cache_restore_failed">The saved chat cache could not be restored. Continuing without it.</string>
+    <string name="native_chat_kv_cache_reason_remote">Only available for servers running on this phone.</string>
+    <string name="native_chat_kv_cache_reason_engine">Only available for llama-server connections.</string>
+    <string name="native_chat_kv_cache_reason_restart">Restart this server to enable saving the cache to disk.</string>
+    <string name="native_chat_kv_cache_title">Keep KV cache on disk for this chat</string>
+    <string name="native_chat_kv_cache_desc">Returning to this chat skips reprocessing the conversation. Uses disk space: models with large contexts can take hundreds of MB per chat.</string>
+    <string name="native_chat_kv_cache_size">Cache size: %1$s</string>
+    <string name="native_chat_kv_cache_size_saved">Cache size: %1$s, saved %2$s</string>
+    <string name="native_chat_kv_cache_empty">No cache saved yet</string>
+    <string name="native_chat_kv_cache_clear">Clear cache</string>
+    <string name="native_chat_kv_cache_storage_title">Chat KV caches on disk</string>
+    <string name="native_chat_kv_cache_storage_total">Total size: %1$s</string>
+    <string name="native_chat_kv_cache_delete_all">Delete all</string>
+    <string name="native_chat_kv_cache_delete_all_title">Delete all chat caches?</string>
+    <string name="native_chat_kv_cache_delete_all_message">This frees the disk space used by every saved chat cache. Per-chat switches stay on and the caches are rebuilt on the next reply in each chat.</string>
+    <string name="native_chat_kv_cache_local_only_note">Disk cache only works with local llama.cpp servers started by this app, not remote servers, Ollama, llama-swap or LiteRT.</string>
+    <string name="native_chat_kv_cache_generating_reason">Wait for the current reply to finish to change this.</string>
+    <string name="native_chat_kv_cache_enable_title">Keep the KV cache on disk?</string>
+    <string name="native_chat_kv_cache_enable_message">This chat\'s KV cache will be saved on disk so returning to it does not reprocess the prompt. To apply it, this chat\'s local llama.cpp server will be restarted and the model will reload. Cache files can use hundreds of MB.</string>
+    <string name="native_chat_kv_cache_enable_message_no_restart">This chat\'s KV cache will be saved on disk so returning to it does not reprocess the prompt. The server is not running, so nothing needs restarting now. Cache files can use hundreds of MB.</string>
+    <string name="native_chat_kv_cache_enable_confirm">Enable and restart</string>
+    <string name="native_chat_kv_cache_enable_confirm_plain">Enable</string>
+    <string name="native_chat_kv_cache_restarting">Restarting the server to apply the disk cache…</string>
+</resources>

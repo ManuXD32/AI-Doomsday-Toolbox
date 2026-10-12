@@ -30,9 +30,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import androidx.compose.ui.res.stringResource
+import com.example.llamadroid.ui.theme.sprites.PixelVariantSpritePreview
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.AppThemeMode
+import com.example.llamadroid.data.AppVisualStyle
 import com.example.llamadroid.data.backup.NativeChatNotesBackupManager
 import com.example.llamadroid.data.binary.BinaryAvailability
 import com.example.llamadroid.data.binary.BinaryRepository
@@ -253,6 +255,10 @@ fun GeneralSettingsScreen(navController: NavController) {
             item {
                 val themeMode by settingsRepo.themeMode.collectAsState()
                 val dynamicColor by settingsRepo.dynamicColor.collectAsState()
+                val visualStyle by settingsRepo.visualStyle.collectAsState()
+                val pixelVariant by settingsRepo.pixelVariant.collectAsState()
+                val pixelFont by settingsRepo.pixelFontEnabled.collectAsState()
+                val pixelActive = visualStyle == AppVisualStyle.PIXEL
                 var themeMenuExpanded by remember { mutableStateOf(false) }
                 val themeOptions = listOf(
                     AppThemeMode.SYSTEM to stringResource(R.string.soft_studio_theme_system),
@@ -330,6 +336,19 @@ fun GeneralSettingsScreen(navController: NavController) {
                             }
                         }
                         Spacer(modifier = Modifier.height(12.dp))
+                        AppearanceStyleSection(
+                            visualStyle = visualStyle,
+                            pixelVariant = pixelVariant,
+                            onVisualStyleChange = settingsRepo::setVisualStyle,
+                            onPixelVariantChange = settingsRepo::setPixelVariant,
+                            pixelFontEnabled = pixelFont,
+                            onPixelFontChange = settingsRepo::setPixelFontEnabled,
+                            onInteraction = { walkthroughTargets?.recordEvent("settings.appearance") },
+                            variantPreview = { variant, previewModifier ->
+                                PixelVariantSpritePreview(variant, previewModifier)
+                            }
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically
@@ -341,15 +360,18 @@ fun GeneralSettingsScreen(navController: NavController) {
                                     fontWeight = FontWeight.Medium
                                 )
                                 Text(
-                                    stringResource(R.string.soft_studio_dynamic_color_desc),
+                                    stringResource(
+                                        if (pixelActive) R.string.pixel_theme_dynamic_color_disabled
+                                        else R.string.soft_studio_dynamic_color_desc
+                                    ),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                             Switch(
-                                checked = dynamicColor,
+                                checked = dynamicColor && !pixelActive,
                                 onCheckedChange = settingsRepo::setDynamicColor,
-                                enabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                                enabled = !pixelActive && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
                             )
                         }
                     }

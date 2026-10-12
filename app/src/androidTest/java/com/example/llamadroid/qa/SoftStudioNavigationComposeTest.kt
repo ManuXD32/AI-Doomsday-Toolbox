@@ -57,6 +57,8 @@ class SoftStudioNavigationComposeTest {
         rule.runOnIdle { assertTrue(settingsOpened); route = "image_gen?startMode=0" }
         rule.onNodeWithTag("soft_studio_navigation_bar").assertDoesNotExist()
         rule.onNodeWithTag("soft_studio_settings").assertDoesNotExist()
+        rule.onNodeWithTag("universal_keys_strip").assertIsDisplayed()
+        rule.onNodeWithTag("universal_key_settings").assertIsDisplayed()
     }
 
     @Test fun largeTextDrawerKeepsEveryRootReachable() {

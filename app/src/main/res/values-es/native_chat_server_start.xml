@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="native_chat_server_start_blocked_other_port">Ya hay otro llama-server en ejecución en el puerto %1$d (%2$s). Deténlo desde Servidores o cambia el puerto de este perfil antes de chatear.</string>
+    <string name="native_chat_server_start_missing_model_file">Falta un archivo necesario para iniciar el servidor local o no se puede leer: %1$s</string>
+    <string name="native_chat_server_start_still_starting">El servidor aún se está iniciando… vuelve a enviar el mensaje en unos segundos.</string>
+    <string name="native_chat_server_start_failed_with_reason">No se pudo iniciar el servidor local: %1$s</string>
+    <string name="native_chat_server_start_unknown_model">modelo desconocido</string>
+</resources>

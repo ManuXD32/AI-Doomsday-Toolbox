@@ -4199,7 +4199,8 @@ object Migrations {
         GenerationQueueMigration.MIGRATION_123_124,
         GenerationQueueMigration.MIGRATION_124_125,
         EasyLlamaChatMigration.MIGRATION_125_126,
-        HarnessInstallationsMigration.MIGRATION_126_127
+        HarnessInstallationsMigration.MIGRATION_126_127,
+        NativeChatServerBindingMigration.MIGRATION_127_128
     )
     /**
      * Check if a column exists in a table.

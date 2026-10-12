@@ -10,7 +10,5 @@
     <string name="managed_llama_timeout">El modelo tarda demasiado en iniciarse. Comprueba el estado del servidor y vuelve a intentarlo.</string>
     <string name="managed_llama_context_unknown">El servidor no indicó su tamaño de contexto. Configúralo en sus ajustes y vuelve a intentarlo.</string>
     <string name="managed_llama_start_failed">No se pudo iniciar el servidor. Comprueba sus ajustes y registros en la administración de servidores y vuelve a intentarlo.</string>
-    <string name="managed_llama_idle_stopped">Detenido tras 10 minutos de inactividad</string>
-    <string name="managed_llama_open_server_management">Abrir administración de servidores</string>
     <string name="managed_llama_idle_retry">El cierre automático no se pudo completar. La aplicación lo reintentará mientras este servidor siga inactivo.</string>
 </resources>

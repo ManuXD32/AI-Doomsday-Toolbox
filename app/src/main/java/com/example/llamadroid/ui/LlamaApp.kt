@@ -1,6 +1,7 @@
 package com.example.llamadroid.ui
 
 import com.example.llamadroid.ui.navigation.navigateToRoot
+import com.example.llamadroid.ui.navigation.navigateToUniversalKey
 import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 
 import com.example.llamadroid.ui.walkthrough.*
@@ -42,6 +43,9 @@ import com.example.llamadroid.ui.settings.DailySupportPrompt
 import com.example.llamadroid.ui.settings.SettingsHubScreen
 import com.example.llamadroid.ui.settings.GeneralSettingsScreen
 import com.example.llamadroid.ui.settings.LLMSettingsScreen
+import com.example.llamadroid.ui.ai.llama.servers.LocalServerProfileEditorOpener
+import com.example.llamadroid.ui.ai.llama.servers.ServerProfileEditorScreen
+import com.example.llamadroid.ui.ai.llama.servers.serverProfileEditorRoute
 import com.example.llamadroid.ui.settings.ImageGenSettingsScreen
 import com.example.llamadroid.ui.settings.WhisperSettingsScreen
 import com.example.llamadroid.ui.settings.VideoUpscalerSettingsScreen
@@ -581,6 +585,8 @@ fun LlamaApp(
         destinations = directNavigationDestinations,
         snackbarHostState = snackbarHostState,
         onSettings = { navController.navigate(Screen.Settings.route) { launchSingleTop = true } },
+        onUniversalKey = { navController.navigateToUniversalKey(it) },
+        isFirstRun = showWelcome && !hasCompletedWelcome,
         onTour = {
             tour.openGuide()
             navController.navigate(Screen.Walkthrough.route) { launchSingleTop = true }
@@ -590,6 +596,11 @@ fun LlamaApp(
             if (tourTargets.modalOwners.isEmpty()) WalkthroughCoach(tour, tourTargets, currentRoute, onOpen = openTourRoute)
         }
     ) { innerPadding ->
+        CompositionLocalProvider(
+            LocalServerProfileEditorOpener provides { cardId, modelPath ->
+                navController.navigate(serverProfileEditorRoute(cardId, modelPath))
+            }
+        ) {
         NavHost(
             navController = navController, 
             startDestination = Screen.Dashboard.route,
@@ -649,7 +660,7 @@ fun LlamaApp(
                 ChatScreen(navController, serverPortOverride = serverPort)
             }
             composable(Screen.LlamaServers.route) {
-                com.example.llamadroid.ui.ai.llama.LlamaServerCardsScreen(navController)
+                com.example.llamadroid.ui.ai.llama.servers.ServersScreen(navController)
             }
             composable(
                 route = "${Screen.ImageGen.route}?startMode={startMode}&tab={tab}",
@@ -751,6 +762,19 @@ fun LlamaApp(
             // Settings sub-screens
             composable("settings_general") { GeneralSettingsScreen(navController) }
             composable("settings_llm") { LLMSettingsScreen(navController) }
+            composable(
+                Screen.ServerProfileEditor.route,
+                arguments = listOf(
+                    navArgument("cardId") { type = NavType.LongType; defaultValue = -1L },
+                    navArgument("modelPath") { type = NavType.StringType; nullable = true; defaultValue = null }
+                )
+            ) { entry ->
+                ServerProfileEditorScreen(
+                    navController = navController,
+                    cardId = entry.arguments?.getLong("cardId") ?: -1L,
+                    modelPath = entry.arguments?.getString("modelPath")?.takeIf { it.isNotBlank() }
+                )
+            }
             composable("settings_imagegen") { ImageGenSettingsScreen(navController) }
             composable("settings_whisper") { WhisperSettingsScreen(navController) }
             composable("settings_upscaler") { VideoUpscalerSettingsScreen(navController) }
@@ -946,7 +970,7 @@ fun LlamaApp(
             
             // Native Llama Client
             composable(Screen.LlamaServerList.route) {
-                com.example.llamadroid.ui.ai.llama.LlamaServerListScreen(navController)
+                com.example.llamadroid.ui.ai.llama.servers.ServersScreen(navController)
             }
             composable(Screen.LlamaChatList.route) {
                 com.example.llamadroid.ui.ai.llama.LlamaChatListScreen(navController)
@@ -1236,6 +1260,7 @@ fun LlamaApp(
                 }
             }
         }
+        }  // CompositionLocalProvider
     }
     }
     }

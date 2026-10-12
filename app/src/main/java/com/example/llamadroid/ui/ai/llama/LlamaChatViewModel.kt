@@ -75,6 +75,21 @@ class LlamaChatViewModel(
         }
     }
 
+    /** Bind (or rebind) a chat to a connection row; the chat screen follows the new binding. */
+    fun bindChatServer(chatId: Long, serverId: Long?) {
+        viewModelScope.launch {
+            repository.bindChatServer(chatId, serverId)
+        }
+    }
+
+    fun renameChat(chatId: Long, title: String) {
+        val trimmed = title.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch {
+            repository.updateChatTitle(chatId, trimmed)
+        }
+    }
+
     fun updateChatApiParams(chatId: Long, apiParams: String?) {
         viewModelScope.launch {
             repository.updateChatApiParams(chatId, apiParams)

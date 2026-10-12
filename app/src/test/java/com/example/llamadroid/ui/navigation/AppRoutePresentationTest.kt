@@ -43,6 +43,38 @@ class AppRoutePresentationTest {
         }
     }
 
+    @Test fun `universal keys go to the strip on deep routes and drawer roots, the top bar on bar and rail roots`() {
+        val deep = UniversalKeysPlacement.STRIP
+        AppNavigationLayout.entries.forEach {
+            assertEquals(deep, universalKeysPlacement(false, it, false, false))
+        }
+        assertEquals(deep, universalKeysPlacement(true, AppNavigationLayout.Drawer, false, false))
+        assertEquals(UniversalKeysPlacement.TOP_BAR_ORGANIZER, universalKeysPlacement(true, AppNavigationLayout.Bar, false, false))
+        assertEquals(UniversalKeysPlacement.TOP_BAR_ORGANIZER, universalKeysPlacement(true, AppNavigationLayout.Rail, false, false))
+    }
+
+    @Test fun `universal keys hide on first run and during the walkthrough`() {
+        AppNavigationLayout.entries.forEach { layout ->
+            listOf(true, false).forEach { root ->
+                assertEquals(UniversalKeysPlacement.NONE, universalKeysPlacement(root, layout, true, false))
+                assertEquals(UniversalKeysPlacement.NONE, universalKeysPlacement(root, layout, false, true))
+            }
+        }
+    }
+
+    @Test fun `universal key highlight follows the owning route`() {
+        assertEquals(true, UniversalKey.ORGANIZER.isCurrent("notes_manager"))
+        assertEquals(true, UniversalKey.SETTINGS.isCurrent("settings"))
+        assertEquals(true, UniversalKey.SETTINGS.isCurrent("settings_llm"))
+        assertEquals(false, UniversalKey.SETTINGS.isCurrent("about"))
+        assertEquals(true, UniversalKey.DASHBOARD.isCurrent("dashboard"))
+        assertEquals(true, UniversalKey.TAMA.isCurrent("tama"))
+        assertEquals(false, UniversalKey.TAMA.isCurrent("tama_chat"))
+        assertEquals(true, universalKeyLabelsVisible(360, 1.0f))
+        assertEquals(false, universalKeyLabelsVisible(359, 1.0f))
+        assertEquals(false, universalKeyLabelsVisible(411, 1.3f))
+    }
+
     @Test fun `gallery links are validated without breaking legacy creation shortcuts`() {
         assertEquals("image_gen?startMode=0", Screen.ImageGen.createRoute())
         assertEquals("video_gen", Screen.VideoGen.createRoute())

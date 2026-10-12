@@ -96,7 +96,8 @@ data class LlamaChatPromptProfileEntity(
         Index("pinnedAt"),
         Index("isEphemeral"),
         Index("source"),
-        Index("expiresAtMillis")
+        Index("expiresAtMillis"),
+        Index("serverId")
     ]
 )
 data class LlamaChatEntity(
@@ -113,7 +114,12 @@ data class LlamaChatEntity(
     val isEphemeral: Boolean = false,
     val source: String? = null,
     val deleteAfterSession: Boolean = false,
-    val expiresAtMillis: Long? = null
+    val expiresAtMillis: Long? = null,
+    /** The connection row this chat talks to; null for legacy chats not yet bound (no FK by design). */
+    val serverId: Long? = null,
+    /** Opt-in per-chat KV cache persistence (llama-server slot save/restore). */
+    @androidx.room.ColumnInfo(defaultValue = "0")
+    val persistKvCache: Boolean = false
 )
 
 @Entity(

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chats_rework_servers_header">Servers</string>
+    <string name="chats_rework_add_server_chip">Server</string>
+    <string name="chats_rework_empty_title">No model servers yet</string>
+    <string name="chats_rework_empty_body">A server runs a model so you can chat with it. Add one from a downloaded model, or connect to a remote server.</string>
+    <string name="chats_rework_add_server">Add a model server</string>
+    <string name="chats_rework_get_model">Get a model</string>
+    <string name="chats_rework_fab_new_chat">New chat</string>
+    <string name="chats_rework_new_chat_title">New chat</string>
+    <string name="chats_rework_choose_server">Server</string>
+    <string name="chats_rework_sheet_no_servers">No servers yet. Add one, or create a local server from a downloaded model.</string>
+    <string name="chats_rework_new_local">New local server from a downloaded model</string>
+    <string name="chats_rework_new_local_hint">Pick a model: the app creates a local server, starts it and opens the chat.</string>
+    <string name="chats_rework_start_now">Start now</string>
+    <string name="chats_rework_customize_first">Customize first</string>
+    <string name="chats_rework_create">Create chat</string>
+    <string name="chats_rework_create_failed">The chat could not be created. Check the server and try again.</string>
+</resources>

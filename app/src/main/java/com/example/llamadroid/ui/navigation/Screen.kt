@@ -168,6 +168,8 @@ sealed class Screen(val route: String) {
         fun createFolderRoute(folderId: Long): String = "llama_chat_list/folder/$folderId"
     }
     object LlamaScheduler : Screen("llama_scheduler")           // Scheduled native Llama tasks
+    /** Full-screen local server editor; open it with `serverProfileEditorRoute(cardId, modelPath)`. */
+    object ServerProfileEditor : Screen("server_profile_editor?cardId={cardId}&modelPath={modelPath}")
     object LlamaChat : Screen("llama_chat/{chatId}/{serverId}") { // Chat interface
         fun createRoute(chatId: Long, serverId: Long): String = "llama_chat/$chatId/$serverId"
     }

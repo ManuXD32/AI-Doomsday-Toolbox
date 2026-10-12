@@ -4,6 +4,7 @@ import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.ui.walkthrough.FeatureGuideAction
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -28,7 +29,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -37,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -50,14 +51,39 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.example.llamadroid.ui.theme.sprites.AppSpriteKey
+import com.example.llamadroid.ui.theme.sprites.PixelSpriteImage
 import com.example.llamadroid.R
+import com.example.llamadroid.ui.theme.LocalAppVisualStyle
+import com.example.llamadroid.ui.theme.PixelCornerShape
 
 object AppChromeDefaults {
     val ScreenPadding = 20.dp
     val SectionSpacing = 16.dp
-    val CardShape = RoundedCornerShape(24.dp)
-    val InnerCardShape = RoundedCornerShape(16.dp)
-    val CompactShape = RoundedCornerShape(12.dp)
+    // Soft Studio shapes stay available as plain constants for non-composable callers.
+    val SoftStudioCardShape = RoundedCornerShape(24.dp)
+    val SoftStudioInnerCardShape = RoundedCornerShape(16.dp)
+    val SoftStudioCompactShape = RoundedCornerShape(12.dp)
+    private val PixelCardShape = PixelCornerShape(4.dp, 3)
+    private val PixelInnerCardShape = PixelCornerShape(3.dp, 3)
+    private val PixelCompactShape = PixelCornerShape(2.dp, 3)
+
+    // Theme-aware: stepped 8-bit corners while the pixel theme is active.
+    val CardShape: Shape
+        @Composable @ReadOnlyComposable
+        get() = if (LocalAppVisualStyle.current.isPixel) PixelCardShape else SoftStudioCardShape
+    val InnerCardShape: Shape
+        @Composable @ReadOnlyComposable
+        get() = if (LocalAppVisualStyle.current.isPixel) PixelInnerCardShape else SoftStudioInnerCardShape
+    val CompactShape: Shape
+        @Composable @ReadOnlyComposable
+        get() = if (LocalAppVisualStyle.current.isPixel) PixelCompactShape else SoftStudioCompactShape
+
+    /** Chunky 2 dp outline used by shared cards in pixel mode; null in Soft Studio. */
+    @Composable
+    @ReadOnlyComposable
+    fun pixelCardBorder(): BorderStroke? =
+        if (LocalAppVisualStyle.current.isPixel) BorderStroke(2.dp, MaterialTheme.colorScheme.outline) else null
     // Soft Studio uses tonal surfaces and outlines to establish hierarchy;
     // elevation remains available to callers as a token but does not add a
     // shadow to the shared chrome.
@@ -130,9 +156,10 @@ fun AppScreenScaffold(
                 navigationIcon = {
                     if (onBack != null) {
                         IconButton(onClick = onBack, modifier = Modifier.walkthroughTarget("back")) {
-                            Icon(
-                                imageVector = Icons.Filled.ArrowBack,
-                                contentDescription = stringResource(R.string.action_back)
+                            AppIcon(
+                                icon = Icons.Filled.ArrowBack,
+                                contentDescription = stringResource(R.string.action_back),
+                                sprite = AppSpriteKey.BACK
                             )
                         }
                     }
@@ -231,6 +258,7 @@ fun AppSectionCard(
         modifier = modifier.fillMaxWidth(),
         shape = shape,
         colors = CardDefaults.cardColors(containerColor = containerColor),
+        border = AppChromeDefaults.pixelCardBorder(),
         elevation = CardDefaults.cardElevation(defaultElevation = AppChromeDefaults.CardElevation)
     ) {
         Column(
@@ -256,12 +284,14 @@ fun AppHeroCard(
     ),
     icon: ImageVector? = null,
     iconContentDescription: String? = null,
+    sprite: AppSpriteKey? = null,
     content: (@Composable ColumnScope.() -> Unit)? = null
 ) {
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = AppChromeDefaults.CardShape,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = AppChromeDefaults.pixelCardBorder(),
         elevation = CardDefaults.cardElevation(defaultElevation = AppChromeDefaults.HeroElevation)
     ) {
         Column(
@@ -276,11 +306,12 @@ fun AppHeroCard(
                     shape = CircleShape,
                     color = MaterialTheme.colorScheme.primaryContainer
                 ) {
-                    Icon(
-                        imageVector = icon,
+                    AppIcon(
+                        icon = icon,
                         contentDescription = iconContentDescription,
-                        modifier = Modifier.padding(12.dp),
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                        modifier = Modifier.padding(if (LocalAppVisualStyle.current.isPixel) 8.dp else 12.dp),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        sprite = sprite
                     )
                 }
             }
@@ -351,7 +382,8 @@ fun AppEmptyState(
     subtitle: String,
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
-    action: (@Composable () -> Unit)? = null
+    action: (@Composable () -> Unit)? = null,
+    sprite: AppSpriteKey? = null
 ) {
     AppSectionCard(modifier = modifier) {
         Column(
@@ -364,13 +396,15 @@ fun AppEmptyState(
                     shape = CircleShape,
                     color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
                 ) {
-                    Icon(
-                        imageVector = icon,
+                    val pixel = LocalAppVisualStyle.current.isPixel
+                    AppIcon(
+                        icon = icon,
                         contentDescription = null,
                         modifier = Modifier
                             .padding(12.dp)
-                            .size(28.dp),
-                        tint = MaterialTheme.colorScheme.primary
+                            .size(if (pixel) 32.dp else 28.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                        sprite = sprite ?: AppSpriteKey.STATE_EMPTY
                     )
                 }
             }
@@ -432,12 +466,14 @@ fun AppHubCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
-    iconContentDescription: String? = null
+    iconContentDescription: String? = null,
+    sprite: AppSpriteKey? = null
 ) {
     Card(
         modifier = modifier.clickable(onClick = onClick),
         shape = AppChromeDefaults.CardShape,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = AppChromeDefaults.pixelCardBorder(),
         elevation = CardDefaults.cardElevation(defaultElevation = AppChromeDefaults.CardElevation)
     ) {
         Column(
@@ -447,17 +483,20 @@ fun AppHubCard(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            if (icon != null) {
+            if (sprite != null && LocalAppVisualStyle.current.isPixel) {
+                PixelSpriteImage(sprite, Modifier.size(48.dp), iconContentDescription)
+            } else if (icon != null) {
                 Surface(
                     modifier = Modifier.size(48.dp),
                     shape = CircleShape,
                     color = MaterialTheme.colorScheme.primaryContainer
                 ) {
-                    Icon(
-                        imageVector = icon,
+                    AppIcon(
+                        icon = icon,
                         contentDescription = iconContentDescription,
-                        modifier = Modifier.padding(12.dp),
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                        modifier = Modifier.padding(if (LocalAppVisualStyle.current.isPixel) 8.dp else 12.dp),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        sprite = sprite
                     )
                 }
             } else {

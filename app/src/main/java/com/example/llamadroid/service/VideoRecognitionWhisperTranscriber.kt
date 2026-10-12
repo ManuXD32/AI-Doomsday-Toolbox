@@ -141,6 +141,8 @@ class VideoRecognitionWhisperTranscriber(
                 throw IOException(
                     if (whisperExitCodeIndicatesMissingModel(transcription.exitCode)) {
                         appContext.getString(R.string.whisper_error_no_model)
+                    } else if (whisperExitCodeIndicatesInputFailure(transcription.exitCode)) {
+                        appContext.getString(R.string.whisper_error_input_failed)
                     } else {
                         appContext.getString(
                             R.string.video_recognition_whisper_failed,

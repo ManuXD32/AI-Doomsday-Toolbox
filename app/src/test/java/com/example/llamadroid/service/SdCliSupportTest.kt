@@ -438,6 +438,33 @@ class SdCliSupportTest {
         assertFalse(caps.autoFitRequiresValue)
     }
 
+    @Test
+    fun `vae tile size help in image pixels scales stored latent units`() {
+        val newHelp = parseSdBinaryCapabilities(
+            """
+              --vae-tile-size WxH
+                  tile size for vae encode and decode in image
+                  pixels, format [W]x[H] or [S] (default: 256x256; requires --vae-tiling)
+              --vae-relative-tile-size WxH
+                  relative tile size for vae encode and decode
+            """.trimIndent()
+        )
+        val oldHelp = parseSdBinaryCapabilities(
+            """
+              --vae-tile-size X[xY]  tile size for vae tiling in latent units, not image pixels, format [X]x[Y] (default: 32x32)
+              --vae-relative-tile-size X[xY]
+            """.trimIndent()
+        )
+
+        assertTrue(newHelp.vaeTileSizeInImagePixels)
+        assertFalse(oldHelp.vaeTileSizeInImagePixels)
+        assertEquals("256x192", sdVaeTileSizeForBinary("32x24", newHelp))
+        assertEquals("256", sdVaeTileSizeForBinary("32", newHelp))
+        assertEquals("32x24", sdVaeTileSizeForBinary("32x24", oldHelp))
+        assertEquals("256x192", sdVaeTileSizeForBinary("32x24", null))
+        assertEquals("abc", sdVaeTileSizeForBinary("abc", newHelp))
+    }
+
     @Test(expected = SdUnsupportedModesException::class)
     fun `dedicated ADetailer mode requires binary support`() {
         val detector = File.createTempFile("detector", ".safetensors")

@@ -32,10 +32,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.llamadroid.R
+import com.example.llamadroid.ui.components.AppIcon
 import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.theme.LocalAppVisualStyle
+import com.example.llamadroid.ui.theme.sprites.AppSpriteKey
 import com.example.llamadroid.ui.navigation.Screen
 
-private data class SettingsEntry(val title: Int, val description: Int, val icon: ImageVector, val route: String)
+private data class SettingsEntry(val title: Int, val description: Int, val icon: ImageVector, val route: String, val sprite: AppSpriteKey? = null)
 private data class SettingsSection(val header: Int, val entries: List<SettingsEntry>)
 
 /** All preference families remain directly discoverable, grouped by purpose. */
@@ -43,22 +46,22 @@ private data class SettingsSection(val header: Int, val entries: List<SettingsEn
 fun SettingsHubScreen(navController: NavController) {
     val sections = listOf(
         SettingsSection(R.string.settings_section_app, listOf(
-            SettingsEntry(R.string.settings_general, R.string.settings_general_desc, Icons.Default.Tune, "settings_general")
+            SettingsEntry(R.string.settings_general, R.string.settings_general_desc, Icons.Default.Tune, "settings_general", AppSpriteKey.SETTINGS)
         )),
         SettingsSection(R.string.settings_section_ai, listOf(
-            SettingsEntry(R.string.settings_llm, R.string.settings_llm_desc, Icons.Default.ChatBubbleOutline, "settings_llm"),
-            SettingsEntry(R.string.settings_hub_imagegen, R.string.settings_imagegen_desc, Icons.Default.Image, "settings_imagegen"),
-            SettingsEntry(R.string.settings_hub_whisper, R.string.settings_whisper_desc, Icons.Default.MicNone, "settings_whisper"),
-            SettingsEntry(R.string.settings_upscaler, R.string.settings_upscaler_desc, Icons.Default.AutoAwesome, "settings_upscaler"),
-            SettingsEntry(R.string.settings_hub_pdf, R.string.settings_pdf_desc, Icons.Default.Description, "settings_pdf")
+            SettingsEntry(R.string.settings_llm, R.string.settings_llm_desc, Icons.Default.ChatBubbleOutline, "settings_llm", AppSpriteKey.MODEL_LLM),
+            SettingsEntry(R.string.settings_hub_imagegen, R.string.settings_imagegen_desc, Icons.Default.Image, "settings_imagegen", AppSpriteKey.MODEL_IMAGE),
+            SettingsEntry(R.string.settings_hub_whisper, R.string.settings_whisper_desc, Icons.Default.MicNone, "settings_whisper", AppSpriteKey.MODEL_WHISPER),
+            SettingsEntry(R.string.settings_upscaler, R.string.settings_upscaler_desc, Icons.Default.AutoAwesome, "settings_upscaler", AppSpriteKey.TOOL_UPSCALE),
+            SettingsEntry(R.string.settings_hub_pdf, R.string.settings_pdf_desc, Icons.Default.Description, "settings_pdf", AppSpriteKey.TOOL_PDF)
         )),
         SettingsSection(R.string.settings_section_agent, listOf(
-            SettingsEntry(R.string.settings_hub_agent, R.string.settings_hub_agent_desc, Icons.Default.Terminal, "${Screen.Agent.route}?harnessTab=settings"),
-            SettingsEntry(R.string.settings_prompts, R.string.settings_prompts_desc, Icons.Default.EditNote, "settings_prompts")
+            SettingsEntry(R.string.settings_hub_agent, R.string.settings_hub_agent_desc, Icons.Default.Terminal, "${Screen.Agent.route}?harnessTab=settings", AppSpriteKey.AGENT_ROBOT),
+            SettingsEntry(R.string.settings_prompts, R.string.settings_prompts_desc, Icons.Default.EditNote, "settings_prompts", AppSpriteKey.TOOL_NOTES)
         )),
         SettingsSection(R.string.settings_section_system, listOf(
             SettingsEntry(R.string.settings_stats, R.string.settings_stats_desc, Icons.Default.QueryStats, Screen.Stats.route),
-            SettingsEntry(R.string.settings_hub_logs, R.string.settings_debug_desc, Icons.Default.BugReport, Screen.Logs.route),
+            SettingsEntry(R.string.settings_hub_logs, R.string.settings_debug_desc, Icons.Default.BugReport, Screen.Logs.route, AppSpriteKey.TOOL_TERMINAL),
             SettingsEntry(R.string.settings_about, R.string.settings_about_desc, Icons.Default.Info, "about")
         ))
     )
@@ -106,7 +109,8 @@ fun SettingsHubScreen(navController: NavController) {
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        Icon(entry.icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+                        AppIcon(entry.icon, null, tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(if (LocalAppVisualStyle.current.isPixel) 32.dp else 24.dp), sprite = entry.sprite)
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(stringResource(entry.title), style = MaterialTheme.typography.titleMedium)
                             Text(stringResource(entry.description), style = MaterialTheme.typography.bodyMedium,

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="spe_title_new">New local server</string>
+    <string name="spe_title_edit">Edit server</string>
+    <string name="spe_subtitle">All LLM launch options, saved only with this server.</string>
+    <string name="spe_section_title">Server</string>
+    <string name="spe_intro">Every option below belongs to this server only. Changing it never affects other servers or the global LLM settings.</string>
+    <string name="spe_loading">Loading server settings…</string>
+    <string name="spe_save_and_restart">Save and restart</string>
+    <string name="spe_discard_title">Discard changes?</string>
+    <string name="spe_discard_message">Your edits to this server have not been saved.</string>
+    <string name="spe_discard_confirm">Discard</string>
+    <string name="spe_discard_keep">Keep editing</string>
+    <string name="spe_chooser_local_hint">Opens the full settings screen: model, vision, speculative decoding / MTP, KV cache, context, threads and more.</string>
+    <string name="spe_chooser_remote_label">Or connect to a remote server</string>
+</resources>

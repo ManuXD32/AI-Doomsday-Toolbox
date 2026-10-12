@@ -15,7 +15,6 @@
     <string name="ui_library_notes">Notes</string>
     <string name="ui_library_creations_title">My creations</string>
     <string name="ui_library_link_storage">Storage and saved sources</string>
-    <string name="ui_library_link_share">Share models</string>
     <string name="ui_sd_group_base">Base models</string>
     <string name="ui_sd_group_components">Components</string>
     <string name="ui_sd_group_adapters">Adapters</string>

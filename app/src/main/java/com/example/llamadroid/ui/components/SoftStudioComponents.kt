@@ -28,6 +28,8 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import com.example.llamadroid.ui.theme.LocalAppVisualStyle
+import com.example.llamadroid.ui.theme.sprites.AppSpriteKey
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -171,6 +173,7 @@ enum class AppStateKind {
 
 private data class AppStateVisuals(
     val icon: ImageVector,
+    val sprite: AppSpriteKey,
     val containerColor: Color,
     val contentColor: Color
 )
@@ -181,36 +184,43 @@ private fun appStateVisuals(kind: AppStateKind): AppStateVisuals {
     return when (kind) {
         AppStateKind.Empty -> AppStateVisuals(
             icon = Icons.Default.Info,
+            sprite = AppSpriteKey.STATE_EMPTY,
             containerColor = colors.surfaceVariant,
             contentColor = colors.onSurfaceVariant
         )
         AppStateKind.Blocked -> AppStateVisuals(
             icon = Icons.Default.Block,
+            sprite = AppSpriteKey.STATE_BLOCKED,
             containerColor = colors.surfaceContainerHigh,
             contentColor = colors.onSurface
         )
         AppStateKind.Running -> AppStateVisuals(
             icon = Icons.Default.Refresh,
+            sprite = AppSpriteKey.STATE_RUNNING,
             containerColor = colors.primaryContainer,
             contentColor = colors.onPrimaryContainer
         )
         AppStateKind.Cancelling -> AppStateVisuals(
             icon = Icons.Default.Pause,
+            sprite = AppSpriteKey.STATE_RUNNING,
             containerColor = colors.primaryContainer,
             contentColor = colors.onPrimaryContainer
         )
         AppStateKind.Interrupted -> AppStateVisuals(
             icon = Icons.Default.ErrorOutline,
+            sprite = AppSpriteKey.STATE_ERROR,
             containerColor = colors.errorContainer,
             contentColor = colors.onErrorContainer
         )
         AppStateKind.Error -> AppStateVisuals(
             icon = Icons.Default.ErrorOutline,
+            sprite = AppSpriteKey.STATE_ERROR,
             containerColor = colors.errorContainer,
             contentColor = colors.onErrorContainer
         )
         AppStateKind.Success -> AppStateVisuals(
             icon = Icons.Default.CheckCircle,
+            sprite = AppSpriteKey.STATE_SUCCESS,
             containerColor = colors.secondaryContainer,
             contentColor = colors.onSecondaryContainer
         )
@@ -253,13 +263,15 @@ fun AppStatePanel(
                     shape = CircleShape,
                     color = visuals.contentColor.copy(alpha = 0.12f)
                 ) {
-                    Icon(
-                        imageVector = visuals.icon,
+                    val pixel = LocalAppVisualStyle.current.isPixel
+                    AppIcon(
+                        icon = visuals.icon,
                         contentDescription = null,
                         modifier = Modifier
-                            .padding(10.dp)
-                            .size(24.dp),
-                        tint = visuals.contentColor
+                            .padding(if (pixel) 6.dp else 10.dp)
+                            .size(if (pixel) 32.dp else 24.dp),
+                        tint = visuals.contentColor,
+                        sprite = visuals.sprite
                     )
                 }
                 Spacer(modifier = Modifier.width(12.dp))

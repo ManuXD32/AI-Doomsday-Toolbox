@@ -2,9 +2,11 @@ package com.example.llamadroid.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import com.example.llamadroid.R
 
 val Typography = Typography(
     headlineLarge = TextStyle(
@@ -71,3 +73,31 @@ val Typography = Typography(
         letterSpacing = 0.5.sp
     )
 )
+
+/** Pixelify Sans (SIL OFL 1.1, see assets/licenses/pixelify-sans-OFL.txt). Covers ASCII and Spanish accents. */
+val PixelFontFamily = FontFamily(
+    Font(R.font.pixelify_sans_regular, FontWeight.Normal),
+    Font(R.font.pixelify_sans_bold, FontWeight.Bold)
+)
+
+/**
+ * Pixel theme typography: the pixel font is used for display, headline, title and label
+ * styles only. Body styles keep the default font so long text stays readable.
+ */
+val PixelTypography: Typography = Typography.let { base ->
+    fun TextStyle.pixel() = copy(fontFamily = PixelFontFamily)
+    base.copy(
+        displayLarge = base.displayLarge.pixel(),
+        displayMedium = base.displayMedium.pixel(),
+        displaySmall = base.displaySmall.pixel(),
+        headlineLarge = base.headlineLarge.pixel(),
+        headlineMedium = base.headlineMedium.pixel(),
+        headlineSmall = base.headlineSmall.pixel(),
+        titleLarge = base.titleLarge.pixel(),
+        titleMedium = base.titleMedium.pixel(),
+        titleSmall = base.titleSmall.pixel(),
+        labelLarge = base.labelLarge.pixel(),
+        labelMedium = base.labelMedium.pixel(),
+        labelSmall = base.labelSmall.pixel()
+    )
+}

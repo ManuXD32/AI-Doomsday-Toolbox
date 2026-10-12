@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="whisper_error_input_failed">Whisper no pudo procesar o guardar uno o más archivos de entrada (código de salida 11)</string>
+</resources>

@@ -5,6 +5,7 @@ import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.LlamaServerEntity
 import com.example.llamadroid.service.ManagedLlamaServerException
 import com.example.llamadroid.service.NativeChatToolConfig
+import com.example.llamadroid.ui.ai.llama.chatlist.newChatApiParamsForServer
 import java.io.File
 import java.nio.file.Files
 import org.json.JSONObject

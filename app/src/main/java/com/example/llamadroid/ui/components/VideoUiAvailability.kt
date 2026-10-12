@@ -44,7 +44,8 @@ enum class VideoAdditionalControl(
     EXTRA_SAMPLE_ARGS("--extra-sample-args"),
     EXTRA_TILING_ARGS("--extra-tiling-args"),
     INCREASE_REF_INDEX("--increase-ref-index"),
-    DISABLE_AUTO_RESIZE_REF_IMAGE("--disable-auto-resize-ref-image"),
+    // Emitted as --ref-image-args "resize_before_vae=off"; the old standalone flag was removed upstream.
+    DISABLE_AUTO_RESIZE_REF_IMAGE("--ref-image-args"),
     CIRCULAR("--circular"),
     CIRCULAR_X("--circularx"),
     CIRCULAR_Y("--circulary"),

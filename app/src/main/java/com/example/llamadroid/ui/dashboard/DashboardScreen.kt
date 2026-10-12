@@ -56,6 +56,9 @@ import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.service.GenerationQueueRepository
 import com.example.llamadroid.ui.ai.ChatServerPickerDialog
 import com.example.llamadroid.ui.ai.ToolCatalog
+import com.example.llamadroid.ui.components.AppIcon
+import com.example.llamadroid.ui.theme.LocalAppVisualStyle
+import com.example.llamadroid.ui.theme.sprites.AppSpriteKey
 import com.example.llamadroid.ui.ai.llama.EasyLlamaChatEntryCard
 import com.example.llamadroid.ui.ai.llama.rememberRunningLlamaChatServers
 import com.example.llamadroid.ui.components.AppChromeDefaults
@@ -76,6 +79,7 @@ private data class HomeStartAction(
     val key: String,
     val icon: ImageVector,
     val label: String,
+    val sprite: AppSpriteKey? = null,
     val onClick: () -> Unit
 )
 
@@ -134,7 +138,7 @@ fun DashboardScreen(navController: NavController) {
     val pinnedTools = ToolCatalog.tools.filter { it.id in pinnedToolIds }
     val startActions = buildList {
         pinnedTools.forEach { tool ->
-            add(HomeStartAction("tool:${tool.id}", tool.icon, stringResource(tool.titleRes)) {
+            add(HomeStartAction("tool:${tool.id}", tool.icon, stringResource(tool.titleRes), tool.sprite) {
                 if (tool.id == "chat") {
                     when (runningChatServers.size) {
                         0 -> navController.navigate(Screen.LlamaServers.route)
@@ -144,16 +148,16 @@ fun DashboardScreen(navController: NavController) {
                 } else navController.navigate(tool.route)
             })
         }
-        fun addDefault(toolId: String?, route: String, icon: ImageVector, label: String) {
+        fun addDefault(toolId: String?, route: String, icon: ImageVector, label: String, sprite: AppSpriteKey? = null) {
             if (toolId != null && toolId in pinnedToolIds) return
-            add(HomeStartAction("default:$route", icon, label) {
+            add(HomeStartAction("default:$route", icon, label, sprite) {
                 if (route == CHATS_ROUTE) navController.navigateToRoot(route) else navController.navigate(route)
             })
         }
-        addDefault(null, CHATS_ROUTE, Icons.AutoMirrored.Filled.Chat, stringResource(R.string.soft_studio_home_new_chat))
-        addDefault("agent", Screen.Agent.route, Icons.Default.AccountTree, stringResource(R.string.ui_home_agent_short))
-        addDefault("image_generation", Screen.ImageGen.route, Icons.Default.Image, stringResource(R.string.ai_image_gen))
-        addDefault("organizer", Screen.NotesManager.route, Icons.Default.CalendarMonth, stringResource(R.string.soft_studio_home_organizer))
+        addDefault(null, CHATS_ROUTE, Icons.AutoMirrored.Filled.Chat, stringResource(R.string.soft_studio_home_new_chat), AppSpriteKey.CHATS)
+        addDefault("agent", Screen.Agent.route, Icons.Default.AccountTree, stringResource(R.string.ui_home_agent_short), AppSpriteKey.AGENT_ROBOT)
+        addDefault("image_generation", Screen.ImageGen.route, Icons.Default.Image, stringResource(R.string.ai_image_gen), AppSpriteKey.MODEL_IMAGE)
+        addDefault("organizer", Screen.NotesManager.route, Icons.Default.CalendarMonth, stringResource(R.string.soft_studio_home_organizer), AppSpriteKey.ORGANIZER)
     }
 
     // Continue: pinned native chats and Agent projects merged by recency.
@@ -252,7 +256,7 @@ private fun DashboardStartRow(actions: List<HomeStartAction>) {
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(action.icon, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                        AppIcon(action.icon, null, modifier = Modifier.size(if (LocalAppVisualStyle.current.isPixel) 24.dp else 18.dp), tint = MaterialTheme.colorScheme.primary, sprite = action.sprite)
                         Text(
                             text = action.label,
                             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Medium),

@@ -5,6 +5,7 @@ import com.example.llamadroid.data.dao.LlamaChatFolderDao
 import com.example.llamadroid.data.dao.LlamaChatPromptProfileDao
 import com.example.llamadroid.data.dao.LlamaMessageDao
 import com.example.llamadroid.data.dao.LlamaServerDao
+import com.example.llamadroid.data.dao.ServerChatCount
 import com.example.llamadroid.data.model.LlamaChatEntity
 import com.example.llamadroid.data.model.LlamaChatFolderEntity
 import com.example.llamadroid.data.model.LlamaChatPromptProfileEntity
@@ -115,6 +116,12 @@ private class FakeLlamaServerDao(
     override suspend fun deleteServer(server: LlamaServerEntity) {
         servers.remove(server.id)
     }
+    override suspend fun deleteServerById(id: Long) {
+        servers.remove(id)
+    }
+    override suspend fun linkManagedCard(id: Long, cardId: Long?) {
+        servers[id] = servers.getValue(id).copy(managedServerCardId = cardId)
+    }
     override suspend fun updateLastUsed(id: Long, timestamp: Long) {
         servers[id] = servers.getValue(id).copy(lastUsed = timestamp)
     }
@@ -208,6 +215,26 @@ private class FakeLlamaChatDao(
     override suspend fun deleteChat(chat: LlamaChatEntity) {
         chats.remove(chat.id)
     }
+    override suspend fun bindChatServer(chatId: Long, serverId: Long?) {
+        chats[chatId] = chats.getValue(chatId).copy(serverId = serverId)
+    }
+    override suspend fun bindChatServerIfUnbound(chatId: Long, serverId: Long): Int {
+        val chat = chats[chatId]?.takeIf { it.serverId == null } ?: return 0
+        chats[chatId] = chat.copy(serverId = serverId)
+        return 1
+    }
+    override suspend fun clearChatServerBinding(serverId: Long) {
+        chats.values.filter { it.serverId == serverId }.forEach { chats[it.id] = it.copy(serverId = null) }
+    }
+    override suspend fun setPersistKvCache(chatId: Long, enabled: Boolean) {
+        chats[chatId] = chats.getValue(chatId).copy(persistKvCache = enabled)
+    }
+    override suspend fun getChatsBoundToServer(serverId: Long): List<LlamaChatEntity> =
+        chats.values.filter { it.serverId == serverId }.sortedByDescending { it.lastModified }
+    override fun observeBoundChatCounts(): Flow<List<ServerChatCount>> = flowOf(
+        chats.values.mapNotNull { it.serverId }.groupingBy { it }.eachCount()
+            .map { (serverId, count) -> ServerChatCount(serverId, count) }
+    )
     override suspend fun deleteEphemeralChatById(id: Long) {
         val chat = chats[id] ?: return
         if (chat.isEphemeral && chat.deleteAfterSession) {

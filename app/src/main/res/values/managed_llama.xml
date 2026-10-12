@@ -10,7 +10,5 @@
     <string name="managed_llama_timeout">The model is taking too long to start. Check its server status and retry.</string>
     <string name="managed_llama_context_unknown">The server did not report its context size. Set a context size in its server settings and retry.</string>
     <string name="managed_llama_start_failed">The server could not start. Check its settings and logs in server management, then retry.</string>
-    <string name="managed_llama_idle_stopped">Stopped after 10 minutes of inactivity</string>
     <string name="managed_llama_idle_retry">Automatic shutdown could not finish. The app will retry while this server remains idle.</string>
-    <string name="managed_llama_open_server_management">Open server management</string>
 </resources>

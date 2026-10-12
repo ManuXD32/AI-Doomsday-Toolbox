@@ -23,6 +23,9 @@ interface LlamaServerCardDao {
     @Query("SELECT * FROM llama_server_cards WHERE id = :id")
     suspend fun getCard(id: Long): LlamaServerCardEntity?
 
+    @Query("SELECT COUNT(*) FROM llama_server_cards WHERE savedCommandId = :presetId AND id != :exceptCardId")
+    suspend fun countOtherCardsUsingPreset(presetId: Long, exceptCardId: Long): Int
+
     @Query("SELECT * FROM llama_server_cards WHERE easyModelId = :modelId LIMIT 1")
     suspend fun getEasyCard(modelId: String): LlamaServerCardEntity?
 

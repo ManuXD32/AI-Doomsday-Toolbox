@@ -32,8 +32,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -41,7 +39,6 @@ import androidx.compose.ui.unit.dp
 import com.example.llamadroid.LlamaApplication
 import com.example.llamadroid.MainActivity
 import com.example.llamadroid.R
-import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.tama.data.CropDefinitions
 import com.example.llamadroid.tama.data.FARM_MAX_FARM_PAGES
 import com.example.llamadroid.tama.data.FarmTile
@@ -57,7 +54,7 @@ import com.example.llamadroid.tama.game.PetMapper
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppSectionCard
 import com.example.llamadroid.ui.navigation.Screen
-import com.example.llamadroid.ui.theme.LlamaDroidTheme
+import com.example.llamadroid.ui.theme.AppThemeFromSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -266,10 +263,7 @@ class TamaFarmWidgetConfigActivity : ComponentActivity() {
         }
 
         setContent {
-            val appearanceSettings = remember { SettingsRepository(applicationContext) }
-            val themeMode = appearanceSettings.themeMode.collectAsState().value
-            val dynamicColor = appearanceSettings.dynamicColor.collectAsState().value
-            LlamaDroidTheme(themeMode = themeMode, dynamicColor = dynamicColor) {
+            AppThemeFromSettings {
                 TamaFarmWidgetConfigScreen(
                     onCancel = { finish() },
                     onSelectPage = { pageIndex ->

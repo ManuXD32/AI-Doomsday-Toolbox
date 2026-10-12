@@ -4,6 +4,7 @@ import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDial
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -19,7 +20,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
@@ -33,14 +33,9 @@ import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.data.binary.EffectiveLlamaBinary
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelType
-import com.example.llamadroid.data.db.SavedCommand
-import com.example.llamadroid.data.db.SavedCommandScopes
-import com.example.llamadroid.data.db.launchProfile
-import com.example.llamadroid.data.db.savedCommandFromLaunchProfile
 import com.example.llamadroid.service.LlamaSpeculativeMode
 import com.example.llamadroid.service.LlamaLoadMode
 import com.example.llamadroid.service.LlamaLoraSpec
-import com.example.llamadroid.service.LlamaServerLaunchProfile
 import com.example.llamadroid.service.LlamaVideoProfileLimits
 import com.example.llamadroid.service.effectiveSpeculativeDraftPath
 import com.example.llamadroid.service.speculativeDraftModelsFor
@@ -49,433 +44,7 @@ import com.example.llamadroid.ui.components.AppScreenScaffold
 import kotlinx.coroutines.launch
 import java.util.Locale
 
-private typealias SavedCommandEntity = SavedCommand
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun LlmModeDropdown(
-    label: String,
-    selected: String,
-    options: List<Pair<String, String>>,
-    expanded: Boolean,
-    onExpandedChange: (Boolean) -> Unit,
-    onSelected: (String) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val selectedLabel = options.firstOrNull { it.first == selected }?.second ?: options.firstOrNull()?.second.orEmpty()
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = onExpandedChange,
-        modifier = modifier.fillMaxWidth()
-    ) {
-        OutlinedTextField(
-            value = selectedLabel,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text(label) },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier
-                .menuAnchor()
-                .fillMaxWidth(),
-            singleLine = true
-        )
-        ExposedDropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { onExpandedChange(false) },
-            modifier = Modifier.heightIn(max = 420.dp)
-        ) {
-            options.forEach { (value, text) ->
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            text,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    },
-                    onClick = {
-                        onSelected(value)
-                        onExpandedChange(false)
-                    }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun LlmAdvancedToggle(
-    title: String,
-    description: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onCheckedChange(!checked) },
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, fontWeight = FontWeight.Medium)
-            Text(
-                description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
-    }
-}
-
-internal data class LlamaParallelContextBreakdown(
-    val totalContext: Int,
-    val parallel: Int,
-    val contextPerSequence: Int,
-    val remainder: Int
-)
-
-internal fun calculateLlamaParallelContext(
-    totalContext: Int,
-    configuredParallel: Int?
-): LlamaParallelContextBreakdown {
-    val safeContext = totalContext.coerceAtLeast(0)
-    val effectiveParallel = (configuredParallel ?: 1).coerceAtLeast(1)
-    return LlamaParallelContextBreakdown(
-        totalContext = safeContext,
-        parallel = effectiveParallel,
-        contextPerSequence = safeContext / effectiveParallel,
-        remainder = safeContext % effectiveParallel
-    )
-}
-
-internal fun containsManagedLlamaFlag(customFlags: String): Boolean {
-    val managed = setOf(
-        "--parallel", "-np", "--cache-ram", "-cram", "--ctx-checkpoints", "-ctxcp",
-        "--swa-checkpoints", "--checkpoint-min-step", "-cms", "--cache-prompt",
-        "--no-cache-prompt", "--cache-idle-slots", "--no-cache-idle-slots",
-        "--kv-unified", "-kvu", "--no-kv-unified", "-no-kvu", "--swa-full",
-        "--no-swa-full", "--sleep-idle-seconds"
-    )
-    return customFlags
-        .split(Regex("\\s+"))
-        .asSequence()
-        .map { it.substringBefore('=') }
-        .any { it in managed }
-}
-
-@Composable
-private fun DraftIntTextField(
-    value: Int,
-    onValueChange: (Int) -> Unit,
-    modifier: Modifier = Modifier,
-    label: @Composable (() -> Unit)? = null,
-    placeholder: @Composable (() -> Unit)? = null,
-    valueRange: IntRange? = null,
-    singleLine: Boolean = true
-) {
-    var draft by remember(value) { mutableStateOf(value.toString()) }
-    OutlinedTextField(
-        value = draft,
-        onValueChange = {
-            draft = it.filter(Char::isDigit)
-            draft.toIntOrNull()?.let { parsed ->
-                if (valueRange?.contains(parsed) != false) onValueChange(parsed)
-            }
-        },
-        modifier = modifier,
-        label = label,
-        placeholder = placeholder,
-        singleLine = singleLine
-    )
-}
-
-@Composable
-private fun DraftNullableIntTextField(
-    value: Int?,
-    onValueChange: (Int?) -> Unit,
-    modifier: Modifier = Modifier,
-    label: @Composable (() -> Unit)? = null,
-    placeholder: @Composable (() -> Unit)? = null,
-    singleLine: Boolean = true,
-    valueRange: IntRange? = null
-) {
-    var draft by remember(value) { mutableStateOf(value?.toString().orEmpty()) }
-    OutlinedTextField(
-        value = draft,
-        onValueChange = {
-            draft = it.filter(Char::isDigit)
-            if (draft.isBlank()) {
-                onValueChange(null)
-            } else {
-                draft.toIntOrNull()?.let { parsed ->
-                    if (valueRange?.contains(parsed) != false) onValueChange(parsed)
-                }
-            }
-        },
-        modifier = modifier,
-        label = label,
-        placeholder = placeholder,
-        singleLine = singleLine
-    )
-}
-
-@Composable
-private fun DraftFloatTextField(
-    value: Float,
-    onValueChange: (Float) -> Unit,
-    modifier: Modifier = Modifier,
-    label: @Composable (() -> Unit)? = null,
-    singleLine: Boolean = true,
-    valueRange: ClosedFloatingPointRange<Float>? = null,
-    allowSigned: Boolean = false
-) {
-    var draft by remember(value) { mutableStateOf(value.toString()) }
-    OutlinedTextField(
-        value = draft,
-        onValueChange = {
-            draft = buildString {
-                var seenDot = false
-                it.forEachIndexed { index, ch ->
-                    if (ch.isDigit()) append(ch)
-                    if (ch == '-' && allowSigned && index == 0) append(ch)
-                    if (ch == '.' && !seenDot) {
-                        append(ch)
-                        seenDot = true
-                    }
-                }
-            }
-            draft.toFloatOrNull()
-                ?.takeIf { it.isFinite() }
-                ?.let { parsed ->
-                    if (valueRange?.contains(parsed) != false) onValueChange(parsed)
-                }
-        },
-        modifier = modifier,
-        label = label,
-        singleLine = singleLine,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-    )
-}
-
-private fun loraPathsMatch(first: String, second: String): Boolean =
-    first.trim().equals(second.trim(), ignoreCase = true)
-
-private fun safeLoraStrength(value: Float): Float =
-    if (value.isFinite()) value else 1f
-
-private fun LlamaLoadMode.localizedLabelRes(): Int = when (name.lowercase(Locale.ROOT)) {
-    "auto" -> R.string.llm_load_mode_auto
-    "none" -> R.string.llm_load_mode_none
-    "mmap" -> R.string.llm_load_mode_mmap
-    "mlock" -> R.string.llm_load_mode_mlock
-    "mmap_mlock", "mmap+mlock" -> R.string.llm_load_mode_mmap_mlock
-    "dio", "direct_io", "directio" -> R.string.llm_load_mode_dio
-    else -> R.string.llm_load_mode_unknown
-}
-
-private fun LlamaLoadMode.localizedDescriptionRes(): Int = when (name.lowercase(Locale.ROOT)) {
-    "auto" -> R.string.llm_load_mode_auto_desc
-    "none" -> R.string.llm_load_mode_none_desc
-    "mmap" -> R.string.llm_load_mode_mmap_desc
-    "mlock" -> R.string.llm_load_mode_mlock_desc
-    "mmap_mlock", "mmap+mlock" -> R.string.llm_load_mode_mmap_mlock_desc
-    "dio", "direct_io", "directio" -> R.string.llm_load_mode_dio_desc
-    else -> R.string.llm_load_mode_unknown_desc
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun LlamaLoadModePicker(
-    selected: LlamaLoadMode,
-    expanded: Boolean,
-    onExpandedChange: (Boolean) -> Unit,
-    onSelected: (LlamaLoadMode) -> Unit
-) {
-    val modes = remember { LlamaLoadMode.entries.toList() }
-    val selectedLabel = stringResource(selected.localizedLabelRes())
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = onExpandedChange,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        OutlinedTextField(
-            value = selectedLabel,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text(stringResource(R.string.llm_load_mode_label)) },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.menuAnchor().fillMaxWidth(),
-            singleLine = true
-        )
-        ExposedDropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { onExpandedChange(false) }
-        ) {
-            modes.forEach { mode ->
-                DropdownMenuItem(
-                    text = {
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                stringResource(mode.localizedLabelRes()),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                stringResource(mode.localizedDescriptionRes()),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 3,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    },
-                    onClick = {
-                        onSelected(mode)
-                        onExpandedChange(false)
-                    }
-                )
-            }
-        }
-    }
-    Spacer(modifier = Modifier.height(6.dp))
-    Text(
-        stringResource(selected.localizedDescriptionRes()),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-}
-
-@Composable
-private fun LlamaLoraStackRow(
-    index: Int,
-    spec: LlamaLoraSpec,
-    onStrengthChange: (Float) -> Unit,
-    onMoveUp: (() -> Unit)?,
-    onMoveDown: (() -> Unit)?,
-    onRemove: () -> Unit
-) {
-    val strength = safeLoraStrength(spec.strength)
-    val sliderStrength = strength.coerceIn(0f, 2f)
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
-        ),
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 12.dp, top = 10.dp, end = 4.dp, bottom = 10.dp),
-            verticalAlignment = Alignment.Top
-        ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text(
-                    stringResource(R.string.llm_lora_stack_item, index + 1),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    spec.path.substringAfterLast('/').ifBlank { spec.path },
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        stringResource(R.string.llm_lora_stack_strength),
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.widthIn(max = 78.dp),
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Slider(
-                        value = sliderStrength,
-                        onValueChange = { onStrengthChange(it.coerceIn(0f, 2f)) },
-                        valueRange = 0f..2f,
-                        steps = 19,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Text(
-                        String.format(Locale.ROOT, "%.3g", strength.toDouble()),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.widthIn(min = 44.dp, max = 72.dp),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                DraftFloatTextField(
-                    value = strength,
-                    onValueChange = { onStrengthChange(safeLoraStrength(it)) },
-                    label = { Text(stringResource(R.string.llm_lora_stack_strength_input)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    allowSigned = true
-                )
-                Text(
-                    stringResource(R.string.llm_lora_stack_strength_hint),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                when {
-                    ',' in spec.path -> R.string.llm_lora_stack_invalid_comma
-                    strength != 1f && ':' in spec.path -> R.string.llm_lora_stack_invalid_scaled_colon
-                    else -> null
-                }?.let { errorRes ->
-                    Text(
-                        stringResource(errorRes),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-            }
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(0.dp),
-                modifier = Modifier.width(48.dp)
-            ) {
-                IconButton(
-                    onClick = { onMoveUp?.invoke() },
-                    enabled = onMoveUp != null,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Icon(
-                        Icons.Default.KeyboardArrowUp,
-                        contentDescription = stringResource(R.string.llm_lora_stack_move_up),
-                    )
-                }
-                IconButton(
-                    onClick = { onMoveDown?.invoke() },
-                    enabled = onMoveDown != null,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Icon(
-                        Icons.Default.KeyboardArrowDown,
-                        contentDescription = stringResource(R.string.llm_lora_stack_move_down),
-                    )
-                }
-                IconButton(
-                    onClick = onRemove,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Delete,
-                        contentDescription = stringResource(R.string.llm_lora_stack_remove),
-                        tint = MaterialTheme.colorScheme.error
-                    )
-                }
-            }
-        }
-    }
-}
 
 /**
  * LLM/Chat Settings - Threads, Context Size, Temperature, Vision
@@ -484,8 +53,57 @@ private fun LlamaLoraStackRow(
 @Composable
 fun LLMSettingsScreen(navController: NavController) {
     val context = LocalContext.current
-    val resources = LocalResources.current
     val settingsRepo = remember { SettingsRepository(context) }
+    AppScreenScaffold(
+        title = stringResource(R.string.llm_settings_title),
+        subtitle = stringResource(R.string.settings_llm_desc),
+        onBack = { navController.popBackStack() }
+    ) { contentPadding ->
+        LlmSettingsContent(
+            settingsRepo = settingsRepo,
+            mode = LlmSettingsMode.GLOBAL,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(contentPadding)
+        )
+    }
+}
+
+/** Where the shared LLM settings content is hosted. */
+enum class LlmSettingsMode {
+    /** The app-wide LLM Settings screen: everything is visible, writes go to the global repository. */
+    GLOBAL,
+
+    /**
+     * A per-server launch-profile draft. Hides app-wide controls that are not part of a server's
+     * launch profile (saved commands, chat KV storage, remote access, port, agent diagnostics,
+     * speculative run history).
+     */
+    SERVER_PROFILE
+}
+
+/**
+ * The full set of LLM launch settings, reading and writing [settingsRepo]. In [LlmSettingsMode.SERVER_PROFILE]
+ * the repository is an isolated draft. [header] adds items above the first card in the same lazy list
+ * so the whole screen scrolls as one; [onModelSelected] is called after the user picks a model.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LlmSettingsContent(
+    settingsRepo: SettingsRepository,
+    mode: LlmSettingsMode,
+    modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(
+        start = AppChromeDefaults.ScreenPadding,
+        top = 12.dp,
+        end = AppChromeDefaults.ScreenPadding,
+        bottom = AppChromeDefaults.ScreenPadding
+    ),
+    header: (LazyListScope.() -> Unit)? = null,
+    onModelSelected: ((com.example.llamadroid.data.db.ModelEntity) -> Unit)? = null
+) {
+    val context = LocalContext.current
+    val isGlobal = mode == LlmSettingsMode.GLOBAL
     val binaryRepo = remember { BinaryRepository(context) }
     val db = remember { AppDatabase.getDatabase(context) }
     val scope = rememberCoroutineScope()
@@ -571,17 +189,8 @@ fun LLMSettingsScreen(navController: NavController) {
     val llamaKvOffloadMode by settingsRepo.llamaKvOffloadMode.collectAsState()
     val llamaDraftDeviceMode by settingsRepo.llamaDraftDeviceMode.collectAsState()
     
-    var showSaveCommandDialog by remember { mutableStateOf(false) }
     var speculativeModeMenuExpanded by remember { mutableStateOf(false) }
-    var saveCommandName by remember { mutableStateOf("") }
-    var selectedSaveCommandId by remember { mutableStateOf<Long?>(null) }
-    var showOverwriteSavedCommandDialog by remember { mutableStateOf(false) }
-    var showLoadCommandDialog by remember { mutableStateOf(false) }
-    var showCommandPreview by remember { mutableStateOf<SavedCommandEntity?>(null) }
     
-    val savedCommands by db.savedCommandDao()
-        .getCommandsByScope(SavedCommandScopes.GENERAL)
-        .collectAsState(initial = emptyList())
     val speculativeRuns by db.llamaSpeculativeRunDao().observeRuns().collectAsState(initial = emptyList())
     // val scope = rememberCoroutineScope() // Duplicate declaration, removed
 
@@ -650,23 +259,13 @@ fun LLMSettingsScreen(navController: NavController) {
         settingsRepo.setSelectedLlmLoras(value)
     }
     
-    AppScreenScaffold(
-        title = stringResource(R.string.llm_settings_title),
-        subtitle = stringResource(R.string.settings_llm_desc),
-        onBack = { navController.popBackStack() }
-    ) { contentPadding ->
+    run {
         LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(contentPadding),
-            contentPadding = PaddingValues(
-                start = AppChromeDefaults.ScreenPadding,
-                top = 12.dp,
-                end = AppChromeDefaults.ScreenPadding,
-                bottom = AppChromeDefaults.ScreenPadding
-            ),
+            modifier = modifier,
+            contentPadding = contentPadding,
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            header?.invoke(this)
             // Active Model
             item {
                 Card(
@@ -789,58 +388,8 @@ fun LLMSettingsScreen(navController: NavController) {
                 }
             }
             
-            // Custom Commands Section
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
-                    )
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            "💾 " + stringResource(R.string.dist_load_command_title),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = { showLoadCommandDialog = true },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Icon(Icons.Default.Menu, null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    stringResource(R.string.dist_load_command),
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            
-                            Button(
-                                onClick = {
-                                    selectedSaveCommandId = null
-                                    saveCommandName = ""
-                                    showSaveCommandDialog = true
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Icon(Icons.Default.Star, null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    stringResource(R.string.dist_save_command),
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-                    }
-                }
+            if (isGlobal) {
+                item { LlmSavedCommandsCard(settingsRepo, effectiveDraftModelPath) }
             }
             
             // Custom Flags
@@ -946,14 +495,16 @@ fun LLMSettingsScreen(navController: NavController) {
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        DraftIntTextField(
-                            value = serverPort,
-                            onValueChange = settingsRepo::setServerPort,
-                            valueRange = 1..65535,
-                            label = { Text(stringResource(R.string.llm_port)) },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true
-                        )
+                        if (isGlobal) {
+                            DraftIntTextField(
+                                value = serverPort,
+                                onValueChange = settingsRepo::setServerPort,
+                                valueRange = 1..65535,
+                                label = { Text(stringResource(R.string.llm_port)) },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                        }
                         DraftIntTextField(
                             value = serverBatchSize,
                             onValueChange = settingsRepo::setServerBatchSize,
@@ -1120,30 +671,32 @@ fun LLMSettingsScreen(navController: NavController) {
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                                LlmModeDropdown(
-                                    label = stringResource(R.string.llm_slot_affinity),
-                                    selected = agentLlamaSlotAffinityMode,
-                                    options = listOf(
-                                        "automatic" to stringResource(R.string.general_acceleration_mode_auto),
-                                        "enabled" to stringResource(R.string.action_enable),
-                                        "disabled" to stringResource(R.string.action_disable)
-                                    ),
-                                    expanded = slotAffinityMenuExpanded,
-                                    onExpandedChange = { slotAffinityMenuExpanded = it },
-                                    onSelected = settingsRepo::setAgentLlamaSlotAffinityMode
-                                )
-                                LlmAdvancedToggle(
-                                    title = stringResource(R.string.llm_prompt_cache_diagnostics),
-                                    description = stringResource(R.string.llm_prompt_cache_diagnostics_desc),
-                                    checked = agentPromptCacheDiagnostics,
-                                    onCheckedChange = settingsRepo::setAgentPromptCacheDiagnostics
-                                )
-                                LlmAdvancedToggle(
-                                    title = stringResource(R.string.llm_developer_prompt_comparison),
-                                    description = stringResource(R.string.llm_developer_prompt_comparison_warning),
-                                    checked = agentDeveloperPromptComparison,
-                                    onCheckedChange = settingsRepo::setAgentDeveloperPromptComparison
-                                )
+                                if (isGlobal) {
+                                    LlmModeDropdown(
+                                        label = stringResource(R.string.llm_slot_affinity),
+                                        selected = agentLlamaSlotAffinityMode,
+                                        options = listOf(
+                                            "automatic" to stringResource(R.string.general_acceleration_mode_auto),
+                                            "enabled" to stringResource(R.string.action_enable),
+                                            "disabled" to stringResource(R.string.action_disable)
+                                        ),
+                                        expanded = slotAffinityMenuExpanded,
+                                        onExpandedChange = { slotAffinityMenuExpanded = it },
+                                        onSelected = settingsRepo::setAgentLlamaSlotAffinityMode
+                                    )
+                                    LlmAdvancedToggle(
+                                        title = stringResource(R.string.llm_prompt_cache_diagnostics),
+                                        description = stringResource(R.string.llm_prompt_cache_diagnostics_desc),
+                                        checked = agentPromptCacheDiagnostics,
+                                        onCheckedChange = settingsRepo::setAgentPromptCacheDiagnostics
+                                    )
+                                    LlmAdvancedToggle(
+                                        title = stringResource(R.string.llm_developer_prompt_comparison),
+                                        description = stringResource(R.string.llm_developer_prompt_comparison_warning),
+                                        checked = agentDeveloperPromptComparison,
+                                        onCheckedChange = settingsRepo::setAgentDeveloperPromptComparison
+                                    )
+                                }
                                 if (isUsingOpenClBinary) {
                                     HorizontalDivider()
                                     LlmAdvancedToggle(
@@ -1242,8 +795,8 @@ fun LLMSettingsScreen(navController: NavController) {
                 }
             }
             
-            // Remote Access
-            item {
+            // Remote Access (global only: a server profile always binds loopback)
+            if (isGlobal) item {
                 val remoteAccess by settingsRepo.remoteAccess.collectAsState()
                 
                 Card(
@@ -1426,6 +979,8 @@ fun LLMSettingsScreen(navController: NavController) {
                 }
             }
             
+            if (isGlobal) item { ChatKvCacheStorageCard() }
+
             // llama.cpp model loading policy
             item {
                 Card(
@@ -2184,7 +1739,7 @@ fun LLMSettingsScreen(navController: NavController) {
                 }
             } // End of Vision Settings
 
-            item {
+            if (isGlobal) item {
                 SpeculativeRunHistoryCard(
                     runs = speculativeRuns,
                     onRename = { run, name ->
@@ -2205,212 +1760,8 @@ fun LLMSettingsScreen(navController: NavController) {
                 )
             }
         } // End of LazyColumn
-    } // End of Scaffold content
+    } // End of content run
     
-    // Save Command Dialog
-    if (showSaveCommandDialog) {
-        AlertDialog(
-            onDismissRequest = { showSaveCommandDialog = false },
-            title = { Text(stringResource(R.string.dist_save_command_title)) },
-            text = {
-                Column(
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(stringResource(R.string.dist_save_command_desc), style = MaterialTheme.typography.bodyMedium)
-                    OutlinedTextField(
-                        value = saveCommandName,
-                        onValueChange = { saveCommandName = it; selectedSaveCommandId = null },
-                        label = { Text(stringResource(R.string.dist_command_preset_name)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Text(stringResource(R.string.saved_command_update_existing), style = MaterialTheme.typography.labelLarge)
-                    savedCommands.forEach { command ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth().clickable {
-                                selectedSaveCommandId = command.id
-                                saveCommandName = command.name
-                            }.padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(selected = selectedSaveCommandId == command.id, onClick = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(command.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val requiresDraftSelection =
-                            speculativeMode.requiresDraftModel ||
-                                (speculativeMode == LlamaSpeculativeMode.DRAFT_MTP && mtpUseDraftModel)
-                        if (speculativeEnabled &&
-                            requiresDraftSelection &&
-                            effectiveDraftModelPath.isNullOrBlank()
-                        ) {
-                            android.widget.Toast.makeText(context, resources.getString(R.string.dist_speculative_missing_required_draft), android.widget.Toast.LENGTH_SHORT).show()
-                        } else if (saveCommandName.isNotBlank() && selectedModelPath != null) {
-                            val existing = savedCommands.firstOrNull {
-                                it.name.equals(saveCommandName.trim(), ignoreCase = true)
-                            }
-                            if (selectedSaveCommandId == null && existing != null) {
-                                selectedSaveCommandId = existing.id
-                                showOverwriteSavedCommandDialog = true
-                            } else {
-                                val cmd = savedCommandFromLaunchProfile(
-                                    name = saveCommandName.trim(),
-                                    profile = LlamaServerLaunchProfile.capture(settingsRepo).copy(
-                                        draftModelPath = effectiveDraftModelPath
-                                    ),
-                                    id = selectedSaveCommandId ?: 0L
-                                )
-                                scope.launch { db.savedCommandDao().insertCommand(cmd) }
-                                val feedback = if (selectedSaveCommandId == null) {
-                                    R.string.dist_command_saved
-                                } else {
-                                    R.string.saved_command_overwritten
-                                }
-                                android.widget.Toast.makeText(context, resources.getString(feedback), android.widget.Toast.LENGTH_SHORT).show()
-                                showSaveCommandDialog = false
-                                saveCommandName = ""
-                                selectedSaveCommandId = null
-                            }
-                        } else if (selectedModelPath == null) {
-                            android.widget.Toast.makeText(context, resources.getString(R.string.llm_select_model), android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    enabled = saveCommandName.isNotBlank()
-                ) {
-                    Text(stringResource(R.string.dist_save_command))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showSaveCommandDialog = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            }
-        )
-    }
-
-    if (showOverwriteSavedCommandDialog) {
-        AlertDialog(
-            onDismissRequest = { showOverwriteSavedCommandDialog = false },
-            title = { Text(stringResource(R.string.saved_command_overwrite_title)) },
-            text = { Text(stringResource(R.string.saved_command_overwrite_message, saveCommandName)) },
-            confirmButton = {
-                Button(onClick = {
-                    val cmd = savedCommandFromLaunchProfile(
-                        name = saveCommandName.trim(),
-                        profile = LlamaServerLaunchProfile.capture(settingsRepo),
-                        id = selectedSaveCommandId ?: 0L
-                    )
-                    scope.launch { db.savedCommandDao().insertCommand(cmd) }
-                    android.widget.Toast.makeText(context, resources.getString(R.string.saved_command_overwritten), android.widget.Toast.LENGTH_SHORT).show()
-                    showOverwriteSavedCommandDialog = false
-                    showSaveCommandDialog = false
-                    saveCommandName = ""
-                    selectedSaveCommandId = null
-                }) { Text(stringResource(R.string.saved_command_overwrite)) }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showOverwriteSavedCommandDialog = false
-                    selectedSaveCommandId = null
-                }) { Text(stringResource(R.string.action_cancel)) }
-            }
-        )
-    }
-
-    // Load / Edit Command Dialog
-    if (showLoadCommandDialog) {
-        AlertDialog(
-            onDismissRequest = { showLoadCommandDialog = false },
-            title = {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(stringResource(R.string.dist_load_command))
-                    IconButton(onClick = { showLoadCommandDialog = false }) {
-                        Icon(Icons.Default.Close, null)
-                    }
-                }
-            },
-            text = {
-                if (savedCommands.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                        Text(stringResource(R.string.dist_no_commands_saved), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.heightIn(max = 400.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(savedCommands) { cmd ->
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(8.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(
-                                        modifier = Modifier.weight(1f).clickable {
-                                            // The versioned profile owns every launch-affecting setting.
-                                            // launchProfile() converts historical rows when JSON is absent.
-                                            LlamaServerLaunchProfile.restore(cmd.launchProfile(), settingsRepo)
-                                            
-                                            settingsRepo.setLoadedCommandId(cmd.id)
-                                            
-                                            android.widget.Toast.makeText(context, resources.getString(R.string.dist_command_loaded), android.widget.Toast.LENGTH_SHORT).show()
-                                            showLoadCommandDialog = false
-                                        }.padding(8.dp)
-                                    ) {
-                                        Text(cmd.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                                        Text(stringResource(R.string.model_filename_label, cmd.modelPath.substringAfterLast("/")), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                    
-                                    Row {
-                                        IconButton(onClick = { showCommandPreview = cmd }) {
-                                            Icon(Icons.Default.Edit, stringResource(R.string.dist_edit_command))
-                                        }
-                                        IconButton(onClick = { 
-                                            scope.launch {
-                                                db.savedCommandDao().deleteCommand(cmd)
-                                            }
-                                        }) {
-                                            Icon(Icons.Default.Delete, stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {}
-        )
-    }
-
-    // Shared with the server manager; edits remain attached to the same saved profile.
-    showCommandPreview?.let { cmd ->
-        SavedLlamaCommandEditor(command = cmd, onDismiss = { showCommandPreview = null }) { name, profile ->
-            scope.launch {
-                db.savedCommandDao().insertCommand(savedCommandFromLaunchProfile(name, profile, id = cmd.id))
-            }
-            android.widget.Toast.makeText(context, resources.getString(R.string.saved_command_overwritten),
-                android.widget.Toast.LENGTH_SHORT).show()
-            showCommandPreview = null
-        }
-    }
-
     // Model Selector Dialog
     if (showLlmSelector) {
         AlertDialog(
@@ -2422,6 +1773,7 @@ fun LLMSettingsScreen(navController: NavController) {
                         Surface(
                             onClick = {
                                 settingsRepo.setSelectedModelPath(model.path)
+                                onModelSelected?.invoke(model)
                                 showLlmSelector = false
                             },
                             modifier = Modifier.fillMaxWidth(),

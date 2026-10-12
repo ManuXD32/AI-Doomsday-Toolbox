@@ -33,7 +33,7 @@ class LlamaClientServiceLocalServerTest {
     }
 
     @Test
-    fun localLlamaServerAutoStartPolicy_onlyAllowsStoppedLoopbackLlamaServer() {
+    fun localLlamaServerAutoStartPolicy_allowsStoppedOrErrorLoopbackLlamaServer() {
         val localLlamaServer = LlamaServerEntity(
             name = "Local llama-server",
             host = "127.0.0.1",
@@ -46,7 +46,8 @@ class LlamaClientServiceLocalServerTest {
         assertTrue(shouldAutoStartLocalLlamaServer(localLlamaServer, ServerState.Stopped))
         assertFalse(shouldAutoStartLocalLlamaServer(localLiteRt, ServerState.Stopped))
         assertFalse(shouldAutoStartLocalLlamaServer(remoteLlamaServer, ServerState.Stopped))
-        assertFalse(shouldAutoStartLocalLlamaServer(localLlamaServer, ServerState.Error("failed")))
+        // A stale Error from an earlier failure must not block a fresh user-initiated start.
+        assertTrue(shouldAutoStartLocalLlamaServer(localLlamaServer, ServerState.Error("failed")))
         assertFalse(shouldAutoStartLocalLlamaServer(localLlamaServer, ServerState.Running(8080)))
     }
 

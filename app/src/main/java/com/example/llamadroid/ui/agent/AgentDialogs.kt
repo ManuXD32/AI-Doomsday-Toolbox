@@ -33,6 +33,7 @@ import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import com.example.llamadroid.R
 import com.example.llamadroid.service.AgentService
+import com.example.llamadroid.ui.theme.sprites.AgentRoleEmoji
 import com.example.llamadroid.service.AgentHarnessPolicy
 import com.example.llamadroid.service.OllamaService
 import com.example.llamadroid.data.SettingsRepository
@@ -3490,7 +3491,7 @@ private fun AgentTuningCard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
+                AgentRoleEmoji(
                     emoji,
                     fontSize = 24.sp,
                     modifier = Modifier.alpha(if (isEnabled) 1f else 0.4f)
@@ -4181,7 +4182,7 @@ fun AgentConfigCard(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(emoji, fontSize = 24.sp, modifier = Modifier.alpha(if (isEnabled) 1f else 0.4f))
+                AgentRoleEmoji(emoji, fontSize = 24.sp, modifier = Modifier.alpha(if (isEnabled) 1f else 0.4f))
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
@@ -4524,7 +4525,7 @@ fun AgentModelSelector(
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(emoji, fontSize = 20.sp)
+                AgentRoleEmoji(emoji, fontSize = 20.sp, spriteSize = 24.dp)
                 Spacer(modifier = Modifier.width(8.dp))
                 Column {
                     Text(roleName, fontWeight = FontWeight.Bold)

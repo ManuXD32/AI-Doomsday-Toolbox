@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Collections
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GraphicEq
@@ -36,6 +37,9 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import com.example.llamadroid.ui.components.AppIcon
+import com.example.llamadroid.ui.theme.LocalAppVisualStyle
+import com.example.llamadroid.ui.theme.sprites.AppSpriteKey
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -76,10 +80,12 @@ fun LibraryScreen(navController: NavController) {
             AppSectionCard {
                 LibrarySectionHeader(
                     icon = Icons.Default.Storage,
+                    sprite = AppSpriteKey.MODEL_LLM,
                     title = stringResource(R.string.ui_library_models_title)
                 )
                 LibraryActionRow(
                     icon = Icons.AutoMirrored.Filled.Chat,
+                    sprite = AppSpriteKey.MODEL_LLM,
                     title = stringResource(R.string.ui_library_task_chat),
                     supporting = stringResource(R.string.ui_library_task_chat_desc),
                     modifier = Modifier.walkthroughTarget("library.resources"),
@@ -90,6 +96,7 @@ fun LibraryScreen(navController: NavController) {
                 )
                 LibraryActionRow(
                     icon = Icons.Default.Image,
+                    sprite = AppSpriteKey.MODEL_IMAGE,
                     title = stringResource(R.string.ui_library_task_images),
                     supporting = stringResource(R.string.ui_library_task_images_desc),
                     onClick = { navController.navigate(Screen.SDModels.route) },
@@ -99,6 +106,7 @@ fun LibraryScreen(navController: NavController) {
                 )
                 LibraryActionRow(
                     icon = Icons.Default.GraphicEq,
+                    sprite = AppSpriteKey.MODEL_AUDIO,
                     title = stringResource(R.string.ui_library_task_voice),
                     supporting = stringResource(R.string.ui_library_task_voice_desc),
                     onClick = { navController.navigate(Screen.AudioModels.route) },
@@ -109,12 +117,25 @@ fun LibraryScreen(navController: NavController) {
                 )
                 LibraryActionRow(
                     icon = Icons.Default.Search,
+                    sprite = AppSpriteKey.TOOL_KNOWLEDGE,
                     title = stringResource(R.string.ui_library_task_documents),
                     supporting = stringResource(R.string.ui_library_task_documents_desc),
                     onClick = { navController.navigate(Screen.LLMModels.route) }
                 )
                 LibraryActionRow(
+                    icon = Icons.Default.Share,
+                    sprite = AppSpriteKey.TOOL_DISTRIBUTED,
+                    title = stringResource(R.string.models_share),
+                    supporting = stringResource(R.string.models_share_desc),
+                    modifier = Modifier.walkthroughTarget("models.share"),
+                    onClick = {
+                        walkthroughTargets?.recordEvent("models.share")
+                        navController.navigate("model_share")
+                    }
+                )
+                LibraryActionRow(
                     icon = Icons.Default.Folder,
+                    sprite = AppSpriteKey.MODEL_BUNDLE,
                     title = stringResource(R.string.ui_library_all_managers),
                     supporting = stringResource(R.string.soft_studio_library_models_desc),
                     onClick = { navController.navigate(Screen.ModelHub.route) }
@@ -124,22 +145,26 @@ fun LibraryScreen(navController: NavController) {
             AppSectionCard {
                 LibrarySectionHeader(
                     icon = Icons.Default.Collections,
+                    sprite = AppSpriteKey.TOOL_KNOWLEDGE,
                     title = stringResource(R.string.ui_library_knowledge_title)
                 )
                 LibraryActionRow(
                     icon = Icons.Default.Collections,
+                    sprite = AppSpriteKey.TOOL_KNOWLEDGE,
                     title = stringResource(R.string.ui_library_knowledge_bases),
                     supporting = stringResource(R.string.soft_studio_library_knowledge_desc),
                     onClick = { navController.navigate(Screen.KnowledgeBase.route) }
                 )
                 LibraryActionRow(
                     icon = Icons.Default.Description,
+                    sprite = AppSpriteKey.TOOL_KIWIX,
                     title = stringResource(R.string.soft_studio_library_open_offline),
                     supporting = stringResource(R.string.soft_studio_library_offline_desc),
                     onClick = { navController.navigate(Screen.ZimManager.route) }
                 )
                 LibraryActionRow(
                     icon = Icons.Default.Edit,
+                    sprite = AppSpriteKey.TOOL_NOTES,
                     title = stringResource(R.string.ui_library_notes),
                     onClick = { navController.navigate(Screen.NotesManager.route) }
                 )
@@ -148,16 +173,19 @@ fun LibraryScreen(navController: NavController) {
             AppSectionCard {
                 LibrarySectionHeader(
                     icon = Icons.Default.Collections,
+                    sprite = AppSpriteKey.TOOL_IMAGE,
                     title = stringResource(R.string.ui_library_creations_title)
                 )
                 LibraryActionRow(
                     icon = Icons.Default.Collections,
+                    sprite = AppSpriteKey.TOOL_IMAGE,
                     title = stringResource(R.string.soft_studio_library_open_all_media),
                     supporting = stringResource(R.string.media_gallery_subtitle),
                     onClick = { navController.navigate(Screen.AllMediaGallery.route) }
                 )
                 LibraryActionRow(
                     icon = Icons.Default.Image,
+                    sprite = AppSpriteKey.MODEL_IMAGE,
                     title = stringResource(R.string.soft_studio_library_open_images),
                     onClick = {
                         navController.navigate(Screen.ImageGen.createRoute(startMode = 0, tab = "gallery"))
@@ -165,31 +193,37 @@ fun LibraryScreen(navController: NavController) {
                 )
                 LibraryActionRow(
                     icon = Icons.Default.Movie,
+                    sprite = AppSpriteKey.TOOL_VIDEO,
                     title = stringResource(R.string.soft_studio_library_open_videos),
                     onClick = { navController.navigate(Screen.VideoGen.createRoute(tab = "gallery")) }
                 )
                 LibraryActionRow(
                     icon = Icons.Default.GraphicEq,
+                    sprite = AppSpriteKey.MODEL_AUDIO,
                     title = stringResource(R.string.soft_studio_library_open_audio),
                     onClick = { navController.navigate(Screen.AudioWorkspace.createRoute("history")) }
                 )
                 LibraryActionRow(
                     icon = Icons.Default.GraphicEq,
+                    sprite = AppSpriteKey.MODEL_AUDIO,
                     title = stringResource(R.string.soft_studio_library_open_onnx_voice),
                     onClick = { navController.navigate(Screen.OnnxTtsGallery.route) }
                 )
                 LibraryActionRow(
                     icon = Icons.Default.Speed,
+                    sprite = AppSpriteKey.MODEL_IMAGE,
                     title = stringResource(R.string.soft_studio_library_open_fast_sd),
                     onClick = { navController.navigate(Screen.FastsdGallery.route) }
                 )
                 LibraryActionRow(
                     icon = Icons.Default.Hub,
+                    sprite = AppSpriteKey.TOOL_DISTRIBUTED,
                     title = stringResource(R.string.soft_studio_library_open_distributed_media),
                     onClick = { navController.navigate(Screen.SdDistributedGallery.route) }
                 )
                 LibraryActionRow(
                     icon = Icons.Default.Speed,
+                    sprite = AppSpriteKey.STATE_RUNNING,
                     title = stringResource(R.string.ui_sweepb_generation_queue),
                     supporting = stringResource(R.string.ui_sweepb_generation_queue_desc),
                     onClick = { navController.navigate(Screen.GenerationQueue.route) }
@@ -210,16 +244,6 @@ fun LibraryScreen(navController: NavController) {
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                TextButton(
-                    onClick = { navController.navigate("model_share") },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(
-                        stringResource(R.string.ui_library_link_share),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
             }
         }
     }
@@ -228,7 +252,8 @@ fun LibraryScreen(navController: NavController) {
 @Composable
 private fun LibrarySectionHeader(
     icon: ImageVector,
-    title: String
+    title: String,
+    sprite: AppSpriteKey? = null
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -240,11 +265,12 @@ private fun LibrarySectionHeader(
             shape = RoundedCornerShape(14.dp),
             color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
         ) {
-            Icon(
-                imageVector = icon,
+            AppIcon(
+                icon = icon,
                 contentDescription = null,
-                modifier = Modifier.padding(10.dp),
-                tint = MaterialTheme.colorScheme.primary
+                modifier = Modifier.padding(if (LocalAppVisualStyle.current.isPixel) 6.dp else 10.dp),
+                tint = MaterialTheme.colorScheme.primary,
+                sprite = sprite
             )
         }
         Column(
@@ -266,6 +292,7 @@ private fun LibraryActionRow(
     icon: ImageVector,
     title: String,
     modifier: Modifier = Modifier,
+    sprite: AppSpriteKey? = null,
     supporting: String? = null,
     secondary: List<Pair<String, () -> Unit>> = emptyList(),
     onClick: () -> Unit
@@ -287,7 +314,8 @@ private fun LibraryActionRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            AppIcon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(if (LocalAppVisualStyle.current.isPixel) 32.dp else 24.dp), sprite = sprite)
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     text = title,

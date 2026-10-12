@@ -23,6 +23,8 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Collections
 import androidx.compose.material.icons.filled.SmartToy
+import com.example.llamadroid.ui.theme.LocalAppVisualStyle
+import com.example.llamadroid.ui.theme.sprites.AppSpriteKey
 import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -527,11 +529,9 @@ private fun CuratedModelBundleCard(
 ) {
     val context = LocalContext.current
     val allInstalled = installedCount == bundle.files.size && !hasPrefixError
-    val catalogIcon = if (bundle.files.any { it.type == ModelType.LLM || it.type == ModelType.LLM_DRAFT }) {
-        Icons.Default.SmartToy
-    } else {
-        Icons.Default.Collections
-    }
+    val isLlmBundle = bundle.files.any { it.type == ModelType.LLM || it.type == ModelType.LLM_DRAFT }
+    val catalogIcon = if (isLlmBundle) Icons.Default.SmartToy else Icons.Default.Collections
+    val catalogSprite = if (isLlmBundle) AppSpriteKey.MODEL_LLM else AppSpriteKey.MODEL_BUNDLE
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -561,12 +561,13 @@ private fun CuratedModelBundleCard(
                     else MaterialTheme.colorScheme.secondaryContainer,
                     modifier = Modifier.size(52.dp)
                 ) {
-                    Icon(
+                    AppIcon(
                         catalogIcon,
                         contentDescription = null,
                         tint = if (allInstalled) MaterialTheme.colorScheme.onPrimaryContainer
                         else MaterialTheme.colorScheme.onSecondaryContainer,
-                        modifier = Modifier.padding(12.dp)
+                        modifier = Modifier.padding(if (LocalAppVisualStyle.current.isPixel) 10.dp else 12.dp),
+                        sprite = catalogSprite
                     )
                 }
                 Spacer(Modifier.width(12.dp))

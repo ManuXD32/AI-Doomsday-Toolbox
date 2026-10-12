@@ -159,6 +159,14 @@ class WhisperCliSupportTest {
     }
 
     @Test
+    fun `upstream input failure exit code 11 is classified separately`() {
+        assertTrue(whisperExitCodeIndicatesInputFailure(WHISPER_INPUT_FAILED_EXIT_CODE))
+        assertFalse(whisperExitCodeIndicatesInputFailure(WHISPER_MISSING_MODEL_EXIT_CODE))
+        assertFalse(whisperExitCodeIndicatesMissingModel(WHISPER_INPUT_FAILED_EXIT_CODE))
+        assertFalse(whisperExitCodeIndicatesInputFailure(0))
+    }
+
+    @Test
     fun `CLI numbers remain locale independent`() {
         val original = Locale.getDefault()
         try {

@@ -64,6 +64,8 @@ import androidx.navigation.NavController
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.ui.components.AppChromeDefaults
+import com.example.llamadroid.ui.components.AppIcon
+import com.example.llamadroid.ui.theme.sprites.AppSpriteKey
 import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.ui.components.AppPageHeader
@@ -73,6 +75,10 @@ import com.example.llamadroid.ui.settings.ImageGenSettingsContent
 import com.example.llamadroid.ui.settings.PDFSettingsContent
 import com.example.llamadroid.ui.settings.VideoUpscalerSettingsContent
 import com.example.llamadroid.ui.ai.llama.RunningLlamaChatServerUi
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.llamadroid.ui.ai.llama.servers.ServerPickerSheet
+import com.example.llamadroid.ui.ai.llama.servers.ServerRegistryViewModel
+import com.example.llamadroid.ui.ai.llama.servers.key
 import com.example.llamadroid.ui.settings.WhisperSettingsContent
 
 private const val PINNED_TOOLS_PREFS = "ai_tool_pins"
@@ -229,6 +235,7 @@ fun AIHubScreen(navController: NavController) {
                         ToolHubCard(
                             id = item.definition.id,
                             icon = item.definition.icon,
+                            sprite = item.definition.sprite,
                             category = item.definition.category,
                             title = item.title,
                             description = item.description,
@@ -252,6 +259,7 @@ fun AIHubScreen(navController: NavController) {
                         ToolHubCard(
                             id = item.definition.id,
                             icon = item.definition.icon,
+                            sprite = item.definition.sprite,
                             category = item.definition.category,
                             title = item.title,
                             description = item.description,
@@ -267,70 +275,29 @@ fun AIHubScreen(navController: NavController) {
     }
 }
 
+/**
+ * Running-server chooser for the web-UI Chat tile. Kept as a thin adapter (the Home screen still
+ * passes [RunningLlamaChatServerUi]s) over the shared [ServerPickerSheet].
+ */
 @Composable
 internal fun ChatServerPickerDialog(
     servers: List<RunningLlamaChatServerUi>,
     onDismiss: () -> Unit,
     onServerSelected: (RunningLlamaChatServerUi) -> Unit
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Text(
-                text = stringResource(R.string.ai_chat_choose_server),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
+    val serverRegistry: ServerRegistryViewModel = viewModel()
+    ServerPickerSheet(
+        viewModel = serverRegistry,
+        selectedRowId = null,
+        onDismiss = onDismiss,
+        onPick = {},
+        title = stringResource(R.string.ai_chat_choose_server),
+        runningOnly = true,
+        onPickServer = { picked ->
+            onServerSelected(
+                servers.firstOrNull { it.port == picked.port }
+                    ?: RunningLlamaChatServerUi(sessionId = picked.key, name = picked.name, port = picked.port)
             )
-        },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 360.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text = stringResource(R.string.ai_chat_servers_many),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis
-                )
-                servers.forEach { server ->
-                    Button(
-                        onClick = { onServerSelected(server) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text(
-                                text = server.name,
-                                modifier = Modifier.weight(1f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = stringResource(R.string.ai_chat_server_port, server.port),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            androidx.compose.material3.TextButton(onClick = onDismiss) {
-                Text(
-                    text = stringResource(R.string.action_cancel),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
         }
     )
 }
@@ -392,6 +359,7 @@ private fun ToolCategoryHeader(
 private fun ToolHubCard(
     id: String,
     icon: ImageVector,
+    sprite: AppSpriteKey?,
     category: ToolCategory,
     title: String,
     description: String,
@@ -429,7 +397,7 @@ private fun ToolHubCard(
                 shape = RoundedCornerShape(14.dp),
                 color = accent.copy(alpha = 0.14f)
             ) {
-                Icon(icon, contentDescription = null, modifier = Modifier.padding(10.dp), tint = accent)
+                AppIcon(icon, contentDescription = null, modifier = Modifier.padding(10.dp), tint = accent, sprite = sprite)
             }
             Column(
                 modifier = Modifier

@@ -10,8 +10,13 @@ import com.example.llamadroid.data.model.LlamaChatEntity
 import com.example.llamadroid.data.model.LlamaChatFolderEntity
 import com.example.llamadroid.data.model.LlamaChatPromptProfileEntity
 import com.example.llamadroid.data.model.LlamaMessageEntity
+import com.example.llamadroid.LlamaApplication
+import com.example.llamadroid.service.NativeChatKvCacheStore
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 
 class LlamaRepository(
     private val serverDao: LlamaServerDao,
@@ -37,6 +42,25 @@ class LlamaRepository(
         supportsVideo: Boolean = false
     ) = serverDao.updateModelMetadata(id, modelName, supportsVision, supportsAudio, supportsVideo)
 
+    // Chat <-> server binding
+    suspend fun bindChatServer(chatId: Long, serverId: Long?) = chatDao.bindChatServer(chatId, serverId)
+    suspend fun bindChatServerIfUnbound(chatId: Long, serverId: Long): Boolean =
+        chatDao.bindChatServerIfUnbound(chatId, serverId) > 0
+    suspend fun clearChatServerBinding(serverId: Long) = chatDao.clearChatServerBinding(serverId)
+    /** Turning the cache off also deletes the chat's saved slot files. */
+    suspend fun setPersistKvCache(chatId: Long, enabled: Boolean) {
+        chatDao.setPersistKvCache(chatId, enabled)
+        if (!enabled) deleteKvCacheFiles(chatId)
+    }
+
+    /** Best effort: the repository is also built in tests and workers without an Application. */
+    private suspend fun deleteKvCacheFiles(chatId: Long) = withContext(Dispatchers.IO) {
+        runCatching { NativeChatKvCacheStore(LlamaApplication.instance).delete(chatId) }
+    }
+    suspend fun getChatsBoundToServer(serverId: Long): List<LlamaChatEntity> = chatDao.getChatsBoundToServer(serverId)
+    fun observeBoundChatCounts(): Flow<Map<Long, Int>> =
+        chatDao.observeBoundChatCounts().map { rows -> rows.associate { it.serverId to it.chatCount } }
+
     // Chats
     val allChats: Flow<List<LlamaChatEntity>> = chatDao.getAllChats()
     val allChatFolders: Flow<List<LlamaChatFolderEntity>> = folderDao.getAllFolders()
@@ -52,7 +76,8 @@ class LlamaRepository(
         isEphemeral: Boolean = false,
         source: String? = null,
         deleteAfterSession: Boolean = false,
-        expiresAtMillis: Long? = null
+        expiresAtMillis: Long? = null,
+        serverId: Long? = null
     ): Long {
         val chat = LlamaChatEntity(
             title = title,
@@ -63,16 +88,26 @@ class LlamaRepository(
             isEphemeral = isEphemeral,
             source = source,
             deleteAfterSession = deleteAfterSession,
-            expiresAtMillis = expiresAtMillis
+            expiresAtMillis = expiresAtMillis,
+            serverId = serverId
         )
         return chatDao.insertChat(chat)
     }
     
     suspend fun getChat(id: Long) = chatDao.getChatById(id)
-    suspend fun deleteChat(chat: LlamaChatEntity) = chatDao.deleteChat(chat)
-    suspend fun deleteEphemeralChat(id: Long) = chatDao.deleteEphemeralChatById(id)
+    suspend fun deleteChat(chat: LlamaChatEntity) {
+        chatDao.deleteChat(chat)
+        deleteKvCacheFiles(chat.id)
+    }
+    suspend fun deleteEphemeralChat(id: Long) {
+        chatDao.deleteEphemeralChatById(id)
+        if (chatDao.getChatById(id) == null) deleteKvCacheFiles(id)
+    }
     suspend fun deleteExpiredEphemeralChats(now: Long = System.currentTimeMillis()) {
-        chatDao.getExpiredEphemeralChats(now).forEach { chatDao.deleteChat(it) }
+        chatDao.getExpiredEphemeralChats(now).forEach {
+            chatDao.deleteChat(it)
+            deleteKvCacheFiles(it.id)
+        }
     }
     suspend fun updateChatTitle(id: Long, title: String) = chatDao.updateTitle(id, title)
     suspend fun updateChatContextSize(id: Long, contextSize: Int) = chatDao.updateContextSize(id, contextSize)
@@ -171,6 +206,8 @@ class LlamaRepository(
     suspend fun clearChatMessages(chatId: Long) {
         messageDao.deleteAllMessagesForChat(chatId)
         chatDao.updateLastModified(chatId)
+        // The saved KV state describes the deleted history, so it is stale now.
+        deleteKvCacheFiles(chatId)
     }
     
     // For "Edit and Regenerate": Delete all messages after the edited one

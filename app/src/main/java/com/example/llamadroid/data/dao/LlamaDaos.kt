@@ -25,6 +25,12 @@ interface LlamaServerDao {
     @Query("UPDATE llama_servers SET host = :host, port = :port WHERE managedServerCardId = :cardId")
     suspend fun updateManagedEndpoint(cardId: Long, host: String, port: Int)
 
+    @Query("DELETE FROM llama_servers WHERE id = :id")
+    suspend fun deleteServerById(id: Long)
+
+    @Query("UPDATE llama_servers SET managedServerCardId = :cardId WHERE id = :id")
+    suspend fun linkManagedCard(id: Long, cardId: Long?)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertServer(server: LlamaServerEntity): Long
 
@@ -99,6 +105,9 @@ interface LlamaChatPromptProfileDao {
     suspend fun deleteProfileById(id: Long)
 }
 
+/** Number of chats bound to one connection row. */
+data class ServerChatCount(val serverId: Long, val chatCount: Int)
+
 @Dao
 interface LlamaChatDao {
     @Query("SELECT * FROM llama_chats ORDER BY lastModified DESC")
@@ -118,6 +127,25 @@ interface LlamaChatDao {
 
     @Delete
     suspend fun deleteChat(chat: LlamaChatEntity)
+
+    @Query("UPDATE llama_chats SET serverId = :serverId WHERE id = :chatId")
+    suspend fun bindChatServer(chatId: Long, serverId: Long?)
+
+    /** Binds only legacy chats; returns the number of updated rows (0 when already bound). */
+    @Query("UPDATE llama_chats SET serverId = :serverId WHERE id = :chatId AND serverId IS NULL")
+    suspend fun bindChatServerIfUnbound(chatId: Long, serverId: Long): Int
+
+    @Query("UPDATE llama_chats SET serverId = NULL WHERE serverId = :serverId")
+    suspend fun clearChatServerBinding(serverId: Long)
+
+    @Query("UPDATE llama_chats SET persistKvCache = :enabled WHERE id = :chatId")
+    suspend fun setPersistKvCache(chatId: Long, enabled: Boolean)
+
+    @Query("SELECT * FROM llama_chats WHERE serverId = :serverId ORDER BY lastModified DESC")
+    suspend fun getChatsBoundToServer(serverId: Long): List<LlamaChatEntity>
+
+    @Query("SELECT serverId AS serverId, COUNT(*) AS chatCount FROM llama_chats WHERE serverId IS NOT NULL GROUP BY serverId")
+    fun observeBoundChatCounts(): Flow<List<ServerChatCount>>
 
     @Query("UPDATE llama_chats SET title = :title WHERE id = :id")
     suspend fun updateTitle(id: Long, title: String)

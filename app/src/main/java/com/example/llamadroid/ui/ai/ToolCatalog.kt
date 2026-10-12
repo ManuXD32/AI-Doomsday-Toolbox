@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Web
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.example.llamadroid.R
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.theme.sprites.AppSpriteKey
 
 /** The task a person is trying to complete, rather than the engine used underneath it. */
 enum class ToolCategory(val titleRes: Int) {
@@ -73,7 +74,9 @@ data class AIToolDefinition(
     val settingsAction: ToolSettingsAction = ToolSettingsAction.None,
     val keywords: List<String> = emptyList(),
     /** False for tools that now live in another root tab (Chats, Library, Audio). Routes still resolve. */
-    val showInHub: Boolean = true
+    val showInHub: Boolean = true,
+    /** Pixel-theme sprite; null falls back to the vector icon. Filled from [ToolCatalog.toolSprites]. */
+    val sprite: AppSpriteKey? = null
 )
 
 private fun tool(
@@ -106,6 +109,39 @@ object ToolCatalog {
      * as ONNX are grouped by the task they perform and retain the engine name in keywords so a
      * search for "onnx" still finds every relevant action.
      */
+    /** Pixel sprite per tool id (see [AIToolDefinition.sprite]). */
+    val toolSprites: Map<String, AppSpriteKey> = mapOf(
+        "chat" to AppSpriteKey.CHATS,
+        "agent" to AppSpriteKey.AGENT_ROBOT,
+        "native_llama" to AppSpriteKey.MODEL_LLM,
+        "image_generation" to AppSpriteKey.MODEL_IMAGE,
+        "video_generation" to AppSpriteKey.TOOL_VIDEO,
+        "onnx_image_generation" to AppSpriteKey.MODEL_ONNX,
+        "onnx_background_removal" to AppSpriteKey.TOOL_IMAGE,
+        "video_upscaler" to AppSpriteKey.TOOL_UPSCALE,
+        "video_interpolation" to AppSpriteKey.TOOL_VIDEO,
+        "subtitle_burn" to AppSpriteKey.TOOL_VIDEO,
+        "onnx_tts" to AppSpriteKey.MODEL_AUDIO,
+        "audio_workspace" to AppSpriteKey.MODEL_AUDIO,
+        "live_translator" to AppSpriteKey.TOOL_TRANSLATE,
+        "transcription" to AppSpriteKey.MODEL_WHISPER,
+        "video_summary" to AppSpriteKey.TOOL_VIDEO,
+        "pdf_tools" to AppSpriteKey.TOOL_PDF,
+        "workflows" to AppSpriteKey.TOOL_NOTES,
+        "dataset" to AppSpriteKey.TOOL_DATASET,
+        "organizer" to AppSpriteKey.ORGANIZER,
+        "knowledge" to AppSpriteKey.TOOL_KNOWLEDGE,
+        "offline_library" to AppSpriteKey.TOOL_KIWIX,
+        "servers_hub" to AppSpriteKey.MODEL_SERVER,
+        "distributed_llm" to AppSpriteKey.TOOL_DISTRIBUTED,
+        "distributed_media" to AppSpriteKey.TOOL_DISTRIBUTED,
+        "quadtrix" to AppSpriteKey.MODEL_LLM,
+        "termux" to AppSpriteKey.TOOL_TERMINAL,
+        "ollama" to AppSpriteKey.MODEL_SERVER,
+        "file_server" to AppSpriteKey.MODEL_SERVER,
+        "model_library" to AppSpriteKey.MODEL_BUNDLE
+    )
+
     val tools: List<AIToolDefinition> = listOf(
         tool("chat", ToolCategory.ADVANCED, Icons.AutoMirrored.Filled.Chat, R.string.ai_chat, R.string.ai_chat_desc, Screen.Chat.route,
             routePatterns = listOf(Screen.Chat.route, "${Screen.Chat.route}?port={serverPort}"),
@@ -182,7 +218,7 @@ object ToolCatalog {
             keywords = listOf("file server", "share", "lan", "infrastructure")),
         tool("model_library", ToolCategory.ADVANCED, Icons.Default.Tune, R.string.models_hub, R.string.models_hub_subtitle, Screen.ModelHub.route,
             keywords = listOf("models", "download", "import", "engine"), showInHub = false)
-    )
+    ).map { it.copy(sprite = toolSprites[it.id]) }
 
     val aiRoutePatterns: Set<String> = tools
         .flatMap { it.routePatterns }

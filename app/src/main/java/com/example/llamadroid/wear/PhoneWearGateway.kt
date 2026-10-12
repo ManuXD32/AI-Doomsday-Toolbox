@@ -40,6 +40,8 @@ import com.example.llamadroid.service.LlamaServerSessionSnapshot
 import com.example.llamadroid.service.LlamaServerSessionStateStore
 import com.example.llamadroid.service.LlamaServerSessionStatus
 import com.example.llamadroid.service.LlamaService
+import com.example.llamadroid.service.NativeChatLocalServerStarter
+import com.example.llamadroid.service.NativeChatServerStartException
 import com.example.llamadroid.service.NativeChatToolConfig
 import com.example.llamadroid.service.OllamaService
 import com.example.llamadroid.service.OrganizerAlarmScheduler
@@ -97,6 +99,8 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -468,7 +472,10 @@ private class WearRequestRouter(
     private val processedGenerations: MutableSet<String>,
     private val messageListeners: ConcurrentHashMap<String, Long>
 ) {
+    private val quickChatStartScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     private companion object {
+        private const val QUICK_CHAT_START_WAIT_MS = 14_000L
         private const val WEAR_QUICK_CHAT_PREFS = "adt_wear_quick_chat_v1"
         private const val WEAR_QUICK_CHAT_SELECTED_SERVER_ID = "selected_server_id"
         private const val WEAR_QUICK_CHAT_SYSTEM_PROMPT = "system_prompt"
@@ -779,11 +786,14 @@ private class WearRequestRouter(
             AppDatabase.getDatabase(appContext).llamaServerDao().getServerById(it)
         }
         if (
-            config.autoStartServer &&
-            selectedServer?.canAutoStartLocalLlamaServer() == true &&
-            LlamaService.state.value is ServerState.Stopped
+            config.autoStartServer && selectedServer != null &&
+            (selectedServer.managedServerCardId != null || selectedServer.canAutoStartLocalLlamaServer())
         ) {
-            serverController.start(request.meta.requestId)
+            // Start the row the user selected (not the "allow watch to start" card) and report
+            // a real failure instead of silently creating a chat with no server behind it.
+            startSelectedQuickChatServer(selectedServer)?.let { failure ->
+                return errorBytes(request.meta, failure.code, failure.message.orEmpty())
+            }
         }
         serverId?.let { selectedServerPrefs.edit().putLong("selected_server_id", it).apply() }
         val id = repository.createChat(
@@ -797,6 +807,27 @@ private class WearRequestRouter(
         )
         val chat = requireNotNull(repository.getChat(id))
         return ok(request.meta, ChatSummary.serializer(), chat.toChatSummary(null, emptyList()))
+    }
+
+    /**
+     * Waits up to [QUICK_CHAT_START_WAIT_MS] (the watch RPC times out at 18 s) for the selected
+     * server to answer. A start still loading afterwards keeps running in the background and
+     * the first send retries it through the shared starter. Returns the failure, if any.
+     */
+    private suspend fun startSelectedQuickChatServer(server: LlamaServerEntity): NativeChatServerStartException? {
+        val start = quickChatStartScope.async {
+            try {
+                NativeChatLocalServerStarter(appContext).ensureReady(server)
+                null
+            } catch (error: NativeChatServerStartException) {
+                error
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                NativeChatServerStartException("start_failed", error.message.orEmpty())
+            }
+        }
+        return withTimeoutOrNull(QUICK_CHAT_START_WAIT_MS) { start.await() }
     }
 
     private suspend fun handleQuickChatEnd(request: QuickChatEndRequest): ByteArray {

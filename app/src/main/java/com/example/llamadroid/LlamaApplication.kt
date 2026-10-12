@@ -9,6 +9,7 @@ import com.example.llamadroid.R
 import com.example.llamadroid.data.AppContainer
 import com.example.llamadroid.data.DefaultAppContainer
 import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.data.ensureVisualStyleResolved
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.RestoreCoordinator
 import com.example.llamadroid.data.db.RestoreAdmissionContext
@@ -62,6 +63,9 @@ class LlamaApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this  // Safe: Application lives for entire app lifecycle
+        // Must run before anything else (and before MainActivity writes last_seen_version_code)
+        // so the first-run visual style is chosen from the legacy markers.
+        ensureVisualStyleResolved(this)
         if (RestoreCoordinator.isMaintenance(this)) {
             // MainActivity owns the isolated restore phase. No settings, Room, or recovery
             // component may open live data before that phase completes.

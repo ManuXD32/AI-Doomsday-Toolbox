@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="pixel_theme_style_title">Estilo visual</string>
+    <string name="pixel_theme_style_desc">Elige el aspecto general de la app. El modo claro y oscuro funcionan con ambos estilos.</string>
+    <string name="pixel_theme_style_soft_studio">Soft Studio</string>
+    <string name="pixel_theme_style_pixel">Retro píxel</string>
+    <string name="pixel_theme_variant_title">Paleta píxel</string>
+    <string name="pixel_theme_variant_selected">Seleccionada</string>
+    <string name="pixel_theme_variant_candy_pop">Caramelo pop</string>
+    <string name="pixel_theme_variant_candy_pop_desc">Rosa pastel, menta y lavanda.</string>
+    <string name="pixel_theme_variant_pocket_lcd">LCD de bolsillo</string>
+    <string name="pixel_theme_variant_pocket_lcd_desc">Los verdes clásicos de consola portátil.</string>
+    <string name="pixel_theme_variant_arcade_night">Noche arcade</string>
+    <string name="pixel_theme_variant_arcade_night_desc">Azul marino con cian, magenta y amarillo neón.</string>
+    <string name="pixel_theme_variant_sunset_cartridge">Cartucho atardecer</string>
+    <string name="pixel_theme_variant_sunset_cartridge_desc">Naranja cálido, morado y crema.</string>
+    <string name="pixel_theme_dynamic_color_disabled">Los colores dinámicos no se usan con el estilo Retro píxel.</string>
+    <string name="pixel_theme_font_title">Fuente píxel para títulos</string>
+    <string name="pixel_theme_font_desc">Desactivada mantiene la fuente estándar, más fácil de leer.</string>
+</resources>

@@ -1010,9 +1010,12 @@ class ProcessController {
         } else {
             null
         }
-        val args = customArgs?.let {
-            appendVideoArgsIfNeeded(it, config, enabled = config.videoEnabled)
-        } ?: getCommand(binaryPath, config, binaryCapabilities)
+        val args = NativeChatKvCacheStore.withSlotSavePath(
+            args = customArgs?.let {
+                appendVideoArgsIfNeeded(it, config, enabled = config.videoEnabled)
+            } ?: getCommand(binaryPath, config, binaryCapabilities),
+            filesDir = filesDir
+        )
         var launchedProcess: Process? = null
         
         try {

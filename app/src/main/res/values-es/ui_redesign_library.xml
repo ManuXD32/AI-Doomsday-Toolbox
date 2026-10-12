@@ -15,7 +15,6 @@
     <string name="ui_library_notes">Notas</string>
     <string name="ui_library_creations_title">Mis creaciones</string>
     <string name="ui_library_link_storage">Almacenamiento y fuentes</string>
-    <string name="ui_library_link_share">Compartir modelos</string>
     <string name="ui_sd_group_base">Modelos base</string>
     <string name="ui_sd_group_components">Componentes</string>
     <string name="ui_sd_group_adapters">Adaptadores</string>

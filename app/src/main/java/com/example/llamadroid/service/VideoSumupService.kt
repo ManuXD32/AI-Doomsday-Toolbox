@@ -532,6 +532,8 @@ object VideoSumupService {
                 throw IllegalStateException(
                     if (whisperExitCodeIndicatesMissingModel(exitCode)) {
                         context.getString(R.string.whisper_error_no_model)
+                    } else if (whisperExitCodeIndicatesInputFailure(exitCode)) {
+                        context.getString(R.string.whisper_error_input_failed)
                     } else {
                         context.getString(R.string.whisper_error_failed_with_exit_code, exitCode)
                     }
