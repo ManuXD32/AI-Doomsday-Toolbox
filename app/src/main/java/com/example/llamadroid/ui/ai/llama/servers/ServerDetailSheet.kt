@@ -56,6 +56,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.llamadroid.R
 import com.example.llamadroid.data.model.LlamaChatEntity
+import com.example.llamadroid.data.model.LlamaServerEntity
+import com.example.llamadroid.data.model.normalizeLlamaServerEngine
 import com.example.llamadroid.data.repository.UnifiedServer
 import com.example.llamadroid.data.repository.UnifiedServerKind
 import com.example.llamadroid.data.repository.UnifiedServerStatus
@@ -105,6 +107,7 @@ fun ServerDetailSheet(
     var logsExpanded by remember(serverKey) { mutableStateOf(false) }
     var showDelete by remember(serverKey) { mutableStateOf(false) }
     var showUpgrade by remember(serverKey) { mutableStateOf(false) }
+    var showPrepareCaches by remember(serverKey) { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -130,6 +133,22 @@ fun ServerDetailSheet(
                     Spacer(Modifier.size(6.dp))
                     Text(stringResource(R.string.chats_open_web_ui), maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
+            }
+
+            if (server.status == UnifiedServerStatus.RUNNING && server.kind != UnifiedServerKind.REMOTE &&
+                normalizeLlamaServerEngine(server.engine) == LlamaServerEntity.ENGINE_LLAMA_SERVER
+            ) {
+                OutlinedButton(onClick = { showPrepareCaches = true }, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.Refresh, contentDescription = null)
+                    Spacer(Modifier.size(6.dp))
+                    Text(stringResource(R.string.kv_prepare_caches_button), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            }
+
+            if (server.kind != UnifiedServerKind.REMOTE &&
+                normalizeLlamaServerEngine(server.engine) == LlamaServerEntity.ENGINE_LLAMA_SERVER
+            ) {
+                LockedScreenSpeedBlock(port = server.port)
             }
 
             if (server.kind == UnifiedServerKind.LOCAL_MANAGED && server.cardId != null) {
@@ -192,6 +211,10 @@ fun ServerDetailSheet(
                 )
             }
         }
+    }
+
+    if (showPrepareCaches) {
+        PrepareCachesSheet(server = server, onDismiss = { showPrepareCaches = false })
     }
 
     if (showUpgrade) {

@@ -158,8 +158,10 @@ class LlamaCallService : Service() {
         hangUpRequested = false
         callJob = serviceScope.launch {
             try {
-                val server = repository.getServer(serverId)
-                    ?: throw IllegalStateException(getString(R.string.llama_call_error_no_server))
+                val baseServer = (repository.getServer(serverId)
+                    ?: throw IllegalStateException(getString(R.string.llama_call_error_no_server)))
+                    // Per-chat audio routing (direct vs Whisper, model, language) overrides the server card.
+                    .withChatAudioOverrides(repository.getChat(chatId)?.apiParams)
                 val callTiming = repository.getChat(chatId)
                     ?.apiParams
                     ?.let(NativeChatToolConfig::fromApiParams)
@@ -173,6 +175,12 @@ class LlamaCallService : Service() {
                 while (isActive && !hangUpRequested) {
                     val utterance = recordUtterance(chatId, callTiming) ?: break
                     ensureActiveCall()
+                    // A forced "direct" mode that the server rejected falls back to Whisper for the rest of the call.
+                    val server = if (NativeChatMediaFailures.audioRejected(chatId)) {
+                        baseServer.copy(preferWhisperAudioTranscription = true)
+                    } else {
+                        baseServer
+                    }
                     val transcript = if (server.requiresAudioTranscriptionFallback()) {
                         publishState(chatId, LlamaCallPhase.TRANSCRIBING, getString(R.string.llama_call_state_transcribing))
                         transcribeUtterance(server, utterance).trim().also { text ->
@@ -374,7 +382,7 @@ class LlamaCallService : Service() {
     }
 
     private fun startLlamaTurn(chatId: Long, serverId: Long, utterance: File, transcript: String?) {
-        if (LlamaClientService.generationState.value is LlamaClientService.GenerationState.Generating) {
+        if (NativeChatGenerationStates.isBusy(chatId)) {
             throw IllegalStateException(getString(R.string.llama_call_error_generation_active))
         }
         val intent = Intent(applicationContext, LlamaClientService::class.java).apply {
@@ -393,15 +401,16 @@ class LlamaCallService : Service() {
 
     private suspend fun waitForLlamaCompletion(chatId: Long) {
         var sawGenerating = false
-        val terminal = LlamaClientService.generationState
+        val terminal = NativeChatGenerationStates.flowFor(chatId)
             .filter { state ->
                 when (state) {
-                    is LlamaClientService.GenerationState.Generating -> {
-                        if (state.chatId == chatId) sawGenerating = true
+                    is LlamaClientService.GenerationState.Generating,
+                    is LlamaClientService.GenerationState.Queued -> {
+                        sawGenerating = true
                         false
                     }
-                    is LlamaClientService.GenerationState.Completed -> sawGenerating && state.chatId == chatId
-                    is LlamaClientService.GenerationState.Error -> sawGenerating && (state.chatId == chatId || state.chatId == -1L)
+                    is LlamaClientService.GenerationState.Completed -> sawGenerating
+                    is LlamaClientService.GenerationState.Error -> sawGenerating
                     LlamaClientService.GenerationState.Idle -> false
                 }
             }

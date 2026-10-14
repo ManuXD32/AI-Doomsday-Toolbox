@@ -28,9 +28,8 @@
     <string name="srv_bound_chats_title">Chats on this server</string>
     <string name="srv_no_bound_chats">No chats use this server yet.</string>
     <string name="srv_untitled_chat">Untitled chat</string>
-    <string name="srv_editor_new_title">Add a server</string>
+    <string name="srv_editor_new_remote_title">Add a remote server</string>
     <string name="srv_editor_edit_title">Edit server</string>
-    <string name="srv_mode_local">Local model (this phone)</string>
     <string name="srv_save_and_start">Save and start</string>
     <string name="srv_port_auto">Auto</string>
     <string name="srv_port_hint">Leave empty to pick a free port automatically.</string>

@@ -67,6 +67,10 @@ class ZimShareService : Service() {
         return START_STICKY
     }
     
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        ForegroundTimeoutSupport.handle(this, fgsType)
+    }
+
     override fun onDestroy() {
         stopServer()
         notificationTaskId?.let { UnifiedNotificationManager.dismissTask(it) }

@@ -45,7 +45,9 @@ data class NativeHarnessCustomProviderRequest(
     val baseUrl: String,
     val models: List<NativeHarnessCustomProviderModel>,
     /** Transient secret; it is never included in UI state or settings JSON. */
-    val apiKey: String = ""
+    val apiKey: String = "",
+    /** Optional per-route stream idle timeout (ms) written into the profile; null keeps the plugin default. */
+    val streamIdleTimeoutMs: Long? = null
 )
 
 internal data class NativeHarnessCustomProviderValidationError(
@@ -254,6 +256,7 @@ internal fun buildNativeCustomProviderProfile(
         }
         put("api", request.api)
         put("baseURL", request.baseUrl)
+        request.streamIdleTimeoutMs?.let { put("streamIdleTimeoutMs", it) }
         putJsonArray("models") {
             request.models.forEach { model ->
                 add(buildJsonObject {

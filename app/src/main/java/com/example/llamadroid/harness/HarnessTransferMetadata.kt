@@ -616,7 +616,7 @@ object HarnessTransferMetadata {
         dao: HarnessTransferDao,
         runtimeId: String,
     ) {
-        val owner = database.harnessDao().runtime()
+        val owner = database.harnessDao(runtimeId).runtime()
         require(owner == null || owner.state !in ACTIVE_STATES) {
             ACTIVE_RUNTIME_STATE_ERROR
         }

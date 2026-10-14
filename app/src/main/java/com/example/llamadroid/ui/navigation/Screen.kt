@@ -125,10 +125,12 @@ sealed class Screen(val route: String) {
     object FastsdGallery : Screen("fastsd_gallery")           // FastSD CPU generated images gallery
     // AI Agent screens
     object Agent : Screen("agent") {                           // AI coding agent chat
-        fun createRoute(conversationId: Long, harnessTab: String? = null): String {
+        /** [returnToCaller]: back from the conversation pops to the opener (e.g. the native chat) instead of the project list. */
+        fun createRoute(conversationId: Long, harnessTab: String? = null, returnToCaller: Boolean = false): String {
             require(conversationId > 0L) { "Conversation ID must be positive" }
             require(harnessTab == null || harnessTab in setOf("conversation", "requests", "plan"))
-            return "$route?conversationId=$conversationId" + (harnessTab?.let { "&harnessTab=$it" } ?: "")
+            return "$route?conversationId=$conversationId" + (harnessTab?.let { "&harnessTab=$it" } ?: "") +
+                (if (returnToCaller) "&returnToCaller=true" else "")
         }
     }
     object AgentWorkspace : Screen("agent_workspace")          // Agent workspace file manager
@@ -172,5 +174,8 @@ sealed class Screen(val route: String) {
     object ServerProfileEditor : Screen("server_profile_editor?cardId={cardId}&modelPath={modelPath}")
     object LlamaChat : Screen("llama_chat/{chatId}/{serverId}") { // Chat interface
         fun createRoute(chatId: Long, serverId: Long): String = "llama_chat/$chatId/$serverId"
+    }
+    object NativeChatDelegation : Screen("native_chat_delegation/{chatId}") { // DeepSeek delegation viewer
+        fun createRoute(chatId: Long): String = "native_chat_delegation/$chatId"
     }
 }

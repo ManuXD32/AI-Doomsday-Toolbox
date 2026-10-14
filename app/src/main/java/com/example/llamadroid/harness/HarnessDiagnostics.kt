@@ -53,6 +53,12 @@ class HarnessDiagnostics(
         )
     }
 
+    /** Metadata-only journal line for a failed model request (code and duration; no text). */
+    fun modelFailure(failure: HarnessModelFailure) {
+        writeSafely { runtimeJournal?.recordConnection("native_failure", transport = "native",
+            operation = "connection", outcome = "failure", durationMs = failure.elapsedMs, errorCode = failure.code) }
+    }
+
     fun webView(outcome: String, code: String? = null, httpStatus: Int? = null) {
         writeSafely { runtimeJournal?.recordConnection("webview", "webview", "interface", outcome,
             errorCode = code, httpStatus = httpStatus) }

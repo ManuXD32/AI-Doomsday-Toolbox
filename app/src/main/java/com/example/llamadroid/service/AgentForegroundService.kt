@@ -30,6 +30,8 @@ class AgentForegroundService : Service() {
     
     companion object {
         private const val TAG = "AgentForegroundService"
+        private const val WAKE_LOCK_TIMEOUT_MS = 24 * 60 * 60 * 1000L
+        private const val WAKE_LOCK_RENEW_INTERVAL_MS = 30 * 60 * 1000L
         
         const val ACTION_START_AGENT = "start_agent"
         const val ACTION_STOP_AGENT = "stop_agent"
@@ -55,7 +57,7 @@ class AgentForegroundService : Service() {
         private val delayedDirectStartInFlight = AtomicBoolean(false)
         private val recoveryCheckInFlight = AtomicBoolean(false)
         private val runtimeRetainCount = AtomicInteger(0)
-        private val harnessRetained = AtomicBoolean(false)
+        private val harnessLeases = HarnessRetainLeases()
         private val resumeTriggered = AtomicBoolean(false)
         private val serviceInstanceIds = AtomicInteger(0)
         private val lastIdleReconciledAtMs = AtomicLong(0L)
@@ -248,8 +250,8 @@ class AgentForegroundService : Service() {
         }
 
         /** Keeps the shared Harness alive without constructing or recovering the retired agent loop. */
-        fun retainHarness(context: Context, status: String) {
-            val acquired = harnessRetained.compareAndSet(false, true)
+        fun retainHarness(context: Context, runtimeId: String, status: String) {
+            val acquired = harnessLeases.acquire(runtimeId)
             if (!acquired && isRunning) return
             if (acquired) runtimeRetainCount.incrementAndGet()
             try {
@@ -260,15 +262,21 @@ class AgentForegroundService : Service() {
                 context.startForegroundService(intent)
             } catch (error: Exception) {
                 if (acquired) {
-                    harnessRetained.set(false)
+                    harnessLeases.release(runtimeId)
                     runtimeRetainCount.updateAndGet { (it - 1).coerceAtLeast(0) }
                 }
                 throw error
             }
         }
 
-        fun releaseHarness(context: Context) {
-            if (harnessRetained.compareAndSet(true, false)) releaseRuntime(context)
+        /** Each runtime owns one counted lease; the foreground role ends only when all are released. */
+        fun releaseHarness(context: Context, runtimeId: String) {
+            if (!harnessLeases.release(runtimeId)) return
+            // Other runtimes keep running: refresh the aggregated line so it drops this one.
+            if (harnessLeases.isNotEmpty()) {
+                updateStatus(context, com.example.llamadroid.harness.HarnessAppRuntime.runningStatusLine(context, excludingRuntimeId = runtimeId))
+            }
+            releaseRuntime(context)
         }
 
         fun releaseRuntime(context: Context) {
@@ -433,6 +441,7 @@ class AgentForegroundService : Service() {
     private var immediateForegroundActive = false
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var wakeLockRenewJob: Job? = null
     @Volatile
     private var recoveryOnlyStart = false
     
@@ -487,17 +496,18 @@ class AgentForegroundService : Service() {
                 startInFlight.set(false)
                 // This is an idle-release intent. Re-check leases when delivered so an old
                 // queued release cannot stop a newly started Harness generation.
-                if (!harnessRetained.get() && runtimeRetainCount.get() == 0 && !AgentService.isLoading.value) stopAgentForeground()
+                if (harnessLeases.isEmpty() && runtimeRetainCount.get() == 0 && !AgentService.isLoading.value) stopAgentForeground()
             }
             ACTION_STOP_ALL_RUNTIME -> {
                 startInFlight.set(false)
-                val harness = com.example.llamadroid.harness.HarnessAppRuntime.existing()
-                if (harness != null && harnessRetained.get()) {
-                    harness.scope.launch {
-                        harness.forceStop()
+                val harnessRuntimes = com.example.llamadroid.harness.HarnessAppRuntime.running()
+                if (harnessRuntimes.isNotEmpty() && harnessLeases.isNotEmpty()) {
+                    serviceScope.launch {
+                        // Each force stop runs on its runtime's own scope so it outlives this service scope.
+                        harnessRuntimes.map { harness -> harness.scope.async { runCatching { harness.forceStop() } } }.awaitAll()
                         runtimeOllamaManager?.cancelAll()
                         AgentService.stopAllJobs()
-                        if (harnessRetained.get()) {
+                        if (harnessLeases.isNotEmpty()) {
                             runtimeRetainCount.set(1)
                             updateNotificationStatus(getString(R.string.harness_runtime_cleanup_pending))
                         } else {
@@ -757,8 +767,22 @@ class AgentForegroundService : Service() {
                 )
             }
             if (wakeLock?.isHeld == false) {
-                wakeLock?.acquire(60 * 60 * 1000L)  // 1 hour max
+                // Long safety timeout; the renewal loop below keeps it alive while the service runs.
+                wakeLock?.setReferenceCounted(false)
+                wakeLock?.acquire(WAKE_LOCK_TIMEOUT_MS)
                 DebugLog.log("[$TAG] WakeLock acquired")
+            }
+            if (wakeLockRenewJob?.isActive != true) {
+                wakeLockRenewJob = serviceScope.launch {
+                    while (isActive) {
+                        delay(WAKE_LOCK_RENEW_INTERVAL_MS)
+                        try {
+                            // Non reference counted: re-acquiring resets the timeout instead of stacking.
+                            if (isRunning) wakeLock?.acquire(WAKE_LOCK_TIMEOUT_MS)
+                        } catch (_: Exception) {
+                        }
+                    }
+                }
             }
             
             // Acquire WifiLock to keep network alive when screen is off
@@ -777,6 +801,8 @@ class AgentForegroundService : Service() {
     }
     
     private fun releaseWakeLock() {
+        wakeLockRenewJob?.cancel()
+        wakeLockRenewJob = null
         try {
             if (wakeLock?.isHeld == true) {
                 wakeLock?.release()
@@ -796,8 +822,8 @@ class AgentForegroundService : Service() {
     }
     
     override fun onDestroy() {
-        if (harnessRetained.get()) {
-            com.example.llamadroid.harness.HarnessAppRuntime.existing()?.let { harness ->
+        if (harnessLeases.isNotEmpty()) {
+            com.example.llamadroid.harness.HarnessAppRuntime.running().forEach { harness ->
                 harness.scope.launch { harness.forceStop() }
             }
         }
@@ -817,7 +843,7 @@ class AgentForegroundService : Service() {
             event = "app_task_removed",
             details = "loading=${AgentService.isLoading.value} retain=${runtimeRetainCount.get()}"
         )
-        if (harnessRetained.get()) {
+        if (harnessLeases.isNotEmpty()) {
             super.onTaskRemoved(rootIntent)
             return
         }

@@ -106,7 +106,11 @@ data class LlamaConfig(
     /** Distributed profiles disable implicit cache-policy flags that are not exposed in their UI. */
     val emitDefaultCachePolicyArgs: Boolean = true,
     val customFlags: String? = null,
-    val flashAttention: Boolean = false
+    val flashAttention: Boolean = false,
+    /** Locked-screen performance (see perf/LockedScreenLaunchTuning); off for non-profile launches. */
+    val lockedScreenThreadFit: Boolean = false,
+    val lockedScreenThreadPriority: Boolean = false,
+    val lockedScreenPerformanceHints: Boolean = false
 )
 
 /**

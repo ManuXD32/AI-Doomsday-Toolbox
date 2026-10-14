@@ -5,11 +5,14 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
-/** Process ownership only. Tokens, credentials and command/output content never enter this row. */
+/**
+ * Process ownership only. Tokens, credentials and command/output content never enter this row.
+ * One row per runtime: [id] == runtimeId == [environmentId].
+ */
 @Entity(tableName = "agent_harness_runtime")
 data class HarnessRuntimeEntity(
-    @PrimaryKey val id: String = "shared",
-    val environmentId: String = "deepseek-harness-shared",
+    @PrimaryKey val id: String,
+    val environmentId: String = id,
     val state: String = "STOPPED",
     val generation: String? = null,
     val brokerPid: Long? = null,

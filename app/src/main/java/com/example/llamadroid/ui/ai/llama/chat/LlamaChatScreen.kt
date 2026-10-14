@@ -56,10 +56,15 @@ import com.example.llamadroid.onnx.supertonicLanguageCodes
 import com.example.llamadroid.service.KnowledgeBaseIndexingService
 import com.example.llamadroid.service.LlamaCallService
 import com.example.llamadroid.service.LlamaClientService
+import com.example.llamadroid.service.NativeChatGenerationStates
 import com.example.llamadroid.ui.agent.CustomToolsScreen
 import com.example.llamadroid.service.NativeChatKvCacheStore
+import com.example.llamadroid.service.NativeChatMediaFailures
+import com.example.llamadroid.service.NativeChatToolConfig
+import com.example.llamadroid.service.withChatAudioOverrides
 import com.example.llamadroid.service.supportsSdTxt2Img
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.service.delegation.DelegationWakeDispatcher
 import java.io.File
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
@@ -81,6 +86,7 @@ import com.example.llamadroid.ui.ai.llama.servers.key
 import com.example.llamadroid.ui.ai.llama.servers.serverErrorText
 import com.example.llamadroid.data.repository.UnifiedServer
 import com.example.llamadroid.data.repository.UnifiedServerKind
+import com.example.llamadroid.data.repository.UnifiedServerStatus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 
@@ -93,6 +99,7 @@ fun LlamaChatScreen(
 ) {
     val context = LocalContext.current
     val videoOpenFailedMessage = stringResource(R.string.llama_video_open_failed)
+    val generatingTitleMessage = stringResource(R.string.chat_generating_title)
     val localizedStrings = llamaChatLocalizedStrings()
     val density = LocalDensity.current
     val rootView = LocalView.current
@@ -112,7 +119,10 @@ fun LlamaChatScreen(
 
     // UI State
     val messages by viewModel.messages.collectAsState()
-    val generationState by LlamaClientService.generationState.collectAsState()
+    val attachmentsUi = rememberChatAttachmentsUi(repository, chatId)
+    val pickChatFile = rememberChatFilePicker(chatId)
+    val generationState by remember(chatId) { NativeChatGenerationStates.flowFor(chatId) }
+        .collectAsState(initial = NativeChatGenerationStates.stateFor(chatId))
     val callState by LlamaCallService.state.collectAsState()
     val whisperModels by remember(database) {
         database.modelDao().getModelsByType(ModelType.WHISPER)
@@ -210,6 +220,7 @@ fun LlamaChatScreen(
     var showServerPicker by remember { mutableStateOf(false) }
     var pendingSwitchRowId by remember { mutableStateOf<Long?>(null) }
     var showSettingsSheet by remember { mutableStateOf(false) }
+    var showChatOptions by remember { mutableStateOf(false) }
     var detailServerKey by remember { mutableStateOf<String?>(null) }
     var editingServer by remember { mutableStateOf<UnifiedServer?>(null) }
     var showServerEditor by remember { mutableStateOf(false) }
@@ -346,13 +357,40 @@ fun LlamaChatScreen(
             server.supportsVision
         }
     } == true
+    // Video button: "native" is tried even on unflagged servers, "transcript" needs Whisper; both
+    // let the chat override the unreliable capability flag (see NativeChatMediaRouting).
     val supportsVideo = activeServer?.let { server ->
-        server.supportsVideo && (server.isLlamaServerEngine() || server.isLlamaSwapEngine())
+        val llamaEngine = server.isLlamaServerEngine() || server.isLlamaSwapEngine()
+        when (NativeChatToolConfig.normalizeVideoInputMode(settings.videoInputMode)) {
+            NativeChatToolConfig.VIDEO_INPUT_NATIVE -> llamaEngine
+            NativeChatToolConfig.VIDEO_INPUT_TRANSCRIPT ->
+                llamaEngine && (server.whisperModelPath?.isNotBlank() == true || whisperModels.isNotEmpty())
+            else -> server.supportsVideo && llamaEngine
+        }
     } == true
-    val whisperFallbackAvailable = activeServer?.whisperModelPath?.isNotBlank() == true || whisperModels.isNotEmpty()
-    val supportsDirectAudioInput = activeServer?.let { server ->
+    // The chat's own audio options (Chat options in the menu) override the server card.
+    val chatAudioServer = remember(
+        activeServer, settings.audioInputMode, settings.whisperModelPath, settings.whisperLanguage
+    ) {
+        activeServer?.withChatAudioOverrides(
+            NativeChatToolConfig(
+                audioInputMode = settings.audioInputMode,
+                whisperModelPath = settings.whisperModelPath.takeIf { it.isNotBlank() },
+                whisperLanguage = settings.whisperLanguage.takeIf { it.isNotBlank() }
+            ),
+            directRejected = NativeChatMediaFailures.audioRejected(chatId)
+        )
+    }
+    val whisperFallbackAvailable = chatAudioServer?.whisperModelPath?.isNotBlank() == true || whisperModels.isNotEmpty()
+    val chatDirectAudioCapable = activeServer?.let { server ->
+        if (server.isLiteRtEngine()) activeLiteRtModel?.supportsLiteRtAudio() == true
+        else server.hasDirectAudioInputCapability()
+    } == true
+    val supportsDirectAudioInput = chatAudioServer?.let { server ->
         if (server.isLiteRtEngine()) {
-            activeLiteRtModel?.supportsLiteRtAudio() == true
+            val audioMode = NativeChatToolConfig.normalizeAudioInputMode(settings.audioInputMode)
+            audioMode == NativeChatToolConfig.AUDIO_INPUT_DIRECT ||
+                (activeLiteRtModel?.supportsLiteRtAudio() == true && audioMode != NativeChatToolConfig.AUDIO_INPUT_WHISPER)
         } else {
             server.supportsDirectAudioInput()
         }
@@ -361,13 +399,12 @@ fun LlamaChatScreen(
         (activeServer != null && whisperFallbackAvailable)
     val generationStateSnapshot = generationState
     val activeGenerationState = generationStateSnapshot as? LlamaClientService.GenerationState.Generating
-    val streamingGenerationState = activeGenerationState?.takeIf {
-        it.chatId == chatId && !it.isTranscribingAudio
-    }
-    val completedGenerationState = (generationStateSnapshot as? LlamaClientService.GenerationState.Completed)
-        ?.takeIf { it.chatId == chatId }
-    val isGeneratingAnyChat = generationStateSnapshot is LlamaClientService.GenerationState.Generating
-    val isCurrentChatGenerating = activeGenerationState?.chatId == chatId
+    val streamingGenerationState = activeGenerationState?.takeIf { !it.isTranscribingAudio }
+    val completedGenerationState = generationStateSnapshot as? LlamaClientService.GenerationState.Completed
+    val queuedGenerationState = generationStateSnapshot as? LlamaClientService.GenerationState.Queued
+    val isCurrentChatGenerating = activeGenerationState != null
+    // Generating or waiting in the queue: this chat cannot start, clear or retry another turn.
+    val isChatBusy = isCurrentChatGenerating || queuedGenerationState != null
     val isTranscribingAudio = isCurrentChatGenerating && activeGenerationState?.isTranscribingAudio == true
     val isStreamingResponse = streamingGenerationState != null
     val activeToolEvents = streamingGenerationState?.toolEvents.orEmpty()
@@ -381,7 +418,7 @@ fun LlamaChatScreen(
         }
     }
     val lastPersistedMessage = messages.lastOrNull()
-    val canContinueChat = !isGeneratingAnyChat &&
+    val canContinueChat = !isChatBusy &&
         lastPersistedMessage?.role == "assistant" &&
         (
             lastPersistedMessage.content.isNotBlank() ||
@@ -569,7 +606,7 @@ fun LlamaChatScreen(
 
         scope.launch {
             viewModel.deleteMessagesAfter(chatId, message.timestamp, message.id)
-            LlamaClientService.resetStateIfIdle()
+            NativeChatGenerationStates.clearIfIdle(chatId)
             val intent = Intent(context, LlamaClientService::class.java).apply {
                 action = LlamaClientService.ACTION_GENERATE
                 putExtra(LlamaClientService.EXTRA_CHAT_ID, chatId)
@@ -590,7 +627,7 @@ fun LlamaChatScreen(
         scope.launch {
             viewModel.deleteMessagesAfter(chatId, message.timestamp, message.id)
             viewModel.deleteMessageNow(message)
-            LlamaClientService.resetStateIfIdle()
+            NativeChatGenerationStates.clearIfIdle(chatId)
             val intent = Intent(context, LlamaClientService::class.java).apply {
                 action = LlamaClientService.ACTION_GENERATE
                 putExtra(LlamaClientService.EXTRA_CHAT_ID, chatId)
@@ -620,7 +657,7 @@ fun LlamaChatScreen(
         scope.launch {
             viewModel.deleteMessagesAfter(chatId, msg.timestamp, msg.id)
             viewModel.deleteMessageNow(msg)
-            LlamaClientService.resetStateIfIdle()
+            NativeChatGenerationStates.clearIfIdle(chatId)
             val intent = Intent(context, LlamaClientService::class.java).apply {
                 action = LlamaClientService.ACTION_GENERATE
                 putExtra(LlamaClientService.EXTRA_CHAT_ID, chatId)
@@ -651,7 +688,11 @@ fun LlamaChatScreen(
             showServerPicker = true
             return
         }
-        val text = inputMessage
+        val text = if (inputMessage.isBlank() && attachmentsUi.pendingFiles.isNotEmpty()) {
+            attachedFilesFallbackText(context, attachmentsUi.pendingFiles)
+        } else {
+            inputMessage
+        }
         val intentImagePath = attachedImagePath
         val intentAudioPath = attachedAudioPath
         val intentVideoPath = attachedVideoPath
@@ -962,6 +1003,7 @@ fun LlamaChatScreen(
     // Load messages
     LaunchedEffect(chatId) {
         viewModel.loadMessages(chatId)
+        DelegationWakeDispatcher.deliverPending(context.applicationContext, chatId)
     }
 
     LaunchedEffect(isRecording) {
@@ -1043,9 +1085,7 @@ fun LlamaChatScreen(
     }
 
     val activeStatus = activeUnified?.let { effectiveServerStatus(it, activeServerAction) }
-    val generationStatusText = (generationState as? LlamaClientService.GenerationState.Generating)
-        ?.takeIf { it.chatId == chatId }
-        ?.statusText
+    val generationStatusText = (generationState as? LlamaClientService.GenerationState.Generating)?.statusText
     val bannerKind = if (!serverResolved) {
         ChatServerBannerKind.NONE
     } else {
@@ -1092,7 +1132,7 @@ fun LlamaChatScreen(
                 showWorkspace = settings.effectiveToolsEnabled && settings.fileToolsEnabled && currentChat != null,
                 pinned = currentChat?.pinnedToAiHub == true,
                 pinEnabled = currentChat != null && (currentChat.pinnedToAiHub || activeServer != null),
-                clearEnabled = messages.isNotEmpty() && !isGeneratingAnyChat,
+                clearEnabled = messages.isNotEmpty() && !isChatBusy,
                 onBack = { navController.popBackStack() },
                 onRename = {
                     renameText = currentChat?.title.orEmpty()
@@ -1100,6 +1140,7 @@ fun LlamaChatScreen(
                 },
                 onServerChip = { showServerSheet = true },
                 onChangeServer = { showServerPicker = true },
+                onChatOptions = { showChatOptions = true },
                 onCall = {
                     if (isCallActiveForChat) {
                         hangUpCallMode()
@@ -1132,7 +1173,23 @@ fun LlamaChatScreen(
                 },
                 onClear = { showClearChatConfirm = true },
                 onExport = { exportLauncher.launch((currentChat?.title ?: "chat") + ".json") },
-                onSaveAsNote = { saveCurrentChatAsNote() }
+                onSaveAsNote = { saveCurrentChatAsNote() },
+                chatId = chatId,
+                autoCompactEnabled = settings.autoCompactEnabled,
+                onAutoCompactChange = { settings.autoCompactEnabled = it },
+                isGenerating = isChatBusy,
+                delegationBar = if (settings.delegation.enabled) {
+                    ChatDelegationBar(chatId, settings.delegation.runtimeId, navController)
+                } else null,
+                // The web UI WebView only reaches servers on this device (127.0.0.1), so remote servers hide it.
+                showWebUi = activeUnified != null && activeUnified.kind != UnifiedServerKind.REMOTE &&
+                    activeUnified.engine == LlamaServerEntity.ENGINE_LLAMA_SERVER &&
+                    activeStatus == UnifiedServerStatus.RUNNING,
+                onOpenWebUi = { activeUnified?.let { navController.navigate("chat?port=${it.port}") } },
+                onGenerateTitle = {
+                    Toast.makeText(context, generatingTitleMessage, Toast.LENGTH_SHORT).show()
+                    com.example.llamadroid.service.titlegen.TitleGenerationManager.generateNow(context, chatId)
+                }
             )
         }
     ) { padding ->
@@ -1244,7 +1301,7 @@ fun LlamaChatScreen(
                 streamingGenerationState = streamingGenerationState,
                 completedGenerationState = completedGenerationState,
                 canContinueChat = canContinueChat,
-                isGeneratingAnyChat = isGeneratingAnyChat,
+                isChatBusy = isChatBusy,
                 hasActiveServer = activeServer != null,
                 userWantsAutoScroll = userWantsAutoScroll,
                 onUserWantsAutoScrollChange = { userWantsAutoScroll = it },
@@ -1263,7 +1320,9 @@ fun LlamaChatScreen(
                 onDeleteMessage = { messagePendingDelete = it },
                 onOpenToolActivity = { showToolActivity = true },
                 onContinue = { continueGeneration() },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                compactions = attachmentsUi.compactions,
+                attachmentsByMessage = attachmentsUi.byMessage
             )
 
             ChatServerBanner(
@@ -1281,6 +1340,8 @@ fun LlamaChatScreen(
                 onChooseServer = { showServerPicker = true }
             )
 
+            if (chatId >= 0L) ChatDelegationStopBar(chatId = chatId, navController = navController)
+
             ChatComposer(
                 inputMessage = inputMessage,
                 onInputChange = { inputMessage = it },
@@ -1295,7 +1356,9 @@ fun LlamaChatScreen(
                 onRemoveAudio = { clearAudioAttachment() },
                 onPreviewVideo = { videoPreviewPath = attachedVideoPath },
                 onRemoveVideo = { clearVideoAttachment() },
-                isGeneratingAnyChat = isGeneratingAnyChat,
+                isChatGenerating = isCurrentChatGenerating,
+                queuedState = queuedGenerationState,
+                chatId = chatId,
                 isCallActiveForChat = isCallActiveForChat,
                 isExtractingDocument = isExtractingDocument,
                 supportsVision = supportsVision,
@@ -1311,7 +1374,11 @@ fun LlamaChatScreen(
                 onPickVideo = { videoPickerLauncher.launch(arrayOf("video/*")) },
                 onPickDocument = { documentPickerLauncher.launch(nativeChatDocumentMimeTypes()) },
                 onStartRecording = { startCurrentRecording() },
-                onSend = { sendCurrentMessage() }
+                onSend = { sendCurrentMessage() },
+                showAttachFile = settings.delegation.enabled,
+                onPickFile = pickChatFile,
+                pendingFiles = attachmentsUi.pendingFiles,
+                onRemovePendingFile = { file -> scope.launch { removePendingChatFile(context, file) } }
             )
             Spacer(modifier = Modifier.height(effectiveImePadding))
             if (imagePreviewPath != null) {
@@ -1350,6 +1417,13 @@ fun LlamaChatScreen(
                 }
             }
         }
+        ChatKvCacheNoticeHost(
+            chatId = chatId,
+            persistKvCache = currentChat?.persistKvCache == true,
+            server = activeServer,
+            hasNoMessages = { viewModel.getMessagesOnce(chatId).isEmpty() },
+            onTurnOff = { scope.launch { repository.setPersistKvCache(chatId, false) } }
+        )
         messagePendingDelete?.let { messageToDelete ->
             LlamaDeleteMessageDialog(
                 onConfirm = {
@@ -1390,7 +1464,8 @@ fun LlamaChatScreen(
                                 alarmToolsEnabled ||
                                 fileToolsEnabled ||
                                 customToolsEnabled ||
-                                imageGenerationEnabled
+                                imageGenerationEnabled ||
+                                delegation.enabled
                         }
                         persistSettings(chatDocumentKnowledgeBaseIdOverride = null)
                         chatDocumentBaseToDelete?.let { baseId ->
@@ -1499,6 +1574,30 @@ fun LlamaChatScreen(
                 onSaved = { serverRefreshTick++ }
             )
         }
+        if (showChatOptions) {
+            ChatOptionsDialog(
+                settings = settings,
+                server = activeServer,
+                serverSummary = activeServerSubtitle,
+                directAudioCapable = chatDirectAudioCapable,
+                directAudioRejected = NativeChatMediaFailures.audioRejected(chatId),
+                whisperModelPaths = whisperModels.map { it.path },
+                onOpenSettings = {
+                    flushSettings()
+                    showChatOptions = false
+                    showSettingsSheet = true
+                },
+                onChangeServer = {
+                    flushSettings()
+                    showChatOptions = false
+                    showServerPicker = true
+                },
+                onDismiss = {
+                    flushSettings()
+                    showChatOptions = false
+                }
+            )
+        }
         if (showSettingsSheet) {
             ChatSettingsSheet(
                 state = settings,
@@ -1518,12 +1617,23 @@ fun LlamaChatScreen(
                     flushSettings()
                     showSettingsSheet = false
                 },
+                delegationSection = {
+                    ChatDelegationSettingsSection(
+                        settings = settings,
+                        chat = currentChat,
+                        chatServer = activeServer,
+                        registryViewModel = registryViewModel,
+                        navController = navController,
+                        onSettingsChanged = { persistSettings() }
+                    )
+                },
                 memorySection = currentChat?.let { chat -> {
                     ChatKvCacheSection(
                         chat = chat,
                         server = activeServer,
                         unifiedServer = activeUnified,
-                        isGenerating = isGeneratingAnyChat,
+                        isGenerating = isChatBusy,
+                        delegationEnabled = settings.delegation.enabled,
                         onRestartServer = { registryViewModel.restart(it) }
                     )
                 } }

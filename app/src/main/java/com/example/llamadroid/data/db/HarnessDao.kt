@@ -15,17 +15,21 @@ import kotlinx.coroutines.flow.Flow
  */
 @Dao
 interface HarnessDao {
-    @Query("SELECT * FROM agent_harness_runtime WHERE id = 'shared'")
-    suspend fun runtime(): HarnessRuntimeEntity?
+    @Query("SELECT * FROM agent_harness_runtime WHERE id = :id")
+    suspend fun runtime(id: String): HarnessRuntimeEntity?
 
-    @Query("SELECT * FROM agent_harness_runtime WHERE id = 'shared'")
-    fun observeRuntime(): Flow<HarnessRuntimeEntity?>
+    @Query("SELECT * FROM agent_harness_runtime WHERE id = :id")
+    fun observeRuntime(id: String): Flow<HarnessRuntimeEntity?>
 
-    @Query("SELECT * FROM agent_harness_runtime WHERE id = 'shared' AND environmentId = :environmentId")
-    suspend fun runtimeForEnvironment(environmentId: String): HarnessRuntimeEntity?
+    @Query("SELECT * FROM agent_harness_runtime ORDER BY id")
+    fun observeRuntimes(): Flow<List<HarnessRuntimeEntity>>
 
-    @Query("SELECT * FROM agent_harness_runtime WHERE id = 'shared' AND environmentId = :environmentId")
-    fun observeRuntimeForEnvironment(environmentId: String): Flow<HarnessRuntimeEntity?>
+    /** Rows whose state is STARTING, RUNNING, STOP_REQUESTED or FORCE_STOPPING. */
+    @Query("SELECT * FROM agent_harness_runtime WHERE state IN ('STARTING', 'RUNNING', 'STOP_REQUESTED', 'FORCE_STOPPING')")
+    suspend fun activeRuntimes(): List<HarnessRuntimeEntity>
+
+    @Query("DELETE FROM agent_harness_runtime WHERE id = :id")
+    suspend fun deleteRuntime(id: String)
 
     @Upsert
     suspend fun saveRuntime(runtime: HarnessRuntimeEntity)
@@ -167,9 +171,8 @@ data class HarnessLegacyMessageChunk(val text: String, val totalLength: Int)
  * Runtime-scoped facade over the Room DAO.
  *
  * Room only generates the no-argument DAO accessor. This facade captures the
- * selected runtime once, so every identity/history operation carries the same
- * runtime predicate. Process-owner methods deliberately delegate to the
- * singleton owner row.
+ * runtime once, so every identity/history operation carries the same
+ * runtime predicate. Process-owner methods use this runtime's own row (id == runtimeId).
  */
 class HarnessRuntimeDao internal constructor(
     private val delegate: HarnessDao,
@@ -179,10 +182,10 @@ class HarnessRuntimeDao internal constructor(
         require(runtimeId.isNotBlank()) { "Harness runtime id must not be blank" }
     }
 
-    suspend fun runtime(): HarnessRuntimeEntity? = delegate.runtimeForEnvironment(runtimeId)
-    fun observeRuntime(): Flow<HarnessRuntimeEntity?> = delegate.observeRuntimeForEnvironment(runtimeId)
+    suspend fun runtime(): HarnessRuntimeEntity? = delegate.runtime(runtimeId)
+    fun observeRuntime(): Flow<HarnessRuntimeEntity?> = delegate.observeRuntime(runtimeId)
     suspend fun saveRuntime(runtime: HarnessRuntimeEntity) =
-        delegate.saveRuntime(runtime.copy(id = "shared", environmentId = runtimeId))
+        delegate.saveRuntime(runtime.copy(id = runtimeId, environmentId = runtimeId))
 
     fun observeWorkspaces(): Flow<List<HarnessWorkspaceEntity>> = delegate.observeWorkspaces(runtimeId)
     suspend fun workspaces(): List<HarnessWorkspaceEntity> = delegate.workspaces(runtimeId)

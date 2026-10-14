@@ -75,6 +75,11 @@ class HarnessInstallationManager internal constructor(
         }
         check(preferences.edit().putBoolean("initialized", true).commit())
         if (selected.value?.let { catalog.getById(it) } == null) persistSelection(null)
+        // Instances are lazy and each runs recover() on construction: build one for every row that
+        // still claims a live process so an orphan left by the previous app process is reconciled.
+        runCatching { database.harnessDao().activeRuntimes() }.getOrDefault(emptyList()).forEach { row ->
+            runCatching { HarnessAppRuntime.forRuntime(context, row.id) }
+        }
         // Recovery remains visible and is retried explicitly. Never hide a partially installed
         // tree behind a normal Start or replay previously queued agent work on startup.
         val pending = try { files.journal.pending() } catch (_: Exception) {
@@ -91,18 +96,26 @@ class HarnessInstallationManager internal constructor(
 
     suspend fun ready() { initialization.await() }
 
-    internal suspend fun <T> withFiles(runtimeId: String, action: suspend () -> T): T = lifecycle.runMaintenance {
+    internal suspend fun <T> withFiles(runtimeId: String, action: suspend () -> T): T = lifecycleFor(runtimeId).runMaintenance {
         ready()
-        check(!operation.value.busy) { "HARNESS_OPERATION_BUSY" }
+        check(!operationBlocks(runtimeId)) { "HARNESS_OPERATION_BUSY" }
         val row = requireNotNull(catalog.getById(runtimeId)) { "HARNESS_RUNTIME_REQUIRED" }
         check(row.status !in setOf("INSTALLING", "UPDATING", "DELETING", "BROKEN")) { "HARNESS_RUNTIME_UNAVAILABLE" }
         check(files.journal.pending().none { it.runtimeId == runtimeId }) { "HARNESS_OPERATION_INTERRUPTED" }
         action()
     }
 
-    suspend fun requireSelected(runtimeId: String) {
+    /** True while an installation operation affects this runtime (an unscoped one affects all). */
+    internal fun operationBlocks(runtimeId: String): Boolean {
+        val op = operation.value
+        if (!op.busy) return false
+        if (op.kind == "CREATE") return op.runtimeId == runtimeId
+        return op.runtimeId == null || op.runtimeId == runtimeId
+    }
+
+    /** Any available runtime may start; selection is only the UI focus. */
+    suspend fun requireAvailable(runtimeId: String) {
         ready()
-        check(selected.value == runtimeId) { "HARNESS_RUNTIME_NOT_SELECTED" }
         val row = requireNotNull(catalog.getById(runtimeId)) { "HARNESS_RUNTIME_REQUIRED" }
         check(row.status !in setOf("INSTALLING", "UPDATING", "DELETING", "BROKEN")) { "HARNESS_RUNTIME_UNAVAILABLE" }
         check(files.journal.pending().none { it.runtimeId == runtimeId }) { "HARNESS_OPERATION_INTERRUPTED" }
@@ -135,7 +148,9 @@ class HarnessInstallationManager internal constructor(
         }
     }
 
-    suspend fun select(id: String) = execute("SWITCH", id) {
+    /** Focus only: never stops or restarts anything. */
+    suspend fun select(id: String) {
+        ready()
         val row = requireNotNull(catalog.getById(id)) { "HARNESS_RUNTIME_REQUIRED" }
         check(row.status !in setOf("INSTALLING", "UPDATING", "DELETING")) { "HARNESS_RUNTIME_UNAVAILABLE" }
         persistSelection(id)
@@ -184,13 +199,10 @@ class HarnessInstallationManager internal constructor(
                 AgentForegroundService.retainHarnessMaintenance(context, context.getString(R.string.harness_installation_working))
                 mutableOperation.value = HarnessInstallationOperation(kind, runtimeId, "STOPPING")
                 try {
-                    lifecycle.runExclusiveDestructive(
-                        terminate = { quiesce() },
-                        action = {
-                            mutableOperation.value = mutableOperation.value.copy(phase = "PREPARING", cancellable = true)
-                            action()
-                        },
-                    ).also { mutableOperation.value = mutableOperation.value.copy(phase = "COMPLETE", cancellable = false) }
+                    runOperation(kind, runtimeId) {
+                        mutableOperation.value = mutableOperation.value.copy(phase = "PREPARING", cancellable = true)
+                        action()
+                    }.also { mutableOperation.value = mutableOperation.value.copy(phase = "COMPLETE", cancellable = false) }
                 } catch (cancelled: CancellationException) {
                     mutableOperation.value = mutableOperation.value.copy(phase = "CANCELLED", cancellable = false)
                     throw cancelled
@@ -217,21 +229,53 @@ class HarnessInstallationManager internal constructor(
         mutableOperation.value = mutableOperation.value.copy(phase = phase, completedBytes = completed, totalBytes = total, cancellable = cancellable)
     }
 
-    private suspend fun quiesce() {
-        // Recover the real durable owner, even when its installation is no longer selected.
-        val owner = database.harnessDao().runtime()
+    /**
+     * Applies the exclusivity [kind] needs: EXPORT_ALL (whole-database backup) quiesces every
+     * runtime and then holds the global lock exclusively; CREATE needs nothing; every other kind
+     * quiesces only the runtime it affects under that runtime's own gate.
+     */
+    private suspend fun <T> runOperation(kind: String, runtimeId: String?, action: suspend () -> T): T = when {
+        kind == "EXPORT_ALL" -> runGlobalExclusive(action)
+        kind == "CREATE" || runtimeId == null -> {
+            val extra = if (kind == "RECOVER") pendingReceiptRuntimes() else emptySet()
+            globalLock.shared { extra.forEach { quiesce(it) }; action() }
+        }
+        else -> lifecycleFor(runtimeId).runExclusiveDestructive(
+            terminate = { (setOf(runtimeId) + if (kind == "RECOVER") pendingReceiptRuntimes() else emptySet()).forEach { quiesce(it) } },
+            action = action,
+        )
+    }
+
+    private suspend fun pendingReceiptRuntimes(): Set<String> =
+        files.journal.pending().map { it.runtimeId }.toSet()
+
+    private suspend fun <T> runGlobalExclusive(action: suspend () -> T): T {
+        // Stopping needs the shared lock, so quiesce first and then verify under the exclusive
+        // lock; a start that slipped in between sends us around again.
+        repeat(3) {
+            catalog.getAll().forEach { quiesce(it.id) }
+            val outcome = globalLock.exclusive {
+                if (database.harnessDao().activeRuntimes().isNotEmpty()) null
+                else listOf(action())
+            }
+            if (outcome != null) return outcome.first()
+        }
+        throw IllegalStateException("HARNESS_STOP_REQUIRED")
+    }
+
+    /** Stops only [runtimeId]: its process, LAN proxy, recovery terminal, SFTP server and worker. */
+    private suspend fun quiesce(runtimeId: String) {
+        val scoped = database.harnessDao(runtimeId)
+        val owner = scoped.runtime()
         if (owner != null && owner.state in setOf("STARTING", "RUNNING", "STOP_REQUESTED", "FORCE_STOPPING")) {
-            val runtime = HarnessAppRuntime.forRuntime(context, owner.environmentId)
-            runtime.stop()
-            check(database.harnessDao().runtime()?.state == "STOPPED") { "HARNESS_STOP_REQUIRED" }
+            HarnessAppRuntime.forRuntime(context, runtimeId).stop()
+            check(scoped.runtime()?.state == "STOPPED") { "HARNESS_STOP_REQUIRED" }
         }
-        HarnessLanAccessManager.stopAllForMaintenance()
-        HarnessRecoveryTerminalSessionManager.closeAllForMaintenance()
-        HarnessRecoveryFileServer.stopAllForMaintenance()
-        HarnessAppRuntime.pauseMaintenanceWorkers()
-        catalog.getAll().forEach { row ->
-            check(database.agentProotEnvironmentDao().countActiveRuns(row.id) == 0) { "HARNESS_STOP_REQUIRED" }
-        }
+        HarnessLanAccessManager.stopForMaintenance(runtimeId)
+        HarnessRecoveryTerminalSessionManager.closeForMaintenance(runtimeId)
+        HarnessRecoveryFileServer.stopForMaintenance(runtimeId)
+        HarnessAppRuntime.pauseMaintenanceWorkers(runtimeId)
+        check(database.agentProotEnvironmentDao().countActiveRuns(runtimeId) == 0) { "HARNESS_STOP_REQUIRED" }
     }
 
     private suspend fun install(row: AgentProotEnvironmentEntity, receipt: HarnessInstallationReceipt) {
@@ -293,7 +337,11 @@ class HarnessInstallationManager internal constructor(
     }
 
     companion object {
-        internal val lifecycle = HarnessLifecycleGate()
+        internal val globalLock = HarnessGlobalLock()
+        private val gates = java.util.concurrent.ConcurrentHashMap<String, HarnessLifecycleGate>()
+        /** One gate per runtime; all share [globalLock] for whole-database operations. */
+        internal fun lifecycleFor(runtimeId: String): HarnessLifecycleGate =
+            gates.computeIfAbsent(runtimeId) { HarnessLifecycleGate(globalLock) }
         @SuppressLint("StaticFieldLeak")
         @Volatile private var instance: HarnessInstallationManager? = null
         fun get(context: Context): HarnessInstallationManager = instance ?: synchronized(this) {

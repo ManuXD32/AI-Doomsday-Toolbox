@@ -40,7 +40,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.AppDatabase
-import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.LITERT_BACKEND_AUTO
 import com.example.llamadroid.data.model.LITERT_BACKEND_CPU
 import com.example.llamadroid.data.model.LITERT_BACKEND_GPU
@@ -48,17 +47,14 @@ import com.example.llamadroid.data.model.LlamaServerEntity
 import com.example.llamadroid.data.model.normalizeLiteRtBackend
 import com.example.llamadroid.data.model.supportsLiteRtAudio
 import com.example.llamadroid.data.model.supportsLiteRtVision
-import com.example.llamadroid.data.repository.KnowledgeBaseRepository
 import com.example.llamadroid.data.repository.LiteRtModelRepository
 import com.example.llamadroid.data.repository.LlamaRepository
-import com.example.llamadroid.service.WhisperLanguages
 import com.example.llamadroid.ui.ai.llama.LlamaServerViewModel
 import com.example.llamadroid.ui.ai.llama.LlamaServerViewModelFactory
-import java.io.File
 
 /**
  * Remote / other-app half of the unified server editor: host, port, engine (llama-server, Ollama,
- * llama-swap, LiteRT), model and capabilities, Whisper fallback and the default tool permissions.
+ * llama-swap, LiteRT), model and capabilities, and the default tools seeded into new chats.
  * It was extracted from the old connection dialog so the fields exist exactly once. Existing
  * `localLaunchProfileJson` of a legacy row is preserved untouched; use "Upgrade to managed
  * server" in the detail sheet to turn such a row into a card with its own preset.
@@ -73,7 +69,6 @@ fun RemoteServerForm(
 ) {
     val context = LocalContext.current
     val database = remember(context) { AppDatabase.getDatabase(context) }
-    val knowledgeBaseRepository = remember(database) { KnowledgeBaseRepository(context, database) }
     val liteRtModelRepository = remember(database) {
         LiteRtModelRepository(context = context, modelDao = database.liteRtModelDao())
     }
@@ -86,11 +81,7 @@ fun RemoteServerForm(
         )
     }
     val serverViewModel: LlamaServerViewModel = viewModel(factory = LlamaServerViewModelFactory(repository))
-    val knowledgeBases by knowledgeBaseRepository.observeKnowledgeBases().collectAsState(initial = emptyList())
-    val whisperModels by remember(database) {
-        database.modelDao().getModelsByType(ModelType.WHISPER)
-    }.collectAsState(initial = emptyList())
-    val whisperModelPaths = remember(whisperModels) { whisperModels.map { it.path } }
+    val registryViewModel: ServerRegistryViewModel = viewModel()
     val liteRtModels by remember(liteRtModelRepository) {
         liteRtModelRepository.observeModels()
     }.collectAsState(initial = emptyList())
@@ -115,14 +106,6 @@ fun RemoteServerForm(
             }?.supportsVideo == true
         )
     }
-    var whisperModelPath by remember(dialogKey) { mutableStateOf(initialServer?.whisperModelPath.orEmpty()) }
-    var whisperLanguage by remember(dialogKey) {
-        mutableStateOf(initialServer?.whisperLanguage?.ifBlank { LlamaServerEntity.DEFAULT_WHISPER_LANGUAGE }
-            ?: LlamaServerEntity.DEFAULT_WHISPER_LANGUAGE)
-    }
-    var preferWhisperAudioTranscription by remember(dialogKey) {
-        mutableStateOf(initialServer?.preferWhisperAudioTranscription ?: false)
-    }
     var liteRtModelId by remember(dialogKey) { mutableStateOf(initialServer?.liteRtModelId) }
     var liteRtBackend by remember(dialogKey) {
         mutableStateOf(normalizeLiteRtBackend(initialServer?.liteRtBackend))
@@ -131,40 +114,16 @@ fun RemoteServerForm(
     var availableOllamaModels by remember(dialogKey) {
         mutableStateOf(initialServer?.modelName?.takeIf { it.isNotBlank() }?.let(::listOf) ?: emptyList())
     }
-    var showWhisperModelMenu by remember(dialogKey) { mutableStateOf(false) }
-    var showWhisperLanguageMenu by remember(dialogKey) { mutableStateOf(false) }
     var showOllamaModelMenu by remember(dialogKey) { mutableStateOf(false) }
     var showLiteRtModelMenu by remember(dialogKey) { mutableStateOf(false) }
     var statusMessage by remember(dialogKey) { mutableStateOf<String?>(null) }
     var isLoadingOllamaModels by remember(dialogKey) { mutableStateOf(false) }
     var isLoadingOllamaCapabilities by remember(dialogKey) { mutableStateOf(false) }
-    val initialToolDefaults = remember(dialogKey) {
-        parseServerDefaultToolConfig(initialServer?.defaultApiParams)
-    }
-    var defaultToolsEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.toolsEnabled) }
-    var defaultWebSearchEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.webSearchEnabled) }
-    var defaultKiwixSearchEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.kiwixSearchEnabled) }
-    var defaultKiwixServerUrl by remember(dialogKey) { mutableStateOf(initialToolDefaults.kiwixServerUrl) }
-    var defaultFetchUrlEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.fetchUrlEnabled) }
-    var defaultDeepResearchEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.deepResearchEnabled) }
-    var defaultDeepResearchImportIntoSelectedKbEnabled by remember(dialogKey) {
-        mutableStateOf(initialToolDefaults.deepResearchImportIntoSelectedKbEnabled)
-    }
-    var defaultDeepResearchSourceLimit by remember(dialogKey) { mutableStateOf(initialToolDefaults.deepResearchSourceLimit) }
-    var defaultDateTimeEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.dateTimeEnabled) }
-    var defaultCalculatorEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.calculatorEnabled) }
-    var defaultNoteToolsEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.noteToolsEnabled) }
-    var defaultTodoToolsEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.todoToolsEnabled) }
-    var defaultCalendarToolsEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.calendarToolsEnabled) }
-    var defaultAlarmToolsEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.alarmToolsEnabled) }
-    var defaultKnowledgeBaseEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.knowledgeBaseEnabled) }
-    var defaultKnowledgeBaseAutoContextEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.knowledgeBaseAutoContextEnabled) }
-    var defaultSelectedKnowledgeBaseIds by remember(dialogKey) { mutableStateOf(initialToolDefaults.selectedKnowledgeBaseIds) }
-    var defaultKnowledgeBaseMaxResults by remember(dialogKey) { mutableStateOf(initialToolDefaults.knowledgeBaseMaxResults) }
-    var defaultImageGenerationEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.imageGenerationEnabled) }
-    var defaultImageIterationEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.imageIterationEnabled) }
-    var defaultBackgroundRemovalEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.backgroundRemovalEnabled) }
-    var defaultMaxToolRounds by remember(dialogKey) { mutableStateOf(initialToolDefaults.maxToolRounds) }
+    // Chat options new chats of this server start with (shared with the chat's own settings groups).
+    val defaultsState = rememberServerDefaultsState(
+        savedJson = initialServer?.defaultApiParams.orEmpty(),
+        liteRt = engine == LlamaServerEntity.ENGINE_LITERT_LM
+    )
 
     val portInt = port.toIntOrNull() ?: 8080
     val mergedOllamaModels = remember(availableOllamaModels, ollamaModelName) {
@@ -310,33 +269,13 @@ fun RemoteServerForm(
                 },
                 liteRtModelId = if (isLiteRtEngine) selectedLiteRtModel?.id else null,
                 liteRtBackend = if (isLiteRtEngine) normalizeLiteRtBackend(liteRtBackend) else LITERT_BACKEND_AUTO,
-                whisperModelPath = whisperModelPath.ifBlank { null },
-                whisperLanguage = whisperLanguage.ifBlank { LlamaServerEntity.DEFAULT_WHISPER_LANGUAGE },
-                preferWhisperAudioTranscription = preferWhisperAudioTranscription && directAudioInputAvailable,
-                defaultApiParams = buildServerDefaultToolApiParams(
-                    toolsEnabled = defaultToolsEnabled,
-                    webSearchEnabled = defaultWebSearchEnabled,
-                    kiwixSearchEnabled = defaultKiwixSearchEnabled,
-                    kiwixServerUrl = defaultKiwixServerUrl,
-                    fetchUrlEnabled = defaultFetchUrlEnabled,
-                    deepResearchEnabled = defaultDeepResearchEnabled,
-                    deepResearchImportIntoSelectedKbEnabled = defaultDeepResearchImportIntoSelectedKbEnabled,
-                    deepResearchSourceLimit = defaultDeepResearchSourceLimit,
-                    dateTimeEnabled = defaultDateTimeEnabled,
-                    calculatorEnabled = defaultCalculatorEnabled,
-                    noteToolsEnabled = defaultNoteToolsEnabled,
-                    todoToolsEnabled = defaultTodoToolsEnabled,
-                    knowledgeBaseEnabled = defaultKnowledgeBaseEnabled,
-                    knowledgeBaseAutoContextEnabled = defaultKnowledgeBaseAutoContextEnabled,
-                    selectedKnowledgeBaseIds = defaultSelectedKnowledgeBaseIds,
-                    knowledgeBaseMaxResults = defaultKnowledgeBaseMaxResults,
-                    calendarToolsEnabled = defaultCalendarToolsEnabled,
-                    alarmToolsEnabled = defaultAlarmToolsEnabled,
-                    imageGenerationEnabled = defaultImageGenerationEnabled,
-                    imageIterationEnabled = defaultImageIterationEnabled,
-                    backgroundRemovalEnabled = defaultBackgroundRemovalEnabled,
-                    maxToolRounds = defaultMaxToolRounds
-                ),
+                // Whisper routing is a per-chat option now (chat menu -> Chat options); the server only
+                // keeps its previous values, which seed the audio options of newly created chats.
+                whisperModelPath = initialServer?.whisperModelPath,
+                whisperLanguage = initialServer?.whisperLanguage?.ifBlank { LlamaServerEntity.DEFAULT_WHISPER_LANGUAGE }
+                    ?: LlamaServerEntity.DEFAULT_WHISPER_LANGUAGE,
+                preferWhisperAudioTranscription = initialServer?.preferWhisperAudioTranscription == true && directAudioInputAvailable,
+                defaultApiParams = defaultsState.buildApiParamsJson(),
             )
         )
     }
@@ -809,120 +748,6 @@ fun RemoteServerForm(
                 }
             }
 
-            Text(
-                text = stringResource(R.string.llama_whisper_fallback_title),
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold
-            )
-            if (directAudioInputAvailable) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = stringResource(R.string.llama_use_whisper_for_audio),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Switch(
-                        checked = preferWhisperAudioTranscription,
-                        onCheckedChange = { preferWhisperAudioTranscription = it }
-                    )
-                }
-                Text(
-                    text = stringResource(R.string.llama_use_whisper_for_audio_desc),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else {
-                Text(
-                    text = stringResource(R.string.llama_whisper_required_desc),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Box(modifier = Modifier.fillMaxWidth()) {
-                OutlinedTextField(
-                    value = whisperModelPath.ifBlank { stringResource(R.string.llama_whisper_model_auto) },
-                    onValueChange = {},
-                    readOnly = true,
-                    label = { Text(stringResource(R.string.llama_whisper_model_label)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    trailingIcon = {
-                        IconButton(
-                            onClick = { showWhisperModelMenu = !showWhisperModelMenu },
-                            enabled = whisperModelPaths.isNotEmpty()
-                        ) {
-                            Icon(
-                                Icons.Default.KeyboardArrowDown,
-                                contentDescription = stringResource(R.string.llama_whisper_model_label)
-                            )
-                        }
-                    }
-                )
-                androidx.compose.material3.DropdownMenu(
-                    expanded = showWhisperModelMenu && whisperModelPaths.isNotEmpty(),
-                    onDismissRequest = { showWhisperModelMenu = false }
-                ) {
-                    androidx.compose.material3.DropdownMenuItem(
-                        text = { Text(stringResource(R.string.llama_whisper_model_auto)) },
-                        onClick = {
-                            whisperModelPath = ""
-                            showWhisperModelMenu = false
-                        }
-                    )
-                    whisperModelPaths.forEach { path ->
-                        androidx.compose.material3.DropdownMenuItem(
-                            text = { Text(File(path).name) },
-                            onClick = {
-                                whisperModelPath = path
-                                showWhisperModelMenu = false
-                            }
-                        )
-                    }
-                }
-            }
-            if (whisperModelPaths.isEmpty()) {
-                Text(
-                    text = stringResource(R.string.llama_whisper_no_models),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            Box(modifier = Modifier.fillMaxWidth()) {
-                OutlinedTextField(
-                    value = WhisperLanguages.languages.firstOrNull { it.first == whisperLanguage }?.second
-                        ?: stringResource(R.string.whisper_auto_detect),
-                    onValueChange = {},
-                    readOnly = true,
-                    label = { Text(stringResource(R.string.llama_whisper_language_label)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    trailingIcon = {
-                        IconButton(onClick = { showWhisperLanguageMenu = !showWhisperLanguageMenu }) {
-                            Icon(
-                                Icons.Default.KeyboardArrowDown,
-                                contentDescription = stringResource(R.string.llama_whisper_language_label)
-                            )
-                        }
-                    }
-                )
-                androidx.compose.material3.DropdownMenu(
-                    expanded = showWhisperLanguageMenu,
-                    onDismissRequest = { showWhisperLanguageMenu = false }
-                ) {
-                    WhisperLanguages.languages.forEach { (code, label) ->
-                        androidx.compose.material3.DropdownMenuItem(
-                            text = { Text(label) },
-                            onClick = {
-                                whisperLanguage = code
-                                showWhisperLanguageMenu = false
-                            }
-                        )
-                    }
-                }
-            }
-
             if (engine == LlamaServerEntity.ENGINE_LITERT_LM) {
                 Text(
                     text = stringResource(R.string.litert_tools_unavailable_desc),
@@ -930,52 +755,10 @@ fun RemoteServerForm(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            NativeServerToolDefaultsSection(
-                toolsEnabled = defaultToolsEnabled,
-                onToolsEnabledChange = { defaultToolsEnabled = it },
-                webSearchEnabled = defaultWebSearchEnabled,
-                onWebSearchEnabledChange = { defaultWebSearchEnabled = it },
-                kiwixSearchEnabled = defaultKiwixSearchEnabled,
-                onKiwixSearchEnabledChange = { defaultKiwixSearchEnabled = it },
-                kiwixServerUrl = defaultKiwixServerUrl,
-                onKiwixServerUrlChange = { defaultKiwixServerUrl = it },
-                fetchUrlEnabled = defaultFetchUrlEnabled,
-                onFetchUrlEnabledChange = { defaultFetchUrlEnabled = it },
-                deepResearchEnabled = defaultDeepResearchEnabled,
-                onDeepResearchEnabledChange = { defaultDeepResearchEnabled = it },
-                deepResearchImportIntoSelectedKbEnabled = defaultDeepResearchImportIntoSelectedKbEnabled,
-                onDeepResearchImportIntoSelectedKbEnabledChange = { defaultDeepResearchImportIntoSelectedKbEnabled = it },
-                deepResearchSourceLimit = defaultDeepResearchSourceLimit,
-                onDeepResearchSourceLimitChange = { defaultDeepResearchSourceLimit = it },
-                dateTimeEnabled = defaultDateTimeEnabled,
-                onDateTimeEnabledChange = { defaultDateTimeEnabled = it },
-                calculatorEnabled = defaultCalculatorEnabled,
-                onCalculatorEnabledChange = { defaultCalculatorEnabled = it },
-                noteToolsEnabled = defaultNoteToolsEnabled,
-                onNoteToolsEnabledChange = { defaultNoteToolsEnabled = it },
-                todoToolsEnabled = defaultTodoToolsEnabled,
-                onTodoToolsEnabledChange = { defaultTodoToolsEnabled = it },
-                knowledgeBases = knowledgeBases,
-                knowledgeBaseEnabled = defaultKnowledgeBaseEnabled,
-                onKnowledgeBaseEnabledChange = { defaultKnowledgeBaseEnabled = it },
-                knowledgeBaseAutoContextEnabled = defaultKnowledgeBaseAutoContextEnabled,
-                onKnowledgeBaseAutoContextEnabledChange = { defaultKnowledgeBaseAutoContextEnabled = it },
-                selectedKnowledgeBaseIds = defaultSelectedKnowledgeBaseIds,
-                onSelectedKnowledgeBaseIdsChange = { defaultSelectedKnowledgeBaseIds = it },
-                knowledgeBaseMaxResults = defaultKnowledgeBaseMaxResults,
-                onKnowledgeBaseMaxResultsChange = { defaultKnowledgeBaseMaxResults = it },
-                calendarToolsEnabled = defaultCalendarToolsEnabled,
-                onCalendarToolsEnabledChange = { defaultCalendarToolsEnabled = it },
-                alarmToolsEnabled = defaultAlarmToolsEnabled,
-                onAlarmToolsEnabledChange = { defaultAlarmToolsEnabled = it },
-                imageGenerationEnabled = defaultImageGenerationEnabled,
-                onImageGenerationEnabledChange = { defaultImageGenerationEnabled = it },
-                imageIterationEnabled = defaultImageIterationEnabled,
-                onImageIterationEnabledChange = { defaultImageIterationEnabled = it },
-                backgroundRemovalEnabled = defaultBackgroundRemovalEnabled,
-                onBackgroundRemovalEnabledChange = { defaultBackgroundRemovalEnabled = it },
-                maxToolRounds = defaultMaxToolRounds,
-                onMaxToolRoundsChange = { defaultMaxToolRounds = it }
+            NativeServerChatDefaultsSection(
+                state = defaultsState,
+                registryViewModel = registryViewModel,
+                navController = null
             )
 
             statusMessage?.takeIf { it.isNotBlank() }?.let { message ->

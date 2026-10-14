@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Process as AndroidProcess
 import android.util.Log
 import com.example.llamadroid.data.proot.AgentProotNativeBinaryProvider
+import com.example.llamadroid.harness.RoomHarnessRuntimeStore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
@@ -83,7 +84,9 @@ private data class StopContext(
 )
 
 /**
- * Serializes lifecycle state transitions for the one shared DeepSeek Harness instance.
+ * Serializes lifecycle state transitions for one Harness runtime. There is one controller
+ * (and one durable row, id == environmentId) per runtime, so several runtimes can run side by
+ * side on distinct loopback ports; [otherActivePorts] keeps their allocations disjoint.
  * Environment extraction and authenticated readiness run outside the short state mutex so a
  * concurrent Stop or Force operation can cancel startup and own the process cleanup.
  */
@@ -101,6 +104,8 @@ class HarnessRuntimeController(
     private val now: () -> Long = { System.currentTimeMillis() },
     private val listenerProbe: suspend (Int) -> Boolean = ::isLoopbackListenerOpen,
     private val defaultEnvironmentId: String = HarnessRuntimeRecord.DEFAULT_ENVIRONMENT_ID,
+    /** Ports persisted by the other runtimes' active rows; they are never handed out here. */
+    private val otherActivePorts: suspend () -> Set<Int> = { emptySet() },
 ) {
     private val lifecycleLock = Mutex()
     private var activeStart: StartSession? = null
@@ -108,7 +113,10 @@ class HarnessRuntimeController(
     private var liveIdentity: HarnessProcessIdentity? = null
     private var liveEndpoint: HarnessEndpoint? = null
 
-    suspend fun start(request: HarnessStartRequest = HarnessStartRequest()): HarnessRuntimeOutcome {
+    suspend fun start(request: HarnessStartRequest = HarnessStartRequest()): HarnessRuntimeOutcome =
+        start(request, portRetried = false)
+
+    private suspend fun start(request: HarnessStartRequest, portRetried: Boolean): HarnessRuntimeOutcome {
         val decision = lifecycleLock.withLock { prepareStartLocked(request) }
         return when (decision) {
             is StartDecision.Return -> decision.outcome
@@ -122,7 +130,16 @@ class HarnessRuntimeController(
                     )
                 }
             }
-            is StartDecision.Begin -> runStart(decision)
+            is StartDecision.Begin -> try {
+                runStart(decision)
+            } catch (error: HarnessRuntimeException) {
+                // Another process may have grabbed the probed port between allocation and bind.
+                if (error.code == "HARNESS_PORT_IN_USE" && !portRetried) {
+                    start(request.copy(preferredPort = null), portRetried = true)
+                } else {
+                    throw error
+                }
+            }
         }
     }
 
@@ -157,7 +174,7 @@ class HarnessRuntimeController(
             }
         }
         val stopped = processStopped && awaitListenerClosed(
-            context.requested.port,
+            context.portToAwait,
             remainingMillis(context.deadlineNanos)
         )
         awaitStartCompletion(context)
@@ -176,7 +193,7 @@ class HarnessRuntimeController(
         } catch (_: Throwable) {
             false
         }
-        val stopped = processStopped && awaitListenerClosed(context.requested.port)
+        val stopped = processStopped && awaitListenerClosed(context.portToAwait)
         context.session?.let { session ->
             lifecycleLock.withLock { session.cleanupDone = stopped }
         }
@@ -231,7 +248,8 @@ class HarnessRuntimeController(
         )
         val identityRecoveredFromLedger = persistedIdentity == null && identity != null
         val ownerAlive = identity?.let(processSupervisor::isOwnerAlive) == true
-        val listenerAlive = current.port?.let { probeListener(it) } == true
+        val verifiablePort = listenerPortToVerify(current, ownerAlive)
+        val listenerAlive = verifiablePort?.let { probeListener(it) } == true
         if (current.state == HarnessRuntimeState.STOPPED && !ownerAlive && !listenerAlive) {
             return@withLock HarnessRuntimeOutcome(current)
         }
@@ -244,11 +262,12 @@ class HarnessRuntimeController(
                 false
             }
         }
-        cleanupSucceeded = cleanupSucceeded && awaitListenerClosed(current.port)
+        cleanupSucceeded = cleanupSucceeded && awaitListenerClosed(verifiablePort)
         val observedCode = sanitizeHarnessProcessCode(observed?.errorCode)
             ?: classifyHarnessProcessExit(observed?.exitCode)
         val interrupted = current.copy(
             state = HarnessRuntimeState.INTERRUPTED,
+            port = if (cleanupSucceeded) null else current.port,
             endedAt = now(),
             updatedAt = now(),
             errorCode = observedCode ?: if (identityMissing) {
@@ -318,7 +337,15 @@ class HarnessRuntimeController(
         }
 
         val generation = UUID.randomUUID().toString()
-        val port = portAllocator.allocate(request.preferredPort)
+        val excludedPorts = otherActivePorts()
+        var port = portAllocator.allocate(request.preferredPort?.takeIf { it !in excludedPorts })
+        var allocationAttempts = 0
+        while (port in excludedPorts && allocationAttempts++ < PORT_ALLOCATION_ATTEMPTS) {
+            port = portAllocator.allocate(null)
+        }
+        if (port in excludedPorts) {
+            throw HarnessRuntimeException("HARNESS_PORT_IN_USE", "No free Harness port is available")
+        }
         val starting = HarnessRuntimeRecord(
             runtimeId = request.environmentId,
             environmentId = request.environmentId,
@@ -548,6 +575,7 @@ class HarnessRuntimeController(
                     } else if (!cancelled) {
                         val failed = current.copy(
                             state = HarnessRuntimeState.FAILED,
+                            port = if (cleaned) null else current.port,
                             endedAt = now(),
                             updatedAt = now(),
                             errorCode = failureCode,
@@ -557,6 +585,7 @@ class HarnessRuntimeController(
                     } else if (cleaned && current.state == HarnessRuntimeState.FORCE_STOPPING) {
                         val finished = current.copy(
                             state = if (hook.completed) HarnessRuntimeState.STOPPED else HarnessRuntimeState.FORCE_STOPPING,
+                            port = if (hook.completed) null else current.port,
                             endedAt = if (hook.completed) now() else current.endedAt,
                             updatedAt = now(),
                             errorCode = hook.errorCode
@@ -657,7 +686,7 @@ class HarnessRuntimeController(
         }
         val resolvedIdentity = persistedIdentity ?: recoveredIdentity
         val ownerAlive = resolvedIdentity?.let(processSupervisor::isOwnerAlive) == true
-        val listenerAlive = current.port?.let { probeListener(it) } == true
+        val listenerAlive = listenerPortToVerify(current, ownerAlive)?.let { probeListener(it) } == true
         if (current.state == HarnessRuntimeState.STOPPED &&
             session == null &&
             !ownerAlive &&
@@ -770,6 +799,7 @@ class HarnessRuntimeController(
             }
             val finished = current.copy(
                 state = HarnessRuntimeState.STOPPED,
+                port = null,
                 endedAt = now(),
                 updatedAt = now(),
                 errorCode = null,
@@ -823,6 +853,7 @@ class HarnessRuntimeController(
             if (stopped && hook.completed) {
                 val finished = current.copy(
                     state = HarnessRuntimeState.STOPPED,
+                    port = null,
                     endedAt = now(),
                     updatedAt = now(),
                     errorCode = hook.errorCode,
@@ -938,6 +969,25 @@ class HarnessRuntimeController(
         return remainingMillis(deadlineNanos)
     }
 
+    /**
+     * A terminal row whose owner is dead no longer owns its recorded port: another runtime may
+     * be listening there, so probing it would wrongly make this runtime look live.
+     */
+    private fun listenerPortToVerify(row: HarnessRuntimeRecord, ownerAlive: Boolean): Int? =
+        if (!ownerAlive && row.state in TERMINAL_STATES) null else row.port
+
+    /**
+     * Port whose listener a stop waits on. An already STOPPED row with no session, handle or
+     * identity has nothing left to drain, and its recorded port may now belong to another runtime.
+     * INTERRUPTED/FAILED rows keep verifying, since their cleanup may have been incomplete.
+     */
+    private val StopContext.portToAwait: Int?
+        get() = if (session == null && handle == null && identity == null && current.state == HarnessRuntimeState.STOPPED) {
+            null
+        } else {
+            requested.port
+        }
+
     private suspend fun probeListener(port: Int): Boolean = try {
         listenerProbe(port)
     } catch (cancelled: CancellationException) {
@@ -954,9 +1004,9 @@ class HarnessRuntimeController(
         }
         return when {
             context.identity != null -> processSupervisor.forceStop(context.handle, context.identity) &&
-                awaitListenerClosed(context.requested.port)
+                awaitListenerClosed(context.portToAwait)
             context.handle != null -> forceStopWithoutIdentity(context.handle) &&
-                awaitListenerClosed(context.requested.port)
+                awaitListenerClosed(context.portToAwait)
             else -> true
         }
     }
@@ -1131,7 +1181,8 @@ class HarnessRuntimeController(
         )
         val identityRecoveredFromLedger = persistedIdentity == null && identity != null
         val ownerAlive = identity?.let(processSupervisor::isOwnerAlive) == true
-        val listenerAlive = current.port?.let { probeListener(it) } == true
+        val verifiablePort = listenerPortToVerify(current, ownerAlive)
+        val listenerAlive = verifiablePort?.let { probeListener(it) } == true
         if (current.state == HarnessRuntimeState.STOPPED && !ownerAlive && !listenerAlive) return
         val identityMissing = identity == null && current.state in ACTIVE_OWNER_STATES
         var cleaned = !identityMissing
@@ -1142,7 +1193,7 @@ class HarnessRuntimeController(
                 false
             }
         }
-        cleaned = cleaned && awaitListenerClosed(current.port)
+        cleaned = cleaned && awaitListenerClosed(verifiablePort)
         if (!cleaned || (identity != null && processSupervisor.isOwnerAlive(identity))) {
             val errorCode = if (identityMissing) {
                 "HARNESS_OWNER_IDENTITY_MISSING"
@@ -1162,6 +1213,7 @@ class HarnessRuntimeController(
         store.replace(
             current.copy(
                 state = HarnessRuntimeState.INTERRUPTED,
+                port = null,
                 endedAt = now(),
                 updatedAt = now(),
                 errorCode = if (identityRecoveredFromLedger) {
@@ -1283,6 +1335,13 @@ class HarnessRuntimeController(
         "Harness runtime failure (${error::class.java.simpleName})"
 
     companion object {
+        private const val PORT_ALLOCATION_ATTEMPTS = 8
+        private val TERMINAL_STATES = setOf(
+            HarnessRuntimeState.STOPPED,
+            HarnessRuntimeState.FAILED,
+            HarnessRuntimeState.INTERRUPTED
+        )
+
         fun forAndroid(
             context: Context,
             store: HarnessRuntimeStore,
@@ -1317,6 +1376,13 @@ class HarnessRuntimeController(
                 portAllocator = AndroidHarnessPortAllocator(),
                 logger = logger,
                 defaultEnvironmentId = HarnessRuntimeScope.id(context),
+                otherActivePorts = {
+                    val own = HarnessRuntimeScope.id(context)
+                    (store as? RoomHarnessRuntimeStore)?.activeRuntimes().orEmpty()
+                        .filter { it.environmentId != own }
+                        .mapNotNull { it.port }
+                        .toSet()
+                },
             )
         }
     }

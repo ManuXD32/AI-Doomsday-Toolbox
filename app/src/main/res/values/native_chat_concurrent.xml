@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Single foreground notification while several Chat Llama Native chats generate. -->
+    <plurals name="native_chat_notification_generating_count">
+        <item quantity="one">%1$d chat generating</item>
+        <item quantity="other">%1$d chats generating</item>
+    </plurals>
+</resources>

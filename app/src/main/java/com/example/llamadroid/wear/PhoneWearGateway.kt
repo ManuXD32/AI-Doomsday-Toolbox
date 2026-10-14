@@ -40,6 +40,7 @@ import com.example.llamadroid.service.LlamaServerSessionSnapshot
 import com.example.llamadroid.service.LlamaServerSessionStateStore
 import com.example.llamadroid.service.LlamaServerSessionStatus
 import com.example.llamadroid.service.LlamaService
+import com.example.llamadroid.service.NativeChatGenerationStates
 import com.example.llamadroid.service.NativeChatLocalServerStarter
 import com.example.llamadroid.service.NativeChatServerStartException
 import com.example.llamadroid.service.NativeChatToolConfig
@@ -137,6 +138,8 @@ object PhoneWearGateway {
     private val revision = AtomicLong(0L)
     private val processedGenerations = Collections.synchronizedSet(mutableSetOf<String>())
     private val messageListeners = ConcurrentHashMap<String, Long>()
+    /** Chat each watch generation request runs on, so Cancel stops that chat only. */
+    private val generationChatIds = ConcurrentHashMap<String, Long>()
 
     private lateinit var appContext: Context
     private lateinit var repository: LlamaRepository
@@ -196,7 +199,8 @@ object PhoneWearGateway {
                 deltaEmitter = deltaEmitter,
                 serverController = serverController,
                 processedGenerations = processedGenerations,
-                messageListeners = messageListeners
+                messageListeners = messageListeners,
+                generationChatIds = generationChatIds
             )
             Wearable.getDataClient(appContext).addListener(
                 dataListener,
@@ -470,7 +474,9 @@ private class WearRequestRouter(
     private val deltaEmitter: WearDeltaEmitter,
     private val serverController: LlamaServerController,
     private val processedGenerations: MutableSet<String>,
-    private val messageListeners: ConcurrentHashMap<String, Long>
+    private val messageListeners: ConcurrentHashMap<String, Long>,
+    /** Chat each watch generation request runs on, so Cancel stops that chat only. */
+    private val generationChatIds: ConcurrentHashMap<String, Long>
 ) {
     private val quickChatStartScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -1416,9 +1422,13 @@ private class WearRequestRouter(
     }
 
     private fun handleGenerationCancel(request: GenerationCancelRequest): ByteArray {
-        appContext.startService(Intent(appContext, LlamaClientService::class.java).apply {
-            action = LlamaClientService.ACTION_STOP
-        })
+        generationChatIds.remove(request.generationId)?.let { chatId ->
+            val queued = NativeChatGenerationStates.stateFor(chatId) is LlamaClientService.GenerationState.Queued
+            appContext.startService(Intent(appContext, LlamaClientService::class.java).apply {
+                action = if (queued) LlamaClientService.ACTION_CANCEL_QUEUED else LlamaClientService.ACTION_STOP
+                putExtra(LlamaClientService.EXTRA_CHAT_ID, chatId)
+            })
+        }
         messageListeners.remove(request.generationId)
         return ok(request.meta, EmptyResult.serializer(), EmptyResult())
     }
@@ -1729,6 +1739,8 @@ private class WearRequestRouter(
     ) {
         if (!processedGenerations.add(requestId)) return
         messageListeners[requestId] = 0L
+        generationChatIds[requestId] = chatId
+        NativeChatGenerationStates.clearIfIdle(chatId)
         appContext.startForegroundService(Intent(appContext, LlamaClientService::class.java).apply {
             action = LlamaClientService.ACTION_GENERATE
             putExtra(LlamaClientService.EXTRA_CHAT_ID, chatId)
@@ -1739,14 +1751,11 @@ private class WearRequestRouter(
         })
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch generationCollector@{
             var observedFreshGeneration = false
-            LlamaClientService.generationState
+            NativeChatGenerationStates.flowFor(chatId)
                 .filter { state ->
-                    when (state) {
-                        is LlamaClientService.GenerationState.Generating -> state.chatId == chatId
-                        is LlamaClientService.GenerationState.Completed -> state.chatId == chatId
-                        is LlamaClientService.GenerationState.Error -> state.chatId == chatId || state.chatId == -1L
-                        else -> false
-                    }
+                    state is LlamaClientService.GenerationState.Generating ||
+                        state is LlamaClientService.GenerationState.Completed ||
+                        state is LlamaClientService.GenerationState.Error
                 }
                 .collect { state ->
                     when (state) {
@@ -1769,6 +1778,7 @@ private class WearRequestRouter(
                             )
                             deleteFinishedQuickChat(chatId)
                             messageListeners.remove(requestId)
+                            generationChatIds.remove(requestId)
                             this@generationCollector.cancel()
                         }
                         is LlamaClientService.GenerationState.Error -> {
@@ -1785,6 +1795,7 @@ private class WearRequestRouter(
                             )
                             deleteFinishedQuickChat(chatId)
                             messageListeners.remove(requestId)
+                            generationChatIds.remove(requestId)
                             this@generationCollector.cancel()
                         }
                         else -> Unit

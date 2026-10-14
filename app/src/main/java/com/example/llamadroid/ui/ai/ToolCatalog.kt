@@ -147,10 +147,10 @@ object ToolCatalog {
             routePatterns = listOf(Screen.Chat.route, "${Screen.Chat.route}?port={serverPort}"),
             settingsAction = ToolSettingsAction.Navigate("settings_llm"), keywords = listOf("chat", "conversation", "llm"), showInHub = false),
         tool("agent", ToolCategory.ADVANCED, Icons.Default.SmartToy, R.string.hub_agent, R.string.hub_agent_desc, Screen.Agent.route,
-            routePatterns = listOf(Screen.Agent.route, "${Screen.Agent.route}?conversationId={conversationId}", Screen.AgentWorkspace.route, Screen.AgentProotTerminal.route, Screen.AgentInvocation.route),
+            routePatterns = listOf(Screen.Agent.route, "${Screen.Agent.route}?conversationId={conversationId}&harnessTab={harnessTab}&returnToCaller={returnToCaller}", Screen.AgentWorkspace.route, Screen.AgentProotTerminal.route, Screen.AgentInvocation.route),
             keywords = listOf("agent", "coding", "workspace", "project"), showInHub = false),
-        tool("native_llama", ToolCategory.ADVANCED, Icons.Default.Memory, R.string.llama_client_title, R.string.llama_client_desc, Screen.LlamaServerList.route,
-            routePatterns = listOf(Screen.LlamaServerList.route, Screen.LlamaChatList.route, Screen.LlamaChatList.folderRoute, Screen.LlamaScheduler.route, Screen.LlamaChat.route),
+        tool("native_llama", ToolCategory.ADVANCED, Icons.Default.Memory, R.string.llama_client_title, R.string.llama_client_desc, Screen.Chats.route,
+            routePatterns = listOf(Screen.Chats.route, Screen.LlamaServerList.route, Screen.LlamaServers.route, Screen.LlamaChatList.route, Screen.LlamaChatList.folderRoute, Screen.LlamaScheduler.route, Screen.LlamaChat.route),
             settingsAction = ToolSettingsAction.Navigate("settings_llm"), keywords = listOf("llama", "native", "server", "scheduler"), showInHub = false),
         tool("image_generation", ToolCategory.CREATE, Icons.Default.Image, R.string.ai_image_gen, R.string.ai_image_gen_desc, Screen.ImageGen.route,
             routePatterns = listOf(

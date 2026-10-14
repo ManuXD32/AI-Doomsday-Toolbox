@@ -101,6 +101,8 @@ fun NativeHarnessScreen(
     onAction: (NativeHarnessUiAction) -> Unit,
     modifier: Modifier = Modifier,
     onBack: (() -> Unit)? = null,
+    /** Opened from a native chat/viewer: Back at conversation level calls [onBack] instead of climbing to the project picker. */
+    returnToCallerOnBack: Boolean = false,
     originalWebUiContent: (@Composable () -> Unit)? = null,
     onLeavingOriginalWebUi: (() -> Unit)? = null,
     /** Optional route-owned slot for the authenticated Changes transport. */
@@ -289,14 +291,13 @@ fun NativeHarnessScreen(
             "requests" -> HarnessSurfaceTab.REQUESTS
             "plan" -> HarnessSurfaceTab.PLAN
             "conversation" -> HarnessSurfaceTab.CONVERSATION
-            // Settings are installation-wide, so they open without a resolved project.
             "settings" -> HarnessSurfaceTab.SETTINGS
+            "runtime" -> HarnessSurfaceTab.RUNTIME // installation-wide, like settings
             else -> null
         }
         if (initialAttentionApplied || requestedAttentionTab == null) return@LaunchedEffect
         if (projectNavigationEnabled && initialProjectId == null &&
-            requestedAttentionTab != HarnessSurfaceTab.CONVERSATION &&
-            requestedAttentionTab != HarnessSurfaceTab.SETTINGS) {
+            requestedAttentionTab !in setOf(HarnessSurfaceTab.CONVERSATION, HarnessSurfaceTab.SETTINGS, HarnessSurfaceTab.RUNTIME)) {
             // The route may still be resolving the notification's project. Keep the deep link
             // pending until the owner supplies that project instead of marking it handled on the
             // landing screen.
@@ -312,6 +313,11 @@ fun NativeHarnessScreen(
     }
 
     fun navigateBack() {
+        // Opened from the native chat: leave straight back to it once no secondary panel is open.
+        if (returnToCallerOnBack && onBack != null && currentNavigationLocation.tab == HarnessSurfaceTab.CONVERSATION) {
+            onBack.invoke()
+            return
+        }
         // Keep Back hierarchical: a secondary panel returns to the active
         // conversation, then the project picker, then the owning dashboard.
         // Replace the small history rather than appending another route so a

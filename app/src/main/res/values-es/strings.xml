@@ -1468,14 +1468,11 @@
     <string name="llama_loading">Cargando…</string>
     <string name="llama_ollama_no_models_loaded">Todavía no se han cargado modelos de Ollama.</string>
     <string name="llama_swap_no_models_loaded">Todavía no se han cargado modelos de llama-swap.</string>
-    <string name="llama_whisper_fallback_title">Respaldo de Whisper</string>
     <string name="llama_whisper_model_auto">Automático</string>
     <string name="llama_whisper_model_label">Modelo de Whisper</string>
     <string name="llama_whisper_no_models">No se encontraron modelos locales de Whisper.</string>
     <string name="llama_whisper_language_label">Idioma de Whisper</string>
-    <string name="llama_use_whisper_for_audio">Usar Whisper para audio</string>
     <string name="llama_use_whisper_for_audio_desc">Transcribe primero el audio y envía texto al modelo del chat en vez de enviar el archivo de audio directamente.</string>
-    <string name="llama_whisper_required_desc">Este servidor no usa audio directo en esta app, así que los mensajes de audio se transcriben con Whisper.</string>
     <string name="llama_ollama_model_required">Selecciona un modelo de Ollama antes de iniciar el chat nativo.</string>
     <string name="llama_swap_model_required">Selecciona un modelo de llama-swap antes de iniciar el chat nativo.</string>
     <string name="llama_delete_message_confirm_title">¿Eliminar mensaje?</string>
@@ -1681,9 +1678,6 @@
     <string name="llama_tool_image_iteration_desc">Si el servidor soporta visión, permite que el LLM inspeccione las imágenes generadas y regenere mejores versiones antes de responder.</string>
     <string name="llama_tool_bgr">Quitar fondo ONNX</string>
     <string name="llama_tool_bgr_desc">Quita fondos de imágenes con el preset BgR seleccionado para el chat nativo.</string>
-    <string name="llama_tools_master_switch">Activar herramientas</string>
-    <string name="llama_server_default_tools_title">Permisos de herramientas del servidor</string>
-    <string name="llama_server_default_tools_desc">Estos interruptores inicializan los chats nuevos y son el máximo de herramientas que puede usar cualquier chat con este servidor.</string>
     <string name="llama_tool_datetime">Fecha y hora</string>
     <string name="llama_tool_datetime_desc">Consulta la fecha y hora local actual.</string>
     <string name="llama_tool_calculator">Calculadora</string>

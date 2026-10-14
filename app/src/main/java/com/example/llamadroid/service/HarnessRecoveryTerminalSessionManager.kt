@@ -127,6 +127,9 @@ class HarnessRecoveryTerminalSessionManager private constructor(context: Context
                 HarnessRecoveryTerminalSessionManager(captured)
             }
         }
+        internal suspend fun closeForMaintenance(runtimeId: String) {
+            instances.remove(runtimeId)?.close()?.getOrThrow()
+        }
         internal suspend fun closeAllForMaintenance() {
             instances.values.toList().forEach { it.close().getOrThrow() }
             instances.clear()
@@ -226,8 +229,8 @@ class HarnessRecoveryTerminalSessionManager private constructor(context: Context
     }
 
     /** Opens the shell, preparing only the verified Debian rootfs and its persistent mounts. */
-    suspend fun open(): Result<HarnessRecoveryTerminalState> = HarnessInstallationManager.lifecycle.runStart {
-        HarnessInstallationManager.get(appContext).requireSelected(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(appContext))
+    suspend fun open(): Result<HarnessRecoveryTerminalState> = HarnessInstallationManager.lifecycleFor(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(appContext)).runStart {
+        HarnessInstallationManager.get(appContext).requireAvailable(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(appContext))
         openOwned()
     }
 

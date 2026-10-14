@@ -60,6 +60,10 @@ data class HarnessRuntimeInstallationUi(
     val sessionCount: Int = 0,
     val settingsCount: Int = 0,
     val canSelect: Boolean = true,
+    val port: Int? = null,
+    val canStart: Boolean = false,
+    val canStop: Boolean = false,
+    val canForceStop: Boolean = false,
     val canRename: Boolean = true,
     val canRecreate: Boolean = true,
     val canDelete: Boolean = true,
@@ -105,7 +109,11 @@ data class HarnessRuntimeInstallationsUiState(
 
 sealed interface HarnessRuntimeInstallationAction {
     data class Create(val name: String) : HarnessRuntimeInstallationAction
+    /** Focus only ("Open"); never stops other runtimes. */
     data class Select(val runtimeId: String) : HarnessRuntimeInstallationAction
+    data class Start(val runtimeId: String) : HarnessRuntimeInstallationAction
+    data class Stop(val runtimeId: String) : HarnessRuntimeInstallationAction
+    data class ForceStop(val runtimeId: String) : HarnessRuntimeInstallationAction
     data class Rename(val runtimeId: String, val name: String) : HarnessRuntimeInstallationAction
     data class Recreate(val runtimeId: String) : HarnessRuntimeInstallationAction
     data class Delete(val runtimeId: String) : HarnessRuntimeInstallationAction
@@ -214,6 +222,12 @@ internal fun RuntimeInstallationsPanel(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Text(
+                    stringResource(R.string.harness_multi_runtime_header_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
             }
             if (isLoading) {
                 CircularProgressIndicator(
@@ -282,6 +296,9 @@ internal fun RuntimeInstallationsPanel(
                         selected = row.id == selectedId,
                         operation = operation,
                         onSelect = { onAction(HarnessRuntimeInstallationAction.Select(row.id)) },
+                        onStart = { onAction(HarnessRuntimeInstallationAction.Start(row.id)) },
+                        onStop = { onAction(HarnessRuntimeInstallationAction.Stop(row.id)) },
+                        onForceStop = { onAction(HarnessRuntimeInstallationAction.ForceStop(row.id)) },
                         onRename = { renameRuntimeId = row.id },
                         onRecreate = { recreateRuntimeId = row.id },
                         onDelete = { deleteRuntimeId = row.id },
@@ -382,6 +399,9 @@ private fun RuntimeInstallationCard(
     selected: Boolean,
     operation: HarnessRuntimeInstallationOperationUi?,
     onSelect: () -> Unit,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onForceStop: () -> Unit,
     onRename: () -> Unit,
     onRecreate: () -> Unit,
     onDelete: () -> Unit,
@@ -448,9 +468,15 @@ private fun RuntimeInstallationCard(
                     }
                 }
                 Text(
-                    row.statusLabel ?: runtimeInstallationStatusLabel(row.status),
+                    row.statusLabel ?: runtimeInstallationStatusLabel(row.status).let { label ->
+                        if (row.status == HarnessRuntimeStatus.RUNNING && row.port != null) {
+                            stringResource(R.string.harness_multi_runtime_running_port, row.port)
+                        } else label
+                    },
                     style = MaterialTheme.typography.labelMedium,
                     color = statusColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 row.detail?.takeIf { it.isNotBlank() }?.let { detail ->
                     Text(
@@ -502,13 +528,45 @@ private fun RuntimeInstallationCard(
             modifier = Modifier.padding(top = 10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            if (row.canStop || row.canStart) {
+                // Stopped runtimes offer Start; live ones offer Stop (Force stop stays secondary).
+                if (row.canStop) {
+                    OutlinedButton(
+                        onClick = onStop,
+                        modifier = Modifier.fillMaxWidth().testTag("harness_runtime_stop_${row.id}"),
+                    ) {
+                        Text(stringResource(R.string.harness_multi_runtime_stop), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                } else {
+                    Button(
+                        onClick = onStart,
+                        enabled = !rowBusy,
+                        modifier = Modifier.fillMaxWidth().testTag("harness_runtime_start_${row.id}"),
+                    ) {
+                        Text(stringResource(R.string.harness_multi_runtime_start), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+            if (row.canForceStop) {
+                TextButton(
+                    onClick = onForceStop,
+                    modifier = Modifier.fillMaxWidth().testTag("harness_runtime_force_stop_${row.id}"),
+                ) {
+                    Text(
+                        stringResource(R.string.harness_multi_runtime_force_stop),
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
             if (selected) {
                 OutlinedButton(
                     onClick = {},
                     enabled = false,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text(stringResource(R.string.harness_installations_active))
+                    Text(stringResource(R.string.harness_installations_active), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             } else {
                 Button(

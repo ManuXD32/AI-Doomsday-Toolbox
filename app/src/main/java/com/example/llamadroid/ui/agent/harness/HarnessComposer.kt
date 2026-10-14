@@ -1,5 +1,6 @@
 package com.example.llamadroid.ui.agent.harness
 
+import android.content.Context
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,6 +23,8 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
@@ -46,12 +49,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.edit
 import androidx.compose.ui.window.PopupProperties
 import com.example.llamadroid.R
 import com.example.llamadroid.ui.components.AppTaskActionFooter
@@ -196,38 +201,63 @@ internal fun HarnessComposerSlot(
         state.selectedSessionId != null &&
         state.selectedSessionId !in state.deletingSessionIds
     val modelPickerEnabled = harnessModelPickerEnabled(state)
+    val context = LocalContext.current
+    val prefs = remember(context) { context.getSharedPreferences(HARNESS_COMPOSER_PREFS, Context.MODE_PRIVATE) }
+    var inputHidden by remember { mutableStateOf(prefs.getBoolean(HARNESS_COMPOSER_HIDDEN_KEY, false)) }
     Column(modifier = Modifier.fillMaxWidth()) {
-        HarnessUsageSummaryStrip(state)
+        // Compact toggle: hides the whole input area (usage strip + composer) so the conversation can use the space.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            IconButton(
+                onClick = {
+                    inputHidden = !inputHidden
+                    prefs.edit { putBoolean(HARNESS_COMPOSER_HIDDEN_KEY, inputHidden) }
+                },
+                modifier = Modifier.size(32.dp).testTag("harness_composer_toggle")
+            ) {
+                Icon(
+                    if (inputHidden) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = stringResource(
+                        if (inputHidden) R.string.harness_composer_show else R.string.harness_composer_hide
+                    )
+                )
+            }
+        }
         HarnessGenerationStatus(
             activity = state.generationActivity,
             canCancelTurn = state.canCancelTurn,
             isStoppingTurn = state.isStoppingTurn,
         )
-        HarnessComposer(
-            state = state,
-            enabled = enabled,
-            modelPickerEnabled = modelPickerEnabled,
-            references = references,
-            onReferenceQuery = onReferenceQuery,
-            onClientCommand = onClientCommand,
-            onTextChange = { onAction(NativeHarnessUiAction.UpdateComposer(it)) },
-            onModeChange = { onAction(NativeHarnessUiAction.SetComposerMode(it)) },
-            onOpenAttachmentPicker = { onAction(NativeHarnessUiAction.OpenAttachmentPicker) },
-            onOpenReferencePicker = { onAction(NativeHarnessUiAction.OpenReferencePicker) },
-            onOpenAttachment = { onAction(NativeHarnessUiAction.OpenAttachment(it)) },
-            onRemoveAttachment = { onAction(NativeHarnessUiAction.RemoveAttachment(it)) },
-            onCancelTurn = { onAction(NativeHarnessUiAction.CancelTurn) },
-            onSubmit = { onAction(NativeHarnessUiAction.SubmitComposer) },
-            onSelectModel = { providerId, modelId ->
-                onAction(NativeHarnessUiAction.SelectSessionModel(providerId, modelId))
-            },
-            onRefreshModelCatalog = { onAction(NativeHarnessUiAction.RefreshModelCatalog) },
-            onSelectReasoning = { onAction(NativeHarnessUiAction.SelectReasoningEffort(it)) },
-            onSelectPermission = { onAction(NativeHarnessUiAction.SelectPermissionPreset(it)) },
-            onOpenModelSettings = onOpenModelSettings,
-        )
+        if (!inputHidden) {
+            HarnessUsageSummaryStrip(state)
+            HarnessComposer(
+                state = state,
+                enabled = enabled,
+                modelPickerEnabled = modelPickerEnabled,
+                references = references,
+                onReferenceQuery = onReferenceQuery,
+                onClientCommand = onClientCommand,
+                onTextChange = { onAction(NativeHarnessUiAction.UpdateComposer(it)) },
+                onModeChange = { onAction(NativeHarnessUiAction.SetComposerMode(it)) },
+                onOpenAttachmentPicker = { onAction(NativeHarnessUiAction.OpenAttachmentPicker) },
+                onOpenReferencePicker = { onAction(NativeHarnessUiAction.OpenReferencePicker) },
+                onOpenAttachment = { onAction(NativeHarnessUiAction.OpenAttachment(it)) },
+                onRemoveAttachment = { onAction(NativeHarnessUiAction.RemoveAttachment(it)) },
+                onCancelTurn = { onAction(NativeHarnessUiAction.CancelTurn) },
+                onSubmit = { onAction(NativeHarnessUiAction.SubmitComposer) },
+                onSelectModel = { providerId, modelId ->
+                    onAction(NativeHarnessUiAction.SelectSessionModel(providerId, modelId))
+                },
+                onRefreshModelCatalog = { onAction(NativeHarnessUiAction.RefreshModelCatalog) },
+                onSelectReasoning = { onAction(NativeHarnessUiAction.SelectReasoningEffort(it)) },
+                onSelectPermission = { onAction(NativeHarnessUiAction.SelectPermissionPreset(it)) },
+                onOpenModelSettings = onOpenModelSettings,
+            )
+        }
     }
 }
+
+private const val HARNESS_COMPOSER_PREFS = "harness_ui"
+private const val HARNESS_COMPOSER_HIDDEN_KEY = "composer_hidden"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

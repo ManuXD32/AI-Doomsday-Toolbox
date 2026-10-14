@@ -17,7 +17,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.KnowledgeSourceEntity
+import com.example.llamadroid.data.model.LlamaMessageAttachmentEntity
 import com.example.llamadroid.data.model.LlamaMessageEntity
+import com.example.llamadroid.data.model.LlamaMessageKind
+import com.example.llamadroid.data.model.NativeChatCompactionEntity
+import com.example.llamadroid.data.model.tokensSaved
 import com.example.llamadroid.service.LlamaCallUiState
 import com.example.llamadroid.service.LlamaClientService
 import kotlinx.coroutines.launch
@@ -38,7 +42,7 @@ internal fun ChatMessageList(
     streamingGenerationState: LlamaClientService.GenerationState.Generating?,
     completedGenerationState: LlamaClientService.GenerationState.Completed?,
     canContinueChat: Boolean,
-    isGeneratingAnyChat: Boolean,
+    isChatBusy: Boolean,
     hasActiveServer: Boolean,
     userWantsAutoScroll: Boolean,
     onUserWantsAutoScrollChange: (Boolean) -> Unit,
@@ -57,15 +61,15 @@ internal fun ChatMessageList(
     onDeleteMessage: (LlamaMessageEntity) -> Unit,
     onOpenToolActivity: () -> Unit,
     onContinue: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    compactions: List<NativeChatCompactionEntity> = emptyList(),
+    attachmentsByMessage: Map<Long, List<LlamaMessageAttachmentEntity>> = emptyMap()
 ) {
     val scope = rememberCoroutineScope()
     Box(modifier = modifier) {
         LazyColumn(
             state = listState,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 8.dp),
+            modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = PaddingValues(vertical = 8.dp)
         ) {
@@ -86,27 +90,37 @@ internal fun ChatMessageList(
             }
 
             items(displayedMessages, key = { it.id }) { msg ->
-                LlamaMessageItem(
-                    message = msg,
-                    onRegenerate = { onRegenerate(msg) },
-                    onEdit = { newContent -> onEditMessage(msg, newContent) },
-                    onRetry = { onRetryMessage(msg) },
-                    retryEnabled = !isGeneratingAnyChat && !msg.isError && hasActiveServer,
-                    onRetryTranscription = { onRetryTranscription(msg) },
-                    onDiscardFailedMessage = { onDiscardFailedMessage(msg) },
-                    onDelete = { onDeleteMessage(msg) },
-                    autoPlayAssistantAudio = msg.role == "assistant" &&
-                        assistantTtsEnabled &&
-                        !isCallActiveForChat &&
-                        msg.timestamp >= openedAtMs &&
-                        msg.audioPath?.takeIf { it.isNotBlank() } !in autoPlayedAssistantAudioPaths,
-                    onAssistantAudioAutoPlayed = { path ->
-                        if (path !in autoPlayedAssistantAudioPaths) {
-                            autoPlayedAssistantAudioPaths.add(path)
-                        }
-                    },
-                    onKnowledgeLinkClick = onKnowledgeLinkClick
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (msg.kind == LlamaMessageKind.DELEGATION_NOTICE) {
+                        ChatDelegationNoticeRow(message = msg)
+                    } else {
+                        LlamaMessageItem(
+                            message = msg,
+                            onRegenerate = { onRegenerate(msg) },
+                            onEdit = { newContent -> onEditMessage(msg, newContent) },
+                            onRetry = { onRetryMessage(msg) },
+                            retryEnabled = !isChatBusy && !msg.isError && hasActiveServer,
+                            onRetryTranscription = { onRetryTranscription(msg) },
+                            onDiscardFailedMessage = { onDiscardFailedMessage(msg) },
+                            onDelete = { onDeleteMessage(msg) },
+                            autoPlayAssistantAudio = msg.role == "assistant" &&
+                                assistantTtsEnabled &&
+                                !isCallActiveForChat &&
+                                msg.timestamp >= openedAtMs &&
+                                msg.audioPath?.takeIf { it.isNotBlank() } !in autoPlayedAssistantAudioPaths,
+                            onAssistantAudioAutoPlayed = { path ->
+                                if (path !in autoPlayedAssistantAudioPaths) {
+                                    autoPlayedAssistantAudioPaths.add(path)
+                                }
+                            },
+                            onKnowledgeLinkClick = onKnowledgeLinkClick,
+                            attachments = attachmentsByMessage[msg.id].orEmpty()
+                        )
+                    }
+                    compactions.filter { it.boundaryMessageId == msg.id }.forEach { compaction ->
+                        ChatCompactionMarker(tokensSaved = compaction.tokensSaved, measured = compaction.measured)
+                    }
+                }
             }
 
         // Active Generation Indicator

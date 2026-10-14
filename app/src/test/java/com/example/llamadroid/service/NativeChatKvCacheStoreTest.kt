@@ -56,7 +56,7 @@ class NativeChatKvCacheStoreTest {
         store.writeMeta(7L, meta)
         assertEquals(meta, store.readMeta(7L))
         val text = File(store.directory, "chat-7.json").readText()
-        assertEquals(setOf("fingerprint", "slotNCtx", "bytes", "tokens", "savedAt", "serverRowId"),
+        assertEquals(setOf("fingerprint", "slotNCtx", "bytes", "tokens", "savedAt", "serverRowId", "originalBytes", "incompressible"),
             org.json.JSONObject(text).keys().asSequence().toSet())
         assertNull(store.readMeta(8L))
     }

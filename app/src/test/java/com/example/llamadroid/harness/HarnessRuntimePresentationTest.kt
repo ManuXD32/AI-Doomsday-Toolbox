@@ -33,7 +33,7 @@ class HarnessRuntimePresentationTest {
 
     @Test fun runningProcessCanShowAnInterruptedChatConnection() {
         val rows = listOf(HarnessRuntimeDiagnostic(1, 1, "websocket", outcome = "failure", httpStatus = 403))
-        val result = runtimePresentation(HarnessRuntimeEntity(state = "RUNNING"), null, rows, Int::toString)
+        val result = runtimePresentation(HarnessRuntimeEntity(id = "rt", state = "RUNNING"), null, rows, Int::toString)
         assertEquals(HarnessRuntimeStatus.RUNNING, result.status)
         assertEquals(R.string.harness_connection_interrupted.toString(), result.connectionLabel)
         assertTrue(result.diagnostics.single().connectionMetadata.orEmpty().contains("HTTP 403"))
@@ -63,9 +63,9 @@ class HarnessRuntimePresentationTest {
     }
 
     @Test fun authenticationTimeoutIsNotPresentedAsStopTimeout() {
-        val result = runtimePresentation(HarnessRuntimeEntity(state = "FAILED", errorCode = "HARNESS_NOT_READY"), null, emptyList(), Int::toString)
+        val result = runtimePresentation(HarnessRuntimeEntity(id = "rt", state = "FAILED", errorCode = "HARNESS_NOT_READY"), null, emptyList(), Int::toString)
         assertEquals(R.string.harness_start_readiness_failed.toString(), result.detail)
-        val stopping = runtimePresentation(HarnessRuntimeEntity(state = "STOP_REQUESTED", errorCode = "HARNESS_STOP_TIMEOUT"), null, emptyList(), Int::toString)
+        val stopping = runtimePresentation(HarnessRuntimeEntity(id = "rt", state = "STOP_REQUESTED", errorCode = "HARNESS_STOP_TIMEOUT"), null, emptyList(), Int::toString)
         assertEquals(R.string.harness_runtime_stop_timeout.toString(), stopping.detail)
         assertTrue(stopping.canForceStop)
         assertFalse(stopping.canStart)
@@ -76,7 +76,7 @@ class HarnessRuntimePresentationTest {
             HarnessRuntimeDiagnostic(1, 1, "phase", phase = "payload_preparing", generation = "generation"),
             HarnessRuntimeDiagnostic(2, 2, "start_failed", errorCode = "HARNESS_EXECUTABLE_MISSING", exitCode = 127),
         )
-        val result = runtimePresentation(HarnessRuntimeEntity(state = "FAILED", generation = "generation"), null, rows, Int::toString)
+        val result = runtimePresentation(HarnessRuntimeEntity(id = "rt", state = "FAILED", generation = "generation"), null, rows, Int::toString)
         assertEquals(R.string.harness_event_payload_preparing.toString(), result.phaseLabel)
         assertEquals(2, result.diagnostics.size)
         assertEquals(127, result.diagnostics.last().exitCode)

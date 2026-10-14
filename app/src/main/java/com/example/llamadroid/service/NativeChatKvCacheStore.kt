@@ -1,9 +1,14 @@
 package com.example.llamadroid.service
 
+import android.annotation.SuppressLint
 import android.content.Context
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
 import java.security.MessageDigest
+import java.util.zip.Deflater
+import java.util.zip.GZIPInputStream
+import java.util.zip.GZIPOutputStream
 
 /**
  * Facts that decide whether a saved llama-server slot file can be loaded back into the
@@ -31,12 +36,21 @@ data class KvCacheMeta(
     val bytes: Long,
     val tokens: Int,
     val savedAt: Long,
-    val serverRowId: Long
+    val serverRowId: Long,
+    /** Uncompressed size of the `.bin`; set when the file was gzipped to `.bin.gz`. */
+    val originalBytes: Long = 0L,
+    /** The first-MiB sample did not shrink enough; compression is not retried. */
+    val incompressible: Boolean = false
 )
+
+/** Result of one idle-compression attempt. */
+enum class KvCompressionOutcome { COMPRESSED, INCOMPRESSIBLE, SKIPPED }
 
 /**
  * Disk layout for per-chat llama-server slot files under `files/llama_kv_slots/`:
  * `chat-<id>.bin` (written by llama-server) plus `chat-<id>.json` (written by the app).
+ * Idle files are gzipped to `<stem>.bin.gz`; llama-server only reads `.bin`, so [unpack] runs
+ * before any restore.
  */
 class NativeChatKvCacheStore internal constructor(private val root: File) {
 
@@ -47,20 +61,41 @@ class NativeChatKvCacheStore internal constructor(private val root: File) {
 
     fun slotFileName(chatId: Long): String = slotFileName(chatId, "bin")
 
-    private fun slotFile(chatId: Long) = File(root, slotFileName(chatId, "bin"))
+    fun slotFileName(key: KvCacheKey): String = "${key.fileStem}.bin"
 
-    private fun metaFile(chatId: Long) = File(root, slotFileName(chatId, "json"))
+    private fun slotFile(stem: String) = File(root, "$stem.bin")
 
-    fun sizeBytes(chatId: Long): Long = slotFile(chatId).takeIf { it.isFile }?.length() ?: 0L
+    private fun gzFile(stem: String) = File(root, "$stem.bin.gz")
 
-    fun readMeta(chatId: Long): KvCacheMeta? {
-        val file = metaFile(chatId).takeIf { it.isFile } ?: return null
+    private fun metaFile(stem: String) = File(root, "$stem.json")
+
+    fun sizeBytes(chatId: Long): Long = sizeBytes(KvCacheKey.Chat(chatId))
+
+    /** On-disk size of the cache: the `.bin`, else its compressed `.bin.gz`. */
+    fun sizeBytes(key: KvCacheKey): Long =
+        (slotFile(key.fileStem).takeIf { it.isFile } ?: gzFile(key.fileStem).takeIf { it.isFile })?.length() ?: 0L
+
+    /** True when only the gzipped copy exists and [unpack] is needed before a restore. */
+    fun isCompressed(key: KvCacheKey): Boolean = isCompressedStem(key.fileStem)
+
+    private fun isCompressedStem(stem: String) = gzFile(stem).isFile && !slotFile(stem).isFile
+
+    fun readMeta(chatId: Long): KvCacheMeta? = readMeta(KvCacheKey.Chat(chatId))
+
+    fun readMeta(key: KvCacheKey): KvCacheMeta? = readMetaOfStem(key.fileStem)
+
+    private fun readMetaOfStem(stem: String): KvCacheMeta? {
+        val file = metaFile(stem).takeIf { it.isFile } ?: return null
         return runCatching { parseMeta(file.readText()) }.getOrNull()
     }
 
-    fun writeMeta(chatId: Long, meta: KvCacheMeta) {
+    fun writeMeta(chatId: Long, meta: KvCacheMeta) = writeMeta(KvCacheKey.Chat(chatId), meta)
+
+    fun writeMeta(key: KvCacheKey, meta: KvCacheMeta) = writeMetaOfStem(key.fileStem, meta)
+
+    private fun writeMetaOfStem(stem: String, meta: KvCacheMeta) {
         root.mkdirs()
-        val target = metaFile(chatId)
+        val target = metaFile(stem)
         val temp = File(root, target.name + ".tmp")
         temp.writeText(encodeMeta(meta))
         if (!temp.renameTo(target)) {
@@ -69,10 +104,151 @@ class NativeChatKvCacheStore internal constructor(private val root: File) {
         }
     }
 
-    fun delete(chatId: Long) {
-        slotFile(chatId).delete()
-        metaFile(chatId).delete()
-        File(root, slotFileName(chatId, "json") + ".tmp").delete()
+    fun delete(chatId: Long) = delete(KvCacheKey.Chat(chatId))
+
+    fun delete(key: KvCacheKey) = deleteStem(key.fileStem)
+
+    private fun deleteStem(stem: String) {
+        slotFile(stem).delete()
+        gzFile(stem).delete()
+        metaFile(stem).delete()
+        File(root, "$stem.json.tmp").delete()
+        File(root, "$stem.bin.gz.tmp").delete()
+        File(root, "$stem.bin.tmp").delete()
+    }
+
+    /** Deletes every cache of one namespace (chat, delegate or harness). */
+    fun deleteNamespace(namespace: KvCacheNamespace) {
+        stems().filter { KvCacheKey.namespaceOfStem(it) == namespace }.forEach(::deleteStem)
+    }
+
+    /** Deletes every harness cache that belongs to [runtimeId]. */
+    fun deleteHarnessRuntime(runtimeId: String) {
+        val prefix = KvCacheKey.harnessRuntimeStemPrefix(runtimeId)
+        stems().filter { it.startsWith(prefix) }.forEach(::deleteStem)
+    }
+
+    /** Bytes used by one harness runtime's caches, including sidecars. */
+    fun harnessRuntimeBytes(runtimeId: String): Long {
+        val prefix = KvCacheKey.harnessRuntimeStemPrefix(runtimeId)
+        return stemBytes().filterKeys { it.startsWith(prefix) }.values.sum()
+    }
+
+    /** Bytes per namespace; every namespace is present, zero when empty. */
+    fun breakdown(): Map<KvCacheNamespace, Long> {
+        val result = KvCacheNamespace.values().associateWithTo(linkedMapOf()) { 0L }
+        stemBytes().forEach { (stem, bytes) ->
+            KvCacheKey.namespaceOfStem(stem)?.let { result[it] = (result[it] ?: 0L) + bytes }
+        }
+        return result
+    }
+
+    /** Bytes saved by gzipped caches: recorded original size minus the `.bin.gz` size. */
+    fun compressionSavedBytes(): Long = stems().sumOf { stem ->
+        if (!isCompressedStem(stem)) return@sumOf 0L
+        val original = readMetaOfStem(stem)?.originalBytes ?: 0L
+        (original - gzFile(stem).length()).coerceAtLeast(0L)
+    }
+
+    /** Marks a cache as just used so the idle compressor leaves it alone. */
+    fun touch(key: KvCacheKey) {
+        slotFile(key.fileStem).takeIf { it.isFile }?.setLastModified(System.currentTimeMillis())
+    }
+
+    /** Drops a gzipped copy that a fresh llama-server save made stale. */
+    fun removeCompressedCopy(key: KvCacheKey) {
+        gzFile(key.fileStem).delete()
+    }
+
+    /**
+     * Stems with an uncompressed `.bin` unused for more than [idleMs] (latest of file mtime and
+     * sidecar `savedAt`) that have not been marked incompressible. [protectedStems] are skipped.
+     */
+    fun idleCompressionCandidates(nowMs: Long, idleMs: Long, protectedStems: Set<String>): List<String> =
+        stems().filter { stem ->
+            if (stem in protectedStems || KvCacheKey.namespaceOfStem(stem) == null) return@filter false
+            val bin = slotFile(stem).takeIf { it.isFile && it.length() > 0L } ?: return@filter false
+            val meta = readMetaOfStem(stem) ?: return@filter false
+            !meta.incompressible && nowMs - maxOf(bin.lastModified(), meta.savedAt) > idleMs
+        }
+
+    /**
+     * Compresses one idle `.bin` to `.bin.gz` when a first-MiB sample deflates by at least
+     * [MIN_SAMPLE_SAVING_PERCENT]; otherwise the sidecar is marked incompressible. The caller
+     * must hold the per-key lock and have excluded in-use stems.
+     */
+    fun compressStem(stem: String): KvCompressionOutcome {
+        val bin = slotFile(stem).takeIf { it.isFile } ?: return KvCompressionOutcome.SKIPPED
+        val meta = readMetaOfStem(stem)?.takeIf { !it.incompressible } ?: return KvCompressionOutcome.SKIPPED
+        val original = bin.length()
+        if (original <= 0L) return KvCompressionOutcome.SKIPPED
+        val (sampleIn, sampleOut) = deflateSample(bin) ?: return KvCompressionOutcome.SKIPPED
+        if (!sampleSavesEnough(sampleIn, sampleOut)) {
+            writeMetaOfStem(stem, meta.copy(incompressible = true))
+            return KvCompressionOutcome.INCOMPRESSIBLE
+        }
+        if (!canSave(original)) return KvCompressionOutcome.SKIPPED
+        val gz = gzFile(stem)
+        val temp = File(root, "$stem.bin.gz.tmp")
+        return try {
+            bin.inputStream().buffered(IO_BUFFER).use { input ->
+                FastGzipOutputStream(temp.outputStream().buffered(IO_BUFFER)).use { out ->
+                    input.copyTo(out, IO_BUFFER)
+                }
+            }
+            if (temp.length() <= 0L || temp.length() >= original) {
+                temp.delete()
+                writeMetaOfStem(stem, meta.copy(incompressible = true))
+                return KvCompressionOutcome.INCOMPRESSIBLE
+            }
+            if (!temp.renameTo(gz)) {
+                gz.delete()
+                if (!temp.renameTo(gz)) {
+                    temp.delete()
+                    return KvCompressionOutcome.SKIPPED
+                }
+            }
+            writeMetaOfStem(stem, meta.copy(originalBytes = original))
+            bin.delete()
+            KvCompressionOutcome.COMPRESSED
+        } catch (_: IOException) {
+            temp.delete()
+            KvCompressionOutcome.SKIPPED
+        }
+    }
+
+    /**
+     * Restores the llama-server readable `.bin` from `.bin.gz` (temp file + atomic rename) and
+     * stamps it as just used. Returns false when it could not be unpacked; a stale `.bin.gz`
+     * next to a `.bin` is simply removed.
+     */
+    fun unpack(key: KvCacheKey): Boolean {
+        val stem = key.fileStem
+        val bin = slotFile(stem)
+        val gz = gzFile(stem)
+        if (bin.isFile) {
+            gz.delete()
+            return true
+        }
+        if (!gz.isFile) return false
+        val expected = readMetaOfStem(stem)?.originalBytes?.takeIf { it > 0L } ?: (gz.length() * 4)
+        if (!canSave(expected)) return false
+        val temp = File(root, "$stem.bin.tmp")
+        return try {
+            GZIPInputStream(gz.inputStream().buffered(IO_BUFFER), IO_BUFFER).use { input ->
+                temp.outputStream().buffered(IO_BUFFER).use { out -> input.copyTo(out, IO_BUFFER) }
+            }
+            if (!temp.renameTo(bin)) {
+                temp.delete()
+                return false
+            }
+            bin.setLastModified(System.currentTimeMillis())
+            gz.delete()
+            true
+        } catch (_: IOException) {
+            temp.delete()
+            false
+        }
     }
 
     /** Bytes used by every file in the cache folder, including sidecars. */
@@ -81,6 +257,59 @@ class NativeChatKvCacheStore internal constructor(private val root: File) {
 
     fun clearAll() {
         root.listFiles()?.forEach { if (it.isFile) it.delete() }
+    }
+
+    /**
+     * False when saving [expectedBytes] more would leave less than [MIN_FREE_BYTES] free.
+     * Deliberately uses `usableSpace` rather than `StorageManager.getAllocatableBytes`: an optional
+     * KV cache must never make the system clear other apps' cached data to make room.
+     */
+    @SuppressLint("UsableSpace")
+    fun canSave(expectedBytes: Long): Boolean {
+        val probe = generateSequence(root) { it.parentFile }.firstOrNull { it.exists() } ?: return false
+        return hasRoomToSave(probe.usableSpace, expectedBytes)
+    }
+
+    /**
+     * Deletes the least recently saved caches (sidecar `savedAt`, else file mtime) until the
+     * folder fits [budgetBytes]. Stems in [protectedStems] are never deleted. [namespaces]
+     * limits both the counted size and the candidates. Returns the freed bytes.
+     */
+    fun enforceBudget(
+        budgetBytes: Long,
+        protectedStems: Set<String>,
+        namespaces: Set<KvCacheNamespace>? = null
+    ): Long {
+        val entries = stemBytes().mapNotNull { (stem, bytes) ->
+            val namespace = KvCacheKey.namespaceOfStem(stem) ?: return@mapNotNull null
+            if (namespaces != null && namespace !in namespaces) return@mapNotNull null
+            val savedAt = readMetaOfStem(stem)?.savedAt?.takeIf { it > 0 }
+                ?: slotFile(stem).takeIf { it.isFile }?.lastModified()
+                ?: metaFile(stem).lastModified()
+            Triple(stem, bytes, savedAt)
+        }
+        var total = entries.sumOf { it.second }
+        var freed = 0L
+        for ((stem, bytes, _) in entries.sortedBy { it.third }) {
+            if (total <= budgetBytes) break
+            if (stem in protectedStems) continue
+            deleteStem(stem)
+            total -= bytes
+            freed += bytes
+        }
+        return freed
+    }
+
+    private fun stems(): Set<String> =
+        root.listFiles()?.filter { it.isFile }?.map { it.name.substringBefore('.') }?.toSet().orEmpty()
+
+    private fun stemBytes(): Map<String, Long> {
+        val result = linkedMapOf<String, Long>()
+        root.listFiles()?.filter { it.isFile }?.forEach {
+            val stem = it.name.substringBefore('.')
+            result[stem] = (result[stem] ?: 0L) + it.length()
+        }
+        return result
     }
 
     /** Chat ids that currently have a slot file or a sidecar on disk. */
@@ -95,6 +324,12 @@ class NativeChatKvCacheStore internal constructor(private val root: File) {
         const val DIR_NAME = "llama_kv_slots"
         const val SLOT_SAVE_PATH_FLAG = "--slot-save-path"
 
+        /** Saving is skipped when it would leave less free space than this. */
+        const val MIN_FREE_BYTES = 2L * 1024 * 1024 * 1024
+
+        internal fun hasRoomToSave(usableBytes: Long, expectedBytes: Long): Boolean =
+            usableBytes >= MIN_FREE_BYTES + expectedBytes.coerceAtLeast(0L)
+
         /** Stable, filesystem-safe stem: negative ids cannot produce a `-` collision. */
         fun fileStem(chatId: Long): String =
             if (chatId >= 0) "chat-$chatId" else "chat-n${-(chatId + 1)}"
@@ -107,7 +342,56 @@ class NativeChatKvCacheStore internal constructor(private val root: File) {
             return if (match.groupValues[1].isEmpty()) value else -(value + 1)
         }
 
-        private val FILE_PATTERN = Regex("""chat-(n?)(\d+)\.(?:bin|json)(?:\.tmp)?""")
+        private val FILE_PATTERN = Regex("""chat-(n?)(\d+)\.(?:bin(?:\.gz)?|json)(?:\.tmp)?""")
+
+        private const val IO_BUFFER = 64 * 1024
+
+        /** Idle compression test window: only the first MiB is deflated to decide. */
+        internal const val SAMPLE_BYTES = 1024 * 1024
+
+        /** A sample must shrink by at least this much for the whole file to be gzipped. */
+        internal const val MIN_SAMPLE_SAVING_PERCENT = 10
+
+        /** Pure decision: did the sample save at least [MIN_SAMPLE_SAVING_PERCENT]? */
+        internal fun sampleSavesEnough(sampleBytes: Int, compressedBytes: Int): Boolean =
+            sampleBytes > 0 && (sampleBytes - compressedBytes).toLong() * 100L >= sampleBytes.toLong() * MIN_SAMPLE_SAVING_PERCENT
+
+        /** Deflate (level 1) the first [SAMPLE_BYTES] of [file]; returns (input, output) sizes. */
+        internal fun deflateSample(file: File): Pair<Int, Int>? {
+            val buffer = ByteArray(SAMPLE_BYTES)
+            val read = try {
+                file.inputStream().use { input ->
+                    var total = 0
+                    while (total < buffer.size) {
+                        val n = input.read(buffer, total, buffer.size - total)
+                        if (n <= 0) break
+                        total += n
+                    }
+                    total
+                }
+            } catch (_: IOException) {
+                return null
+            }
+            if (read <= 0) return null
+            val deflater = Deflater(Deflater.BEST_SPEED)
+            return try {
+                deflater.setInput(buffer, 0, read)
+                deflater.finish()
+                val out = ByteArray(IO_BUFFER)
+                var compressed = 0
+                while (!deflater.finished()) compressed += deflater.deflate(out)
+                read to compressed
+            } finally {
+                deflater.end()
+            }
+        }
+
+        /** Gzip stream at the fastest deflate level; KV state is large and the pass is background work. */
+        private class FastGzipOutputStream(out: java.io.OutputStream) : GZIPOutputStream(out, IO_BUFFER) {
+            init {
+                def.setLevel(Deflater.BEST_SPEED)
+            }
+        }
 
         /**
          * Mirrors llama.cpp's `fs_validate_filename` closely enough to guarantee the server
@@ -173,6 +457,8 @@ class NativeChatKvCacheStore internal constructor(private val root: File) {
             .put("tokens", meta.tokens)
             .put("savedAt", meta.savedAt)
             .put("serverRowId", meta.serverRowId)
+            .put("originalBytes", meta.originalBytes)
+            .put("incompressible", meta.incompressible)
             .toString()
 
         internal fun parseMeta(json: String): KvCacheMeta {
@@ -183,7 +469,9 @@ class NativeChatKvCacheStore internal constructor(private val root: File) {
                 bytes = obj.optLong("bytes"),
                 tokens = obj.optInt("tokens"),
                 savedAt = obj.optLong("savedAt"),
-                serverRowId = obj.optLong("serverRowId")
+                serverRowId = obj.optLong("serverRowId"),
+                originalBytes = obj.optLong("originalBytes"),
+                incompressible = obj.optBoolean("incompressible")
             )
         }
 

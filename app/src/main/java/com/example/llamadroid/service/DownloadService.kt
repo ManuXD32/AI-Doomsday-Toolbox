@@ -1764,6 +1764,10 @@ class DownloadService : Service() {
         }
     }
     
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        ForegroundTimeoutSupport.handle(this, fgsType)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         serviceScope.cancel()

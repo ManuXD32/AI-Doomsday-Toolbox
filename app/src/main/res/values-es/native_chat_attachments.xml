@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="native_chat_attachments_missing">Archivo no encontrado</string>
+    <string name="native_chat_attachments_share">Compartir %1$s</string>
+    <string name="native_chat_attachments_remove">Quitar %1$s</string>
+    <string name="native_chat_attachments_compacted_exact">Contexto compactado · %1$s tokens ahorrados</string>
+    <string name="native_chat_attachments_compacted_approx">Contexto compactado · ~%1$s tokens ahorrados</string>
+</resources>

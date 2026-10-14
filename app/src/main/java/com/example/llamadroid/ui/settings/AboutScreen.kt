@@ -305,6 +305,10 @@ fun AboutScreen(navController: NavController) {
             }
 
             item {
+                BackgroundStopCard()
+            }
+
+            item {
                 NativeBuildCommitsCard(nativeBuildCommits)
                 Spacer(modifier = Modifier.height(24.dp))
             }

@@ -175,7 +175,9 @@ data class LlamaMessageEntity(
     val completionTokens: Int = 0,
     val tps: Double = 0.0,
     val generationTimeMs: Long = 0L,
-    val videoPath: String? = null
+    val videoPath: String? = null,
+    /** Null for ordinary messages; see [LlamaMessageKind] for app-written notices. */
+    val kind: String? = null
 )
 
 object LlamaScheduledTaskScheduleType {

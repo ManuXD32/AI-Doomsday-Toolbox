@@ -16,13 +16,13 @@ import com.example.llamadroid.service.LlamaServerUsageLease
 import com.example.llamadroid.service.ManagedLlamaServerCoordinator
 import com.example.llamadroid.service.ManagedLlamaServerException
 import com.example.llamadroid.service.NativeChatToolConfig
+import com.example.llamadroid.ui.ai.llama.chatlist.newChatApiParamsForServer
 import com.example.llamadroid.util.GGUFParser
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -108,7 +108,7 @@ class EasyLlamaChatCoordinator(
                         val chatId = database.llamaChatDao().insertChat(LlamaChatEntity(
                             title = ready.card.name,
                             contextSize = requireNotNull(ready.contextTokens),
-                            apiParams = JSONObject(easyChatDisabledTools().toParamMap()).toString()))
+                            apiParams = newChatApiParamsForServer(linked.server)))
                         database.llamaServerDao().updateLastUsed(linked.server.id)
                         EasyLlamaChatSession(chatId, linked.server.id)
                     }

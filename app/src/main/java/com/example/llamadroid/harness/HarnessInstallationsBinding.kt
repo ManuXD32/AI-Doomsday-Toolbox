@@ -35,7 +35,9 @@ internal fun rememberHarnessInstallations(manager: HarnessInstallationManager): 
     val operation by manager.operation.collectAsState()
     val revision by manager.contentRevision.collectAsState()
     val transferUi by transfer.ui.collectAsState()
-    val owner by remember(manager) { manager.database.harnessDao().observeRuntime() }.collectAsState(null)
+    // One process row per runtime: every row reports its own state (several can run at once).
+    val processRows by remember(manager) { manager.database.harnessDao().observeRuntimes() }.collectAsState(emptyList())
+    val processById = remember(processRows) { processRows.associateBy { it.environmentId } }
     var error by remember { mutableStateOf<String?>(null) }
     val projections by produceState(emptyMap<String, InstallationProjection>(), rows.map { it.id }, revision) {
         coroutineScope {
@@ -58,8 +60,12 @@ internal fun rememberHarnessInstallations(manager: HarnessInstallationManager): 
             } }
         }
     }
-    val activeOwner = owner?.takeIf { it.state in setOf("STARTING", "RUNNING", "STOP_REQUESTED", "FORCE_STOPPING") }
-    val busy = operation.busy || transferUi?.phase == HarnessRuntimeTransferPhase.RUNNING
+    val liveStates = setOf("STARTING", "RUNNING", "STOP_REQUESTED", "FORCE_STOPPING")
+    fun isLive(id: String) = processById[id]?.state in liveStates
+    // An operation only locks the runtime it targets; a null target (e.g. backup of everything) locks all rows.
+    fun operationAffects(id: String) = operation.busy && (operation.runtimeId == null || operation.runtimeId == id)
+    val transferRunning = transferUi?.phase == HarnessRuntimeTransferPhase.RUNNING
+    val busy = operation.busy || transferRunning
     fun ready(row: AgentProotEnvironmentEntity) = row.status !in setOf("INSTALLING", "UPDATING", "DELETING")
     val phaseLabel = stringResource(when (operation.phase) {
         "STOPPING" -> R.string.harness_installation_phase_stopping
@@ -79,16 +85,26 @@ internal fun rememberHarnessInstallations(manager: HarnessInstallationManager): 
         rows = rows.map { row ->
             val projection = projections[row.id] ?: InstallationProjection()
             val preparing = operation.busy && operation.runtimeId == row.id
+            val process = processById[row.id]
+            val live = isLive(row.id)
+            val rowLocked = operationAffects(row.id) || transferRunning
             HarnessRuntimeInstallationUi(row.id, row.displayName,
-                status = if (preparing) HarnessRuntimeStatus.STARTING else if (activeOwner?.environmentId == row.id) when (activeOwner.state) {
+                status = if (preparing) HarnessRuntimeStatus.STARTING else if (live) when (process?.state) {
                     "RUNNING" -> HarnessRuntimeStatus.RUNNING
                     "STARTING" -> HarnessRuntimeStatus.STARTING
                     else -> HarnessRuntimeStatus.STOPPING
-                } else if (!ready(row) || row.status == "BROKEN") HarnessRuntimeStatus.INTERRUPTED else HarnessRuntimeStatus.STOPPED,
+                } else if (process?.state == "FAILED") HarnessRuntimeStatus.ERROR
+                else if (process?.state == "INTERRUPTED") HarnessRuntimeStatus.INTERRUPTED
+                else if (!ready(row) || row.status == "BROKEN") HarnessRuntimeStatus.INTERRUPTED else HarnessRuntimeStatus.STOPPED,
                 detail = if (row.status == "NOT_INSTALLED") stringResource(R.string.harness_installation_not_installed) else null,
                 sizeLabel = Formatter.formatFileSize(context, row.sizeBytes),
                 projectCount = projection.projects.size, sessionCount = projection.sessions.size, settingsCount = projection.settingsCount,
-                canSelect = !busy && ready(row) && row.status != "BROKEN", canRename = !busy,
+                canSelect = !operationAffects(row.id) && !transferRunning && ready(row) && row.status != "BROKEN",
+                port = process?.port?.takeIf { process.state == "RUNNING" },
+                canStart = !rowLocked && !live && ready(row) && row.status !in setOf("BROKEN", "NOT_INSTALLED"),
+                canStop = !rowLocked && process?.state in setOf("STARTING", "RUNNING"),
+                canForceStop = live && process?.state != "FORCE_STOPPING",
+                canRename = !busy,
                 canRecreate = !busy && ready(row), canDelete = !busy && ready(row), canExport = !busy && ready(row),
                 statusLabel = phaseLabel.takeIf { preparing },
             )
@@ -96,7 +112,7 @@ internal fun rememberHarnessInstallations(manager: HarnessInstallationManager): 
         selectedRuntimeId = selected,
         operation = operation.toInstallationOperationUi(phaseLabel),
         transfer = transferUi,
-        stoppedRuntimeTargets = rows.filter { ready(it) && it.status != "BROKEN" && activeOwner?.environmentId != it.id }.map {
+        stoppedRuntimeTargets = rows.filter { ready(it) && it.status != "BROKEN" && !isLive(it.id) }.map {
             HarnessRuntimeTransferTargetUi(it.id, it.displayName)
         },
         exportProjectsByRuntime = projections.mapValues { it.value.projects },
@@ -110,6 +126,9 @@ internal fun rememberHarnessInstallations(manager: HarnessInstallationManager): 
                 when (action) {
                     is HarnessRuntimeInstallationAction.Create -> manager.create(action.name)
                     is HarnessRuntimeInstallationAction.Select -> manager.select(action.runtimeId)
+                    is HarnessRuntimeInstallationAction.Start -> HarnessAppRuntime.forRuntime(context, action.runtimeId).start()
+                    is HarnessRuntimeInstallationAction.Stop -> HarnessAppRuntime.forRuntime(context, action.runtimeId).stop()
+                    is HarnessRuntimeInstallationAction.ForceStop -> HarnessAppRuntime.forRuntime(context, action.runtimeId).forceStop()
                     is HarnessRuntimeInstallationAction.Rename -> manager.rename(action.runtimeId, action.name)
                     is HarnessRuntimeInstallationAction.Recreate -> manager.recreate(action.runtimeId)
                     is HarnessRuntimeInstallationAction.Delete -> manager.delete(action.runtimeId)

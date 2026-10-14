@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -48,6 +49,7 @@ fun ServersScreen(
     viewModel: ServerRegistryViewModel = viewModel()
 ) {
     val servers by viewModel.servers.collectAsState()
+    val openLocalEditor = LocalServerProfileEditorOpener.current
     val actions by viewModel.actions.collectAsState()
     val walkthroughTargets = LocalWalkthroughTargets.current
     var detailKey by rememberSaveable { mutableStateOf<String?>(null) }
@@ -66,7 +68,7 @@ fun ServersScreen(
         subtitle = stringResource(R.string.srv_screen_subtitle),
         onBack = { navController.popBackStack() },
         actions = {
-            IconButton(onClick = { editingKey = null; editorOpen = true }) {
+            IconButton(onClick = { openLocalEditor(null, null) }) {
                 Icon(Icons.Default.Add, contentDescription = stringResource(R.string.srv_add))
             }
         }
@@ -81,12 +83,20 @@ fun ServersScreen(
         ) {
             item(key = "add") {
                 Button(
-                    onClick = { editingKey = null; editorOpen = true },
+                    onClick = { openLocalEditor(null, null) },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(Icons.Default.Add, contentDescription = null)
                     Spacer(Modifier.size(8.dp))
                     Text(stringResource(R.string.srv_add), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            item(key = "add_remote") {
+                OutlinedButton(
+                    onClick = { editingKey = null; editorOpen = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.chats_rework_add_remote), maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             }
             if (servers.isEmpty()) {

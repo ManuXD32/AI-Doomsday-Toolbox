@@ -2563,16 +2563,18 @@ class AiToolServerService : Service() {
             serviceScope.launch {
                 while (isActive) {
                     if (isJobCancelled(jobId)) return@launch
-                    when (val state = LlamaClientService.generationState.value) {
-                        is LlamaClientService.GenerationState.Generating -> if (state.chatId == chatId) {
+                    when (val state = NativeChatGenerationStates.stateFor(chatId)) {
+                        is LlamaClientService.GenerationState.Generating -> {
                             val progress = if (state.tokenCount > 0) 0.35f else 0.15f
                             updateJob(jobId, type.id, "RUNNING", progress, state.statusText ?: "Generating reply", null)
                         }
-                        is LlamaClientService.GenerationState.Completed -> if (state.chatId == chatId) {
+                        is LlamaClientService.GenerationState.Queued ->
+                            updateJob(jobId, type.id, "RUNNING", 0.05f, "Queued: waiting for resources", null)
+                        is LlamaClientService.GenerationState.Completed -> {
                             updateJob(jobId, type.id, "COMPLETED", 1f, "Reply complete", null)
                             return@launch
                         }
-                        is LlamaClientService.GenerationState.Error -> if (state.chatId == chatId) {
+                        is LlamaClientService.GenerationState.Error -> {
                             updateJob(jobId, type.id, "FAILED", 0f, state.message, null)
                             return@launch
                         }

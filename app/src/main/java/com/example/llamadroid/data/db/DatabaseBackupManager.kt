@@ -56,6 +56,7 @@ object DatabaseBackupManager {
         "tama_chat_audio",
         "adventure_worlds",
         "llama_chat_media",
+        "llama_chat_files",
         "llama_chat_audio",
         "agent_chat_images",
         "native_chat_notes_imports"

@@ -117,7 +117,8 @@ object NativeChatNotesBackupManager {
                     promptTokens = message.promptTokens,
                     completionTokens = message.completionTokens,
                     tps = message.tps,
-                    generationTimeMs = message.generationTimeMs
+                    generationTimeMs = message.generationTimeMs,
+                    kind = message.kind
                 )
             }
 
@@ -735,7 +736,8 @@ object NativeChatNotesBackupManager {
         promptTokens = promptTokens,
         completionTokens = completionTokens,
         tps = tps,
-        generationTimeMs = generationTimeMs
+        generationTimeMs = generationTimeMs,
+        kind = kind
     )
 
     private fun NoteBackup.toEntity(
@@ -1193,7 +1195,9 @@ data class LlamaMessageBackup(
     val promptTokens: Int = 0,
     val completionTokens: Int = 0,
     val tps: Double = 0.0,
-    val generationTimeMs: Long = 0
+    val generationTimeMs: Long = 0,
+    /** `LlamaMessageEntity.kind`; null in backups written before 0.9993. */
+    val kind: String? = null
 )
 
 @Keep

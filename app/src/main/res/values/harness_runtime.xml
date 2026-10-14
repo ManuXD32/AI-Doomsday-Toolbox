@@ -32,6 +32,10 @@
     <string name="harness_app_tools_failed">Could not save this change. Retry.</string>
     <string name="harness_legacy_execution_retired">This conversation is saved history. Start DeepSeek Harness to create a new session.</string>
     <string name="harness_runtime_notification">DeepSeek Harness is running</string>
+    <plurals name="harness_runtime_notification_multiple">
+        <item quantity="one">%1$d runtime running: %2$s</item>
+        <item quantity="other">%1$d runtimes running: %2$s</item>
+    </plurals>
     <string name="harness_runtime_starting_notification">Preparing DeepSeek Harness</string>
     <string name="harness_runtime_failure">Harness was interrupted. Start or Continue to reconnect.</string>
     <string name="harness_runtime_stop_timeout">Harness did not stop within ten seconds. Force stop is available.</string>

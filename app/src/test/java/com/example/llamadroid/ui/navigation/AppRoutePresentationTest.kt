@@ -43,23 +43,33 @@ class AppRoutePresentationTest {
         }
     }
 
-    @Test fun `universal keys go to the strip on deep routes and drawer roots, the top bar on bar and rail roots`() {
-        val deep = UniversalKeysPlacement.STRIP
-        AppNavigationLayout.entries.forEach {
-            assertEquals(deep, universalKeysPlacement(false, it, false, false))
-        }
-        assertEquals(deep, universalKeysPlacement(true, AppNavigationLayout.Drawer, false, false))
-        assertEquals(UniversalKeysPlacement.TOP_BAR_ORGANIZER, universalKeysPlacement(true, AppNavigationLayout.Bar, false, false))
-        assertEquals(UniversalKeysPlacement.TOP_BAR_ORGANIZER, universalKeysPlacement(true, AppNavigationLayout.Rail, false, false))
+    @Test fun `one bar of five keys in fixed order on every screen`() {
+        assertEquals(listOf("dashboard", "chats", "tama", "notes_manager", "settings"), UniversalKey.entries.map { it.route })
+        assertEquals(UniversalKeysPlacement.STRIP, universalKeysPlacement(AppNavigationLayout.Bar, false))
+        assertEquals(UniversalKeysPlacement.STRIP, universalKeysPlacement(AppNavigationLayout.Drawer, false))
+        assertEquals(UniversalKeysPlacement.RAIL, universalKeysPlacement(AppNavigationLayout.Rail, false))
     }
 
-    @Test fun `universal keys hide on first run and during the walkthrough`() {
+    @Test fun `navigation hides only on first run`() {
         AppNavigationLayout.entries.forEach { layout ->
-            listOf(true, false).forEach { root ->
-                assertEquals(UniversalKeysPlacement.NONE, universalKeysPlacement(root, layout, true, false))
-                assertEquals(UniversalKeysPlacement.NONE, universalKeysPlacement(root, layout, false, true))
-            }
+            assertEquals(UniversalKeysPlacement.NONE, universalKeysPlacement(layout, true))
         }
+    }
+
+    @Test fun `selected key follows the owning parent`() {
+        assertEquals(UniversalKey.DASHBOARD, selectedUniversalKey("dashboard"))
+        assertEquals(UniversalKey.DASHBOARD, selectedUniversalKey("ai_hub"))
+        assertEquals(UniversalKey.DASHBOARD, selectedUniversalKey("library"))
+        assertEquals(UniversalKey.DASHBOARD, selectedUniversalKey("image_gen"))
+        assertEquals(UniversalKey.CHATS, selectedUniversalKey("chats"))
+        assertEquals(UniversalKey.CHATS, selectedUniversalKey("llama_chat"))
+        assertEquals(UniversalKey.CHATS, selectedUniversalKey("agent"))
+        assertEquals(UniversalKey.TAMA, selectedUniversalKey("tama"))
+        assertEquals(UniversalKey.TAMA, selectedUniversalKey("farm"))
+        assertEquals(UniversalKey.ORGANIZER, selectedUniversalKey("notes_manager"))
+        assertEquals(UniversalKey.SETTINGS, selectedUniversalKey("settings_general"))
+        assertEquals(UniversalKey.SETTINGS, selectedUniversalKey("about"))
+        assertEquals(null, selectedUniversalKey(null))
     }
 
     @Test fun `universal key highlight follows the owning route`() {

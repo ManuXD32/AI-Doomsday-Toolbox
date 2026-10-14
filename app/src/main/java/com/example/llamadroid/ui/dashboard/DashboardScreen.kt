@@ -4,6 +4,7 @@ import com.example.llamadroid.ui.navigation.navigateToRoot
 import android.content.SharedPreferences
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -23,6 +24,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Memory
@@ -41,6 +44,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
@@ -141,7 +145,7 @@ fun DashboardScreen(navController: NavController) {
             add(HomeStartAction("tool:${tool.id}", tool.icon, stringResource(tool.titleRes), tool.sprite) {
                 if (tool.id == "chat") {
                     when (runningChatServers.size) {
-                        0 -> navController.navigate(Screen.LlamaServers.route)
+                        0 -> navController.navigate(Screen.Chats.route) { launchSingleTop = true }
                         1 -> navController.navigate("chat?port=${runningChatServers.single().port}")
                         else -> showChatServerPicker = true
                     }
@@ -175,7 +179,7 @@ fun DashboardScreen(navController: NavController) {
             ) {
                 val serverId = chat.pinnedServerId
                 if (serverId == null || servers.none { it.id == serverId }) {
-                    navController.navigate(Screen.LlamaServers.route)
+                    navController.navigate(Screen.Chats.route) { launchSingleTop = true }
                 } else {
                     navController.navigate(Screen.LlamaChat.createRoute(chat.id, serverId))
                 }
@@ -217,6 +221,21 @@ fun DashboardScreen(navController: NavController) {
 
             DashboardStartRow(startActions)
 
+            AppSectionCard {
+                Box(Modifier.testTag("home_card_ai_hub").walkthroughTarget("root.ai_hub")) {
+                    DashboardLinkRow(Icons.Default.GridView, stringResource(R.string.studio_nav_tools),
+                        stringResource(R.string.home_tools_card_subtitle)) {
+                        navController.navigateToRoot("ai_hub")
+                    }
+                }
+                Box(Modifier.testTag("home_card_library").walkthroughTarget("root.library")) {
+                    DashboardLinkRow(Icons.Default.FolderOpen, stringResource(R.string.studio_nav_library),
+                        stringResource(R.string.home_library_card_subtitle)) {
+                        navController.navigateToRoot("library")
+                    }
+                }
+            }
+
             DashboardContinueCard(
                 items = continueItems,
                 pendingJobs = pendingJobs,
@@ -228,7 +247,7 @@ fun DashboardScreen(navController: NavController) {
                 viewModel = viewModel,
                 runningServers = runningChatServers.size,
                 onMemory = { navController.navigate(Screen.Stats.route) },
-                onServers = { navController.navigate(Screen.LlamaServers.route) }
+                onServers = { navController.navigate(Screen.Chats.route) { launchSingleTop = true } }
             )
         }
     }

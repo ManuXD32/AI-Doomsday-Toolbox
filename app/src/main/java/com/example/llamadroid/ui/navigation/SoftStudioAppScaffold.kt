@@ -32,7 +32,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -40,8 +39,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
@@ -76,7 +73,6 @@ fun SoftStudioAppScaffold(
     currentRoute: String?,
     destinations: List<AppNavigationDestination>,
     snackbarHostState: SnackbarHostState,
-    onSettings: () -> Unit,
     onUniversalKey: (UniversalKey) -> Unit = {},
     isFirstRun: Boolean = false,
     onTour: (() -> Unit)? = null,
@@ -98,7 +94,8 @@ fun SoftStudioAppScaffold(
     val drawerOpen = drawerState.isOpen
     SideEffect { tourTargets?.drawerOpen = drawerOpen }
     val isDrawer = presentation.isRoot && layout == AppNavigationLayout.Drawer
-    val keysPlacement = universalKeysPlacement(presentation.isRoot, layout, onCloseTour != null, isFirstRun)
+    val keysPlacement = universalKeysPlacement(layout, isFirstRun)
+    val selectedKey = selectedUniversalKey(currentRoute?.substringBefore('?')?.substringBefore('/'))
     val baseRoute = currentRoute?.substringBefore('?')?.substringBefore('/')
     LaunchedEffect(isDrawer) { if (!isDrawer) drawerState.close() }
 
@@ -122,9 +119,25 @@ fun SoftStudioAppScaffold(
                     if (onCloseTour != null) Text(stringResource(R.string.tour_tap_target),
                         Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.bodySmall)
                     Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).testTag("soft_studio_navigation_drawer")) {
-                    destinations.forEach { destination ->
+                    UniversalKey.entries.forEach { key ->
                         NavigationDrawerItem(
-                            label = { Text(destination.label) },
+                            label = { Text(stringResource(key.label), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            selected = key == selectedKey,
+                            icon = { AppIcon(key.icon, null, sprite = key.sprite) },
+                            modifier = Modifier.testTag("studio_drawer_${key.route}")
+                                .walkthroughTarget(if (key == UniversalKey.SETTINGS) "drawer.settings" else "drawer.root.${key.route}"),
+                            onClick = {
+                                scope.launch {
+                                    drawerState.close()
+                                    onUniversalKey(key)
+                                }
+                            }
+                        )
+                    }
+                    // Tools and Library are not bar items; the drawer keeps them as secondary entries.
+                    destinations.filter { d -> UniversalKey.entries.none { it.route == d.route } }.forEach { destination ->
+                        NavigationDrawerItem(
+                            label = { Text(destination.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                             selected = destination.isSelected(currentRoute),
                             icon = { AppIcon(destination.icon, null, sprite = rootSprite(destination.route)) },
                             modifier = Modifier.testTag("studio_drawer_${destination.route}").walkthroughTarget("drawer.root.${destination.route}"),
@@ -136,13 +149,6 @@ fun SoftStudioAppScaffold(
                             }
                         )
                     }
-                    NavigationDrawerItem(
-                        label = { Text(stringResource(R.string.settings_title)) },
-                        selected = false,
-                        icon = { AppIcon(Icons.Default.Settings, null, sprite = AppSpriteKey.SETTINGS) },
-                        modifier = Modifier.walkthroughTarget("drawer.settings"),
-                        onClick = { scope.launch { drawerState.close(); onSettings() } }
-                    )
                     }
                 }
             }
@@ -174,15 +180,6 @@ fun SoftStudioAppScaffold(
                                 }
                             }
                             if (currentRoute != AppRootDestination.Home.route) FeatureGuideAction()
-                            if (keysPlacement == UniversalKeysPlacement.TOP_BAR_ORGANIZER) {
-                                IconButton(onClick = { onUniversalKey(UniversalKey.ORGANIZER) },
-                                    modifier = Modifier.testTag("soft_studio_organizer").walkthroughTarget("universal.organizer")) {
-                                    AppIcon(UniversalKey.ORGANIZER.icon, stringResource(R.string.universal_key_open, stringResource(UniversalKey.ORGANIZER.label)), sprite = UniversalKey.ORGANIZER.sprite)
-                                }
-                            }
-                            IconButton(onClick = onSettings, modifier = Modifier.testTag("soft_studio_settings").walkthroughTarget("shell.settings")) {
-                                AppIcon(Icons.Default.Settings, stringResource(R.string.settings_title), sprite = AppSpriteKey.SETTINGS)
-                            }
                         },
                         colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
                     )
@@ -190,43 +187,27 @@ fun SoftStudioAppScaffold(
             },
             bottomBar = {
                 WalkthroughInsetHost(active = onCloseTour != null) {
-                    if (onCloseTour != null) Box(if (presentation.isRoot && layout == AppNavigationLayout.Bar) Modifier else Modifier.navigationBarsPadding()) { walkthroughBar() }
-                if (presentation.isRoot && layout == AppNavigationLayout.Bar) {
-                    NavigationBar(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                        tonalElevation = 0.dp,
-                        modifier = Modifier.testTag("soft_studio_navigation_bar")
-                    ) {
-                        destinations.forEach { destination ->
-                            NavigationBarItem(
-                                selected = destination.isSelected(currentRoute),
-                                onClick = destination.onClick,
-                                icon = { AppIcon(destination.icon, null, sprite = rootSprite(destination.route)) },
-                                label = { Text(destination.label, maxLines = 1) },
-                                modifier = Modifier.testTag("studio_bar_${destination.route}").walkthroughTarget("root.${destination.route}")
-                            )
-                        }
-                    }
-                }
+                    if (onCloseTour != null) Box(if (keysPlacement == UniversalKeysPlacement.STRIP) Modifier else Modifier.navigationBarsPadding()) { walkthroughBar() }
                 if (keysPlacement == UniversalKeysPlacement.STRIP) UniversalKeyStrip(baseRoute, onUniversalKey)
                 }
             }
         ) { padding ->
             Row(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
-                if (presentation.isRoot && layout == AppNavigationLayout.Rail) {
+                if (keysPlacement == UniversalKeysPlacement.RAIL) {
                     NavigationRail(
                         containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                         windowInsets = WindowInsets(0, 0, 0, 0),
                         modifier = Modifier.verticalScroll(rememberScrollState()).testTag("soft_studio_navigation_rail")
                     ) {
-                        destinations.forEach { destination ->
+                        UniversalKey.entries.forEach { key ->
+                            val label = stringResource(key.label)
                             NavigationRailItem(
-                                selected = destination.isSelected(currentRoute),
-                                onClick = destination.onClick,
-                                icon = { AppIcon(destination.icon, destination.contentDescription, sprite = rootSprite(destination.route)) },
-                                label = { Text(destination.label, maxLines = 2) },
+                                selected = key == selectedKey,
+                                onClick = { onUniversalKey(key) },
+                                icon = { AppIcon(key.icon, stringResource(R.string.universal_key_open, label), sprite = key.sprite) },
+                                label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                 alwaysShowLabel = true,
-                                modifier = Modifier.testTag("studio_rail_${destination.route}").walkthroughTarget("root.${destination.route}")
+                                modifier = Modifier.testTag("studio_rail_${key.route}").walkthroughTarget(universalKeyTourTarget(key))
                             )
                         }
                     }

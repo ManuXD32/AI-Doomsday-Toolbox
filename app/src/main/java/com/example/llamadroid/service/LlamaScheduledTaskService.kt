@@ -107,6 +107,10 @@ class LlamaScheduledTaskService : Service() {
         return START_NOT_STICKY
     }
 
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        ForegroundTimeoutSupport.handle(this, fgsType)
+    }
+
     override fun onDestroy() {
         processor?.cancel()
         releaseLocks()

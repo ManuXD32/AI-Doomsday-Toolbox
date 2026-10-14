@@ -259,6 +259,8 @@ data class NativeChatToolConfig(
     val calendarToolsEnabled: Boolean = false,
     val alarmToolsEnabled: Boolean = false,
     val fileToolsEnabled: Boolean = false,
+    val deepSeekDelegationEnabled: Boolean = false,
+    val deepSeekDelegationMode: com.example.llamadroid.service.delegation.DelegationMode = com.example.llamadroid.service.delegation.DelegationMode.AUTO,
     val customToolsEnabled: Boolean = false,
     val knowledgeBaseEnabled: Boolean = false,
     val knowledgeBaseAutoContextEnabled: Boolean = false,
@@ -277,6 +279,14 @@ data class NativeChatToolConfig(
     val assistantTtsSpeed: Float = SUPERTONIC_DEFAULT_SPEED,
     val callSilenceAfterSpeechSeconds: Int = DEFAULT_CALL_SILENCE_AFTER_SPEECH_SECONDS,
     val callNoSpeechTimeoutSeconds: Int = DEFAULT_CALL_NO_SPEECH_TIMEOUT_SECONDS,
+    /** Per-chat audio input routing: [AUDIO_INPUT_SERVER] (server card default), [AUDIO_INPUT_WHISPER] or [AUDIO_INPUT_DIRECT]. */
+    val audioInputMode: String = AUDIO_INPUT_SERVER,
+    /** Per-chat Whisper model override; null keeps the server card's model. */
+    val whisperModelPath: String? = null,
+    /** Per-chat Whisper language override; null keeps the server card's language. */
+    val whisperLanguage: String? = null,
+    /** Per-chat video routing: [VIDEO_INPUT_SERVER] (server/global policy), [VIDEO_INPUT_NATIVE] (try natively, fall back) or [VIDEO_INPUT_TRANSCRIPT]. */
+    val videoInputMode: String = VIDEO_INPUT_SERVER,
     val maxToolRounds: Int = DEFAULT_TOOL_ROUNDS
 ) {
     fun hasEnabledTools(): Boolean = toolsEnabled && (
@@ -292,6 +302,7 @@ data class NativeChatToolConfig(
             calendarToolsEnabled ||
             alarmToolsEnabled ||
             fileToolsEnabled ||
+            deepSeekDelegationEnabled ||
             customToolsEnabled ||
             knowledgeBaseEnabled ||
             imageGenerationEnabled ||
@@ -339,6 +350,7 @@ data class NativeChatToolConfig(
             calendarToolsEnabled = effectiveChatToolsEnabled && calendarToolsEnabled && serverDefaults.calendarToolsEnabled,
             alarmToolsEnabled = effectiveChatToolsEnabled && alarmToolsEnabled && serverDefaults.alarmToolsEnabled,
             fileToolsEnabled = effectiveChatToolsEnabled && fileToolsEnabled,
+            deepSeekDelegationEnabled = effectiveChatToolsEnabled && deepSeekDelegationEnabled,
             customToolsEnabled = effectiveChatToolsEnabled && customToolsEnabled,
             knowledgeBaseEnabled = effectiveKnowledgeBaseEnabled,
             knowledgeBaseAutoContextEnabled = forceChatDocumentKnowledgeBase || (
@@ -389,6 +401,8 @@ data class NativeChatToolConfig(
         put(KEY_CALENDAR_TOOLS_ENABLED, calendarToolsEnabled)
         put(KEY_ALARM_TOOLS_ENABLED, alarmToolsEnabled)
         put(KEY_FILE_TOOLS_ENABLED, fileToolsEnabled)
+        put(com.example.llamadroid.service.delegation.NativeChatDelegationConfig.KEY_ENABLED, deepSeekDelegationEnabled)
+        put(com.example.llamadroid.service.delegation.NativeChatDelegationConfig.KEY_MODE, deepSeekDelegationMode.wire)
         put(KEY_CUSTOM_TOOLS_ENABLED, customToolsEnabled)
         put(KEY_KNOWLEDGE_BASE_ENABLED, knowledgeBaseEnabled)
         put(KEY_KNOWLEDGE_AUTO_CONTEXT_ENABLED, knowledgeBaseAutoContextEnabled)
@@ -405,6 +419,10 @@ data class NativeChatToolConfig(
         put(KEY_ASSISTANT_TTS_SPEED, assistantTtsSpeed.coerceIn(MIN_ASSISTANT_TTS_SPEED, MAX_ASSISTANT_TTS_SPEED))
         put(KEY_CALL_SILENCE_AFTER_SPEECH_SECONDS, callSilenceAfterSpeechSeconds.coerceIn(MIN_CALL_SILENCE_AFTER_SPEECH_SECONDS, MAX_CALL_SILENCE_AFTER_SPEECH_SECONDS))
         put(KEY_CALL_NO_SPEECH_TIMEOUT_SECONDS, callNoSpeechTimeoutSeconds.coerceIn(MIN_CALL_NO_SPEECH_TIMEOUT_SECONDS, MAX_CALL_NO_SPEECH_TIMEOUT_SECONDS))
+        put(KEY_AUDIO_INPUT_MODE, normalizeAudioInputMode(audioInputMode))
+        put(KEY_VIDEO_INPUT_MODE, normalizeVideoInputMode(videoInputMode))
+        whisperModelPath?.trim()?.takeIf { it.isNotBlank() }?.let { put(KEY_WHISPER_MODEL_PATH, it) }
+        whisperLanguage?.trim()?.takeIf { it.isNotBlank() }?.let { put(KEY_WHISPER_LANGUAGE, it) }
         imageParams.toParamMap().forEach { (key, value) ->
             if (value != null) put(key, value)
         }
@@ -457,6 +475,28 @@ data class NativeChatToolConfig(
         const val KEY_ASSISTANT_TTS_SPEED = "assistant_tts_speed"
         const val KEY_CALL_SILENCE_AFTER_SPEECH_SECONDS = "call_silence_after_speech_seconds"
         const val KEY_CALL_NO_SPEECH_TIMEOUT_SECONDS = "call_no_speech_timeout_seconds"
+        const val KEY_AUDIO_INPUT_MODE = "chat_audio_input_mode"
+        const val KEY_WHISPER_MODEL_PATH = "chat_whisper_model_path"
+        const val KEY_WHISPER_LANGUAGE = "chat_whisper_language"
+        const val AUDIO_INPUT_SERVER = "server"
+        const val AUDIO_INPUT_WHISPER = "whisper"
+        const val AUDIO_INPUT_DIRECT = "direct"
+        const val KEY_VIDEO_INPUT_MODE = "chat_video_input_mode"
+        const val VIDEO_INPUT_SERVER = "server"
+        const val VIDEO_INPUT_NATIVE = "native"
+        const val VIDEO_INPUT_TRANSCRIPT = "transcript"
+
+        fun normalizeVideoInputMode(value: String?): String = when (value?.trim()) {
+            VIDEO_INPUT_NATIVE -> VIDEO_INPUT_NATIVE
+            VIDEO_INPUT_TRANSCRIPT -> VIDEO_INPUT_TRANSCRIPT
+            else -> VIDEO_INPUT_SERVER
+        }
+
+        fun normalizeAudioInputMode(value: String?): String = when (value?.trim()) {
+            AUDIO_INPUT_WHISPER -> AUDIO_INPUT_WHISPER
+            AUDIO_INPUT_DIRECT -> AUDIO_INPUT_DIRECT
+            else -> AUDIO_INPUT_SERVER
+        }
         const val KEY_IMAGE_ENGINE = "tool_image_engine"
         const val KEY_IMAGE_MODEL = "tool_image_model"
         const val KEY_IMAGE_WIDTH = "tool_image_width"
@@ -611,6 +651,8 @@ data class NativeChatToolConfig(
             calendarToolsEnabled = booleanParam(params, KEY_CALENDAR_TOOLS_ENABLED, false),
             alarmToolsEnabled = booleanParam(params, KEY_ALARM_TOOLS_ENABLED, false),
             fileToolsEnabled = booleanParam(params, KEY_FILE_TOOLS_ENABLED, false),
+            deepSeekDelegationEnabled = booleanParam(params, com.example.llamadroid.service.delegation.NativeChatDelegationConfig.KEY_ENABLED, false),
+            deepSeekDelegationMode = com.example.llamadroid.service.delegation.DelegationMode.fromWire(params[com.example.llamadroid.service.delegation.NativeChatDelegationConfig.KEY_MODE] as? String),
             customToolsEnabled = booleanParam(params, KEY_CUSTOM_TOOLS_ENABLED, false),
             knowledgeBaseEnabled = booleanParam(params, KEY_KNOWLEDGE_BASE_ENABLED, false),
             knowledgeBaseAutoContextEnabled = booleanParam(params, KEY_KNOWLEDGE_AUTO_CONTEXT_ENABLED, false),
@@ -637,6 +679,10 @@ data class NativeChatToolConfig(
                 .coerceIn(MIN_CALL_SILENCE_AFTER_SPEECH_SECONDS, MAX_CALL_SILENCE_AFTER_SPEECH_SECONDS),
             callNoSpeechTimeoutSeconds = intParam(params, KEY_CALL_NO_SPEECH_TIMEOUT_SECONDS, DEFAULT_CALL_NO_SPEECH_TIMEOUT_SECONDS)
                 .coerceIn(MIN_CALL_NO_SPEECH_TIMEOUT_SECONDS, MAX_CALL_NO_SPEECH_TIMEOUT_SECONDS),
+            audioInputMode = normalizeAudioInputMode(stringParam(params, KEY_AUDIO_INPUT_MODE, AUDIO_INPUT_SERVER)),
+            whisperModelPath = stringParam(params, KEY_WHISPER_MODEL_PATH, "").trim().takeIf { it.isNotBlank() },
+            whisperLanguage = stringParam(params, KEY_WHISPER_LANGUAGE, "").trim().takeIf { it.isNotBlank() },
+            videoInputMode = normalizeVideoInputMode(stringParam(params, KEY_VIDEO_INPUT_MODE, VIDEO_INPUT_SERVER)),
             maxToolRounds = intParam(params, KEY_MAX_TOOL_ROUNDS, DEFAULT_TOOL_ROUNDS)
                 .coerceIn(MIN_TOOL_ROUNDS, MAX_TOOL_ROUNDS)
         )
@@ -901,9 +947,16 @@ class NativeChatToolRuntime(
     private val backgroundRemover: NativeChatBackgroundRemover? = null,
     private val pdfTextExtractor: (ByteArray, Int) -> String = ::extractNativePdfTextFromBytes,
     private val clientFactory: () -> OkHttpClient = { defaultNativeChatToolClient() },
-    private val nowProvider: () -> ZonedDateTime = { ZonedDateTime.now() }
+    private val nowProvider: () -> ZonedDateTime = { ZonedDateTime.now() },
+    private val extensions: List<NativeChatToolExtension> = emptyList()
 ) {
     private val client by lazy(clientFactory)
+
+    fun extensionFor(toolName: String): NativeChatToolExtension? = extensions.firstOrNull { it.handles(toolName) }
+
+    /** Awareness blocks of every enabled extension, for the transient tool-awareness text. */
+    fun extensionAwareness(config: NativeChatToolConfig): List<String> =
+        extensions.filter { it.isEnabled(config) }.mapNotNull { it.awareness(config) }
 
     suspend fun configWithOrganizerPermissions(config: NativeChatToolConfig): NativeChatToolConfig {
         if (!config.calendarToolsEnabled && !config.alarmToolsEnabled) return config
@@ -1392,6 +1445,7 @@ class NativeChatToolRuntime(
                     )
                 )
             }
+            extensions.filter { it.isEnabled(config) }.forEach { addAll(it.tools(config)) }
         }.distinctBy { it.name.lowercase(Locale.ROOT) }
     }
 
@@ -1934,8 +1988,11 @@ class NativeChatToolRuntime(
                     NativeChatWorkspaceSupport.applyPatch(requireNotNull(context), requireNotNull(chatId), toolCall.arguments["patch"].orEmpty())
                 }
                 else -> {
+                    val extension = extensionFor(toolCall.name)
                     val custom = customTools.firstOrNull { it.isEnabled && !it.needsApproval && it.name.equals(toolCall.name, ignoreCase = true) }
-                    if (config.toolsEnabled && config.customToolsEnabled && custom != null && CustomToolHttpExecutor.supports(custom.commandTemplate)) {
+                    if (extension != null) {
+                        extension.execute(toolCall, config, chatId, onProgress).getOrThrow()
+                    } else if (config.toolsEnabled && config.customToolsEnabled && custom != null && CustomToolHttpExecutor.supports(custom.commandTemplate)) {
                         CustomToolHttpExecutor.execute(custom, toolCall.arguments)
                     } else {
                         "tool_error: Unknown or unavailable tool '${toolCall.name}'."

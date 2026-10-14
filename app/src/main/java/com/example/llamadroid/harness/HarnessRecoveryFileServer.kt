@@ -162,6 +162,9 @@ class HarnessRecoveryFileServer private constructor(context: Context) {
                 HarnessRecoveryFileServer(captured)
             }
         }
+        internal suspend fun stopForMaintenance(runtimeId: String) {
+            instances.remove(runtimeId)?.stop()?.getOrThrow()
+        }
         internal suspend fun stopAllForMaintenance() {
             instances.values.toList().forEach { it.stop().getOrThrow() }
             instances.clear()
@@ -177,8 +180,8 @@ class HarnessRecoveryFileServer private constructor(context: Context) {
     val state: StateFlow<HarnessRecoveryFileServerState> = _state.asStateFlow()
 
     /** Prepares the managed environment and binds a random TCP port on all local interfaces. */
-    suspend fun start(): Result<HarnessRecoveryFileServerState> = HarnessInstallationManager.lifecycle.runStart {
-        HarnessInstallationManager.get(appContext).requireSelected(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(appContext))
+    suspend fun start(): Result<HarnessRecoveryFileServerState> = HarnessInstallationManager.lifecycleFor(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(appContext)).runStart {
+        HarnessInstallationManager.get(appContext).requireAvailable(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(appContext))
         startOwned()
     }
 
@@ -216,8 +219,8 @@ class HarnessRecoveryFileServer private constructor(context: Context) {
     /** Starts the server against already prepared paths; useful when the runtime screen has them. */
     suspend fun start(paths: HarnessEnvironmentPaths): Result<HarnessRecoveryFileServerState> =
         withContext(Dispatchers.IO) {
-            HarnessInstallationManager.lifecycle.runStart {
-                HarnessInstallationManager.get(appContext).requireSelected(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(appContext))
+            HarnessInstallationManager.lifecycleFor(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(appContext)).runStart {
+                HarnessInstallationManager.get(appContext).requireAvailable(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(appContext))
                 require(paths.environmentId == com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(appContext))
                 operationLock.withLock { startPrepared(paths) }
             }

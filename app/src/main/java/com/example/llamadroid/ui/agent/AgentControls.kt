@@ -37,6 +37,7 @@ import androidx.compose.ui.res.stringResource
 import coil.compose.AsyncImage
 import com.example.llamadroid.R
 import com.example.llamadroid.ui.components.AppTextDetailsDialog
+import com.example.llamadroid.ui.components.ContextUsageRing
 import com.example.llamadroid.data.db.AgentProjectEventEntity
 import com.example.llamadroid.service.AgentService
 import com.example.llamadroid.service.PromptContextSnapshot
@@ -290,15 +291,6 @@ fun AgentWorkspaceConsoleHeader(
     } ?: stringResource(R.string.agent_console_last_saved_unknown)
     val displayedPromptTokens = contextSnapshot?.actualPromptTokens ?: contextSnapshot?.calibratedRequestTokens ?: contextSnapshot?.packedEstimatedTokens
     val displayedPercentUsed = contextSnapshot?.actualPercentUsed ?: contextSnapshot?.percentUsed
-    val contextProgress = displayedPercentUsed?.div(100f)?.coerceIn(0f, 1f)
-    val contextTone = when {
-        contextSnapshot != null && displayedPercentUsed != null && displayedPercentUsed >= contextSnapshot.thresholdPercent ->
-            MaterialTheme.colorScheme.error
-        contextSnapshot != null && displayedPercentUsed != null && displayedPercentUsed >= 75 ->
-            MaterialTheme.colorScheme.tertiary
-        else -> MaterialTheme.colorScheme.primary
-    }
-
     Card(
         modifier = modifier
             .fillMaxWidth()
@@ -399,11 +391,11 @@ fun AgentWorkspaceConsoleHeader(
                         }
                     }
                     if (hasProject) {
-                        ContextUsageCircle(
+                        ContextUsageRing(
                             percentUsed = displayedPercentUsed,
-                            progress = contextProgress,
-                            color = contextTone,
                             isWorking = isRunning,
+                            warnAtPercent = 75,
+                            errorAtPercent = contextSnapshot?.thresholdPercent ?: Int.MAX_VALUE,
                             onClick = { expanded = !expanded }
                         )
                     }
@@ -477,46 +469,6 @@ fun AgentWorkspaceConsoleHeader(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun ContextUsageCircle(
-    percentUsed: Int?,
-    progress: Float?,
-    color: Color,
-    isWorking: Boolean,
-    onClick: () -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .size(48.dp)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        if (progress == null && isWorking) {
-            CircularProgressIndicator(
-                modifier = Modifier.fillMaxSize(),
-                strokeWidth = 4.dp,
-                color = color,
-                trackColor = MaterialTheme.colorScheme.surfaceVariant
-            )
-        } else {
-            CircularProgressIndicator(
-                progress = { progress ?: 0f },
-                modifier = Modifier.fillMaxSize(),
-                strokeWidth = 4.dp,
-                color = color,
-                trackColor = MaterialTheme.colorScheme.surfaceVariant
-            )
-        }
-        Text(
-            text = percentUsed?.let { "$it%" } ?: if (isWorking) "…" else "--",
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1
-        )
     }
 }
 

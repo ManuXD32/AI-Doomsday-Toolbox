@@ -49,6 +49,19 @@ class ChatListLogicTest {
     }
 
     @Test
+    fun newChatSeedsWhisperOptionsFromTheServer() {
+        val s = LlamaServerEntity(
+            name = "w", host = "h", port = 1, supportsAudio = true, preferWhisperAudioTranscription = true,
+            whisperModelPath = "/m/a.bin", whisperLanguage = "es", defaultApiParams = "{\"tools\":true}"
+        )
+        val json = org.json.JSONObject(requireNotNull(newChatApiParamsForServer(s)))
+        assertEquals(true, json.getBoolean("tools"))
+        assertEquals("whisper", json.getString("chat_audio_input_mode"))
+        assertEquals("/m/a.bin", json.getString("chat_whisper_model_path"))
+        assertEquals("es", json.getString("chat_whisper_language"))
+    }
+
+    @Test
     fun toolDefaultsComeFromTheChosenServer() {
         val remote = LlamaServerEntity(name = "r", host = "h", port = 1, defaultApiParams = "{\"tools\":true}")
         val other = LlamaServerEntity(name = "o", host = "h", port = 2, defaultApiParams = "{\"tools\":false}")
@@ -58,7 +71,10 @@ class ChatListLogicTest {
         assertEquals("{\"tools\":false}", newChatApiParamsForServer(other))
         assertNull(newChatApiParamsForServer(blank))
         assertNull(newChatApiParamsForServer(null))
-        assertTrue(!newChatApiParamsForServer(managed)!!.contains("\"x\""))
+        assertEquals("{\"x\":1}", newChatApiParamsForServer(managed))
+        val managedBlank = LlamaServerEntity(name = "mb", host = "h", port = 6, defaultApiParams = null, managedServerCardId = 7)
+        assertEquals(false, org.json.JSONObject(newChatApiParamsForServer(managedBlank)!!)
+            .getBoolean(com.example.llamadroid.service.NativeChatToolConfig.KEY_TOOLS_ENABLED))
     }
 
     @Test

@@ -292,6 +292,10 @@ class DistributedMasterLlamaService : Service() {
         taskId = null
     }
 
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        ForegroundTimeoutSupport.handle(this, fgsType)
+    }
+
     override fun onDestroy() {
         controller.stop()
         releaseRuntime()

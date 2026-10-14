@@ -7,18 +7,18 @@ import com.example.llamadroid.harness.runtime.HarnessRuntimeRecord
 import com.example.llamadroid.harness.runtime.HarnessRuntimeState
 import com.example.llamadroid.harness.runtime.HarnessRuntimeStore
 
-/** One durable owner, with transactions preventing stale process callbacks replacing a new run. */
+/** One durable owner row per runtime (id == environmentId), with transactions preventing stale process callbacks replacing a new run. */
 class RoomHarnessRuntimeStore(
     private val database: AppDatabase,
     private val environmentId: String = HarnessRuntimeRecord.DEFAULT_ENVIRONMENT_ID,
 ) : HarnessRuntimeStore {
     private val dao = database.harnessDao()
 
-    override suspend fun current(): HarnessRuntimeRecord? = dao.runtime()?.takeIf { it.environmentId == environmentId }?.toRecord()
+    override suspend fun current(): HarnessRuntimeRecord? = dao.runtime(environmentId)?.toRecord()
 
     override suspend fun beginStart(record: HarnessRuntimeRecord): Boolean = database.withTransaction {
         require(record.environmentId == environmentId)
-        val current = dao.runtime()
+        val current = dao.runtime(environmentId)
         if (current != null && current.state in ACTIVE_STATES) return@withTransaction false
         dao.saveRuntime(record.toEntity())
         true
@@ -28,7 +28,7 @@ class RoomHarnessRuntimeStore(
         expectedStates: Set<HarnessRuntimeState>,
         record: HarnessRuntimeRecord
     ): Boolean = database.withTransaction {
-        val current = dao.runtime() ?: return@withTransaction false
+        val current = dao.runtime(environmentId) ?: return@withTransaction false
         if (current.environmentId != environmentId || record.environmentId != environmentId || current.generation != record.generation || expectedStates.none { it.name == current.state }) {
             return@withTransaction false
         }
@@ -38,11 +38,7 @@ class RoomHarnessRuntimeStore(
 
     override suspend fun replace(record: HarnessRuntimeRecord) {
         require(record.environmentId == environmentId)
-        database.withTransaction {
-            val current = dao.runtime()
-            check(current == null || current.environmentId == environmentId || current.state !in ACTIVE_STATES) { "HARNESS_OTHER_RUNTIME_ACTIVE" }
-            dao.saveRuntime(record.toEntity())
-        }
+        dao.saveRuntime(record.toEntity())
     }
 
     private fun HarnessRuntimeEntity.toRecord() = HarnessRuntimeRecord(
@@ -59,7 +55,7 @@ class RoomHarnessRuntimeStore(
     )
 
     private fun HarnessRuntimeRecord.toEntity() = HarnessRuntimeEntity(
-        environmentId = environmentId, state = state.name, generation = generation,
+        id = environmentId, environmentId = environmentId, state = state.name, generation = generation,
         brokerPid = brokerPid?.toLong(), processGroupId = processGroupId?.toLong(),
         processStartTicks = processStartTicks, childPid = childPid, childStartTicks = childStartTicks,
         nodePid = nodePid, nodeStartTicks = nodeStartTicks,
@@ -67,6 +63,9 @@ class RoomHarnessRuntimeStore(
         stopRequestedAt = stopRequestedAt, forceStopRequestedAt = forceStopRequestedAt,
         endedAt = endedAt, errorCode = errorCode, updatedAt = updatedAt
     )
+
+    /** Active rows of every runtime (used to keep port allocation disjoint). */
+    suspend fun activeRuntimes(): List<HarnessRuntimeRecord> = dao.activeRuntimes().map { it.toRecord() }
 
     private companion object {
         val ACTIVE_STATES = setOf("STARTING", "RUNNING", "STOP_REQUESTED", "FORCE_STOPPING")

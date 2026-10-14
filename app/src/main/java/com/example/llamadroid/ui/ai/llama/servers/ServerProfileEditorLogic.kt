@@ -70,3 +70,33 @@ fun serverProfileEditorRoute(cardId: Long?, modelPath: String?): String =
  */
 val LocalServerProfileEditorOpener =
     androidx.compose.runtime.staticCompositionLocalOf<(cardId: Long?, modelPath: String?) -> Unit> { { _, _ -> } }
+
+/**
+ * One-shot request set by "new server for a new chat" entry points (New chat sheet, Home "Chat with a
+ * model") right before opening the editor for a NEW server. The editor consumes it on entry and, after
+ * saving, creates a chat bound to the new server and opens it.
+ */
+object PendingServerChatRequest {
+    private val pending = java.util.concurrent.atomic.AtomicBoolean(false)
+    fun request() = pending.set(true)
+    fun consume(): Boolean = pending.getAndSet(false)
+}
+
+/** Creates a chat bound to the freshly created server row and returns its id. */
+internal suspend fun createChatForNewServer(context: android.content.Context, rowId: Long, title: String): Long =
+    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val db = com.example.llamadroid.data.db.AppDatabase.getDatabase(context)
+        val repository = com.example.llamadroid.data.repository.LlamaRepository(
+            db.llamaServerDao(), db.llamaChatDao(), db.llamaChatFolderDao(), db.llamaMessageDao()
+        )
+        val entity = db.llamaServerDao().getServerById(rowId)
+        val chatId = repository.createChat(
+            title = title,
+            contextSize = 0,
+            apiParams = com.example.llamadroid.ui.ai.llama.chatlist.newChatApiParamsForServer(entity),
+            serverId = rowId,
+            persistKvCache = com.example.llamadroid.ui.ai.llama.chatlist.defaultPersistKvCacheForServer(entity)
+        )
+        db.llamaServerDao().updateLastUsed(rowId)
+        chatId
+    }

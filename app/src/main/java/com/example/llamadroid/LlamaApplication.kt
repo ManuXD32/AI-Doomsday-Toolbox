@@ -79,6 +79,8 @@ class LlamaApplication : Application() {
             installCrashBreadcrumbHandler()
             return
         }
+        com.example.llamadroid.diagnostics.ProcessExitRecorder.recordAsync(this)
+        runCatching { com.example.llamadroid.service.perf.LockedScreenSpeedRecorder.start(this) }
         LlamaRuntimeStateProjection.registerMainProcess(this, LlamaService.mutableStateForProjection(), LlamaService.mutableServerLogsForProjection())
         PhoneWearGateway.start(this)
         installCrashBreadcrumbHandler()
@@ -114,6 +116,8 @@ class LlamaApplication : Application() {
             }
             runCatching { OrganizerAlarmScheduler.rescheduleAll(this@LlamaApplication) }
             runCatching { LlamaScheduledTaskScheduler.rescheduleAll(this@LlamaApplication) }
+            runCatching { com.example.llamadroid.service.delegation.NativeChatDelegation.get(this@LlamaApplication).reconcileOnStartup() }
+            runCatching { com.example.llamadroid.service.titlegen.TitleGenerationManager.onAppStart(this@LlamaApplication) }
             runCatching {
                 val tokenPreferences = getSharedPreferences("litert_model_repository", Context.MODE_PRIVATE)
                 val repository = ModelLibraryRepositoryFactory.create(this@LlamaApplication)

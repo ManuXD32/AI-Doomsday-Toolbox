@@ -479,12 +479,11 @@ fun LlamaApp(
                 if (currentRoute == null) return@LaunchedEffect
                 if (currentRoute != resolution.route) {
                     try {
+                        // Deep links land exactly on their target above Home: never restore a saved
+                        // stack (that could resurrect a stale screen, like the old Home key bug).
                         navController.navigate(resolution.route) {
-                            popUpTo(navController.graph.startDestinationId) {
-                                saveState = true
-                            }
+                            popUpTo(navController.graph.startDestinationId)
                             launchSingleTop = true
-                            restoreState = true
                         }
                     } catch (_: IllegalArgumentException) {
                         feedbackScope.launch {
@@ -584,7 +583,6 @@ fun LlamaApp(
         currentRoute = currentRoute,
         destinations = directNavigationDestinations,
         snackbarHostState = snackbarHostState,
-        onSettings = { navController.navigate(Screen.Settings.route) { launchSingleTop = true } },
         onUniversalKey = { navController.navigateToUniversalKey(it) },
         isFirstRun = showWelcome && !hasCompletedWelcome,
         onTour = {
@@ -660,7 +658,7 @@ fun LlamaApp(
                 ChatScreen(navController, serverPortOverride = serverPort)
             }
             composable(Screen.LlamaServers.route) {
-                com.example.llamadroid.ui.ai.llama.servers.ServersScreen(navController)
+                com.example.llamadroid.ui.chat.ChatsHomeScreen(navController) // servers live only in the chats view
             }
             composable(
                 route = "${Screen.ImageGen.route}?startMode={startMode}&tab={tab}",
@@ -870,7 +868,7 @@ fun LlamaApp(
             
             // AI Agent
             composable(
-                "${Screen.Agent.route}?conversationId={conversationId}&harnessTab={harnessTab}",
+                "${Screen.Agent.route}?conversationId={conversationId}&harnessTab={harnessTab}&returnToCaller={returnToCaller}",
                 arguments = listOf(navArgument("conversationId") {
                     type = NavType.LongType
                     defaultValue = -1L
@@ -878,12 +876,16 @@ fun LlamaApp(
                     type = NavType.StringType
                     nullable = true
                     defaultValue = null
+                }, navArgument("returnToCaller") {
+                    type = NavType.BoolType
+                    defaultValue = false
                 })
             ) { backStackEntry ->
                 com.example.llamadroid.ui.agent.AgentScreen(
                     navController,
                     initialConversationId = backStackEntry.arguments?.getLong("conversationId")?.takeIf { it > 0L },
-                    initialAttentionTab = backStackEntry.arguments?.getString("harnessTab")
+                    initialAttentionTab = backStackEntry.arguments?.getString("harnessTab"),
+                    returnToCaller = backStackEntry.arguments?.getBoolean("returnToCaller") == true
                 )
             }
             
@@ -970,7 +972,7 @@ fun LlamaApp(
             
             // Native Llama Client
             composable(Screen.LlamaServerList.route) {
-                com.example.llamadroid.ui.ai.llama.servers.ServersScreen(navController)
+                com.example.llamadroid.ui.chat.ChatsHomeScreen(navController) // servers live only in the chats view
             }
             composable(Screen.LlamaChatList.route) {
                 com.example.llamadroid.ui.ai.llama.LlamaChatListScreen(navController)
@@ -1000,6 +1002,15 @@ fun LlamaApp(
                 val chatId = backStackEntry.arguments?.getLong("chatId") ?: -1L
                 val serverId = backStackEntry.arguments?.getLong("serverId") ?: -1L
                 com.example.llamadroid.ui.ai.llama.LlamaChatScreen(navController, chatId, serverId)
+            }
+            composable(
+                route = Screen.NativeChatDelegation.route,
+                arguments = listOf(
+                    androidx.navigation.navArgument("chatId") { type = androidx.navigation.NavType.LongType }
+                )
+            ) { backStackEntry ->
+                val chatId = backStackEntry.arguments?.getLong("chatId") ?: -1L
+                com.example.llamadroid.ui.ai.llama.delegation.NativeChatDelegationScreen(navController, chatId)
             }
             
             composable(Screen.Store.route) {

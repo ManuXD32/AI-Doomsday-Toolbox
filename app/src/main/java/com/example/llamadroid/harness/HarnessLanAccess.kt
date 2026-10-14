@@ -189,6 +189,15 @@ class HarnessLanAccessManager private constructor(context: Context) {
                 HarnessLanAccessManager(captured)
             }
         }
+        /** Stops only the named runtime's LAN proxy; other runtimes keep serving. */
+        internal suspend fun stopForMaintenance(runtimeId: String) {
+            instances.remove(runtimeId)?.let {
+                it.endpointWatcher.cancel()
+                it.runtimeWatcher.cancel()
+                it.stopProxy()
+                it.scope.cancel()
+            }
+        }
         internal suspend fun stopAllForMaintenance() {
             instances.values.toList().forEach {
                 it.endpointWatcher.cancel()

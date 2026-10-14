@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -34,14 +33,14 @@ import com.example.llamadroid.data.repository.UnifiedServerKind
 /**
  * Entry point for adding or editing a server from any sheet host.
  *
- * Local managed servers (new, "customize first" for a model, or edit) no longer use a reduced form:
- * they open the full-screen [ServerProfileEditorScreen] through [LocalServerProfileEditorOpener] and
- * this sheet closes immediately. What remains here is the "Add server" chooser (button to the local
- * editor, plus the remote form) and the remote/legacy connection editor.
+ * Local managed servers (edit, or a new one for a given model) never use a reduced form: they open
+ * the full-screen [ServerProfileEditorScreen] through [LocalServerProfileEditorOpener] and this sheet
+ * closes immediately. Add mode is REMOTE-only (just [RemoteServerForm]); new local servers are created
+ * from the full editor by every entry point. Edit mode also covers remote/legacy connection rows.
  *
  * @param editing the server to edit, or null to add a new one
  * @param onSaved called with the connection row id (remote saves) before dismissal
- * @param initialModel pre-selects this model for a new local server ("Customize first")
+ * @param initialModel when set, redirects to the full editor with this model pre-selected
  * @param onManageModels kept for call-site compatibility; model picking now happens in the full editor
  */
 @Suppress("UNUSED_PARAMETER")
@@ -83,33 +82,12 @@ fun ServerEditorSheet(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
-                text = stringResource(if (isEdit) R.string.srv_editor_edit_title else R.string.srv_editor_new_title),
+                text = stringResource(if (isEdit) R.string.srv_editor_edit_title else R.string.srv_editor_new_remote_title),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
-            if (!isEdit) {
-                Button(
-                    onClick = {
-                        openLocalEditor(null, null)
-                        onDismiss()
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text(stringResource(R.string.srv_mode_local), maxLines = 2, overflow = TextOverflow.Ellipsis) }
-                Text(
-                    stringResource(R.string.spe_chooser_local_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    stringResource(R.string.spe_chooser_remote_label),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
             val row by produceState<LlamaServerEntity?>(null, editing?.key) {
                 value = editing?.let { viewModel.loadRow(it) }
             }

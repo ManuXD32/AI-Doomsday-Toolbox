@@ -15,7 +15,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -48,12 +47,10 @@ import com.example.llamadroid.R
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.model.LlamaChatPromptProfileEntity
-import com.example.llamadroid.data.repository.EasyLlamaChatCoordinator
 import com.example.llamadroid.data.repository.LlamaRepository
 import com.example.llamadroid.data.repository.UnifiedServer
 import com.example.llamadroid.ui.ai.llama.EasyLlamaModelPickerDialog
 import com.example.llamadroid.ui.ai.llama.LlamaPromptProfilePickerField
-import com.example.llamadroid.ui.ai.llama.localizedEasyLlamaFailure
 import com.example.llamadroid.ui.ai.llama.servers.ServerRegistryViewModel
 import com.example.llamadroid.ui.ai.llama.servers.ServerStatusDot
 import com.example.llamadroid.ui.ai.llama.servers.effectiveServerStatus
@@ -81,11 +78,10 @@ fun NewChatSheet(
     onChatReady: (chatId: Long, serverId: Long) -> Unit,
     onAddServer: () -> Unit,
     onManageModels: () -> Unit,
-    onCustomizeModel: (ModelEntity) -> Unit
+    onNewLocalFromModel: (ModelEntity) -> Unit
 ) {
     val context = LocalContext.current
     val database = remember(context) { AppDatabase.getDatabase(context) }
-    val coordinator = remember(context, database) { EasyLlamaChatCoordinator(context, database) }
     val scope = rememberCoroutineScope()
     val servers by serversViewModel.servers.collectAsState()
     val actions by serversViewModel.actions.collectAsState()
@@ -106,15 +102,12 @@ fun NewChatSheet(
     var systemPrompt by rememberSaveable { mutableStateOf("") }
     var moreOpen by rememberSaveable { mutableStateOf(false) }
     var showModelPicker by remember { mutableStateOf(false) }
-    var pendingModel by remember { mutableStateOf<ModelEntity?>(null) }
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var job by remember { mutableStateOf<Job?>(null) }
 
     val defaultTitle = stringResource(R.string.llama_new_chat)
-    val creatingText = stringResource(R.string.easy_chat_creating_server)
-    val startingText = stringResource(R.string.easy_chat_starting_server)
     val failedText = stringResource(R.string.chats_rework_create_failed)
 
     fun createWithServer(server: UnifiedServer) {
@@ -135,7 +128,8 @@ fun NewChatSheet(
                     systemPrompt = systemPrompt.ifBlank { null },
                     apiParams = newChatApiParamsForServer(entity),
                     folderId = folderId,
-                    serverId = rowId
+                    serverId = rowId,
+                    persistKvCache = defaultPersistKvCacheForServer(entity)
                 )
                 withContext(Dispatchers.IO) { database.llamaServerDao().updateLastUsed(rowId) }
                 onChatReady(chatId, rowId)
@@ -145,29 +139,6 @@ fun NewChatSheet(
                 error = failedText
             } finally {
                 busy = false
-            }
-        }
-    }
-
-    fun quickStart(model: ModelEntity) {
-        if (busy) return
-        busy = true
-        error = null
-        status = creatingText
-        job = scope.launch {
-            try {
-                val target = coordinator.createOrReuse(model.filename)
-                status = startingText
-                val session = coordinator.openChat(target.card.id) { message -> status = message }
-                repository.bindChatServer(session.chatId, session.serverId)
-                onChatReady(session.chatId, session.serverId)
-            } catch (cancel: CancellationException) {
-                throw cancel
-            } catch (throwable: Throwable) {
-                error = localizedEasyLlamaFailure(context, throwable, R.string.easy_chat_open_failed)
-            } finally {
-                busy = false
-                status = null
             }
         }
     }
@@ -328,42 +299,7 @@ fun NewChatSheet(
             },
             onSelected = { model ->
                 showModelPicker = false
-                pendingModel = model
-            }
-        )
-    }
-
-    pendingModel?.let { model ->
-        AlertDialog(
-            onDismissRequest = { pendingModel = null },
-            title = { Text(stringResource(R.string.chats_rework_new_local), maxLines = 2, overflow = TextOverflow.Ellipsis) },
-            text = {
-                Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(model.filename, style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        stringResource(R.string.chats_rework_new_local_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { pendingModel = null; quickStart(model) }) {
-                    Text(stringResource(R.string.chats_rework_start_now), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            },
-            dismissButton = {
-                Row {
-                    TextButton(onClick = { pendingModel = null; onCustomizeModel(model) }) {
-                        Text(stringResource(R.string.chats_rework_customize_first), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    }
-                    TextButton(onClick = { pendingModel = null }) {
-                        Text(stringResource(R.string.action_cancel))
-                    }
-                }
+                onNewLocalFromModel(model)
             }
         )
     }

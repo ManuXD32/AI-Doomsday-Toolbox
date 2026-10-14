@@ -79,6 +79,7 @@ class HarnessAppRuntime private constructor(private val context: Context) {
     val diagnostics = HarnessDiagnostics(database, scope, HarnessRuntimeJournal(
         com.example.llamadroid.harness.runtime.HarnessRuntimeScope.dataFile(context, "agent_harness/runtime-diagnostics.json")
     ), runtimeId)
+    init { HarnessModelFailureLog.get(context, runtimeId).journalSink = diagnostics::modelFailure }
     // Command text is presentation data: bounded, transient, and never journaled.
     private val mutableLiveCommandOutput = MutableSharedFlow<HarnessLiveCommandOutput>(
         extraBufferCapacity = 128,
@@ -90,8 +91,11 @@ class HarnessAppRuntime private constructor(private val context: Context) {
         scope, { client },
         onNotice = {
             try {
-                ensureAttentionSession(it.sessionId)
-                attentionNotifications.publish(it)
+                // Sessions delegated by the native chat report back through the chat, not here.
+                if (!HarnessDelegatedSessions.suppresses(runtimeId, it.sessionId, it.kind == "approval")) {
+                    ensureAttentionSession(it.sessionId)
+                    attentionNotifications.publish(it)
+                }
             }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { diagnostics.event(it.sessionId, "attention_notification", "failure", errorCode = "HARNESS_NOTIFICATION_FAILED") }
@@ -106,8 +110,7 @@ class HarnessAppRuntime private constructor(private val context: Context) {
     }
     val projectRuns by lazy { HarnessProjectRuns(this) }
     private val store = RoomHarnessRuntimeStore(database, runtimeId)
-    val status: StateFlow<HarnessRuntimeEntity?> = database.harnessDao().observeRuntime()
-        .map { row -> row?.takeIf { it.environmentId == runtimeId } }
+    val status: StateFlow<HarnessRuntimeEntity?> = database.harnessDao(runtimeId).observeRuntime()
         .stateIn(scope, SharingStarted.Eagerly, null)
     private val mutableEndpoint = MutableStateFlow<HarnessEndpoint?>(null)
     val endpoint: StateFlow<HarnessEndpoint?> = mutableEndpoint.asStateFlow()
@@ -131,7 +134,7 @@ class HarnessAppRuntime private constructor(private val context: Context) {
         )
     }
     private var healthMonitor: Job? = null
-    private val lifecycle = HarnessInstallationManager.lifecycle
+    private val lifecycle = HarnessInstallationManager.lifecycleFor(runtimeId)
     private val stopIntent = java.util.concurrent.atomic.AtomicLong()
     @Volatile private var maintenanceStopping = false
     val sessionDeletion by lazy { HarnessSessionDeletion(context, database, scope, ::deleteIdleSession) { id, failure ->
@@ -280,7 +283,7 @@ class HarnessAppRuntime private constructor(private val context: Context) {
     }
 
     private suspend fun startOwned() = lifecycle.runStart {
-        HarnessInstallationManager.get(context).requireSelected(runtimeId)
+        HarnessInstallationManager.get(context).requireAvailable(runtimeId)
         mutableStarting.value = true
         try {
             mutableError.value = null
@@ -290,14 +293,14 @@ class HarnessAppRuntime private constructor(private val context: Context) {
             ))
             initialization.await()
             sessionDeletion.wake()
-            AgentForegroundService.retainHarness(context, context.getString(R.string.harness_runtime_starting_notification))
+            AgentForegroundService.retainHarness(context, runtimeId, context.getString(R.string.harness_runtime_starting_notification))
             var appPhase: String? = null
             var generation = "app"
             try {
                 val outcome = runtime.start(com.example.llamadroid.harness.runtime.HarnessStartRequest(environmentId = runtimeId))
                 if (outcome.record.state != HarnessRuntimeState.RUNNING) {
                     if (outcome.record.brokerPid == null && outcome.record.state in setOf(HarnessRuntimeState.STOPPED, HarnessRuntimeState.FAILED, HarnessRuntimeState.INTERRUPTED)) {
-                        AgentForegroundService.releaseHarness(context)
+                        AgentForegroundService.releaseHarness(context, runtimeId)
                     }
                     return@runStart
                 }
@@ -310,7 +313,7 @@ class HarnessAppRuntime private constructor(private val context: Context) {
                     HarnessInstallationManager.get(context).markReady(runtimeId, select = false)
                 }
                 if (mutableEndpoint.value == target && client?.state?.value == HarnessConnectionState.READY) {
-                    AgentForegroundService.updateStatus(context, context.getString(R.string.harness_runtime_notification))
+                    publishRunningStatus(context)
                     return@runStart
                 }
                 monitorOwnership(outcome.record.generation)
@@ -326,7 +329,7 @@ class HarnessAppRuntime private constructor(private val context: Context) {
                 HarnessInstallationManager.get(context).refreshSize(runtimeId)
                 diagnostics.record(HarnessRuntimeLogEvent("phase", runtimeId, generation,
                     HarnessRuntimeState.RUNNING, phase = "client_connected"))
-                AgentForegroundService.updateStatus(context, context.getString(R.string.harness_runtime_notification))
+                publishRunningStatus(context)
             } catch (error: Exception) {
                 if (error !is CancellationException) {
                     mutableError.value = harnessLifecycleErrorCode(error)
@@ -342,7 +345,7 @@ class HarnessAppRuntime private constructor(private val context: Context) {
                     }
                 }
                 if (store.current()?.state !in setOf(HarnessRuntimeState.STARTING, HarnessRuntimeState.RUNNING, HarnessRuntimeState.STOP_REQUESTED, HarnessRuntimeState.FORCE_STOPPING)) {
-                    AgentForegroundService.releaseHarness(context)
+                    AgentForegroundService.releaseHarness(context, runtimeId)
                 }
                 throw error
             }
@@ -464,7 +467,7 @@ class HarnessAppRuntime private constructor(private val context: Context) {
                 }
             }
             if (prepared.directory == null) return@runMaintenance false // explicit Start resolves an offline queued request
-            if (!canRemoveHarnessProject(database.harnessDao().runtime(), mutableStarting.value, client != null)) return@runMaintenance false
+            if (!canRemoveHarnessProject(dao.runtime(), mutableStarting.value, client != null)) return@runMaintenance false
             if (files.pendingCleanupSessions().isNotEmpty()) return@runMaintenance false
             sessionDeletion.removeStopped(prepared)
             diagnostics.event(receipt.id, "session_deleted", "success")
@@ -478,7 +481,7 @@ class HarnessAppRuntime private constructor(private val context: Context) {
     suspend fun <T> withStoppedProjectMutation(action: suspend () -> T): T {
         initialization.await()
         return lifecycle.runMaintenance {
-            check(canRemoveHarnessProject(database.harnessDao().runtime(), mutableStarting.value, client != null)) {
+            check(canRemoveHarnessProject(dao.runtime(), mutableStarting.value, client != null)) {
                 "PROJECT_RUNTIME_STOP_REQUIRED"
             }
             check(files.pendingCleanupSessions().isEmpty()) { "PROJECT_REMOTE_CLEANUP_PENDING" }
@@ -533,7 +536,7 @@ class HarnessAppRuntime private constructor(private val context: Context) {
             try { client?.close() } finally {
                 client = null
                 mutableEndpoint.value = null
-                AgentForegroundService.releaseHarness(context)
+                AgentForegroundService.releaseHarness(context, runtimeId)
             }
         }
     }
@@ -588,7 +591,7 @@ class HarnessAppRuntime private constructor(private val context: Context) {
                                         cleanupInference()
                                         cleanupRemote()
                                     } finally {
-                                        if (recovery?.timedOut != true) AgentForegroundService.releaseHarness(context)
+                                        if (recovery?.timedOut != true) AgentForegroundService.releaseHarness(context, runtimeId)
                                         else AgentForegroundService.updateStatus(context, context.getString(R.string.harness_runtime_cleanup_pending))
                                     }
                                 }
@@ -609,6 +612,8 @@ class HarnessAppRuntime private constructor(private val context: Context) {
             else -> "HARNESS_PROCESS_LOST"
         }
 
+    private fun publishRunningStatus(context: Context) = AgentForegroundService.updateStatus(context, runningStatusLine(context))
+
     private fun randomToken(): String = ByteArray(32).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
 
     companion object {
@@ -617,8 +622,6 @@ class HarnessAppRuntime private constructor(private val context: Context) {
         // HarnessRuntimeScope.context() always derives an application-backed
         // host before constructing the retained scoped Context; no Activity is
         // stored in this process-level per-runtime cache.
-        @SuppressLint("StaticFieldLeak")
-        @Volatile private var mostRecent: HarnessAppRuntime? = null
         fun get(context: Context): HarnessAppRuntime {
             val id = if (HarnessRuntimeScope.isCaptured(context)) HarnessRuntimeScope.id(context)
                 else HarnessInstallationManager.get(context).selectedId.value ?: error("HARNESS_RUNTIME_REQUIRED")
@@ -626,14 +629,31 @@ class HarnessAppRuntime private constructor(private val context: Context) {
         }
         fun forRuntime(context: Context, id: String): HarnessAppRuntime = instances.computeIfAbsent(id) {
             HarnessAppRuntime(HarnessRuntimeScope.context(context, id))
-        }.also { mostRecent = it }
-        fun existing(): HarnessAppRuntime? = instances.values.firstOrNull { it.client != null || it.startupInProgress.value }
-            ?: mostRecent
+        }
+        /** The UI-focused runtime (selection is focus only; other runtimes may be running). */
+        fun focused(context: Context): HarnessAppRuntime = forRuntime(context,
+            HarnessInstallationManager.get(context).selectedId.value ?: error("HARNESS_RUNTIME_REQUIRED"))
+        /** Every constructed runtime that has a live client or is starting. */
+        fun running(): List<HarnessAppRuntime> = instances.values.filter { it.client != null || it.startupInProgress.value }
         internal fun discard(id: String) {
             instances.remove(id)?.let { runtime ->
                 runtime.client?.close()
                 runtime.scope.cancel()
-                if (mostRecent === runtime) mostRecent = null
+                AgentForegroundService.releaseHarness(runtime.context, id)
+            }
+        }
+        /** One line for the foreground notification; a single runtime keeps the classic text. */
+        internal fun runningStatusLine(context: Context, excludingRuntimeId: String? = null): String {
+            val live = running().filter { it.client != null && it.runtimeId != excludingRuntimeId }
+            if (live.size <= 1) return context.getString(R.string.harness_runtime_notification)
+            val names = HarnessInstallationManager.get(context).installations.value.associate { it.id to it.displayName }
+            val label = live.joinToString(", ") { names[it.runtimeId] ?: it.runtimeId.take(8) }
+            return context.resources.getQuantityString(R.plurals.harness_runtime_notification_multiple, live.size, live.size, label)
+        }
+        internal suspend fun pauseMaintenanceWorkers(id: String) {
+            instances[id]?.let { runtime ->
+                runtime.initialization.await()
+                runtime.sessionDeletion.pause()
             }
         }
         internal suspend fun pauseMaintenanceWorkers() {

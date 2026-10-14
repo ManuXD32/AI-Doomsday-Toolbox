@@ -1447,14 +1447,11 @@
     <string name="llama_refresh_capabilities">Refresh capabilities</string>
     <string name="llama_loading">Loading…</string>
     <string name="llama_ollama_no_models_loaded">No Ollama models loaded yet.</string>
-    <string name="llama_whisper_fallback_title">Whisper fallback</string>
     <string name="llama_whisper_model_auto">Automatic</string>
     <string name="llama_whisper_model_label">Whisper model</string>
     <string name="llama_whisper_no_models">No local Whisper models found.</string>
     <string name="llama_whisper_language_label">Whisper language</string>
-    <string name="llama_use_whisper_for_audio">Use Whisper for audio</string>
     <string name="llama_use_whisper_for_audio_desc">Transcribe audio first and send text to the chat model instead of sending the audio file directly.</string>
-    <string name="llama_whisper_required_desc">This server does not use direct audio in this app, so audio messages are transcribed with Whisper.</string>
     <string name="llama_ollama_model_required">Select an Ollama model before starting native chat.</string>
     <string name="llama_delete_message_confirm_title">Delete message?</string>
     <string name="llama_delete_message_confirm_text">Are you sure you want to remove this message from the chat?</string>
@@ -1648,9 +1645,6 @@
     <string name="llama_tool_image_iteration_desc">If the server supports vision, let the LLM inspect generated images and regenerate better versions before answering.</string>
     <string name="llama_tool_bgr">ONNX background removal</string>
     <string name="llama_tool_bgr_desc">Remove image backgrounds with the selected native chat BgR preset.</string>
-    <string name="llama_tools_master_switch">Enable tools</string>
-    <string name="llama_server_default_tools_title">Server tool permissions</string>
-    <string name="llama_server_default_tools_desc">These switches seed new chats and act as the maximum tools any chat using this server can run.</string>
     <string name="llama_tool_datetime">Date and time</string>
     <string name="llama_tool_datetime_desc">Read the current local date and time.</string>
     <string name="llama_tool_calculator">Calculator</string>

@@ -5,8 +5,8 @@
     <string name="harness_installations_create">Crear</string>
     <string name="harness_installations_import">Importar ZIP</string>
     <string name="harness_installations_export">Exportar ZIP</string>
-    <string name="harness_installations_select">Usar esta instalación</string>
-    <string name="harness_installations_active">Activa</string>
+    <string name="harness_installations_select">Abrir</string>
+    <string name="harness_installations_active">En foco</string>
     <string name="harness_installations_rename">Cambiar nombre</string>
     <string name="harness_installations_recreate">Recrear rootfs</string>
     <string name="harness_installations_delete">Eliminar</string>

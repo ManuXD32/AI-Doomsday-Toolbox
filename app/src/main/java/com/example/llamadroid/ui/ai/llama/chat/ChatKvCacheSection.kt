@@ -47,7 +47,8 @@ fun ChatKvCacheSection(
     server: LlamaServerEntity?,
     unifiedServer: UnifiedServer? = null,
     isGenerating: Boolean = false,
-    onRestartServer: (UnifiedServer) -> Unit = {}
+    onRestartServer: (UnifiedServer) -> Unit = {},
+    delegationEnabled: Boolean = false
 ) {
     val context = LocalContext.current
     val restartingMessage = stringResource(R.string.native_chat_kv_cache_restarting)
@@ -110,6 +111,13 @@ fun ChatKvCacheSection(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        if (delegationEnabled) {
+            Text(
+                stringResource(R.string.native_chat_delegation_kv_cache_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         if (isGenerating) {
             Text(
                 stringResource(R.string.native_chat_kv_cache_generating_reason),

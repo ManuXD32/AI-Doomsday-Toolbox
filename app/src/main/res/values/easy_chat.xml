@@ -23,7 +23,6 @@
     <string name="easy_chat_no_models">No chat models are ready</string>
     <string name="easy_chat_no_models_hint">Install an LLM or vision GGUF model from the model library, then try again.</string>
     <string name="easy_chat_no_matching_models">No matching models</string>
-    <string name="easy_chat_creating_server">Creating the managed server…</string>
     <string name="easy_chat_starting_server">Starting the model…</string>
     <string name="easy_chat_starting">Starting…</string>
     <string name="easy_chat_open_failed">Could not open Chat.</string>

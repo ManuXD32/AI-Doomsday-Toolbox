@@ -80,10 +80,6 @@ fun ChatsHomeScreen(navController: NavController) {
                         }
                         DropdownMenu(expanded = showOverflow, onDismissRequest = { showOverflow = false }) {
                             DropdownMenuItem(
-                                text = { Text(stringResource(R.string.srv_screen_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                                onClick = { showOverflow = false; navController.navigate(Screen.LlamaServers.route) }
-                            )
-                            DropdownMenuItem(
                                 text = { Text(stringResource(R.string.ui_chats_scheduled_prompts), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                 onClick = { showOverflow = false; navController.navigate(Screen.LlamaScheduler.route) }
                             )

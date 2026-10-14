@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="native_chat_compaction_ring_description">Uso del contexto: %1$s</string>
+    <string name="native_chat_compaction_ring_unknown">desconocido</string>
+    <string name="native_chat_compaction_gauge_title">Ventana de contexto</string>
+    <string name="native_chat_compaction_gauge_usage">%1$s de %2$s tokens (%3$d%%)</string>
+    <string name="native_chat_compaction_gauge_unknown">Aún no se conoce el uso. Aparece tras la primera respuesta.</string>
+    <string name="native_chat_compaction_gauge_measured">Medido por el servidor</string>
+    <string name="native_chat_compaction_gauge_estimated">Estimado</string>
+    <string name="native_chat_compaction_gauge_last_saved">La última compactación ahorró %1$s tokens</string>
+    <string name="native_chat_compaction_gauge_last_saved_approx">La última compactación ahorró ~%1$s tokens</string>
+    <string name="native_chat_compaction_auto">Compactar automáticamente</string>
+    <string name="native_chat_compaction_auto_hint">Resume los mensajes antiguos cuando el contexto está casi lleno.</string>
+    <string name="native_chat_compaction_now">Compactar ahora</string>
+    <string name="native_chat_compaction_running">Compactando…</string>
+    <string name="native_chat_compaction_done">Compactado, ahorro de ~%1$s tokens</string>
+    <string name="native_chat_compaction_failed">No se pudo compactar: %1$s</string>
+    <string name="native_chat_compaction_busy">Espera a que termine la respuesta actual.</string>
+
+    <string name="native_chat_compaction_files">Archivos</string>
+    <string name="native_chat_compaction_files_project">Archivos del proyecto</string>
+    <string name="native_chat_compaction_files_runtime">Archivos del runtime</string>
+    <string name="native_chat_compaction_files_project_failed">No se pudieron abrir los archivos del proyecto.</string>
+    <string name="native_chat_compaction_delegation">Delegación a DeepSeek</string>
+    <string name="native_chat_compaction_delegation_running">Delegación a DeepSeek, tarea en curso</string>
+    <string name="native_chat_compaction_delegation_attention">Delegación a DeepSeek, requiere atención</string>
+
+    <string name="native_chat_compaction_notice_finished">Tarea de DeepSeek terminada</string>
+    <string name="native_chat_compaction_notice_check">Revisión programada</string>
+    <string name="native_chat_compaction_notice_question">Pregunta del subagente</string>
+    <string name="native_chat_compaction_notice_direction">La tarea necesita indicaciones</string>
+    <string name="native_chat_compaction_notice_title">Nota automática</string>
+
+    <string name="native_chat_compaction_attach_file">Adjuntar archivo</string>
+    <string name="native_chat_compaction_attach_too_large">%1$s supera los 256 MiB.</string>
+    <string name="native_chat_compaction_attach_failed">No se pudo adjuntar %1$s.</string>
+    <string name="native_chat_compaction_attached_files_text">Archivos adjuntos: %1$s</string>
+
+    <string name="native_chat_compaction_kv_notice_title">La caché KV en disco está activada</string>
+    <string name="native_chat_compaction_kv_notice_text">Este chat guarda su caché KV en disco para que, al volver, no se reprocese toda la conversación. Si tu servidor no se está ejecutando con esta opción, se reiniciará con ella activada al enviar el primer mensaje.</string>
+    <string name="native_chat_compaction_kv_notice_ok">Entendido</string>
+    <string name="native_chat_compaction_kv_notice_off">Desactivar para este chat</string>
+    <string name="native_chat_compaction_stop_bar_running">Tarea de DeepSeek en curso</string>
+    <string name="native_chat_compaction_stop_bar_paused">Tarea de DeepSeek en pausa</string>
+    <string name="native_chat_compaction_stop_bar_button">Detener</string>
+    <string name="native_chat_compaction_stop_title">¿Detener la tarea de DeepSeek?</string>
+    <string name="native_chat_compaction_stop_body">Esto detiene el subagente y los hilos del harness que inició este chat. El runtime y las tareas de otros chats siguen en marcha. Los archivos que ya están en el proyecto se conservan.</string>
+    <string name="native_chat_compaction_stop_confirm">Detener tarea</string>
+    <string name="native_chat_compaction_stop_failed">No se pudo detener la tarea: %1$s</string>
+    <string name="native_chat_compaction_stop_nothing">No hay ninguna tarea en curso que detener.</string>
+</resources>

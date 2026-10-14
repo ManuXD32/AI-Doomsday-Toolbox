@@ -23,7 +23,6 @@
     <string name="easy_chat_no_models">No hay modelos de chat listos</string>
     <string name="easy_chat_no_models_hint">Instala un modelo GGUF LLM o de visión desde la biblioteca y vuelve a intentarlo.</string>
     <string name="easy_chat_no_matching_models">No hay modelos coincidentes</string>
-    <string name="easy_chat_creating_server">Creando el servidor gestionado…</string>
     <string name="easy_chat_starting_server">Iniciando el modelo…</string>
     <string name="easy_chat_starting">Iniciando…</string>
     <string name="easy_chat_open_failed">No se pudo abrir Chat.</string>

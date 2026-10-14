@@ -120,7 +120,8 @@ object UnifiedNotificationManager {
         BENCHMARK("⚡", "Benchmark"),
         ADVENTURE("⚔️", "Adventure"),
         AGENT("🤖", "AI Agent", CompletionAlertPolicy.SUCCESS_ONLY),
-        QUADTRIX("🧬", "Quadtrix Training", CompletionAlertPolicy.SUCCESS_ONLY)
+        QUADTRIX("🧬", "Quadtrix Training", CompletionAlertPolicy.SUCCESS_ONLY),
+        DEEPSEEK_TASK("🐋", "DeepSeek Task", CompletionAlertPolicy.SUCCESS_ONLY)
     }
     
     // Active tasks
@@ -592,6 +593,35 @@ object UnifiedNotificationManager {
         catch (_: SecurityException) { false }
     }
 
+    /** Posts a DeepSeek delegation notice that opens the native chat [chatId]. */
+    fun showDeepSeekTaskNotice(chatId: Long, serverId: Long, title: String, body: String): Boolean {
+        if (!::appContext.isInitialized) return false
+        val manager = NotificationManagerCompat.from(appContext)
+        if (!manager.areNotificationsEnabled()) return false
+        val intent = Intent(appContext, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            data = "adt-deepseek://chat/$chatId".toUri()
+            putExtra(MainActivity.EXTRA_OPEN_ROUTE, Screen.LlamaChat.createRoute(chatId, serverId))
+        }
+        val notificationId = 520_000 + (chatId.hashCode() and 0x0fffffff)
+        val contentIntent = PendingIntent.getActivity(appContext, notificationId, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val notification = NotificationCompat.Builder(appContext, COMPLETION_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setContentIntent(contentIntent)
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .build()
+        return try { manager.notify("deepseek:$chatId", notificationId, notification); true }
+        catch (_: SecurityException) { false }
+    }
+
     fun showAiRuntimeRecoveryNotification(
         recoverableCount: Int,
         route: String
@@ -679,6 +709,7 @@ object UnifiedNotificationManager {
             TaskType.ADVENTURE -> android.R.drawable.ic_menu_compass
             TaskType.AGENT -> android.R.drawable.ic_menu_manage
             TaskType.QUADTRIX -> android.R.drawable.ic_menu_upload
+            TaskType.DEEPSEEK_TASK -> android.R.drawable.ic_menu_manage
             TaskType.AI_SERVERS -> android.R.drawable.ic_menu_share
         }
         

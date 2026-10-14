@@ -25,6 +25,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.llamadroid.R
+import com.example.llamadroid.data.model.LlamaMessageAttachmentEntity
 import com.example.llamadroid.data.model.estimateNativeChatTextTokens
 import com.example.llamadroid.service.LlamaCallUiState
 import com.example.llamadroid.service.LlamaClientService
@@ -154,7 +155,9 @@ internal fun ChatComposer(
     onRemoveAudio: () -> Unit,
     onPreviewVideo: () -> Unit,
     onRemoveVideo: () -> Unit,
-    isGeneratingAnyChat: Boolean,
+    isChatGenerating: Boolean,
+    queuedState: LlamaClientService.GenerationState.Queued?,
+    chatId: Long,
     isCallActiveForChat: Boolean,
     isExtractingDocument: Boolean,
     supportsVision: Boolean,
@@ -165,7 +168,11 @@ internal fun ChatComposer(
     onPickDocument: () -> Unit,
     onStartRecording: () -> Unit,
     onSend: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showAttachFile: Boolean = false,
+    onPickFile: () -> Unit = {},
+    pendingFiles: List<LlamaMessageAttachmentEntity> = emptyList(),
+    onRemovePendingFile: (LlamaMessageAttachmentEntity) -> Unit = {}
 ) {
     val context = LocalContext.current
     var showAttachmentMenu by remember { mutableStateOf(false) }
@@ -176,9 +183,13 @@ internal fun ChatComposer(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 8.dp, top = 6.dp, end = 8.dp, bottom = 0.dp),
+                .padding(start = 2.dp, top = 6.dp, end = 2.dp, bottom = 0.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            if (queuedState != null) {
+                ChatQueueStatus(queued = queuedState)
+            }
+
             if (isRecording) {
                 RecordingStrip(
                     seconds = recordingSeconds,
@@ -209,6 +220,10 @@ internal fun ChatComposer(
                 )
             }
 
+            if (pendingFiles.isNotEmpty()) {
+                PendingAttachmentRow(attachments = pendingFiles, onRemove = onRemovePendingFile)
+            }
+
             val approxTokens = estimateNativeChatTextTokens(inputMessage)
             if (approxTokens > 0) {
                 Text(
@@ -226,7 +241,7 @@ internal fun ChatComposer(
                 Box(modifier = Modifier.padding(end = 4.dp)) {
                     IconButton(
                         onClick = { showAttachmentMenu = true },
-                        enabled = !isGeneratingAnyChat && !isCallActiveForChat
+                        enabled = !isChatGenerating && queuedState == null && !isCallActiveForChat
                     ) {
                         Icon(
                             Icons.Default.Add,
@@ -282,6 +297,24 @@ internal fun ChatComposer(
                                 onPickDocument()
                             }
                         )
+                        if (showAttachFile) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        stringResource(R.string.native_chat_compaction_attach_file),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Default.AttachFile, contentDescription = null)
+                                },
+                                onClick = {
+                                    showAttachmentMenu = false
+                                    onPickFile()
+                                }
+                            )
+                        }
                         if (supportsAudioInput && !isRecording && !isCallActiveForChat) {
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.llama_record_audio)) },
@@ -309,14 +342,15 @@ internal fun ChatComposer(
                     placeholder = { Text(stringResource(R.string.chat_placeholder)) },
                     maxLines = 4,
                     shape = RoundedCornerShape(24.dp),
-                    enabled = !isGeneratingAnyChat && !isCallActiveForChat
+                    enabled = !isChatGenerating && queuedState == null && !isCallActiveForChat
                 )
 
-                if (isGeneratingAnyChat) {
+                if (isChatGenerating) {
                     IconButton(
                         onClick = {
                             val intent = Intent(context, LlamaClientService::class.java).apply {
                                 action = LlamaClientService.ACTION_STOP
+                                putExtra(LlamaClientService.EXTRA_CHAT_ID, chatId)
                             }
                             context.startForegroundService(intent)
                         },
@@ -334,10 +368,11 @@ internal fun ChatComposer(
                     val canSend = inputMessage.isNotBlank() ||
                         attachedImagePath != null ||
                         attachedAudioPath != null ||
-                        attachedVideoPath != null
+                        attachedVideoPath != null ||
+                        pendingFiles.isNotEmpty()
                     IconButton(
                         onClick = { if (canSend) onSend() },
-                        enabled = canSend && !isCallActiveForChat,
+                        enabled = canSend && queuedState == null && !isCallActiveForChat,
                         modifier = Modifier
                             .background(MaterialTheme.colorScheme.primary, CircleShape)
                             .size(48.dp)

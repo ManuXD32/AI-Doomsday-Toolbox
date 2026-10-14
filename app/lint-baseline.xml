@@ -28579,4 +28579,169 @@
             column="10"/>
     </issue>
 
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.paging:paging-compose than 3.3.6 is available: 3.5.3"
+        errorLine1="paging = &quot;3.3.6&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="24"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.paging:paging-compose than 3.3.6 is available: 3.5.3"
+        errorLine1="paging = &quot;3.3.6&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="24"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.paging:paging-compose than 3.3.6 is available: 3.5.3"
+        errorLine1="paging = &quot;3.3.6&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="24"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.paging:paging-runtime than 3.3.6 is available: 3.5.3"
+        errorLine1="paging = &quot;3.3.6&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="24"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.paging:paging-runtime than 3.3.6 is available: 3.5.3"
+        errorLine1="paging = &quot;3.3.6&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="24"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.paging:paging-runtime than 3.3.6 is available: 3.5.3"
+        errorLine1="paging = &quot;3.3.6&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="24"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.paging:paging-testing than 3.3.6 is available: 3.5.3"
+        errorLine1="paging = &quot;3.3.6&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="24"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.paging:paging-testing than 3.3.6 is available: 3.5.3"
+        errorLine1="paging = &quot;3.3.6&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="24"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.paging:paging-testing than 3.3.6 is available: 3.5.3"
+        errorLine1="paging = &quot;3.3.6&quot;"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="24"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.wear.compose:compose-foundation than 1.4.1 is available: 1.7.1"
+        errorLine1="wearCompose = &quot;1.4.1&quot;"
+        errorLine2="              ~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="33"
+            column="15"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.wear.compose:compose-foundation than 1.4.1 is available: 1.7.1"
+        errorLine1="wearCompose = &quot;1.4.1&quot;"
+        errorLine2="              ~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="33"
+            column="15"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.wear.compose:compose-foundation than 1.4.1 is available: 1.7.1"
+        errorLine1="wearCompose = &quot;1.4.1&quot;"
+        errorLine2="              ~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="33"
+            column="15"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.wear.compose:compose-material than 1.4.1 is available: 1.7.1"
+        errorLine1="wearCompose = &quot;1.4.1&quot;"
+        errorLine2="              ~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="33"
+            column="15"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.wear.compose:compose-material than 1.4.1 is available: 1.7.1"
+        errorLine1="wearCompose = &quot;1.4.1&quot;"
+        errorLine2="              ~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="33"
+            column="15"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.wear.compose:compose-material than 1.4.1 is available: 1.7.1"
+        errorLine1="wearCompose = &quot;1.4.1&quot;"
+        errorLine2="              ~~~~~~~">
+        <location
+            file="../gradle/libs.versions.toml"
+            line="33"
+            column="15"/>
+    </issue>
+
 </issues>

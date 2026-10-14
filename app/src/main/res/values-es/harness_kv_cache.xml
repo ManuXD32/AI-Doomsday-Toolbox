@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_kv_cache_title">Caché KV de agentes en disco</string>
+    <string name="harness_kv_cache_description">Guarda en disco el estado KV de llama-server de cada sesión de Harness para que los agentes que se turnan en un servidor compartido no reprocesen sus prompts. Solo aplica a servidores llama gestionados localmente en el teléfono; las rutas personalizadas y remotas no están cubiertas.</string>
+    <string name="harness_kv_cache_size">Usado por este entorno: %1$s</string>
+    <string name="harness_kv_cache_budget">Presupuesto de disco</string>
+    <string name="harness_kv_cache_budget_option">%1$d GiB</string>
+    <string name="harness_kv_cache_clear">Borrar las cachés de este entorno</string>
+    <string name="harness_kv_cache_clear_title">¿Borrar las cachés de este entorno?</string>
+    <string name="harness_kv_cache_clear_body">Se eliminan todas las cachés KV guardadas de este entorno de Harness. Las sesiones siguen funcionando, pero deberán reprocesar sus prompts una vez.</string>
+    <string name="harness_kv_cache_cleared">Cachés borradas</string>
+</resources>

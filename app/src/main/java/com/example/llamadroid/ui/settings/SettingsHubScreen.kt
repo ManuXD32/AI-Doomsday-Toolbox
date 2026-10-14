@@ -57,6 +57,7 @@ fun SettingsHubScreen(navController: NavController) {
         )),
         SettingsSection(R.string.settings_section_agent, listOf(
             SettingsEntry(R.string.settings_hub_agent, R.string.settings_hub_agent_desc, Icons.Default.Terminal, "${Screen.Agent.route}?harnessTab=settings", AppSpriteKey.AGENT_ROBOT),
+            SettingsEntry(R.string.settings_hub_agent_runtimes, R.string.settings_hub_agent_runtimes_desc, Icons.Default.Terminal, "${Screen.Agent.route}?harnessTab=runtime", AppSpriteKey.AGENT_ROBOT),
             SettingsEntry(R.string.settings_prompts, R.string.settings_prompts_desc, Icons.Default.EditNote, "settings_prompts", AppSpriteKey.TOOL_NOTES)
         )),
         SettingsSection(R.string.settings_section_system, listOf(

@@ -33,6 +33,7 @@ import coil.compose.AsyncImage
 import com.example.llamadroid.R
 import com.example.llamadroid.data.model.extractEmbeddedAudioTranscript
 import com.example.llamadroid.data.model.extractEmbeddedDocumentText
+import com.example.llamadroid.data.model.LlamaMessageAttachmentEntity
 import com.example.llamadroid.data.model.LlamaMessageEntity
 import com.example.llamadroid.data.model.stripEmbeddedAudioTranscript
 import com.example.llamadroid.data.model.stripEmbeddedDocumentText
@@ -117,7 +118,8 @@ fun LlamaMessageItem(
     onDelete: () -> Unit,
     autoPlayAssistantAudio: Boolean = false,
     onAssistantAudioAutoPlayed: (String) -> Unit = {},
-    onKnowledgeLinkClick: (String) -> Boolean = { false }
+    onKnowledgeLinkClick: (String) -> Boolean = { false },
+    attachments: List<LlamaMessageAttachmentEntity> = emptyList()
 ) {
     val isUser = message.role == "user"
     val context = LocalContext.current
@@ -285,6 +287,13 @@ fun LlamaMessageItem(
                                 )
                             }
                         }
+                    }
+                    if (attachments.isNotEmpty()) {
+                        ChatAttachmentChips(
+                            attachments = attachments,
+                            modifier = Modifier.padding(top = 8.dp),
+                            compact = true
+                        )
                     }
                 }
             }

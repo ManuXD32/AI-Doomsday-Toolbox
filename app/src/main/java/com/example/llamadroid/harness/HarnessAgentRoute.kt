@@ -100,7 +100,12 @@ import java.util.concurrent.ConcurrentHashMap
 
 /** Canonical Agent entry point. Reuses the existing explorer and model manager. */
 @Composable
-fun HarnessAgentRoute(navController: NavController, initialConversationId: Long? = null, initialAttentionTab: String? = null) {
+fun HarnessAgentRoute(
+    navController: NavController,
+    initialConversationId: Long? = null,
+    initialAttentionTab: String? = null,
+    returnToCaller: Boolean = false,
+) {
     val host = LocalContext.current
     val manager = remember(host) { HarnessInstallationManager.get(host) }
     val selectedId by manager.selectedId.collectAsState()
@@ -113,13 +118,17 @@ fun HarnessAgentRoute(navController: NavController, initialConversationId: Long?
         manager.ready()
         if (initialConversationId != null) {
             val owner = manager.database.agentChatDao().getConversation(initialConversationId)?.runtimeId
+            // select() is focus-only now: it never stops another running runtime.
             if (owner != null && owner != manager.selectedId.value) runCatching { manager.select(owner) }
         }
         ready = true
     }
     val id = selectedId
     val unavailable = installationRows.firstOrNull { it.id == id }?.status in setOf("INSTALLING", "UPDATING", "DELETING", "BROKEN")
-    if (!ready || id == null || installationOperation.busy || unavailable || installationOperation.errorCode == "HARNESS_OPERATION_INVALID") {
+    // Hide the focused runtime's UI only when the running operation affects it (or is not scoped to one runtime).
+    val operationAffectsFocus = installationOperation.busy &&
+        (installationOperation.runtimeId == null || installationOperation.runtimeId == id)
+    if (!ready || id == null || operationAffectsFocus || unavailable || installationOperation.errorCode == "HARNESS_OPERATION_INVALID") {
         com.example.llamadroid.ui.components.AppScreenScaffold(
             title = stringResource(R.string.harness_installations_title), onBack = { navController.popBackStack() },
         ) { padding ->
@@ -130,7 +139,7 @@ fun HarnessAgentRoute(navController: NavController, initialConversationId: Long?
         }
     } else key(id, revision) {
         HarnessRuntimeContent(id) {
-            HarnessCapturedAgentRoute(navController, initialConversationId, initialAttentionTab, binding.state, binding.onAction)
+            HarnessCapturedAgentRoute(navController, initialConversationId, initialAttentionTab, returnToCaller, binding.state, binding.onAction)
         }
     }
 }
@@ -140,6 +149,7 @@ private fun HarnessCapturedAgentRoute(
     navController: NavController,
     initialConversationId: Long?,
     initialAttentionTab: String?,
+    returnToCaller: Boolean,
     installations: HarnessRuntimeInstallationsUiState,
     onInstallationAction: (HarnessRuntimeInstallationAction) -> Unit,
 ) {
@@ -235,12 +245,11 @@ private fun HarnessCapturedAgentRoute(
     }
     var showError by remember { mutableStateOf(false) }
     val openProjectFiles: (String) -> Unit = { id -> scope.launch {
-        runCatching {
-            val captured = withContext(Dispatchers.IO) { runtime.workspaces.openWorkspace(id) }
-            AgentService.selectHarnessWorkspace(captured.conversation)
-            navController.currentBackStackEntry?.savedStateHandle?.set("harness_workspace_files", true)
-            navController.navigate(Screen.AgentWorkspace.route)
-        }.onFailure { showError = true }
+        // Shared implementation (HarnessProjectFilesNavigator) also serves the delegation viewer.
+        val opened = runCatching {
+            HarnessProjectFilesNavigator.openProjectFiles(context, navController, runtime.runtimeId, id)
+        }.getOrDefault(false)
+        if (!opened) showError = true
     } }
     var showJournal by remember { mutableStateOf(false) }
     var showLegacy by remember { mutableStateOf(false) }
@@ -413,7 +422,7 @@ private fun HarnessCapturedAgentRoute(
                 // `models` is a legacy alias and is not registered in the
                 // current graph. Route directly to the canonical Model Hub.
                 openModelManager = { withContext(Dispatchers.Main) { navController.navigate(Screen.ModelHub.route) } },
-                openManagedLocalServers = { withContext(Dispatchers.Main) { navController.navigate(Screen.LlamaServers.route) } }
+                openManagedLocalServers = { withContext(Dispatchers.Main) { navController.navigate(Screen.Chats.route) { launchSingleTop = true } } }
             ),
             providerAuth = nativeHarnessProviderAuthHooks({ runtime.client }, context),
             handleExternalAction = { action ->
@@ -625,7 +634,8 @@ private fun HarnessCapturedAgentRoute(
         CompositionLocalProvider(LocalHarnessInlineAction provides openInline) {
             NativeHarnessScreen(state.copy(generationActivity = generationActivities.values
                 .filter { it.sessionId != null && it.sessionId == state.selectedSessionId }
-                .maxByOrNull { it.updatedAtMs }), controller::dispatch, modifier = Modifier.weight(1f), onBack = {
+                .maxByOrNull { it.updatedAtMs }), controller::dispatch, modifier = Modifier.weight(1f), returnToCallerOnBack = returnToCaller, onBack = {
+                if (returnToCaller && navController.popBackStack()) return@NativeHarnessScreen
                 if (!navController.popBackStack(Screen.Dashboard.route, false)) navController.navigate(Screen.Dashboard.route) {
                     popUpTo(navController.graph.id) { inclusive = false }; launchSingleTop = true
                 }
@@ -1020,27 +1030,4 @@ internal suspend fun uploadHarnessAttachment(runtime: HarnessAppRuntime, uri: Ur
         is HarnessRpcResult.Success -> result.value.jsonObject
         is HarnessRpcResult.Failure -> error(result.error.code)
     }
-}
-
-/** Capture the project identity before an asynchronous session create. */
-private suspend fun prepareHarnessProject(runtime: HarnessAppRuntime, selected: HarnessWorkspaceEntity): JsonObject {
-    val client = requireNotNull(runtime.client)
-    val result = client.prepareWorkspace(buildJsonObject {
-        put("workspaceId", selected.id); put("guestPath", selected.guestPath); put("backend", selected.backend)
-    })
-    val prepared = when (result) {
-        is HarnessRpcResult.Failure -> error(result.error.code)
-        is HarnessRpcResult.Success -> parseHarnessPreparedWorkspace(result.value)
-            ?: error("WORKSPACE_IDENTITY_INVALID")
-    }
-    require(prepared.guestPath == normalizeHarnessGuestPath(selected.guestPath)) {
-        "WORKSPACE_IDENTITY_MISMATCH"
-    }
-    // The single authenticated prepare route now validates Android's project,
-    // registers its DSH group and persists their mapping before session/create.
-    // A failed registration must surface here rather than create an ungrouped chat.
-    requireNotNull(runtime.workspaces.persistPreparedWorkspace(selected.id, prepared)) {
-        "WORKSPACE_NOT_FOUND"
-    }
-    return harnessSessionCreateLocation(selected.guestPath, prepared)
 }

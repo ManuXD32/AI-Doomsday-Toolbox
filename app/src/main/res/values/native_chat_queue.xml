@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_queue_slot_label">Queued: waiting for a free slot on %1$s (position %2$d)</string>
+    <string name="chat_queue_slot">Queued: waiting for a free slot (position %1$d)</string>
+    <string name="chat_queue_ram_label">Waiting for free RAM to start %1$s</string>
+    <string name="chat_queue_ram">Waiting for free RAM to start the model</string>
+    <string name="chat_queue_engine">Waiting for the on-device engine (position %1$d)</string>
+    <string name="chat_queue_cancel">Cancel</string>
+    <string name="chat_queue_cancel_description">Cancel the queued message</string>
+    <string name="chat_row_generating">Generating…</string>
+    <string name="chat_row_queued">Queued</string>
+</resources>

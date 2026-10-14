@@ -102,7 +102,7 @@ fun ChatScreen(
 
     fun openServerManager() {
         showServerPicker = false
-        navController.navigate(Screen.LlamaServers.route) {
+        navController.navigate(Screen.Chats.route) {
             launchSingleTop = true
         }
     }

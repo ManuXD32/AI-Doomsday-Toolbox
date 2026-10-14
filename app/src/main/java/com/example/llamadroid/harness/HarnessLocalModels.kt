@@ -3,6 +3,7 @@ package com.example.llamadroid.harness
 import android.annotation.SuppressLint
 import android.content.Context
 import android.os.SystemClock
+import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.model.LITERT_BACKEND_GPU
@@ -22,6 +23,16 @@ import com.example.llamadroid.service.LlamaServerRequestOptions
 import com.example.llamadroid.service.LlamaServerSamplingParams
 import com.example.llamadroid.service.LlamaSlotAffinityMode
 import com.example.llamadroid.service.LlamaSlotOwnerKey
+import com.example.llamadroid.service.KvCacheKey
+import com.example.llamadroid.service.LlamaServerSessionOwnerStore
+import com.example.llamadroid.service.LlamaServerSessionStateStore
+import com.example.llamadroid.service.LlamaServerSessionStatus
+import com.example.llamadroid.service.ManagedLlamaServerException
+import com.example.llamadroid.service.ManagedLlamaServerHttp
+import com.example.llamadroid.util.NativeProcessCleanup
+import com.example.llamadroid.service.KvSlotOwnerSpec
+import com.example.llamadroid.service.NativeChatKvCacheCoordinator
+import com.example.llamadroid.service.normalizePhysicalEndpoint
 import com.example.llamadroid.service.OllamaService
 import com.example.llamadroid.service.LiteRtConversationMessage
 import com.example.llamadroid.service.LiteRtConversationOverride
@@ -34,7 +45,10 @@ import com.example.llamadroid.service.resolveAgentLiteRtMaxOutputTokens
 import com.example.llamadroid.service.resolveLiteRtBackend
 import com.example.llamadroid.service.resolveLiteRtRequestedOutputTokens
 import com.example.llamadroid.service.compactLiteRtToolParameterSchemaJson
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
@@ -116,7 +130,12 @@ internal fun resolveHarnessLiteRtOutputTokens(
 }
 
 /** Provider adapter uses existing catalogs and workers; Harness remains the only agent loop. */
-class HarnessLocalModels(private val context: Context, private val database: AppDatabase) {
+class HarnessLocalModels(
+    private val context: Context,
+    private val database: AppDatabase,
+    /** Runtime that owns this instance; keys the harness KV caches. */
+    private val runtimeId: String = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context),
+) {
     private val settings: SettingsRepository get() = SettingsRepository(context)
     private val modelCapabilities = HarnessLocalModelCapabilityStore(context)
     private val managedServers = ManagedLlamaServerCoordinator(context, database)
@@ -184,6 +203,7 @@ class HarnessLocalModels(private val context: Context, private val database: App
                 requestedOutputTokens = effectiveOutput,
             )
             val effectiveCatalogContext = effectiveBackendLimits.contextTokens
+            HarnessModelLabels.register("litert:${model.id}", model.displayName)
             data.put(JSONObject().put("id", "litert:${model.id}").put("object", "model")
                 .put("owned_by", "adt-litert").put("name", model.displayName)
                 .apply {
@@ -209,7 +229,14 @@ class HarnessLocalModels(private val context: Context, private val database: App
                 }
                 .put("input_modalities", JSONArray().put("text").apply { if (model.supportsVision) put("image"); if (model.supportsAudio) put("audio") }))
         }
-        managedServers.catalog().forEach { data.put(it.modelRow()) }
+        managedServers.catalog().forEach { info ->
+            val row = info.modelRow()
+            HarnessModelLabels.register("llama:${info.card.id}", info.card.name)
+            modelCapabilities.get("llama:${info.card.id}")?.maxOutputTokens
+                ?.takeIf { it in 1L..Int.MAX_VALUE.toLong() }
+                ?.let { row.put("max_output_tokens", it) }
+            data.put(row)
+        }
         val saved = database.ollamaServerDao().getAllServers().first().take(32)
         val endpoints = (listOf("default" to settings.ollamaUrl.value) + saved.map { it.id.toString() to it.url }).distinctBy { it.second.trimEnd('/') }
         val discovered = coroutineScope { endpoints.map { (key, url) -> async(Dispatchers.IO) {
@@ -242,10 +269,13 @@ class HarnessLocalModels(private val context: Context, private val database: App
         val job = requireNotNull(currentCoroutineContext()[Job])
         activeRequests.add(job)
         val activity = beginGenerationActivity(request)
+        val trace = ModelRequestTrace(SystemClock.elapsedRealtime())
         val activityEmit: suspend (JSONObject) -> Unit = { chunk ->
             updateGenerationActivityFromChunk(activity.requestId, chunk)
+            trace.noteChunk(chunk)
             emit(chunk)
         }
+        try {
         try {
         val id = request.getString("model")
         when {
@@ -253,9 +283,23 @@ class HarnessLocalModels(private val context: Context, private val database: App
             id.startsWith("llama:") -> coroutineScope {
                 val cardId = id.removePrefix("llama:").toLongOrNull()?.takeIf { it > 0 }
                     ?: error("MANAGED_MODEL_NOT_FOUND")
+                trace.cardId = cardId
+                if (HarnessModelServerStability.rule.isUnstable(cardId)) {
+                    throw ManagedLlamaServerException(
+                        HarnessProviderErrorCodes.MODEL_SERVER_UNSTABLE,
+                        context.getString(R.string.harness_model_failure_unstable_message),
+                    )
+                }
                 val usage = LlamaServerUsageLease(context, "card:$cardId", this)
                 try {
                 val server = managedServers.prepare(cardId)
+                trace.baseUrl = server.baseUrl
+                trace.sessionId = server.card.sessionId
+                trace.contextTokens = server.contextTokens
+                LlamaServerSessionOwnerStore(context).get(server.card.sessionId)?.let {
+                    trace.ownerPid = it.pid
+                    trace.ownerTicks = it.processStartTimeTicks
+                }
                 streamLlamaServer(
                     request = request,
                     baseUrl = server.baseUrl ?: error("MANAGED_MODEL_URL_INVALID"),
@@ -263,7 +307,11 @@ class HarnessLocalModels(private val context: Context, private val database: App
                     emit = activityEmit,
                     endpointGeneration = "managed:${server.card.id}:${server.profile?.hashCode()}",
                     activityKey = activity.requestId,
+                    managedCard = true,
+                    capabilityWireId = id,
+                    cardId = cardId,
                 )
+                HarnessModelServerStability.rule.recordSuccess(cardId)
                 } finally { usage.close() }
             }
             id.startsWith("llama-swap:") -> {
@@ -285,9 +333,99 @@ class HarnessLocalModels(private val context: Context, private val database: App
             }
             else -> error("MODEL_NOT_FOUND")
         }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            recordModelFailure(error, request.optString("model"), activity.requestId, trace)
+            throw error
+        }
         } finally {
             mutableGenerationActivity.update { current -> current - activity.requestId }
             activeRequests.remove(job)
+        }
+    }
+
+    /** Per-request facts gathered for the failure record; metadata only. */
+    private class ModelRequestTrace(val startedElapsedMs: Long) {
+        @Volatile var cardId: Long? = null
+        @Volatile var baseUrl: String? = null
+        @Volatile var sessionId: String? = null
+        @Volatile var contextTokens: Int? = null
+        @Volatile var ownerPid: Int? = null
+        @Volatile var ownerTicks: Long? = null
+        private val generated = java.util.concurrent.atomic.AtomicInteger(0)
+        val generatedCount: Int get() = generated.get()
+
+        fun noteChunk(chunk: JSONObject) {
+            val choices = chunk.optJSONArray("choices") ?: return
+            for (index in 0 until choices.length()) {
+                val delta = choices.optJSONObject(index)?.optJSONObject("delta") ?: continue
+                val hasText = listOf("content", "reasoning_content", "reasoning", "thinking")
+                    .any { delta.optString(it).isNotEmpty() }
+                if (hasText || (delta.optJSONArray("tool_calls")?.length() ?: 0) > 0) generated.incrementAndGet()
+            }
+        }
+    }
+
+    /**
+     * Captures a metadata-only record of a failed request where the exception happens: code,
+     * exception class, bounded server body, whether the managed server survived, token counts,
+     * elapsed time and free RAM. Never throws.
+     */
+    private suspend fun recordModelFailure(
+        error: Throwable,
+        wireModel: String,
+        requestId: String,
+        trace: ModelRequestTrace,
+    ) {
+        runCatching {
+            val code = harnessProviderModelErrorCode(error)
+            val progress = mutableGenerationActivity.value[requestId]
+            var alive: Boolean? = null
+            var healthy: Boolean? = null
+            var restarted = false
+            var status: String? = null
+            val sessionId = trace.sessionId
+            val baseUrl = trace.baseUrl
+            if (sessionId != null && baseUrl != null) withContext(Dispatchers.IO) {
+                val owner = LlamaServerSessionOwnerStore(context).get(sessionId)
+                alive = owner != null && NativeProcessCleanup.recordedLlamaOwnerIsAliveSync(
+                    owner.pid, owner.processStartTimeTicks, owner.port)
+                val snapshot = LlamaServerSessionStateStore(context).readAll().firstOrNull { it.sessionId == sessionId }
+                status = snapshot?.status?.name
+                healthy = ManagedLlamaServerHttp.healthy(baseUrl)
+                val before = trace.ownerPid
+                restarted = (owner != null && before != null &&
+                    (owner.pid != before || owner.processStartTimeTicks != trace.ownerTicks)) ||
+                    snapshot?.status == LlamaServerSessionStatus.ERROR ||
+                    snapshot?.status == LlamaServerSessionStatus.STOPPED
+            }
+            val memory = android.app.ActivityManager.MemoryInfo()
+            (context.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager)?.getMemoryInfo(memory)
+            val record = HarnessModelFailure(
+                timestampMs = System.currentTimeMillis(),
+                code = code,
+                exceptionClass = error.javaClass.simpleName,
+                body = HarnessProviderErrorCodes.bodySnippet(error),
+                model = wireModel,
+                cardId = trace.cardId,
+                serverAlive = alive,
+                serverHealthy = healthy,
+                serverRestarted = restarted,
+                serverStatus = status,
+                promptTokens = progress?.total,
+                promptTokensProcessed = progress?.processed,
+                generatedTokens = trace.generatedCount,
+                elapsedMs = SystemClock.elapsedRealtime() - trace.startedElapsedMs,
+                freeRamBytes = memory.availMem.takeIf { it > 0 },
+                lowMemory = memory.lowMemory,
+                contextTokens = trace.contextTokens,
+            )
+            val cardId = trace.cardId
+            if (cardId != null && baseUrl != null && (alive == false || restarted) &&
+                code != HarnessProviderErrorCodes.CONTEXT_WINDOW_EXCEEDED
+            ) HarnessModelServerStability.rule.recordDeath(cardId)
+            HarnessModelFailureLog.get(context, runtimeId).record(record)
         }
     }
 
@@ -390,7 +528,15 @@ class HarnessLocalModels(private val context: Context, private val database: App
         check(ownership.edit().putStringSet("owners", owners).commit()) { "INFERENCE_RECEIPT_WRITE_FAILED" }
     }
 
-    private suspend fun streamLiteRt(request: JSONObject, modelId: Long, emit: suspend (JSONObject) -> Unit) {
+    private suspend fun streamLiteRt(request: JSONObject, modelId: Long, emitFrame: suspend (JSONObject) -> Unit) {
+        // The heartbeat runs beside the worker stream; serialize frames so they never interleave.
+        val emitLock = Mutex()
+        val lastFrameAt = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+        val emit: suspend (JSONObject) -> Unit = { frame ->
+            emitLock.withLock { emitFrame(frame) }
+            lastFrameAt.set(System.currentTimeMillis())
+        }
+        var heartbeat: Job? = null
         val settings = this.settings
         val model = requireNotNull(database.liteRtModelDao().getById(modelId)) { "MODEL_NOT_FOUND" }
         val messages = request.getJSONArray("messages").objects()
@@ -504,6 +650,20 @@ class HarnessLocalModels(private val context: Context, private val database: App
         delta(JSONObject().put("role", "assistant"))
         val worker = LiteRtLmWorkerClient(context)
         var hasVisibleOutput = false
+        // Long prefills and buffered tool calls emit nothing for minutes; keep the provider
+        // stream alive for the whole request whenever no frame went out for a heartbeat interval.
+        val liteRtRequestId = request.optString("requestId").trim().takeIf { it.isNotEmpty() } ?: completionId
+        heartbeat = CoroutineScope(currentCoroutineContext() + Job()).launch {
+            while (true) {
+                val wait = harnessHeartbeatDelayMs(System.currentTimeMillis(), lastFrameAt.get())
+                if (wait > 0) { delay(wait); continue }
+                emit(harnessWaitingHeartbeatChunk(
+                    completionId, modelName, liteRtRequestId,
+                    request.optString("sessionId").trim().takeIf { it.isNotEmpty() },
+                    request.optString("attemptId").trim().takeIf { it.isNotEmpty() } ?: completionId,
+                ))
+            }
+        }
         val stats = runLiteRtWorkerWithOneBoundedRecovery(
             request = workerRequest,
             hasVisibleOutput = { hasVisibleOutput },
@@ -543,7 +703,7 @@ class HarnessLocalModels(private val context: Context, private val database: App
         emit(JSONObject().put("id", completionId).put("object", "chat.completion.chunk").put("model", modelName)
             .put("choices", JSONArray()).put("usage", JSONObject().put("prompt_tokens", stats.promptTokens)
                 .put("completion_tokens", stats.completionTokens).put("total_tokens", stats.promptTokens + stats.completionTokens)))
-        } finally { media.close() }
+        } finally { heartbeat?.cancel(); media.close() }
     }
 
     /**
@@ -558,6 +718,12 @@ class HarnessLocalModels(private val context: Context, private val database: App
         emit: suspend (JSONObject) -> Unit,
         endpointGeneration: String,
         activityKey: String,
+        /** True for app-managed llama cards; only those can keep a disk KV cache. */
+        managedCard: Boolean = false,
+        /** Wire id used to look up the saved max-output override for this model. */
+        capabilityWireId: String? = null,
+        /** Managed card id; keys the harness DeepSeek base cache. */
+        cardId: Long? = null,
     ) = coroutineScope {
         val completionId = "chatcmpl-${UUID.randomUUID()}"
         val modelName = request.optString("model").ifBlank { model }
@@ -572,24 +738,49 @@ class HarnessLocalModels(private val context: Context, private val database: App
         val channel = Channel<JSONObject>(capacity = 64)
         val llamaServer = LlamaServerChatService()
         channel.send(openAiChunk(completionId, modelName, JSONObject().put("role", "assistant")))
+        // Slow phones can spend minutes in the KV lease swap or prefill without a
+        // progress frame, and tool calls are buffered until the reply ends; the plugin treats
+        // "waiting" frames as heartbeats at any point, so they run until the worker finishes.
+        val lastFrameAt = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+        val heartbeat = launch {
+            while (true) {
+                val wait = harnessHeartbeatDelayMs(System.currentTimeMillis(), lastFrameAt.get())
+                if (wait > 0) { delay(wait); continue }
+                // trySend: never block or fail when the response channel is full or closed.
+                channel.trySend(harnessWaitingHeartbeatChunk(completionId, modelName, requestId, sessionId, attemptId))
+                lastFrameAt.set(System.currentTimeMillis())
+            }
+        }
         val worker = async(Dispatchers.IO) {
             try {
                 val owner = LlamaSlotOwnerKey(
                     endpointGeneration = "$endpointGeneration|$baseUrl",
                     modelConfiguration = model,
                     conversationId = sessionId ?: "unsaved",
-                    agentSessionId = attemptId
+                    agentSessionId = attemptId,
+                    // Share one slot pool with chat and subagent requests on the same server.
+                    physicalEndpoint = normalizePhysicalEndpoint(baseUrl)
                 )
                 val requestedToolChoice = parseHarnessToolChoice(request)
                 val tools = llamaTools(request).takeUnless { requestedToolChoice == "none" }.orEmpty()
-                val result = llamaServer.chatWithToolsStreaming(
+                // A configured max output also caps the request (stops 8k summary requests from
+                // overrunning small models); without a request budget the cap is the budget.
+                val outputCap = capabilityWireId?.let { modelCapabilities.get(it)?.maxOutputTokens }
+                    ?.takeIf { it in 1L..Int.MAX_VALUE.toLong() }?.toInt()
+                val requestedMaxTokens = request.optInt("max_completion_tokens", request.optInt("max_tokens", 0))
+                    .takeIf { it > 0 }
+                val effectiveMaxTokens = when {
+                    outputCap == null -> requestedMaxTokens
+                    requestedMaxTokens == null -> outputCap
+                    else -> minOf(requestedMaxTokens, outputCap)
+                }
+                suspend fun runChat(kvSlotId: Int?, kvSlotOwner: LlamaSlotOwnerKey?) = llamaServer.chatWithToolsStreaming(
                     baseUrl = baseUrl,
                     messages = llamaMessages(request),
                     tools = tools,
                     modelLabel = model,
                     thinkingEnabled = request.optBoolean("enable_thinking", true),
-                    maxTokens = request.optInt("max_completion_tokens", request.optInt("max_tokens", 0))
-                        .takeIf { it > 0 },
+                    maxTokens = effectiveMaxTokens,
                     samplingParams = LlamaServerSamplingParams(
                         temperature = request.optDouble("temperature", Double.NaN).toFloatOrNull(),
                         topP = request.optDouble("top_p", Double.NaN).toFloatOrNull(),
@@ -599,6 +790,7 @@ class HarnessLocalModels(private val context: Context, private val database: App
                     ),
                     requestOptions = LlamaServerRequestOptions(
                         cachePrompt = request.optBoolean("cache_prompt", true),
+                        slotId = kvSlotId,
                         returnPromptProgress = true,
                         requireToolCall = requestedToolChoice == "required",
                         toolChoice = requestedToolChoice?.takeUnless { it == "none" },
@@ -606,7 +798,7 @@ class HarnessLocalModels(private val context: Context, private val database: App
                         allowRecoveryAfterConfirmedEnd = false,
                         streamReadTimeoutMs = 0
                     ),
-                    slotOwner = owner,
+                    slotOwner = kvSlotOwner,
                     slotAffinityMode = LlamaSlotAffinityMode.fromValue(settings.agentLlamaSlotAffinityMode.value),
                     onPromptProgressSuspending = { progress ->
                         updateGenerationActivity(activityKey, progress)
@@ -630,6 +822,28 @@ class HarnessLocalModels(private val context: Context, private val database: App
                         }
                     }
                 )
+                val kvEnabled = managedCard && sessionId != null &&
+                    HarnessKvCacheSettings.get(context).enabled.value
+                val result = if (kvEnabled && sessionId != null) {
+                    // The lease takes the slot lock once per request, so the service must not
+                    // take it again (slotOwner = null).
+                    NativeChatKvCacheCoordinator(context).withSlot(
+                        baseUrl = baseUrl,
+                        server = null,
+                        spec = KvSlotOwnerSpec(
+                            key = KvCacheKey.Harness(runtimeId, sessionId),
+                            persist = true,
+                            conversationId = "harness:$runtimeId:$sessionId"
+                        )
+                    ) { lease ->
+                        // A matching base restores the processed system prompt + tools for every new
+                        // thread or retry, so they skip re-reading the ~10k-token harness prefix.
+                        val base = harnessBaseHint(request, cardId, model)
+                        lease.request(base) { slotId -> runChat(slotId, if (slotId == null) owner else null) }
+                    }
+                } else {
+                    runChat(null, owner)
+                }
                 val response = result.getOrThrow()
                 val toolCalls = response.toolCalls ?: response.message.toolCalls.orEmpty()
                 toolCalls.forEachIndexed { index, call ->
@@ -664,18 +878,47 @@ class HarnessLocalModels(private val context: Context, private val database: App
                     )
                 }
             } finally {
+                heartbeat.cancel()
                 channel.close()
             }
         }
         try {
-            for (chunk in channel) emit(chunk)
+            for (chunk in channel) {
+                emit(chunk)
+                lastFrameAt.set(System.currentTimeMillis())
+            }
             worker.await()
         } finally {
+            heartbeat.cancel()
             if (!worker.isCompleted) {
                 worker.cancel()
                 llamaServer.stopGeneration()
             }
         }
+    }
+
+    /**
+     * Base-cache hint for the request's leading system message(s) + tools JSON. Also records the
+     * prefix metadata (hash, card, model, size estimate; never the text) for the "Prepare
+     * caches" UI. Null when the request has no system prefix or the card is unknown.
+     */
+    private fun harnessBaseHint(request: JSONObject, cardId: Long?, model: String): com.example.llamadroid.service.KvBaseHint? {
+        if (cardId == null) return null
+        val messages = request.optJSONArray("messages")
+        val tools = request.optJSONArray("tools")
+        val hash = HarnessBaseCacheRegistry.prefixHash(messages, tools) ?: return null
+        runCatching {
+            HarnessBaseCacheRegistry.record(
+                context,
+                HarnessBaseInfo(
+                    prefixHash = hash, cardId = cardId, model = model,
+                    tokenEstimate = HarnessBaseCacheRegistry.prefixLength(messages, tools) / 4,
+                    capturedAt = System.currentTimeMillis(),
+                ),
+                runtimeId,
+            )
+        }
+        return HarnessBaseCacheRegistry.hint(cardId, model, hash)
     }
 
     private fun llamaMessages(request: JSONObject): List<OllamaService.ChatMessage> =
@@ -800,3 +1043,34 @@ class HarnessLocalModels(private val context: Context, private val database: App
         val SAFE_REQUEST_ID = Regex("^[A-Za-z0-9_.:-]{1,128}$")
     }
 }
+
+/** Interval between metadata-only "waiting" frames while a model has produced no output yet. */
+internal const val HARNESS_HEARTBEAT_INTERVAL_MS = 15_000L
+
+/**
+ * Milliseconds until the next keep-alive frame is due: 0 (or less) means send now. A frame is due
+ * once nothing was sent for [interval]; clock steps backwards never delay more than one interval.
+ */
+internal fun harnessHeartbeatDelayMs(
+    nowMs: Long,
+    lastFrameMs: Long,
+    interval: Long = HARNESS_HEARTBEAT_INTERVAL_MS,
+): Long = (interval - (nowMs - lastFrameMs)).coerceIn(0L, interval)
+
+/** Metadata-only keep-alive frame the provider plugin treats as an activity heartbeat. */
+internal fun harnessWaitingHeartbeatChunk(
+    completionId: String,
+    model: String,
+    requestId: String?,
+    sessionId: String?,
+    attemptId: String?,
+): JSONObject = JSONObject().put("id", completionId).put("object", "chat.completion.chunk")
+    .put("created", System.currentTimeMillis() / 1000).put("model", model)
+    .put("choices", JSONArray()).put(
+        "adt",
+        JSONObject().put("type", "waiting").apply {
+            requestId?.takeIf { it.isNotBlank() }?.let { put("requestId", it) }
+            sessionId?.takeIf { it.isNotBlank() }?.let { put("sessionId", it) }
+            attemptId?.takeIf { it.isNotBlank() }?.let { put("attemptId", it) }
+        }
+    )

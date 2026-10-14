@@ -14,6 +14,8 @@ import com.example.llamadroid.service.NativeChatImageToolParams
 import com.example.llamadroid.service.NativeChatSdImageToolParams
 import com.example.llamadroid.service.NativeChatBackgroundRemovalToolParams
 import com.example.llamadroid.service.NativeChatToolConfig
+import com.example.llamadroid.service.compaction.NativeChatCompactionParams
+import com.example.llamadroid.service.delegation.NativeChatDelegationConfig
 import com.example.llamadroid.ui.ai.llama.LlamaChatSamplerValidation
 import com.example.llamadroid.ui.ai.llama.LlamaSamplerField
 import com.example.llamadroid.data.model.LlamaChatEntity
@@ -52,6 +54,9 @@ internal class ChatSettingsState {
     var maxOutputTokensEnabled by mutableStateOf(parseParam(null, NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS_ENABLED, false))
     var maxOutputTokens by mutableIntStateOf( parseParam( null, NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS, parseParam(null, LITERT_PARAM_MAX_OUTPUT_TOKENS, 1024) ).coerceAtLeast(1) )
     var seedText by mutableStateOf(parseOptionalIntParam(null, "seed"))
+    /** DeepSeek delegation settings; the whole config is rewritten by [buildApiParamsJson]. */
+    var delegation by mutableStateOf(NativeChatDelegationConfig())
+    var autoCompactEnabled by mutableStateOf(true)
     var toolsEnabled by mutableStateOf(parseParam(null, NativeChatToolConfig.KEY_TOOLS_ENABLED, false))
     var webSearchEnabled by mutableStateOf(parseParam(null, NativeChatToolConfig.KEY_WEB_SEARCH_ENABLED, false))
     var webSearchMaxPages by mutableIntStateOf(parseParam(null, NativeChatToolConfig.KEY_WEB_SEARCH_MAX_PAGES, NativeChatToolConfig.DEFAULT_SEARCH_PAGES))
@@ -87,6 +92,11 @@ internal class ChatSettingsState {
     var assistantTtsSpeed by mutableFloatStateOf(NativeChatToolConfig.fromApiParams(null).assistantTtsSpeed)
     var assistantTtsSteps by mutableIntStateOf(NativeChatToolConfig.fromApiParams(null).assistantTtsTotalSteps)
     var callSilenceAfterSpeechSeconds by mutableIntStateOf(NativeChatToolConfig.fromApiParams(null).callSilenceAfterSpeechSeconds)
+    /** Per-chat audio input routing (see [NativeChatToolConfig.audioInputMode]); empty model/language mean "server default". */
+    var audioInputMode by mutableStateOf(NativeChatToolConfig.AUDIO_INPUT_SERVER)
+    var whisperModelPath by mutableStateOf("")
+    var whisperLanguage by mutableStateOf("")
+    var videoInputMode by mutableStateOf(NativeChatToolConfig.VIDEO_INPUT_SERVER)
     var callNoSpeechTimeoutSeconds by mutableIntStateOf(NativeChatToolConfig.fromApiParams(null).callNoSpeechTimeoutSeconds)
     var maxToolRounds by mutableIntStateOf(parseParam(null, NativeChatToolConfig.KEY_MAX_TOOL_ROUNDS, NativeChatToolConfig.DEFAULT_TOOL_ROUNDS))
     var imageToolModel by mutableStateOf(NativeChatToolConfig.fromApiParams(null).imageParams.model.orEmpty())
@@ -146,11 +156,14 @@ internal class ChatSettingsState {
     var bgrToolResizeMaxEdge by mutableIntStateOf(NativeChatToolConfig.fromApiParams(null).backgroundRemovalParams.resizeMaxEdge)
 
     // Server gating ------------------------------------------------------------------------
-    private val activeServerToolDefaults by derivedStateOf {
-        NativeChatToolConfig.fromApiParams(activeServer?.defaultApiParams)
-    }
-    val activeServerIsLiteRt get() = activeServer?.isLiteRtEngine() == true
-    val serverToolGate get() = if (activeServerIsLiteRt) NativeChatToolConfig.liteRtToolDefaults() else activeServerToolDefaults
+    /**
+     * Set by the server defaults editor while the engine is still being chosen (no saved row yet);
+     * null means "ask [activeServer]".
+     */
+    var liteRtOverride by mutableStateOf<Boolean?>(null)
+    val activeServerIsLiteRt get() = liteRtOverride ?: (activeServer?.isLiteRtEngine() == true)
+    /** Tool permissions are per chat now: the server card no longer caps them, so everything is allowed. */
+    val serverToolGate get() = NativeChatToolConfig.liteRtToolDefaults()
     val serverAllowsTools get() = serverToolGate.toolsEnabled
     val serverAllowsWebSearch get() = serverAllowsTools && serverToolGate.webSearchEnabled
     val serverAllowsKiwixSearch get() = serverAllowsTools && serverToolGate.kiwixSearchEnabled
@@ -205,7 +218,8 @@ internal class ChatSettingsState {
             fileToolsEnabled,
             customToolsEnabled,
             effectiveImageGenerationEnabled,
-            effectiveBackgroundRemovalEnabled
+            effectiveBackgroundRemovalEnabled,
+            delegation.enabled
         )
 
     /** Replace every field from the persisted chat/server (the old "Cancel" path, now only used on load). */
@@ -215,10 +229,33 @@ internal class ChatSettingsState {
         liteRtDefaultContext: Int,
         liteRtContextRange: IntRange
     ) {
+        loadFromParams(chat?.apiParams, chat?.contextSize, chat?.systemPrompt, server, liteRtDefaultContext, liteRtContextRange)
+        loaded = chat != null
+    }
+
+    /**
+     * Server "defaults for new chats" editor: the same fields, filled from the server's stored
+     * defaults JSON (blank = every default). [loaded] becomes true because there is nothing to wait for.
+     */
+    fun loadFromDefaults(defaultsJson: String?, server: LlamaServerEntity? = null) {
+        loadFromParams(
+            defaultsJson?.takeIf { it.isNotBlank() }, null, null, server,
+            LITERT_CHAT_FALLBACK_CONTEXT_MAX, LITERT_CHAT_MIN_CONTEXT_TOKENS..LITERT_CHAT_FALLBACK_CONTEXT_MAX
+        )
+        loaded = true
+    }
+
+    private fun loadFromParams(
+        params: String?,
+        contextSize: Int?,
+        systemPrompt: String?,
+        server: LlamaServerEntity?,
+        liteRtDefaultContext: Int,
+        liteRtContextRange: IntRange
+    ) {
         activeServer = server
         this.liteRtDefaultContext = liteRtDefaultContext
         this.liteRtContextRange = liteRtContextRange
-        val params = chat?.apiParams
         temperature = parseParam(params, "temperature", 0.8f)
         temperatureText = formatSamplerText(temperature)
         topP = parseParam(params, "top_p", 0.95f)
@@ -241,14 +278,16 @@ internal class ChatSettingsState {
         ).coerceAtLeast(1)
         seedText = parseOptionalIntParam(params, "seed")
         enableThinking = parseParam(params, "enable_thinking", true)
-        liteRtMaxTokens = (chat?.contextSize?.takeIf { it > 0 } ?: liteRtDefaultContext)
+        liteRtMaxTokens = (contextSize?.takeIf { it > 0 } ?: liteRtDefaultContext)
             .coerceIn(liteRtContextRange)
-        liteRtSystemPrompt = chat?.systemPrompt.orEmpty()
+        liteRtSystemPrompt = systemPrompt.orEmpty()
         liteRtAccelerator = if (normalizeLiteRtBackend(server?.liteRtBackend) == LITERT_BACKEND_CPU) {
             LITERT_BACKEND_CPU
         } else {
             LITERT_BACKEND_GPU
         }
+        delegation = NativeChatDelegationConfig.fromParams(parseParamMap(params))
+        autoCompactEnabled = NativeChatCompactionParams.autoCompactEnabled(parseParamMap(params))
         toolsEnabled = parseParam(params, NativeChatToolConfig.KEY_TOOLS_ENABLED, false)
         webSearchEnabled = parseParam(params, NativeChatToolConfig.KEY_WEB_SEARCH_ENABLED, false)
         webSearchMaxPages = parseParam(params, NativeChatToolConfig.KEY_WEB_SEARCH_MAX_PAGES, NativeChatToolConfig.DEFAULT_SEARCH_PAGES)
@@ -284,6 +323,10 @@ internal class ChatSettingsState {
         assistantTtsSpeed = NativeChatToolConfig.fromApiParams(params).assistantTtsSpeed
         assistantTtsSteps = NativeChatToolConfig.fromApiParams(params).assistantTtsTotalSteps
         callSilenceAfterSpeechSeconds = NativeChatToolConfig.fromApiParams(params).callSilenceAfterSpeechSeconds
+        audioInputMode = NativeChatToolConfig.fromApiParams(params).audioInputMode
+        whisperModelPath = NativeChatToolConfig.fromApiParams(params).whisperModelPath.orEmpty()
+        whisperLanguage = NativeChatToolConfig.fromApiParams(params).whisperLanguage.orEmpty()
+        videoInputMode = NativeChatToolConfig.fromApiParams(params).videoInputMode
         callNoSpeechTimeoutSeconds = NativeChatToolConfig.fromApiParams(params).callNoSpeechTimeoutSeconds
         maxToolRounds = parseParam(params, NativeChatToolConfig.KEY_MAX_TOOL_ROUNDS, NativeChatToolConfig.DEFAULT_TOOL_ROUNDS)
         val imageParams = NativeChatToolConfig.fromApiParams(params).imageParams
@@ -344,7 +387,6 @@ internal class ChatSettingsState {
         bgrToolExportMask = bgrParams.exportMask
         bgrToolResizeBeforeProcessing = bgrParams.resizeBeforeProcessing
         bgrToolResizeMaxEdge = bgrParams.resizeMaxEdge
-        loaded = chat != null
     }
 
     /** Validates a sampler text field and records an inline error; invalid text is never saved. */
@@ -415,6 +457,10 @@ internal class ChatSettingsState {
             assistantTtsTotalSteps = assistantTtsSteps,
             assistantTtsSpeed = assistantTtsSpeed,
             callSilenceAfterSpeechSeconds = callSilenceAfterSpeechSeconds,
+            audioInputMode = audioInputMode,
+            whisperModelPath = whisperModelPath.takeIf { it.isNotBlank() },
+            whisperLanguage = whisperLanguage.takeIf { it.isNotBlank() },
+            videoInputMode = videoInputMode,
             callNoSpeechTimeoutSeconds = callNoSpeechTimeoutSeconds,
             imageParams = NativeChatImageToolParams(
                 engine = imageToolEngine,
@@ -477,7 +523,9 @@ internal class ChatSettingsState {
                 resizeBeforeProcessing = bgrToolResizeBeforeProcessing,
                 resizeMaxEdge = bgrToolResizeMaxEdge
             ),
-            maxToolRounds = maxToolRounds
+            maxToolRounds = maxToolRounds,
+            deepSeekDelegationEnabled = delegation.enabled,
+            deepSeekDelegationMode = delegation.mode
     )
 
     /**
@@ -515,6 +563,9 @@ internal class ChatSettingsState {
             map["enable_thinking"] = enableThinking
         }
         map.putAll(config.toParamMap())
+        // Delegation keys last: KEY_ENABLED is shared with the tool config and must not be stale.
+        map.putAll(delegation.toParamMap())
+        map[NativeChatCompactionParams.KEY_AUTO_COMPACT] = autoCompactEnabled
         return Gson().toJson(map)
     }
 

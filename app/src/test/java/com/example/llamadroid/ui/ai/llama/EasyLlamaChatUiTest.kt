@@ -5,6 +5,10 @@ import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.LlamaServerEntity
 import com.example.llamadroid.service.ManagedLlamaServerException
 import com.example.llamadroid.service.NativeChatToolConfig
+import com.example.llamadroid.data.repository.TOOL_DEFAULTS_MARKER_KEY
+import com.example.llamadroid.data.repository.easyChatAllowedTools
+import com.example.llamadroid.data.repository.markedToolDefaultsJson
+import com.example.llamadroid.data.repository.persistedManagedToolDefaults
 import com.example.llamadroid.ui.ai.llama.chatlist.newChatApiParamsForServer
 import java.io.File
 import java.nio.file.Files
@@ -63,32 +67,46 @@ class EasyLlamaChatUiTest {
     }
 
     @Test
-    fun managedNativeNewChatDisablesToolsWithoutChangingManualDefaults() {
-        val managed = JSONObject(requireNotNull(newChatApiParamsForServer(
-            LlamaServerEntity(
-                name = "Managed",
-                host = "127.0.0.1",
-                port = 49152,
-                managedServerCardId = 12L,
-                defaultApiParams = JSONObject().put(NativeChatToolConfig.KEY_TOOLS_ENABLED, true).toString()
-            )
+    fun managedNativeNewChatCopiesServerDefaultsAndReadsLegacyCeilingAsDisabled() {
+        fun managed(defaults: String?) = LlamaServerEntity(
+            name = "Managed", host = "127.0.0.1", port = 49152, managedServerCardId = 12L,
+            defaultApiParams = defaults
+        )
+        // Legacy rows stored the all-true ceiling: new chats still start with every tool off.
+        val legacy = JSONObject(requireNotNull(newChatApiParamsForServer(
+            managed(JSONObject(easyChatAllowedTools().toParamMap()).toString())
         )))
-        assertFalse(managed.getBoolean(NativeChatToolConfig.KEY_TOOLS_ENABLED))
-        assertFalse(managed.getBoolean(NativeChatToolConfig.KEY_DATETIME_ENABLED))
-        assertFalse(managed.getBoolean(NativeChatToolConfig.KEY_CALCULATOR_ENABLED))
+        assertFalse(legacy.getBoolean(NativeChatToolConfig.KEY_TOOLS_ENABLED))
+        assertFalse(legacy.getBoolean(NativeChatToolConfig.KEY_DATETIME_ENABLED))
+        assertFalse(legacy.getBoolean(NativeChatToolConfig.KEY_CALCULATOR_ENABLED))
+        assertFalse(JSONObject(requireNotNull(newChatApiParamsForServer(managed(null))))
+            .getBoolean(NativeChatToolConfig.KEY_TOOLS_ENABLED))
+
+        // A deliberate choice made in the editor (marked) is copied, even when it is all-true.
+        val chosen = JSONObject(requireNotNull(newChatApiParamsForServer(
+            managed(markedToolDefaultsJson(easyChatAllowedTools()))
+        )))
+        assertTrue(chosen.getBoolean(NativeChatToolConfig.KEY_TOOLS_ENABLED))
+        assertFalse(chosen.has(TOOL_DEFAULTS_MARKER_KEY))
 
         val manualDefaults = JSONObject().put(NativeChatToolConfig.KEY_TOOLS_ENABLED, true).toString()
+        assertEquals(manualDefaults, newChatApiParamsForServer(managed(manualDefaults)))
         assertEquals(
             manualDefaults,
             newChatApiParamsForServer(
-                LlamaServerEntity(
-                    name = "Manual",
-                    host = "127.0.0.1",
-                    port = 49153,
-                    defaultApiParams = manualDefaults
-                )
+                LlamaServerEntity(name = "Manual", host = "127.0.0.1", port = 49153, defaultApiParams = manualDefaults)
             )
         )
+    }
+
+    @Test
+    fun persistedManagedDefaultsNormalizeLegacyAndKeepMarkedChoices() {
+        val legacy = JSONObject(easyChatAllowedTools().toParamMap()).toString()
+        val persisted = persistedManagedToolDefaults(legacy)
+        assertTrue(JSONObject(persisted).has(TOOL_DEFAULTS_MARKER_KEY))
+        assertFalse(JSONObject(persisted).getBoolean(NativeChatToolConfig.KEY_TOOLS_ENABLED))
+        val chosen = markedToolDefaultsJson(easyChatAllowedTools())
+        assertEquals(chosen, persistedManagedToolDefaults(chosen))
     }
 
     private fun model(file: File, type: ModelType, downloaded: Boolean): ModelEntity = ModelEntity(

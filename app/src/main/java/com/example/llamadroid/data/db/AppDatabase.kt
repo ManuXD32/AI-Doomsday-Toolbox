@@ -180,9 +180,15 @@ class Converters {
         com.example.llamadroid.data.model.library.ModelDeletionJournalOperationEntity::class,
         com.example.llamadroid.data.model.library.ModelDeletionJournalPathEntity::class,
         GenerationQueueItemEntity::class,
-        GenerationQueueControlEntity::class
+        GenerationQueueControlEntity::class,
+        com.example.llamadroid.data.model.NativeChatDelegateTaskEntity::class,
+        com.example.llamadroid.data.model.NativeChatDelegateMessageEntity::class,
+        com.example.llamadroid.data.model.NativeChatDelegateEventEntity::class,
+        com.example.llamadroid.data.model.LlamaMessageAttachmentEntity::class,
+        com.example.llamadroid.data.model.NativeChatCompactionEntity::class,
+        com.example.llamadroid.data.model.LlamaMessageImageDescriptionEntity::class
     ],
-    version = 128,
+    version = 130,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -221,6 +227,12 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun llamaChatPromptProfileDao(): com.example.llamadroid.data.dao.LlamaChatPromptProfileDao
     abstract fun llamaChatDao(): com.example.llamadroid.data.dao.LlamaChatDao
     abstract fun llamaMessageDao(): com.example.llamadroid.data.dao.LlamaMessageDao
+    abstract fun nativeChatDelegateTaskDao(): com.example.llamadroid.data.dao.NativeChatDelegateTaskDao
+    abstract fun nativeChatDelegateMessageDao(): com.example.llamadroid.data.dao.NativeChatDelegateMessageDao
+    abstract fun nativeChatDelegateEventDao(): com.example.llamadroid.data.dao.NativeChatDelegateEventDao
+    abstract fun llamaMessageAttachmentDao(): com.example.llamadroid.data.dao.LlamaMessageAttachmentDao
+    abstract fun nativeChatCompactionDao(): com.example.llamadroid.data.dao.NativeChatCompactionDao
+    abstract fun llamaMessageImageDescriptionDao(): com.example.llamadroid.data.dao.LlamaMessageImageDescriptionDao
     abstract fun llamaScheduledTaskDao(): com.example.llamadroid.data.dao.LlamaScheduledTaskDao
     abstract fun llamaSpeculativeRunDao(): com.example.llamadroid.data.dao.LlamaSpeculativeRunDao
     abstract fun organizerDao(): OrganizerDao

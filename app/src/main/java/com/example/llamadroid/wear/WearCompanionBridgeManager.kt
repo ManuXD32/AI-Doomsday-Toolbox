@@ -13,6 +13,7 @@ import com.example.llamadroid.data.repository.LlamaRepository
 import com.example.llamadroid.service.LlamaClientService
 import com.example.llamadroid.service.LlamaServerLauncher
 import com.example.llamadroid.service.LlamaService
+import com.example.llamadroid.service.NativeChatGenerationStates
 import com.example.llamadroid.service.OllamaService
 import com.example.llamadroid.service.ServerState
 import com.example.llamadroid.tama.data.ActivityType
@@ -63,6 +64,8 @@ object WearCompanionBridgeManager {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val processedRequests = Collections.synchronizedSet(mutableSetOf<String>())
+    /** Chats whose turn the watch started and is still waiting on; the watch Stop only stops these. */
+    private val watchTurnChatIds = Collections.synchronizedSet(mutableSetOf<Long>())
     private val snapshotRevision = AtomicLong(0L)
     private lateinit var appContext: Context
     private lateinit var appDatabase: AppDatabase
@@ -718,6 +721,9 @@ object WearCompanionBridgeManager {
                 updatedAt = System.currentTimeMillis()
             )
         )
+        // Drop a stale Completed/Error of this chat so it is not mistaken for the new turn's result.
+        NativeChatGenerationStates.clearIfIdle(chatId)
+        watchTurnChatIds.add(chatId)
         val intent = Intent(appContext, LlamaClientService::class.java).apply {
             action = LlamaClientService.ACTION_GENERATE
             putExtra(LlamaClientService.EXTRA_CHAT_ID, chatId)
@@ -736,15 +742,16 @@ object WearCompanionBridgeManager {
                 updatedAt = System.currentTimeMillis()
             )
         )
-        val terminal = LlamaClientService.generationState
-            .filter { state ->
-                when (state) {
-                    is LlamaClientService.GenerationState.Completed -> state.chatId == chatId
-                    is LlamaClientService.GenerationState.Error -> state.chatId == chatId || state.chatId == -1L
-                    else -> false
+        val terminal = try {
+            NativeChatGenerationStates.flowFor(chatId)
+                .filter { state ->
+                    state is LlamaClientService.GenerationState.Completed ||
+                        state is LlamaClientService.GenerationState.Error
                 }
-            }
-            .first()
+                .first()
+        } finally {
+            watchTurnChatIds.remove(chatId)
+        }
         when (terminal) {
             is LlamaClientService.GenerationState.Completed -> {
                 val assistant = repository.getMessagesOnce(chatId).lastOrNull { it.role == "assistant" }
@@ -781,9 +788,14 @@ object WearCompanionBridgeManager {
     }
 
     private fun stopNativeChatTurn() {
-        appContext.startService(Intent(appContext, LlamaClientService::class.java).apply {
-            action = LlamaClientService.ACTION_STOP
-        })
+        val chatIds = synchronized(watchTurnChatIds) { watchTurnChatIds.toList() }
+        chatIds.forEach { chatId ->
+            val queued = NativeChatGenerationStates.stateFor(chatId) is LlamaClientService.GenerationState.Queued
+            appContext.startService(Intent(appContext, LlamaClientService::class.java).apply {
+                action = if (queued) LlamaClientService.ACTION_CANCEL_QUEUED else LlamaClientService.ACTION_STOP
+                putExtra(LlamaClientService.EXTRA_CHAT_ID, chatId)
+            })
+        }
     }
 
     private suspend fun sendTamaText(command: WearSendTamaTextCommand) {

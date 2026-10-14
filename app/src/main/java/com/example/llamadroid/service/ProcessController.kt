@@ -16,6 +16,7 @@ import java.net.URL
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.DeviceAcceleration
 import com.example.llamadroid.util.CpuFeatures
+import com.example.llamadroid.service.perf.LockedScreenRuntime
 import com.example.llamadroid.util.NativeModuleCatalog
 import com.example.llamadroid.util.NativeProcessCleanup
 import java.security.MessageDigest
@@ -1010,11 +1011,19 @@ class ProcessController {
         } else {
             null
         }
-        val args = NativeChatKvCacheStore.withSlotSavePath(
-            args = customArgs?.let {
-                appendVideoArgsIfNeeded(it, config, enabled = config.videoEnabled)
-            } ?: getCommand(binaryPath, config, binaryCapabilities),
-            filesDir = filesDir
+        val lockedScreen = LockedScreenRuntime.create(config, filesDir, LlamaApplication.instance)
+        val args = lockedScreen.tune(
+            NativeChatKvCacheStore.withSlotSavePath(
+                args = customArgs?.let {
+                    appendVideoArgsIfNeeded(it, config, enabled = config.videoEnabled)
+                } ?: getCommand(binaryPath, config, binaryCapabilities),
+                filesDir = filesDir
+            ),
+            binaryCapabilities ?: if (config.lockedScreenThreadPriority) {
+                probeBinaryCapabilities(binaryPath, filesDir, ownershipWorkingDir)
+            } else {
+                null
+            }
         )
         var launchedProcess: Process? = null
         
@@ -1128,6 +1137,7 @@ class ProcessController {
                     stoppedIntentionally = true
                 )
             }
+            lockedScreen.onProcessStarted(activeChildPid)
             onOwnedProcessStarted?.invoke(
                 activeChildPid,
                 NativeProcessCleanup.processStartTimeTicks(activeChildPid)
@@ -1191,6 +1201,7 @@ class ProcessController {
                 line?.let { 
                     onLog?.invoke(it) 
                     onServerLog?.invoke(it)
+                    lockedScreen.onLogLine(it)
                 }
                 
                 // Parse loading progress from server output
@@ -1222,6 +1233,7 @@ class ProcessController {
                             modelLoaded = true
                             onState?.invoke(ServerState.Running(config.port))
                             onReady?.invoke()
+                            lockedScreen.onReady()
                             DebugLog.log("ProcessController: Server is ready and healthy on port ${config.port}")
                         } else {
                             throw IllegalStateException(
@@ -1281,6 +1293,8 @@ class ProcessController {
             activeChildPid = -1
             activeBinaryWasOpenCl = false
             throw e
+        } finally {
+            lockedScreen.close()
         }
     }
 

@@ -123,8 +123,12 @@
         <service 
             android:name=".service.LlamaService" 
             android:process=":llama_runtime"
-            android:foregroundServiceType="dataSync" 
-            android:exported="false" />
+            android:foregroundServiceType="specialUse" 
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started local model server hosting on-device LLM inference (llama.cpp) for chats, tools and API clients; runs until the user stops it" />
+        </service>
 
         <service
             android:name=".service.LlamaServerSessionService"
@@ -324,8 +328,12 @@
 
         <service 
             android:name=".service.LlamaClientService" 
-            android:foregroundServiceType="dataSync" 
-            android:exported="false" />
+            android:foregroundServiceType="specialUse" 
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started on-device LLM chat generation and tool calls that must continue while the screen is locked; stops when the response finishes or the user cancels" />
+        </service>
 
         <service
             android:name=".wear.PhoneWearGatewayService"
@@ -416,6 +424,10 @@
 
         <receiver
             android:name=".service.AgentSleepWakeReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".service.delegation.DelegationAlarmReceiver"
             android:exported="false" />
 
         <receiver

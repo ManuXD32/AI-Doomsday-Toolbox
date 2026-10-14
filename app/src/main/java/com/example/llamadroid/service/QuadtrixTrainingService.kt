@@ -919,6 +919,10 @@ class QuadtrixTrainingService : Service() {
         notificationTaskId = null
     }
 
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        ForegroundTimeoutSupport.handle(this, fgsType)
+    }
+
     override fun onDestroy() {
         cleanupProcess()
         super.onDestroy()

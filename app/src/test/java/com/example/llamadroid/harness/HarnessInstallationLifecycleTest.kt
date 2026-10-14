@@ -129,6 +129,17 @@ class HarnessInstallationLifecycleTest {
         assertEquals(2, database.harnessInstallationDao().getAll().size)
     }
 
+    @Test fun selectOnlyMovesFocusWithoutRunningAnOperation() = runBlocking {
+        val id = manager.create("Focus")
+        val startsBefore = starts.size
+        manager.select(HarnessRuntimeScope.LEGACY_RUNTIME_ID)
+        assertEquals(HarnessRuntimeScope.LEGACY_RUNTIME_ID, manager.selectedId.value)
+        assertEquals(startsBefore, starts.size)
+        assertFalse(manager.operation.value.busy)
+        manager.requireAvailable(id)
+        manager.requireAvailable(HarnessRuntimeScope.LEGACY_RUNTIME_ID)
+    }
+
     @Test fun bundledDebianAndHarnessArchivesCanCreateAnIndependentInstallation() = runBlocking {
         useBundledArchives = true
         val id = manager.create("Bundled runtime")

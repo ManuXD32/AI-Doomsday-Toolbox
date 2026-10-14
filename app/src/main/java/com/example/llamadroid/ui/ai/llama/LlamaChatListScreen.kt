@@ -42,11 +42,15 @@ import com.example.llamadroid.data.repository.LlamaRepository
 import com.example.llamadroid.data.repository.UnifiedServer
 import com.example.llamadroid.ui.ai.llama.chatlist.ChatListServerSheetState
 import com.example.llamadroid.ui.ai.llama.chatlist.ChatListServerSheets
+import com.example.llamadroid.service.LlamaClientService
+import com.example.llamadroid.service.NativeChatGenerationStates
 import com.example.llamadroid.ui.ai.llama.chatlist.ChatRowServerChip
 import com.example.llamadroid.ui.ai.llama.chatlist.ChatsServerStrip
 import com.example.llamadroid.ui.ai.llama.chatlist.NewChatSheet
 import com.example.llamadroid.ui.ai.llama.chatlist.WearQuickChatSettingsDialog
 import com.example.llamadroid.ui.ai.llama.servers.ServerActionState
+import com.example.llamadroid.ui.ai.llama.servers.LocalServerProfileEditorOpener
+import com.example.llamadroid.ui.ai.llama.servers.PendingServerChatRequest
 import com.example.llamadroid.ui.ai.llama.servers.ServerRegistryViewModel
 import com.example.llamadroid.ui.ai.llama.servers.key
 import com.example.llamadroid.ui.navigation.Screen
@@ -113,6 +117,7 @@ fun LlamaChatListContent(
         ) 
     }
     val serversViewModel: ServerRegistryViewModel = viewModel()
+    val openLocalServerEditor = LocalServerProfileEditorOpener.current
     val viewModel: LlamaChatViewModel = viewModel(factory = LlamaChatViewModelFactory(repository))
     val chats by viewModel.chats.collectAsState()
     val folders by viewModel.folders.collectAsState()
@@ -124,6 +129,7 @@ fun LlamaChatListContent(
 
     var showNewChatSheet by remember { mutableStateOf(false) }
     var showQuickSetupSheet by remember { mutableStateOf(false) }
+    var showTitleGenerationSheet by remember { mutableStateOf(false) }
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var showManageFoldersDialog by remember { mutableStateOf(false) }
     var showPromptProfilesDialog by remember { mutableStateOf(false) }
@@ -279,13 +285,6 @@ fun LlamaChatListContent(
                 if (!embedded) {
                     // The embedded Chats root keeps Servers/Scheduler in its own header menu.
                     DropdownMenuItem(
-                        text = { Text(stringResource(R.string.srv_screen_title)) },
-                        onClick = {
-                            showMoreMenu = false
-                            navController.navigate(Screen.LlamaServers.route)
-                        }
-                    )
-                    DropdownMenuItem(
                         text = { Text(stringResource(R.string.ui_chats_scheduled_prompts)) },
                         onClick = {
                             showMoreMenu = false
@@ -293,6 +292,13 @@ fun LlamaChatListContent(
                         }
                     )
                 }
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.title_generation_menu_item)) },
+                    onClick = {
+                        showMoreMenu = false
+                        showTitleGenerationSheet = true
+                    }
+                )
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.quick_setup_button)) },
                     onClick = {
@@ -417,8 +423,10 @@ fun LlamaChatListContent(
                                 onOpen = { server -> serverSheets.detailKey = server.key },
                                 onStart = serversViewModel::start,
                                 onStop = serversViewModel::stop,
-                                onAddServer = { serverSheets.openEditor() },
-                                onGetModel = { navController.navigate(Screen.LLMModels.route) }
+                                onAddServer = { openLocalServerEditor(null, null) },
+                                onAddRemote = { serverSheets.openEditor() },
+                                onGetModel = { navController.navigate(Screen.LLMModels.route) },
+                                onOpenWebUi = { server -> navController.navigate("${Screen.Chat.route}?port=${server.port}") }
                             )
                         }
                         if (chats.isEmpty()) {
@@ -546,6 +554,10 @@ fun LlamaChatListContent(
 
     ChatListServerSheets(state = serverSheets, viewModel = serversViewModel, navController = navController)
 
+    if (showTitleGenerationSheet) {
+        com.example.llamadroid.ui.settings.TitleGenerationSheet(onDismiss = { showTitleGenerationSheet = false })
+    }
+
     if (showQuickSetupSheet) {
         com.example.llamadroid.ui.quicksetup.QuickSetupSheet(onDismiss = { showQuickSetupSheet = false })
     }
@@ -563,15 +575,16 @@ fun LlamaChatListContent(
             },
             onAddServer = {
                 showNewChatSheet = false
-                serverSheets.openEditor()
+                openLocalServerEditor(null, null)
             },
             onManageModels = {
                 showNewChatSheet = false
                 navController.navigate(Screen.LLMModels.route)
             },
-            onCustomizeModel = { model ->
+            onNewLocalFromModel = { model ->
                 showNewChatSheet = false
-                serverSheets.openEditor(initialModel = model)
+                PendingServerChatRequest.request()
+                openLocalServerEditor(null, model.path)
             }
         )
     }
@@ -812,6 +825,8 @@ fun LlamaChatCard(
 ) {
     val dateFormat = SimpleDateFormat("MMM dd, HH:mm", Locale.getDefault())
     var menuExpanded by remember { mutableStateOf(false) }
+    val generationState by remember(chat.id) { NativeChatGenerationStates.flowFor(chat.id) }
+        .collectAsState(initial = NativeChatGenerationStates.stateFor(chat.id))
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -846,6 +861,20 @@ fun LlamaChatCard(
                         server = server,
                         action = serverAction,
                         modifier = Modifier.padding(vertical = 2.dp)
+                    )
+                }
+                val busyLabel = when (generationState) {
+                    is LlamaClientService.GenerationState.Generating -> R.string.chat_row_generating
+                    is LlamaClientService.GenerationState.Queued -> R.string.chat_row_queued
+                    else -> null
+                }
+                if (busyLabel != null) {
+                    Text(
+                        text = stringResource(busyLabel),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
                 Text(

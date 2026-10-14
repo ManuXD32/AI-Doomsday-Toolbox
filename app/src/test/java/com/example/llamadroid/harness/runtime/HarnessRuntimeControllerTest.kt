@@ -180,7 +180,7 @@ class HarnessRuntimeControllerTest {
     }
 
     @Test
-    fun `force stop reconciles a persisted stopped row when its port is still open`() = runBlocking {
+    fun `stale port on a terminal row is not probed so another runtime cannot make it look live`() = runBlocking {
         val fixture = Fixture(temporaryFolder.newFolder("stopped-listener"))
         fixture.listenerOpen = true
         fixture.store.row = HarnessRuntimeRecord(
@@ -192,12 +192,58 @@ class HarnessRuntimeControllerTest {
         )
         val controller = fixture.controller()
 
-        val pending = controller.forceStop()
-
-        assertEquals(HarnessRuntimeState.FORCE_STOPPING, pending.record.state)
-        assertTrue(pending.timedOut)
-        fixture.listenerOpen = false
         assertEquals(HarnessRuntimeState.STOPPED, controller.forceStop().record.state)
+        assertEquals(0, fixture.listenerProbes.get())
+    }
+
+    @Test
+    fun `terminal transitions clear the recorded port`() = runBlocking {
+        val fixture = Fixture(temporaryFolder.newFolder("port-clear"))
+        val controller = fixture.controller()
+        controller.start(HarnessStartRequest(preferredPort = 39001))
+        assertEquals(39001, fixture.store.row?.port)
+        controller.forceStop()
+        assertEquals(HarnessRuntimeState.STOPPED, fixture.store.row?.state)
+        assertEquals(null, fixture.store.row?.port)
+    }
+
+    @Test
+    fun `two controllers with separate stores start concurrently on distinct ports`() = runBlocking {
+        val shared = java.util.concurrent.atomic.AtomicInteger(40000)
+        val a = Fixture(temporaryFolder.newFolder("multi-a"), "env-a", shared)
+        val b = Fixture(temporaryFolder.newFolder("multi-b"), "env-b", shared)
+        a.otherPorts = { b.store.row?.port?.let { setOf(it) } ?: emptySet() }
+        b.otherPorts = { a.store.row?.port?.let { setOf(it) } ?: emptySet() }
+        val ca = a.controller()
+        val cb = b.controller()
+
+        val ra = async { ca.start(HarnessStartRequest(environmentId = "env-a")) }
+        val rb = async { cb.start(HarnessStartRequest(environmentId = "env-b")) }
+
+        val outA = ra.await()
+        val outB = rb.await()
+        assertEquals(HarnessRuntimeState.RUNNING, outA.record.state)
+        assertEquals(HarnessRuntimeState.RUNNING, outB.record.state)
+        assertNotEquals(outA.record.port, outB.record.port)
+        assertEquals("env-a", a.store.row?.environmentId)
+        assertEquals("env-b", b.store.row?.environmentId)
+    }
+
+    @Test
+    fun `allocation skips ports owned by other active runtimes`() = runBlocking {
+        val fixture = Fixture(temporaryFolder.newFolder("exclude"), allocator = AtomicInteger(40100))
+        fixture.otherPorts = { setOf(40100, 40101) }
+        val started = fixture.controller().start()
+        assertEquals(40102, started.record.port)
+    }
+
+    @Test
+    fun `port in use failure retries once with a fresh port`() = runBlocking {
+        val fixture = Fixture(temporaryFolder.newFolder("retry"), allocator = AtomicInteger(40200))
+        fixture.launchErrors.add(HarnessRuntimeException("HARNESS_PORT_IN_USE", "address in use"))
+        val started = fixture.controller().start()
+        assertEquals(HarnessRuntimeState.RUNNING, started.record.state)
+        assertEquals(40201, started.record.port)
     }
 
     @Test
@@ -408,8 +454,15 @@ class HarnessRuntimeControllerTest {
         assertTrue(start.isCancelled)
     }
 
-    private class Fixture(private val root: File) {
+    private class Fixture(
+        private val root: File,
+        private val environmentId: String = HarnessRuntimeRecord.DEFAULT_ENVIRONMENT_ID,
+        private val allocator: AtomicInteger? = null,
+    ) {
         val store = MemoryStore()
+        val listenerProbes = AtomicInteger()
+        var otherPorts: suspend () -> Set<Int> = { emptySet() }
+        val launchErrors = ArrayDeque<Throwable>()
         val gracefulCalls = AtomicInteger()
         val forceCalls = AtomicInteger()
         val launchCalls = AtomicInteger()
@@ -467,6 +520,7 @@ class HarnessRuntimeControllerTest {
                 processLauncher = object : HarnessProcessLauncher {
                     override fun launch(spec: HarnessLaunchSpec): HarnessProcessHandle {
                         launchError?.let { throw it }
+                        launchErrors.removeFirstOrNull()?.let { throw it }
                         launchCalls.incrementAndGet()
                         launchCommand = spec.payload.command
                         process.alive = !processExitedOnLaunch
@@ -510,10 +564,13 @@ class HarnessRuntimeControllerTest {
                         }
                     }
                 },
-                portAllocator = HarnessPortAllocator { preferredPort -> preferredPort ?: 39000 },
+                portAllocator = HarnessPortAllocator { preferredPort -> preferredPort ?: allocator?.getAndIncrement() ?: 39000 },
                 now = { 1_700_000_000_000L },
                 logger = HarnessRuntimeMetadataLogger { logs += it },
+                defaultEnvironmentId = environmentId,
+                otherActivePorts = { otherPorts() },
                 listenerProbe = {
+                    listenerProbes.incrementAndGet()
                     if (cancelListenerProbe) throw kotlinx.coroutines.CancellationException("listener probe cancelled")
                     listenerOpen
                 }

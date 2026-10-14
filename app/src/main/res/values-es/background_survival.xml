@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="background_limit_channel_name">Límite de tiempo en segundo plano</string>
+    <string name="background_limit_title">Detenido por el límite de tiempo en segundo plano de Android</string>
+    <string name="background_limit_text">Se alcanzó el límite de tiempo de Android para este tipo de trabajo en segundo plano, así que la tarea se detuvo correctamente. Inícialo de nuevo para continuar.</string>
+
+    <string name="background_stop_card_title">Última detención en segundo plano</string>
+    <string name="background_stop_none">No se ha registrado ninguna detención en segundo plano.</string>
+    <string name="background_stop_last">Última detención en segundo plano: %1$s a las %2$s (%3$s)</string>
+    <string name="background_stop_process_main">app</string>
+    <string name="background_stop_process_runtime">servidor de modelos</string>
+    <string name="background_stop_earlier">Detenciones anteriores</string>
+
+    <string name="background_stop_reason_low_memory">Android se quedó sin memoria</string>
+    <string name="background_stop_reason_excessive">Uso excesivo de recursos</string>
+    <string name="background_stop_reason_user">Detenido por el usuario o los ajustes del sistema</string>
+    <string name="background_stop_reason_signaled">Finalizado por el sistema</string>
+    <string name="background_stop_reason_anr">La app no respondía</string>
+    <string name="background_stop_reason_crash">Fallo</string>
+    <string name="background_stop_reason_native_crash">Fallo nativo</string>
+    <string name="background_stop_reason_dependency">Murió un proceso del que depende</string>
+    <string name="background_stop_reason_freezer">Congelado por el sistema</string>
+    <string name="background_stop_reason_fgs_timeout">Se alcanzó el límite de tiempo del servicio en segundo plano</string>
+    <string name="background_stop_reason_permission">Cambio de permiso</string>
+    <string name="background_stop_reason_other">Otro motivo o desconocido</string>
+</resources>

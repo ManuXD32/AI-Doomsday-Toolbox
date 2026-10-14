@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_model_failure_unstable_message">El servidor del modelo se detuvo varias veces durante las solicitudes del Harness, por lo que las nuevas solicitudes se pausan unos minutos. Usa un contexto o un modelo más pequeño, o cierra otras apps, y vuelve a intentarlo.</string>
+    <string name="native_chat_delegation_viewer_model_error_title">Último error del modelo</string>
+    <string name="native_chat_delegation_viewer_model_error_unstable">El servidor del modelo se sigue deteniendo, por lo que las nuevas solicitudes se pausan unos minutos. Prueba un contexto o modelo más pequeño, o cierra otras apps.</string>
+    <string name="native_chat_delegation_viewer_model_error_context">El prompt es más grande que el contexto del modelo.</string>
+    <string name="native_chat_delegation_viewer_model_error_died">El servidor del modelo se detuvo durante la generación.</string>
+    <string name="native_chat_delegation_viewer_model_error_died_oom">El servidor del modelo se detuvo durante la generación — probablemente por falta de memoria (RAM libre %1$s).</string>
+    <string name="native_chat_delegation_viewer_model_error_rejected">llama-server rechazó la solicitud.</string>
+    <string name="native_chat_delegation_viewer_model_error_rejected_body">llama-server rechazó la solicitud: %1$s</string>
+    <string name="native_chat_delegation_viewer_model_error_connection">Se perdió la conexión con el servidor del modelo.</string>
+    <string name="native_chat_delegation_viewer_model_error_adapter">La app no pudo leer el flujo de respuesta del modelo.</string>
+    <string name="native_chat_delegation_viewer_model_error_litert">El proceso del modelo LiteRT en el dispositivo se cerró inesperadamente.</string>
+    <string name="native_chat_delegation_viewer_model_error_other">La solicitud al modelo falló.</string>
+    <string name="native_chat_delegation_viewer_model_error_details">Código %1$s · %2$s transcurridos · tokens del prompt: %3$s · generados: %4$s</string>
+    <string name="native_chat_delegation_viewer_model_error_copy">Copiar diagnóstico</string>
+    <string name="native_chat_delegation_viewer_model_error_copied">Diagnóstico copiado</string>
+</resources>

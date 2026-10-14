@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="background_limit_channel_name">Background time limit</string>
+    <string name="background_limit_title">Stopped by Android\'s background time limit</string>
+    <string name="background_limit_text">Android\'s time limit for this kind of background work was reached, so the task was stopped cleanly. Start it again to continue.</string>
+
+    <string name="background_stop_card_title">Last background stop</string>
+    <string name="background_stop_none">No background stop has been recorded.</string>
+    <string name="background_stop_last">Last background stop: %1$s at %2$s (%3$s)</string>
+    <string name="background_stop_process_main">app</string>
+    <string name="background_stop_process_runtime">model server</string>
+    <string name="background_stop_earlier">Earlier stops</string>
+
+    <string name="background_stop_reason_low_memory">Android ran out of memory</string>
+    <string name="background_stop_reason_excessive">Excessive resource usage</string>
+    <string name="background_stop_reason_user">Stopped by the user or system settings</string>
+    <string name="background_stop_reason_signaled">Killed by the system</string>
+    <string name="background_stop_reason_anr">App not responding</string>
+    <string name="background_stop_reason_crash">Crash</string>
+    <string name="background_stop_reason_native_crash">Native crash</string>
+    <string name="background_stop_reason_dependency">A process it depends on died</string>
+    <string name="background_stop_reason_freezer">Frozen by the system</string>
+    <string name="background_stop_reason_fgs_timeout">Background service time limit reached</string>
+    <string name="background_stop_reason_permission">Permission changed</string>
+    <string name="background_stop_reason_other">Other or unknown reason</string>
+</resources>

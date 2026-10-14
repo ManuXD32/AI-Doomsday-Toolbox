@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import com.example.llamadroid.service.LlamaClientService
+import com.example.llamadroid.service.NativeChatGenerationStates
 
 class LlamaChatViewModel(
     private val repository: LlamaRepository
@@ -59,10 +59,14 @@ class LlamaChatViewModel(
         systemPrompt: String? = null,
         apiParams: String? = null,
         folderId: Long? = null,
+        persistKvCache: Boolean = false,
         onCreated: (Long) -> Unit
     ) {
         viewModelScope.launch {
-            val id = repository.createChat(title, contextSize, systemPrompt, apiParams, folderId)
+            val id = repository.createChat(
+                title, contextSize, systemPrompt, apiParams, folderId,
+                persistKvCache = persistKvCache
+            )
             onCreated(id)
         }
     }
@@ -157,7 +161,8 @@ class LlamaChatViewModel(
             return
         }
         if (currentChatId != chatId) {
-            LlamaClientService.resetStateIfIdle()
+            // Drop a stale finished/failed state of the chat being opened (other chats keep theirs).
+            NativeChatGenerationStates.clearIfIdle(chatId)
             _messages.value = emptyList()
         }
         currentChatId = chatId

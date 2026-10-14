@@ -50,9 +50,12 @@ import androidx.navigation.NavController
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.ModelEntity
+import com.example.llamadroid.data.repository.markedDefaultsJson
+import com.example.llamadroid.data.repository.normalizedManagedToolDefaults
 import com.example.llamadroid.data.repository.UnifiedServerStatus
 import com.example.llamadroid.service.LlamaServerLaunchProfile
 import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.ui.settings.LlmSettingsContent
 import com.example.llamadroid.ui.settings.LlmSettingsMode
 import com.example.llamadroid.ui.settings.validSavedLlamaArguments
@@ -99,6 +102,8 @@ fun ServerProfileEditorScreen(navController: NavController, cardId: Long, modelP
     val scope = rememberCoroutineScope()
     val servers by viewModel.servers.collectAsState()
     val isEdit = cardId > 0L
+    // One-shot flag set by "new server for a new chat" entry points; consumed when the editor opens.
+    val createChatAfterSave = rememberSaveable { !isEdit && PendingServerChatRequest.consume() }
 
     var seeded by rememberSaveable { mutableStateOf(false) }
     val draft = remember {
@@ -113,14 +118,23 @@ fun ServerProfileEditorScreen(navController: NavController, cardId: Long, modelP
     var nameTouched by rememberSaveable { mutableStateOf(isEdit) }
     var portText by rememberSaveable { mutableStateOf("") }
     var allowWear by rememberSaveable { mutableStateOf(false) }
+    // Locked-screen speed options live on the launch profile but not in the draft settings store.
+    var lockedThreadFit by rememberSaveable { mutableStateOf(true) }
+    var lockedThreadPriority by rememberSaveable { mutableStateOf(true) }
+    var lockedPerformanceHints by rememberSaveable { mutableStateOf(true) }
     var baselineProfile by rememberSaveable { mutableStateOf("") }
     var baselineMeta by rememberSaveable { mutableStateOf("") }
+    // Chat options a new chat of this server starts with: the JSON survives rotation, and the
+    // shared chat-settings state is the editable copy (saved under the chat's own keys).
+    var toolDefaultsJson by rememberSaveable { mutableStateOf("") }
+    val defaults = rememberServerDefaultsState(toolDefaultsJson, onJsonChange = { toolDefaultsJson = it })
     var saving by remember { mutableStateOf(false) }
     var errors by remember { mutableStateOf<Set<ProfileEditorError>>(emptySet()) }
     var saveError by remember { mutableStateOf<String?>(null) }
     var showDiscard by remember { mutableStateOf(false) }
 
-    fun metaOf() = "$name|$portText|$allowWear"
+    fun metaOf() = "$name|$portText|$allowWear|$lockedThreadFit|$lockedThreadPriority|$lockedPerformanceHints|" +
+        defaults.buildApiParamsJson()
 
     LaunchedEffect(Unit) {
         if (seeded) return@LaunchedEffect
@@ -140,7 +154,14 @@ fun ServerProfileEditorScreen(navController: NavController, cardId: Long, modelP
             profile = base
             if (isEdit) servers.firstOrNull { it.cardId == cardId }?.let { name = it.name; portText = it.port.toString() }
         }
+        toolDefaultsJson = withContext(Dispatchers.IO) {
+            if (isEdit) viewModel.loadManagedToolDefaults(cardId) else normalizedManagedToolDefaults(null)
+        }
+        defaults.loadFromDefaults(toolDefaultsJson)
         if (!isEdit && !nameTouched) name = suggestedServerName(name, false, profile.modelPath)
+        lockedThreadFit = profile.lockedScreenThreadFit
+        lockedThreadPriority = profile.lockedScreenThreadPriority
+        lockedPerformanceHints = profile.lockedScreenPerformanceHints
         LlamaServerLaunchProfile.restore(profile, draft)
         baselineProfile = profileFingerprint(LlamaServerLaunchProfile.capture(draft))
         baselineMeta = metaOf()
@@ -176,18 +197,35 @@ fun ServerProfileEditorScreen(navController: NavController, cardId: Long, modelP
         saving = true
         saveError = null
         val port = portText.trim().toIntOrNull()
-        val profile = profileForSave(captured, port)
+        val profile = profileForSave(captured, port).copy(
+            lockedScreenThreadFit = lockedThreadFit,
+            lockedScreenThreadPriority = lockedThreadPriority,
+            lockedScreenPerformanceHints = lockedPerformanceHints
+        )
+        val toolDefaultsToSave = markedDefaultsJson(defaults.buildApiParamsJson())
         val finalName = name.trim().ifBlank { defaultServerName(profile.modelPath) }
         scope.launch {
+            var createdRowId: Long? = null
             val result = if (isEdit) {
-                viewModel.updateLocal(cardId, profile, finalName, port, allowWear)
+                viewModel.updateLocal(cardId, profile, finalName, port, allowWear, toolDefaultsToSave)
             } else {
-                viewModel.createLocal(finalName, profile, port, allowWear, startAfterCreate = restart)
+                viewModel.createLocal(
+                    finalName, profile, port, allowWear, startAfterCreate = restart,
+                    defaultApiParams = toolDefaultsToSave
+                )
+                    .onSuccess { createdRowId = it }
                     .map { }
             }
             result.onSuccess {
                 if (isEdit && restart) editing?.let(viewModel::restart)
+                val rowId = createdRowId
+                val chatId = if (createChatAfterSave && rowId != null) {
+                    runCatching { createChatForNewServer(context, rowId, finalName) }.getOrNull()
+                } else null
                 navController.popBackStack()
+                if (chatId != null && rowId != null) {
+                    navController.navigate(Screen.LlamaChat.createRoute(chatId, rowId))
+                }
             }.onFailure { saveError = it.message }
             saving = false
         }
@@ -234,6 +272,25 @@ fun ServerProfileEditorScreen(navController: NavController, cardId: Long, modelP
                             allowWear = allowWear,
                             onAllowWearChange = { allowWear = it },
                             errors = errors
+                        )
+                    }
+                    item(key = "server_locked_screen") {
+                        LockedScreenPerformanceOptions(
+                            threadFit = lockedThreadFit,
+                            threadPriority = lockedThreadPriority,
+                            performanceHints = lockedPerformanceHints,
+                            onChange = { fit, prio, hints ->
+                                lockedThreadFit = fit
+                                lockedThreadPriority = prio
+                                lockedPerformanceHints = hints
+                            }
+                        )
+                    }
+                    item(key = "server_tool_defaults") {
+                        NativeServerChatDefaultsSection(
+                            state = defaults,
+                            registryViewModel = viewModel,
+                            navController = navController
                         )
                     }
                 },

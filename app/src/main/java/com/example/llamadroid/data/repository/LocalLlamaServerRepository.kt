@@ -18,7 +18,6 @@ import com.example.llamadroid.service.managedLlamaConnectHost
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
 
 /** Ids of the three linked records that make up one local managed server. */
 data class LocalServerIds(val cardId: Long, val serverRowId: Long, val presetId: Long)
@@ -56,12 +55,13 @@ class LocalLlamaServerRepository(
         profile: LlamaServerLaunchProfile,
         port: Int? = null,
         allowWearStart: Boolean = false,
-        easyModelId: String? = null
+        easyModelId: String? = null,
+        defaultApiParams: String? = null
     ): LocalServerIds = withContext(Dispatchers.IO) {
-        if (port != null) insertTriple(name, profile, port, allowWearStart, easyModelId)
+        if (port != null) insertTriple(name, profile, port, allowWearStart, easyModelId, defaultApiParams)
         else ManagedLlamaServerCoordinator.creationLock.withLock {
             val allocated = ManagedLlamaServerCoordinator(context, database).allocatePort()
-            insertTriple(name, profile, allocated, allowWearStart, easyModelId)
+            insertTriple(name, profile, allocated, allowWearStart, easyModelId, defaultApiParams)
         }
     }
 
@@ -70,7 +70,8 @@ class LocalLlamaServerRepository(
         profile: LlamaServerLaunchProfile,
         port: Int,
         allowWearStart: Boolean,
-        easyModelId: String?
+        easyModelId: String?,
+        defaultApiParams: String?
     ): LocalServerIds = database.withTransaction {
         val displayName = name.trim().ifBlank { profile.modelPath.substringAfterLast('/').removeSuffix(".gguf") }
             .ifBlank { "llama-server" }
@@ -83,7 +84,8 @@ class LocalLlamaServerRepository(
         val cardId = cardDao.insertCard(draft)
         if (allowWearStart) cardDao.setWearStartCard(cardId)
         val card = draft.copy(id = cardId)
-        val rowId = serverDao.insertServer(linkedRowFor(card, card.launchProfileForPreset(finalProfile)))
+        val rowId = serverDao.insertServer(
+            linkedRowFor(card, card.launchProfileForPreset(finalProfile), defaultApiParams))
         LocalServerIds(cardId, rowId, presetId)
     }
 
@@ -109,7 +111,8 @@ class LocalLlamaServerRepository(
         profile: LlamaServerLaunchProfile,
         name: String? = null,
         port: Int? = null,
-        allowWearStart: Boolean? = null
+        allowWearStart: Boolean? = null,
+        defaultApiParams: String? = null
     ): Unit = withContext(Dispatchers.IO) {
         database.withTransaction {
             val card = cardDao.getCard(cardId) ?: throw ManagedLlamaServerException(
@@ -141,11 +144,13 @@ class LocalLlamaServerRepository(
             }
             val effective = updated.launchProfileForPreset(finalProfile)
             val row = serverDao.getManagedServer(cardId)
-            if (row == null) serverDao.insertServer(linkedRowFor(updated, effective))
+            if (row == null) serverDao.insertServer(linkedRowFor(updated, effective, defaultApiParams))
             else serverDao.updateServer(row.copy(
                 name = newName, host = managedLlamaConnectHost(effective.host), port = newPort,
                 modelName = effective.modelPath.substringAfterLast('/'),
-                supportsVision = effective.visionEnabled, supportsVideo = effective.videoEnabled))
+                supportsVision = effective.visionEnabled, supportsVideo = effective.videoEnabled,
+                // Saving persists the normalized legacy ceiling; other rows keep their tool defaults.
+                defaultApiParams = defaultApiParams ?: persistedManagedToolDefaults(row.defaultApiParams)))
             Unit
         }
     }
@@ -194,7 +199,11 @@ class LocalLlamaServerRepository(
 
     private fun legacyPort(state: ServerState): Int? = (state as? ServerState.Running)?.port
 
-    private fun linkedRowFor(card: LlamaServerCardEntity, profile: LlamaServerLaunchProfile) = LlamaServerEntity(
+    private fun linkedRowFor(
+        card: LlamaServerCardEntity,
+        profile: LlamaServerLaunchProfile,
+        defaultApiParams: String? = null
+    ) = LlamaServerEntity(
         name = card.name,
         host = managedLlamaConnectHost(profile.host),
         port = profile.serverPort,
@@ -202,7 +211,7 @@ class LocalLlamaServerRepository(
         supportsVision = profile.visionEnabled,
         supportsVideo = profile.videoEnabled,
         managedServerCardId = card.id,
-        defaultApiParams = JSONObject(easyChatAllowedTools().toParamMap()).toString()
+        defaultApiParams = defaultApiParams ?: managedDefaultToolsJson()
     )
 
     /** Apply the card's easy/manual lifecycle rules to a freshly written profile. */

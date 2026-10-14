@@ -54,6 +54,7 @@ data class ServerPickerExtraOption(val label: String, val selected: Boolean, val
  * @param runningOnly list only running servers (web-UI chat target)
  * @param extraOption optional leading entry that is not a server
  * @param selectedPort alternative preselection for callers that only know a port
+ * @param filter optional predicate limiting which servers are listed (e.g. engine-specific pickers)
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -69,12 +70,14 @@ fun ServerPickerSheet(
     onManageServers: (() -> Unit)? = null,
     runningOnly: Boolean = false,
     extraOption: ServerPickerExtraOption? = null,
-    selectedPort: Int? = null
+    selectedPort: Int? = null,
+    filter: ((UnifiedServer) -> Boolean)? = null
 ) {
     val servers by viewModel.servers.collectAsState()
     val actions by viewModel.actions.collectAsState()
     val scope = rememberCoroutineScope()
-    val visible = if (runningOnly) servers.filter { it.status == UnifiedServerStatus.RUNNING } else servers
+    val eligible = if (filter != null) servers.filter(filter) else servers
+    val visible = if (runningOnly) eligible.filter { it.status == UnifiedServerStatus.RUNNING } else eligible
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,

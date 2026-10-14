@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="native_chat_compaction_ring_description">Context usage: %1$s</string>
+    <string name="native_chat_compaction_ring_unknown">unknown</string>
+    <string name="native_chat_compaction_gauge_title">Context window</string>
+    <string name="native_chat_compaction_gauge_usage">%1$s of %2$s tokens (%3$d%%)</string>
+    <string name="native_chat_compaction_gauge_unknown">Usage isn\'t known yet. It appears after the first reply.</string>
+    <string name="native_chat_compaction_gauge_measured">Measured by the server</string>
+    <string name="native_chat_compaction_gauge_estimated">Estimated</string>
+    <string name="native_chat_compaction_gauge_last_saved">Last compaction saved %1$s tokens</string>
+    <string name="native_chat_compaction_gauge_last_saved_approx">Last compaction saved ~%1$s tokens</string>
+    <string name="native_chat_compaction_auto">Auto-compact</string>
+    <string name="native_chat_compaction_auto_hint">Summarizes older messages when the context is nearly full.</string>
+    <string name="native_chat_compaction_now">Compact now</string>
+    <string name="native_chat_compaction_running">Compacting…</string>
+    <string name="native_chat_compaction_done">Compacted, saved ~%1$s tokens</string>
+    <string name="native_chat_compaction_failed">Couldn\'t compact: %1$s</string>
+    <string name="native_chat_compaction_busy">Wait for the current reply to finish.</string>
+
+    <string name="native_chat_compaction_files">Files</string>
+    <string name="native_chat_compaction_files_project">Project files</string>
+    <string name="native_chat_compaction_files_runtime">Runtime files</string>
+    <string name="native_chat_compaction_files_project_failed">Couldn\'t open the project files.</string>
+    <string name="native_chat_compaction_delegation">DeepSeek delegation</string>
+    <string name="native_chat_compaction_delegation_running">DeepSeek delegation, task running</string>
+    <string name="native_chat_compaction_delegation_attention">DeepSeek delegation, needs attention</string>
+
+    <string name="native_chat_compaction_notice_finished">DeepSeek task finished</string>
+    <string name="native_chat_compaction_notice_check">Scheduled check</string>
+    <string name="native_chat_compaction_notice_question">Subagent question</string>
+    <string name="native_chat_compaction_notice_direction">Task needs direction</string>
+    <string name="native_chat_compaction_notice_title">Automatic note</string>
+
+    <string name="native_chat_compaction_attach_file">Attach file</string>
+    <string name="native_chat_compaction_attach_too_large">%1$s is larger than 256 MiB.</string>
+    <string name="native_chat_compaction_attach_failed">Couldn\'t attach %1$s.</string>
+    <string name="native_chat_compaction_attached_files_text">Attached files: %1$s</string>
+
+    <string name="native_chat_compaction_kv_notice_title">Disk KV cache is on</string>
+    <string name="native_chat_compaction_kv_notice_text">This chat keeps its KV cache on disk so returning to it doesn\'t reprocess the whole conversation. If your server isn\'t running with this option, it will be restarted with it on when you send the first message.</string>
+    <string name="native_chat_compaction_kv_notice_ok">Got it</string>
+    <string name="native_chat_compaction_kv_notice_off">Turn off for this chat</string>
+    <string name="native_chat_compaction_stop_bar_running">DeepSeek task running</string>
+    <string name="native_chat_compaction_stop_bar_paused">DeepSeek task paused</string>
+    <string name="native_chat_compaction_stop_bar_button">Stop</string>
+    <string name="native_chat_compaction_stop_title">Stop the DeepSeek task?</string>
+    <string name="native_chat_compaction_stop_body">This stops the subagent and the harness threads this chat started. The runtime and other chats\' tasks keep running. Files already in the project are kept.</string>
+    <string name="native_chat_compaction_stop_confirm">Stop task</string>
+    <string name="native_chat_compaction_stop_failed">Could not stop the task: %1$s</string>
+    <string name="native_chat_compaction_stop_nothing">No running task to stop.</string>
+</resources>

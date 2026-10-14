@@ -128,8 +128,12 @@ interface HarnessInstallationDao {
         deleteSessionsForRuntime(runtimeId)
         deleteWorkspacesForRuntime(runtimeId)
         deleteTransferReceiptsForRuntime(runtimeId)
+        deleteRuntimeProcessRow(runtimeId)
         deleteEnvironmentIfUnreferenced(runtimeId)
     }
+
+    @Query("DELETE FROM agent_harness_runtime WHERE id = :runtimeId")
+    suspend fun deleteRuntimeProcessRow(runtimeId: String)
 
     @Query(
         "DELETE FROM agent_proot_environments " +

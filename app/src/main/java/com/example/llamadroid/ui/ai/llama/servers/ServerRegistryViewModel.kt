@@ -18,6 +18,7 @@ import com.example.llamadroid.data.repository.UnifiedServer
 import com.example.llamadroid.data.repository.UnifiedServerKind
 import com.example.llamadroid.data.repository.UnifiedServerStatus
 import com.example.llamadroid.data.repository.easyLlamaProfile
+import com.example.llamadroid.data.repository.normalizedManagedToolDefaults
 import com.example.llamadroid.service.LlamaServerLaunchProfile
 import com.example.llamadroid.service.LlamaServerLauncher
 import com.example.llamadroid.service.LlamaServerSessionLogStore
@@ -238,6 +239,11 @@ class ServerRegistryViewModel(application: Application) : AndroidViewModel(appli
         ManagedEditSeed(card.name, card.port, card.allowWearStart, preset.launchProfile())
     }
 
+    /** Tool defaults for new chats of a managed server (legacy all-true values read as all tools off). */
+    suspend fun loadManagedToolDefaults(cardId: Long): String = withContext(Dispatchers.IO) {
+        normalizedManagedToolDefaults(database.llamaServerDao().getManagedServer(cardId)?.defaultApiParams)
+    }
+
     /** Remote row for the remote half of the editor. */
     suspend fun loadRow(server: UnifiedServer): LlamaServerEntity? = withContext(Dispatchers.IO) {
         server.rowId?.let { database.llamaServerDao().getServerById(it) }
@@ -252,10 +258,12 @@ class ServerRegistryViewModel(application: Application) : AndroidViewModel(appli
         profile: LlamaServerLaunchProfile,
         port: Int?,
         allowWearStart: Boolean,
-        startAfterCreate: Boolean
+        startAfterCreate: Boolean,
+        defaultApiParams: String? = null
     ): Result<Long> = withContext(Dispatchers.IO) {
         try {
-            val ids = localRepository.createLocalServer(name, profile, port = port, allowWearStart = allowWearStart)
+            val ids = localRepository.createLocalServer(
+                name, profile, port = port, allowWearStart = allowWearStart, defaultApiParams = defaultApiParams)
             if (startAfterCreate) {
                 val card = database.llamaServerCardDao().getCard(ids.cardId)
                 start(UnifiedServer(
@@ -279,10 +287,13 @@ class ServerRegistryViewModel(application: Application) : AndroidViewModel(appli
         profile: LlamaServerLaunchProfile,
         name: String,
         port: Int?,
-        allowWearStart: Boolean
+        allowWearStart: Boolean,
+        defaultApiParams: String? = null
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            localRepository.updateLocalServerProfile(cardId, profile, name = name, port = port, allowWearStart = allowWearStart)
+            localRepository.updateLocalServerProfile(
+                cardId, profile, name = name, port = port, allowWearStart = allowWearStart,
+                defaultApiParams = defaultApiParams)
             Result.success(Unit)
         } catch (cancel: CancellationException) {
             throw cancel

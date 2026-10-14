@@ -47,6 +47,9 @@ import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.repository.EasyLlamaChatCoordinator
 import com.example.llamadroid.data.repository.isEasyLlamaChatModel
 import com.example.llamadroid.service.ManagedLlamaServerException
+import com.example.llamadroid.data.db.launchProfile
+import com.example.llamadroid.ui.ai.llama.servers.LocalServerProfileEditorOpener
+import com.example.llamadroid.ui.ai.llama.servers.PendingServerChatRequest
 import com.example.llamadroid.ui.components.AppSectionCard
 import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog
 import kotlinx.coroutines.CancellationException
@@ -227,8 +230,8 @@ fun EasyLlamaChatEntryCard(
     val coordinator = remember(context, database) {
         EasyLlamaChatCoordinator(context, database)
     }
+    val openServerEditor = LocalServerProfileEditorOpener.current
     val scope = rememberCoroutineScope()
-    val creatingServerText = stringResource(R.string.easy_chat_creating_server)
     val startingServerText = stringResource(R.string.easy_chat_starting_server)
     var showPicker by remember { mutableStateOf(false) }
     var isOpening by remember { mutableStateOf(false) }
@@ -378,13 +381,19 @@ fun EasyLlamaChatEntryCard(
                     showPicker = false
                     isOpening = true
                     error = null
-                    status = creatingServerText
+                    status = startingServerText
                     openingJob = scope.launch {
                         val requestJob = currentCoroutineContext()[Job]
                         try {
-                            val target = coordinator.createOrReuse(model.filename)
+                            val existingCardId = withContext(Dispatchers.IO) { findManagedCardIdForModel(database, model) }
+                            if (existingCardId == null) {
+                                // No server for this model yet: the full editor creates it (and the chat).
+                                PendingServerChatRequest.request()
+                                openServerEditor(null, model.path)
+                                return@launch
+                            }
                             status = startingServerText
-                            val session = coordinator.openChat(target.card.id) { message ->
+                            val session = coordinator.openChat(existingCardId) { message ->
                                 scope.launch { if (requestJob?.isActive == true) status = message }
                             }
                             onChatOpened(session.chatId, session.serverId)
@@ -407,4 +416,13 @@ fun EasyLlamaChatEntryCard(
             }
         )
     }
+}
+
+/** Card id of a managed server already serving [model] (the Easy card, or any card whose profile uses its file). */
+private suspend fun findManagedCardIdForModel(database: AppDatabase, model: ModelEntity): Long? {
+    database.llamaServerCardDao().getEasyCard(model.filename)?.let { return it.id }
+    return database.llamaServerCardDao().observeCards().first().firstOrNull { card ->
+        database.savedCommandDao().getGeneralCommandById(card.savedCommandId)
+            ?.launchProfile()?.modelPath == model.path
+    }?.id
 }

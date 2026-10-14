@@ -219,7 +219,7 @@ class HarnessBridgeOperations(
                     JSONObject().put("written", bytes.size)
                 }
                 method in setOf("workspace.run", "workspace.runStatus", "workspace.stopRun") -> {
-                    val runs = HarnessAppRuntime.get(context).projectRuns
+                    val runs = HarnessAppRuntime.forRuntime(context, com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context)).projectRuns
                     val state = when (method) {
                         "workspace.run" -> runs.run(scope.conversation.id)
                         "workspace.runStatus" -> runs.check(scope.conversation.id)

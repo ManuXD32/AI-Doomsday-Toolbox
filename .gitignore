@@ -8,6 +8,8 @@ app/lint-baseline.xml
 .agents
 tests
 .codex-pocket-inbox
+# Archived local release build snapshots and other large scratch data (never committed)
+.tmp/
 
 # Built application files
 *.apk

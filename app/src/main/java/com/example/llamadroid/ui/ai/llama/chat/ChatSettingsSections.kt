@@ -45,7 +45,12 @@ internal class ChatSettingsEnv(
     val bgrModelOptions: List<String>,
     val liteRtContextCap: Int,
     val onOpenKnowledgeBase: () -> Unit,
-    val onManageCustomTools: () -> Unit
+    val onManageCustomTools: () -> Unit,
+    /**
+     * True when the sections edit a server's "defaults for new chats": chat-only actions and
+     * navigation away from the editor (manage custom tools / knowledge bases) are hidden.
+     */
+    val defaultsMode: Boolean = false
 )
 
 @Composable
@@ -294,12 +299,6 @@ internal fun ChatSettingsState.VoiceCallSection(env: ChatSettingsEnv) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        Text(stringResource(R.string.llama_call_settings_title), style = MaterialTheme.typography.titleSmall)
-        Text(
-            text = stringResource(R.string.llama_call_settings_desc),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 stringResource(R.string.llama_call_after_last_word, callSilenceAfterSpeechSeconds),
@@ -511,11 +510,13 @@ internal fun ChatSettingsState.ToolsSection(env: ChatSettingsEnv) {
             enabled = true,
             onCheckedChange = { customToolsEnabled = it }
         )
-        OutlinedButton(
-            onClick = { env.onManageCustomTools() },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(stringResource(R.string.native_chat_manage_custom_tools))
+        if (!env.defaultsMode) {
+            OutlinedButton(
+                onClick = { env.onManageCustomTools() },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(stringResource(R.string.native_chat_manage_custom_tools))
+            }
         }
         LlamaToolNumberRow(
             label = stringResource(R.string.llama_tool_max_rounds),
@@ -609,13 +610,15 @@ internal fun ChatSettingsState.KnowledgeBaseSection(env: ChatSettingsEnv) {
                 onValueChange = { knowledgeBaseMaxResults = it },
                 range = NativeChatToolConfig.MIN_KB_RESULTS..NativeChatToolConfig.MAX_KB_RESULTS
             )
-            OutlinedButton(
-                onClick = { env.onOpenKnowledgeBase() },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Default.Settings, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(stringResource(R.string.kb_manage_action))
+            if (!env.defaultsMode) {
+                OutlinedButton(
+                    onClick = { env.onOpenKnowledgeBase() },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Settings, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.kb_manage_action))
+                }
             }
         }
         } else {
@@ -845,7 +848,7 @@ private fun ToolsOffHint() {
 
 /** Advanced: output cap, seed and the LiteRT-only extras (MTP, system prompt). */
 @Composable
-internal fun ChatSettingsState.AdvancedSection() {
+internal fun ChatSettingsState.AdvancedSection(defaultsMode: Boolean = false) {
     LlamaMaxOutputTokensControl(
         enabled = maxOutputTokensEnabled,
         value = maxOutputTokens,
@@ -880,7 +883,8 @@ internal fun ChatSettingsState.AdvancedSection() {
                 onCheckedChange = { liteRtMtpEnabled = it }
             )
         }
-        OutlinedTextField(
+        // The LiteRT system prompt lives on the chat row, not in the API params, so it has no default.
+        if (!defaultsMode) OutlinedTextField(
             value = liteRtSystemPrompt,
             onValueChange = { liteRtSystemPrompt = it },
             label = { Text(stringResource(R.string.llama_system_prompt)) },
@@ -890,5 +894,32 @@ internal fun ChatSettingsState.AdvancedSection() {
                 .heightIn(min = 96.dp),
             minLines = 3
         )
+    }
+}
+
+/** Automatic context compaction; the chat also reaches this switch from its context gauge. */
+@Composable
+internal fun ChatSettingsState.CompactionSection() {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = stringResource(R.string.native_chat_compaction_auto),
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = stringResource(R.string.native_chat_compaction_auto_hint),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Switch(checked = autoCompactEnabled, onCheckedChange = { autoCompactEnabled = it })
     }
 }
