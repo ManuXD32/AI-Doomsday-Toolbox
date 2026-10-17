@@ -21,6 +21,8 @@ import androidx.navigation.NavController
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.res.stringResource
+import com.example.llamadroid.ui.components.AppHubRow
+import com.example.llamadroid.ui.components.AppHubRowStyle
 import com.example.llamadroid.ui.components.AppIcon
 import com.example.llamadroid.ui.theme.LocalAppVisualStyle
 import com.example.llamadroid.ui.theme.sprites.AppSpriteKey
@@ -52,79 +54,93 @@ fun ModelHubScreen(navController: NavController) {
                 .fillMaxSize()
                 .verticalScroll(scrollState)
         ) {
-            ModelFeatureCard(
+            ModelFamilyChipRow(navController, current = null)
+            com.example.llamadroid.ui.components.ModelStorageOverviewCard(storage)
+
+            AppHubRow(
                 title = stringResource(R.string.models_llm),
-                description = stringResource(R.string.models_llm_desc),
+                style = AppHubRowStyle.Large,
+                showChevron = false,
+                subtitle = stringResource(R.string.models_llm_desc),
                 icon = Icons.Default.Memory,
                 sprite = AppSpriteKey.MODEL_LLM,
                 onClick = { guideTargets?.recordEvent("models.download"); navController.navigate(Screen.LLMModels.route) },
                 modifier = Modifier.walkthroughTarget("models.download"),
-                usage = storage.usage("llm"),
-                storageLoaded = storage.loaded
+                extra = { ModelStorageCount(storage.usage("llm"), loaded = storage.loaded) }
             )
 
-            ModelFeatureCard(
+            AppHubRow(
                 title = stringResource(R.string.models_sd),
-                description = stringResource(R.string.models_sd_desc),
+                style = AppHubRowStyle.Large,
+                showChevron = false,
+                subtitle = stringResource(R.string.models_sd_desc),
                 icon = Icons.Default.Image,
                 sprite = AppSpriteKey.MODEL_IMAGE,
                 onClick = { navController.navigate(Screen.SDModels.route) },
-                usage = storage.usage("sd"),
-                storageLoaded = storage.loaded
+                extra = { ModelStorageCount(storage.usage("sd"), loaded = storage.loaded) }
             )
 
-            ModelFeatureCard(
+            AppHubRow(
                 title = stringResource(R.string.models_onnx),
-                description = stringResource(R.string.models_onnx_desc),
+                style = AppHubRowStyle.Large,
+                showChevron = false,
+                subtitle = stringResource(R.string.models_onnx_desc),
                 icon = Icons.Default.Hub,
                 sprite = AppSpriteKey.MODEL_ONNX,
                 onClick = { navController.navigate(Screen.OnnxModels.route) },
-                usage = storage.usage("onnx"),
-                storageLoaded = storage.loaded
+                extra = { ModelStorageCount(storage.usage("onnx"), loaded = storage.loaded) }
             )
 
-            ModelFeatureCard(
+            AppHubRow(
                 title = stringResource(R.string.models_litert),
-                description = stringResource(R.string.models_litert_desc),
+                style = AppHubRowStyle.Large,
+                showChevron = false,
+                subtitle = stringResource(R.string.models_litert_desc),
                 icon = Icons.Default.Memory,
                 sprite = AppSpriteKey.MODEL_LITERT,
                 onClick = { navController.navigate(Screen.LiteRtModels.route) },
-                usage = storage.usage("litert"),
-                storageLoaded = storage.loaded
+                extra = { ModelStorageCount(storage.usage("litert"), loaded = storage.loaded) }
             )
 
-            ModelFeatureCard(
+            AppHubRow(
                 title = stringResource(R.string.models_whisper),
-                description = stringResource(R.string.models_whisper_desc),
+                style = AppHubRowStyle.Large,
+                showChevron = false,
+                subtitle = stringResource(R.string.models_whisper_desc),
                 icon = Icons.Default.GraphicEq,
                 sprite = AppSpriteKey.MODEL_WHISPER,
                 onClick = { navController.navigate(Screen.WhisperModels.route) },
-                usage = storage.usage("whisper"),
-                storageLoaded = storage.loaded
+                extra = { ModelStorageCount(storage.usage("whisper"), loaded = storage.loaded) }
             )
 
-            ModelFeatureCard(
+            AppHubRow(
                 title = stringResource(R.string.audio_models_title),
-                description = stringResource(R.string.audio_models_subtitle),
+                style = AppHubRowStyle.Large,
+                showChevron = false,
+                subtitle = stringResource(R.string.audio_models_subtitle),
                 icon = Icons.Default.GraphicEq,
                 sprite = AppSpriteKey.MODEL_AUDIO,
                 onClick = { navController.navigate(Screen.AudioModels.route) }
             )
 
-            ModelFeatureCard(
+            AppHubRow(
                 title = stringResource(R.string.model_library_hub_title),
-                description = stringResource(R.string.model_library_hub_desc),
+                style = AppHubRowStyle.Large,
+                showChevron = false,
+                subtitle = stringResource(R.string.model_library_hub_desc),
                 icon = Icons.Default.Link,
                 sprite = AppSpriteKey.MODEL_BUNDLE,
                 onClick = { navController.navigate(Screen.ModelSources.route) }
             )
 
-            ModelFeatureCard(
+            AppHubRow(
                 title = stringResource(R.string.model_storage_unknown_title),
-                description = stringResource(R.string.model_storage_unknown_desc),
+                style = AppHubRowStyle.Large,
+                showChevron = false,
+                subtitle = stringResource(R.string.model_storage_unknown_desc),
                 icon = Icons.Default.HelpOutline,
                 onClick = { navController.navigate("${Screen.ModelSources.route}?tab=unknown") },
-                usage = storage.usage("unknown"), storageLoaded = storage.loaded
+                extra = { ModelStorageCount(storage.usage("unknown"), loaded = storage.loaded) }
             )
 
             Text(
@@ -133,71 +149,6 @@ fun ModelHubScreen(navController: NavController) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 modifier = Modifier.align(Alignment.CenterHorizontally)
             )
-        }
-    }
-}
-
-@Composable
-private fun ModelFeatureCard(
-    title: String,
-    description: String,
-    icon: ImageVector,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    sprite: AppSpriteKey? = null,
-    usage: StorageUsage? = null,
-    storageLoaded: Boolean = true
-) {
-    Card(
-        modifier = modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f)
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(18.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Surface(
-                modifier = Modifier.size(48.dp),
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.74f)
-            ) {
-                AppIcon(
-                    icon = icon,
-                    contentDescription = null,
-                    modifier = Modifier.padding(if (LocalAppVisualStyle.current.isPixel) 8.dp else 12.dp),
-                    tint = MaterialTheme.colorScheme.primary,
-                    sprite = sprite
-                )
-            }
-            
-            Spacer(modifier = Modifier.width(12.dp))
-            
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    title,
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontWeight = FontWeight.SemiBold
-                    )
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    description,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                usage?.let {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    ModelStorageCount(it, loaded = storageLoaded)
-                }
-            }
         }
     }
 }

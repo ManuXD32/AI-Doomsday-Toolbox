@@ -1019,11 +1019,6 @@ class ProcessController {
                 } ?: getCommand(binaryPath, config, binaryCapabilities),
                 filesDir = filesDir
             ),
-            binaryCapabilities ?: if (config.lockedScreenThreadPriority) {
-                probeBinaryCapabilities(binaryPath, filesDir, ownershipWorkingDir)
-            } else {
-                null
-            }
         )
         var launchedProcess: Process? = null
         
@@ -1201,7 +1196,6 @@ class ProcessController {
                 line?.let { 
                     onLog?.invoke(it) 
                     onServerLog?.invoke(it)
-                    lockedScreen.onLogLine(it)
                 }
                 
                 // Parse loading progress from server output

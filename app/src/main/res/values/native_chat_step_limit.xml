@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="native_chat_step_limit_notice">Step limit reached. Press Continue to keep working.</string>
+</resources>

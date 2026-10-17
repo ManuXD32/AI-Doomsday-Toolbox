@@ -19,6 +19,15 @@ class DelegationToolArgsTest {
     }
 
     @Test
+    fun attachmentsAreLenientAboutDecoration() {
+        assertEquals(listOf("f5"), DelegationToolArgs.parseAttachmentRefs("(f5)"))
+        assertEquals(listOf("f5"), DelegationToolArgs.parseAttachmentRefs("f5."))
+        assertEquals(listOf("f5"), DelegationToolArgs.parseAttachmentRefs("f5:x"))
+        assertEquals(listOf("f5", "img9"), DelegationToolArgs.parseAttachmentRefs("the zip f5 and photo img9, please"))
+        assertTrue(DelegationToolArgs.parseAttachmentRefs("pdf12 coffee").isEmpty())
+    }
+
+    @Test
     fun attachmentsAreBounded() {
         val raw = (1..100).joinToString(",") { "f$it" }
         assertEquals(DelegationToolArgs.MAX_ATTACHMENTS, DelegationToolArgs.parseAttachmentRefs(raw).size)

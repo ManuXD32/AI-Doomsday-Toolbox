@@ -54,6 +54,16 @@ object DelegationWakeDispatcher {
             try {
                 val dao = AppDatabase.getDatabase(app).nativeChatDelegateTaskDao()
                 val task = dao.getById(taskId)?.takeIf { it.chatId == chatId } ?: return@launch
+                // Mailbox wakes (subagent reply/question): skipped while a messageSubagent waiter holds the
+                // chat (it takes the row itself and, on timeout, re-enqueues), and only when this call
+                // claims the undelivered rows, so a reply already handed to a waiter or woken once never
+                // wakes again. The claim marks the rows delivered.
+                if (kind == NativeChatDelegationWakeKind.SUBAGENT_REPLY || kind == NativeChatDelegationWakeKind.SUBAGENT_QUESTION) {
+                    if (DelegationMailbox.hasWaiter(chatId)) return@launch
+                    val claimed = AppDatabase.getDatabase(app).nativeChatDelegateMessageDao()
+                        .markSubToMainDelivered(taskId, DelegationMailbox.WAKE_KINDS)
+                    if (!DelegationMailbox.shouldEnqueueWake(false, claimed)) return@launch
+                }
                 val merged = DelegationWakePolicy.mergeKind(task.pendingWakeKind, kind)
                 synchronized(this@DelegationWakeDispatcher) {
                     val previous = if (task.pendingWakeKind != null) storedNotices(app, taskId) else emptyList()

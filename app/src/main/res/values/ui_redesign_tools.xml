@@ -4,7 +4,6 @@
     <string name="ui_redesign_tools_category_share_network">Share &amp; Network</string>
     <string name="ui_redesign_tools_category_advanced">Advanced</string>
     <string name="ui_redesign_tools_audio_studio">Audio studio</string>
-    <string name="ui_redesign_tools_share_to_browser">Share to browser</string>
     <string name="ui_redesign_tools_subtitle">Create, convert and share</string>
-    <string name="ui_redesign_tools_offline_wiki">Offline wiki (Kiwix)</string>
+    <string name="ui_redesign_tools_offline_wiki">Offline wiki</string>
 </resources>

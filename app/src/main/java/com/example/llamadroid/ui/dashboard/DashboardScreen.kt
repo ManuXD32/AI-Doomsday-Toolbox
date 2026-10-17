@@ -4,7 +4,6 @@ import com.example.llamadroid.ui.navigation.navigateToRoot
 import android.content.SharedPreferences
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -24,12 +23,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Chat
-import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Queue
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -55,11 +53,17 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import com.example.llamadroid.BuildConfig
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.model.LlamaChatEntity
 import com.example.llamadroid.service.GenerationQueueRepository
 import com.example.llamadroid.ui.ai.ChatServerPickerDialog
+import com.example.llamadroid.ui.ai.AIToolDefinition
 import com.example.llamadroid.ui.ai.ToolCatalog
+import com.example.llamadroid.ui.ai.ToolDiscovery
+import com.example.llamadroid.ui.ai.ToolUsageStore
+import com.example.llamadroid.ui.components.AppHubRow
 import com.example.llamadroid.ui.components.AppIcon
 import com.example.llamadroid.ui.theme.LocalAppVisualStyle
 import com.example.llamadroid.ui.theme.sprites.AppSpriteKey
@@ -77,6 +81,9 @@ import com.example.llamadroid.util.SystemMonitor
 
 private const val CHATS_ROUTE = "chats"
 private const val MAX_CONTINUE_ITEMS = 5
+private const val MAX_NEW_ITEMS = 3
+private const val MILLIS_PER_DAY = 86_400_000L
+private const val GLOBAL_SEARCH_ROUTE = "global_search"
 
 /** A Start-row shortcut: pinned tools first, then unpinned defaults. */
 private data class HomeStartAction(
@@ -113,6 +120,8 @@ fun DashboardScreen(navController: NavController) {
 
     val pinnedChats by database.llamaChatDao().getPinnedAiHubChats()
         .collectAsStateWithLifecycle(initialValue = emptyList())
+    val allChats: List<LlamaChatEntity>? by database.llamaChatDao().getAllChats()
+        .collectAsStateWithLifecycle(initialValue = null)
     val servers by database.llamaServerDao().getAllServers()
         .collectAsStateWithLifecycle(initialValue = emptyList())
     val projects by database.agentChatDao().getAllConversations()
@@ -196,6 +205,17 @@ fun DashboardScreen(navController: NavController) {
         }
     }.sortedByDescending { it.timestamp }.take(MAX_CONTINUE_ITEMS)
 
+    // Discovery: grid tools never opened (rotating daily) and entries added in this version.
+    val openedToolIds = remember { ToolUsageStore.lastOpened(context).keys }
+    val daySeed = remember { System.currentTimeMillis() / MILLIS_PER_DAY }
+    val notTriedTools = remember(pinnedToolIds, openedToolIds, daySeed) {
+        ToolDiscovery.notTried(ToolCatalog.gridTools, openedToolIds, daySeed, excludeIds = pinnedToolIds)
+    }
+    val newTools = remember { ToolCatalog.addedIn(BuildConfig.VERSION_NAME).take(MAX_NEW_ITEMS) }
+    fun openTool(tool: AIToolDefinition) {
+        if (tool.route == CHATS_ROUTE) navController.navigateToRoot(tool.route) else navController.navigate(tool.route)
+    }
+
     val scrollState = rememberScrollState()
     AppPageBackground {
         AppContentColumn(
@@ -209,31 +229,18 @@ fun DashboardScreen(navController: NavController) {
                 modifier = Modifier.walkthroughTarget("home.summary")
             )
 
-            EasyLlamaChatEntryCard(
-                showQuickSetup = true,
-                onChatOpened = { chatId, serverId ->
-                    navController.navigate(Screen.LlamaChat.createRoute(chatId, serverId))
-                },
-                onManageModels = {
-                    navController.navigate(Screen.LLMModels.route)
-                }
-            )
+            DashboardSearchField(onClick = { navController.navigate(GLOBAL_SEARCH_ROUTE) })
 
-            DashboardStartRow(startActions)
-
-            AppSectionCard {
-                Box(Modifier.testTag("home_card_ai_hub").walkthroughTarget("root.ai_hub")) {
-                    DashboardLinkRow(Icons.Default.GridView, stringResource(R.string.studio_nav_tools),
-                        stringResource(R.string.home_tools_card_subtitle)) {
-                        navController.navigateToRoot("ai_hub")
+            if (allChats?.isEmpty() == true) {
+                EasyLlamaChatEntryCard(
+                    showQuickSetup = true,
+                    onChatOpened = { chatId, serverId ->
+                        navController.navigate(Screen.LlamaChat.createRoute(chatId, serverId))
+                    },
+                    onManageModels = {
+                        navController.navigate(Screen.LLMModels.route)
                     }
-                }
-                Box(Modifier.testTag("home_card_library").walkthroughTarget("root.library")) {
-                    DashboardLinkRow(Icons.Default.FolderOpen, stringResource(R.string.studio_nav_library),
-                        stringResource(R.string.home_library_card_subtitle)) {
-                        navController.navigateToRoot("library")
-                    }
-                }
+                )
             }
 
             DashboardContinueCard(
@@ -243,11 +250,93 @@ fun DashboardScreen(navController: NavController) {
                 onSeeAll = { navController.navigateToRoot(CHATS_ROUTE) }
             )
 
+            DashboardStartRow(startActions)
+
+            if (notTriedTools.isNotEmpty()) {
+                DashboardToolSuggestions(
+                    title = stringResource(R.string.home_not_tried_title),
+                    tools = notTriedTools,
+                    actionLabel = stringResource(R.string.home_not_tried_action),
+                    tag = "home_not_tried",
+                    onOpen = ::openTool
+                )
+            }
+
+            if (newTools.isNotEmpty()) {
+                DashboardToolSuggestions(
+                    title = stringResource(R.string.home_new_in_version_title),
+                    tools = newTools,
+                    actionLabel = stringResource(R.string.home_not_tried_action),
+                    tag = "home_new_in_version",
+                    onOpen = ::openTool
+                )
+            }
+
             DashboardStatusRow(
                 viewModel = viewModel,
                 runningServers = runningChatServers.size,
                 onMemory = { navController.navigate(Screen.Stats.route) },
                 onServers = { navController.navigate(Screen.Chats.route) { launchSingleTop = true } }
+            )
+        }
+    }
+}
+
+/** Tap target that looks like a search field and opens the global search page. */
+@Composable
+private fun DashboardSearchField(onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .clickable(onClick = onClick)
+            .testTag("home_search"),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                text = stringResource(R.string.global_search_hint),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+/** A short list of catalog tools (never opened, or new in this version) with a Try action. */
+@Composable
+private fun DashboardToolSuggestions(
+    title: String,
+    tools: List<AIToolDefinition>,
+    actionLabel: String,
+    tag: String,
+    onOpen: (AIToolDefinition) -> Unit
+) {
+    AppSectionCard(modifier = Modifier.testTag(tag)) {
+        AppSectionTitle(title = title)
+        tools.forEach { tool ->
+            AppHubRow(
+                title = stringResource(tool.titleRes),
+                subtitle = stringResource(tool.descriptionRes),
+                icon = tool.icon,
+                onClick = { onOpen(tool) },
+                trailing = {
+                    Text(
+                        text = actionLabel,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1
+                    )
+                }
             )
         }
     }
@@ -314,12 +403,12 @@ private fun DashboardContinueCard(
             )
         }
         items.forEach { item ->
-            DashboardLinkRow(item.icon, item.title, item.supporting, item.onClick)
+            AppHubRow(title = item.title, subtitle = item.supporting, icon = item.icon, onClick = item.onClick)
         }
         if (pendingJobs > 0) {
-            DashboardLinkRow(
-                icon = Icons.Default.Queue,
+            AppHubRow(
                 title = pluralStringResource(R.plurals.ui_home_queue_pending, pendingJobs, pendingJobs),
+                icon = Icons.Default.Queue,
                 onClick = onQueue
             )
         }
@@ -389,59 +478,3 @@ private fun DashboardStatusRow(
     }
 }
 
-@Composable
-private fun DashboardLinkRow(
-    icon: ImageVector,
-    title: String,
-    supporting: String? = null,
-    onClick: () -> Unit
-) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = AppChromeDefaults.InnerCardShape,
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Surface(
-                modifier = Modifier.size(36.dp),
-                shape = RoundedCornerShape(11.dp),
-                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    modifier = Modifier.padding(8.dp),
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            }
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Medium),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                if (!supporting.isNullOrBlank()) {
-                    Text(
-                        text = supporting,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-            Icon(
-                imageVector = Icons.Default.KeyboardArrowRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}

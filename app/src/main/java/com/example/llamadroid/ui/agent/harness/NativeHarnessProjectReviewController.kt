@@ -2,6 +2,7 @@ package com.example.llamadroid.ui.agent.harness
 
 import com.example.llamadroid.harness.client.HarnessClient
 import com.example.llamadroid.harness.client.HarnessRpcResult
+import com.example.llamadroid.service.delegation.HarnessLatestPage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -14,7 +15,6 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -470,14 +470,8 @@ internal class NativeHarnessProjectReviewController(
         var beforeSequence: Long? = null
         var throughSequence: Long? = null
         repeat(MAX_HISTORY_PAGES) {
-            val result = client.pageSession(
-                buildJsonObject {
-                    put("address", address)
-                    put("maxMessages", MAX_PAGE_MESSAGES)
-                    throughSequence?.let { put("throughSeq", it) }
-                    beforeSequence?.let { put("beforeSeq", it) }
-                }
-            )
+            // The first page has no known sequence: HarnessLatestPage resolves the session cursor.
+            val result = HarnessLatestPage.page(client, address, throughSequence, beforeSequence, MAX_PAGE_MESSAGES)
             val value = when (result) {
                 is HarnessRpcResult.Failure -> throw HistoryReadException(result.error.code)
                 is HarnessRpcResult.Success -> result.value.jsonObjectOrNull() ?: throw HistoryReadException("INVALID_HISTORY_PAGE")

@@ -1,14 +1,13 @@
 package com.example.llamadroid.service.perf
 
 import android.content.Context
-import com.example.llamadroid.service.LlamaBinaryCapabilities
 import com.example.llamadroid.service.LlamaConfig
 import java.io.File
 
 /**
  * Per-launch helper used by `ProcessController.start` inside the `:llama_runtime` process.
- * It tunes the launch arguments, watches the server log for a refused thread priority, runs the
- * PerformanceHintManager session, and mirrors every outcome to a [LockedScreenReport] file that
+ * It tunes the launch arguments, raises the server threads' priority from the app side (and reads
+ * the nice values back), runs the PerformanceHintManager session, and mirrors every outcome to a [LockedScreenReport] file that
  * the main process shows in the server detail sheet. Nothing here may throw into the caller.
  */
 class LockedScreenRuntime private constructor(
@@ -22,14 +21,15 @@ class LockedScreenRuntime private constructor(
     @Volatile
     private var report = LockedScreenReport(port = port, updatedAtMillis = System.currentTimeMillis())
     private var hint: LockedScreenHintSession? = null
+    private var priority: LockedScreenThreadPriority? = null
 
     /** Rewrites [args] according to the options and records the decision. Returns [args] on error. */
-    fun tune(args: List<String>, capabilities: LlamaBinaryCapabilities?): List<String> = runCatching {
+    fun tune(args: List<String>): List<String> = runCatching {
         // Falls back to this service process's own allowed CPUs (it is a foreground-service
         // process too) when SELinux hides the cpuset files from apps.
         val foreground = readCpuset("foreground") ?: readSelfAllowedCpus()
         val topApp = readCpuset("top-app")
-        val result = LockedScreenLaunchTuning.tune(args, options, capabilities, foreground)
+        val result = LockedScreenLaunchTuning.tune(args, options, foreground)
         update {
             it.copy(
                 threadFitEnabled = options.threadFit,
@@ -50,6 +50,9 @@ class LockedScreenRuntime private constructor(
         if (pid <= 0) return
         runCatching {
             update { it.copy(pid = pid) }
+            if (options.threadPriority) {
+                priority = LockedScreenThreadPriority(pid, ::onPriorityOutcome).also { it.start() }
+            }
             val ctx = context
             if (options.performanceHints && ctx != null) {
                 hint = LockedScreenHintSession(ctx, pid, ::onHintState).also { it.start() }
@@ -57,26 +60,29 @@ class LockedScreenRuntime private constructor(
         }
     }
 
-    fun onLogLine(line: String) {
-        if (report.priorityState != PriorityState.REQUESTED.name &&
-            report.priorityState != PriorityState.APPLIED.name
-        ) return
-        if (LockedScreenLaunchTuning.isPriorityWarning(line)) {
-            runCatching { update { it.copy(priorityState = PriorityState.REFUSED.name) } }
-        }
-    }
-
-    /** Called when the server reports ready: a requested priority without a warning counts as applied. */
+    /** Called when the server reports ready: the worker threads exist now, so rescan at once. */
     fun onReady() {
-        if (report.priorityState == PriorityState.REQUESTED.name) {
-            runCatching { update { it.copy(priorityState = PriorityState.APPLIED.name) } }
-        }
+        runCatching { priority?.poke() }
     }
 
     fun close() {
         runCatching { hint?.close() }
         hint = null
+        runCatching { priority?.close() }
+        priority = null
         if (report.running) runCatching { update { it.copy(running = false) } }
+    }
+
+    private fun onPriorityOutcome(outcome: PriorityOutcome) {
+        runCatching {
+            update {
+                it.copy(
+                    priorityState = outcome.state.name,
+                    priorityRaisedThreads = outcome.raised,
+                    priorityTotalThreads = outcome.total
+                )
+            }
+        }
     }
 
     private fun onHintState(state: HintState, detail: String?) {

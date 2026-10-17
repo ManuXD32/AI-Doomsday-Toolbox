@@ -1,10 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="home_tools_card_subtitle">Imagen, audio, video, documentos y más</string>
-    <string name="home_library_card_subtitle">Modelos, medios, conocimiento y descargas</string>
-    <string name="chat_server_web_ui">Web UI</string>
+    <string name="chat_server_web_ui">Web UI de llama.cpp</string>
     <string name="chat_server_web_ui_description">Abrir %1$s en la interfaz web de llama.cpp</string>
-    <string name="chat_menu_open_web_ui">Abrir en la interfaz web de llama.cpp</string>
+    <string name="chat_menu_open_web_ui">Abrir Web UI de llama.cpp</string>
     <string name="chat_menu_generate_title">Generar título</string>
     <string name="chat_generating_title">Generando título…</string>
     <string name="harness_composer_hide">Ocultar entrada</string>

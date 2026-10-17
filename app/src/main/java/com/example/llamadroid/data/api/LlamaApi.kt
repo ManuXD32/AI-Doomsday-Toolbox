@@ -58,7 +58,17 @@ data class LlamaChatMessage(
 data class LlamaChatResponse(
     @SerializedName("choices") val choices: List<LlamaChatChoice>,
     @SerializedName("usage") val usage: LlamaChatUsage? = null,
-    @SerializedName("prompt_progress") val promptProgress: LlamaPromptProgress? = null
+    @SerializedName("prompt_progress") val promptProgress: LlamaPromptProgress? = null,
+    @SerializedName("timings") val timings: LlamaChatTimings? = null
+)
+
+/** llama-server per-call timings: decode (`predicted_*`) and processed prompt (`prompt_n`, cache hits excluded). */
+@Keep
+data class LlamaChatTimings(
+    @SerializedName("prompt_n") val promptN: Int = 0,
+    @SerializedName("prompt_ms") val promptMs: Double = 0.0,
+    @SerializedName("predicted_n") val predictedN: Int = 0,
+    @SerializedName("predicted_ms") val predictedMs: Double = 0.0
 )
 
 @Keep

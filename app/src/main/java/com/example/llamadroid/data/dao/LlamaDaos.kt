@@ -276,6 +276,26 @@ interface LlamaMessageDao {
         generationTimeMs: Long
     )
 
+    /** Same flush as [updateMessageThinkingAndContent] plus the reply's steps, in one write. */
+    @Query("UPDATE llama_messages SET content = :content, thinking = :thinking, promptTokens = :promptTokens, completionTokens = :completionTokens, tps = :tps, generationTimeMs = :generationTimeMs, stepsJson = :stepsJson WHERE id = :id")
+    suspend fun updateMessageThinkingContentAndSteps(
+        id: Long,
+        content: String,
+        thinking: String?,
+        promptTokens: Int,
+        completionTokens: Int,
+        tps: Double,
+        generationTimeMs: Long,
+        stepsJson: String?
+    )
+
+    @Query("UPDATE llama_messages SET stepsJson = :stepsJson WHERE id = :id")
+    suspend fun updateMessageSteps(id: Long, stepsJson: String?)
+
+    /** Round end: stores the finished steps and the (cleared) live text of the next round together. */
+    @Query("UPDATE llama_messages SET content = :content, thinking = :thinking, stepsJson = :stepsJson WHERE id = :id")
+    suspend fun updateMessageStepsAndText(id: Long, content: String, thinking: String?, stepsJson: String?)
+
     @Query("UPDATE llama_messages SET isTruncated = :isTruncated WHERE id = :id")
     suspend fun updateMessageTruncatedStatus(id: Long, isTruncated: Boolean)
 

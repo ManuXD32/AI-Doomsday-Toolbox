@@ -483,7 +483,8 @@ class WalkthroughStateTest {
 
         state.move(1)
         assertEquals("library", state.step?.id)
-        assertEquals("root.library", tourTarget(state.step!!, "dashboard", false, false))
+        assertEquals("root.ai_hub", tourTarget(state.step!!, "dashboard", false, false))
+        assertEquals("library.tab", tourTarget(state.step!!, "ai_hub", false, false))
         assertEquals("library.resources", tourTarget(state.step!!, "library", false, false))
     }
 

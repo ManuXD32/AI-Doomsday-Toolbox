@@ -4,6 +4,8 @@ import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.ui.walkthrough.FeatureGuideAction
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material3.Icon
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -52,7 +54,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.llamadroid.ui.theme.sprites.AppSpriteKey
-import com.example.llamadroid.ui.theme.sprites.PixelSpriteImage
 import com.example.llamadroid.R
 import com.example.llamadroid.ui.theme.LocalAppVisualStyle
 import com.example.llamadroid.ui.theme.PixelCornerShape
@@ -457,68 +458,125 @@ fun AppInsetDivider() {
     )
 }
 
+/** Icon treatment of [AppHubRow]. */
+enum class AppHubRowStyle {
+    /** 36 dp rounded tile behind the icon, compact padding (Home links). */
+    Tile,
+
+    /** Bare 24 dp (32 dp in pixel themes) icon (Library, Settings). */
+    Plain,
+
+    /** 48 dp tile, larger paddings and text (Model hub feature cards). */
+    Large
+}
+
+/**
+ * Shared hub list row used by Home, Library, Models, Settings and Chats. [extra] is laid out under the
+ * subtitle (chips, storage counts); [trailing] sits before the optional chevron.
+ */
 @Composable
-fun AppHubCard(
-    emoji: String,
+fun AppHubRow(
     title: String,
-    description: String,
-    gradientColors: List<Color>,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    subtitle: String? = null,
     icon: ImageVector? = null,
-    iconContentDescription: String? = null,
-    sprite: AppSpriteKey? = null
+    sprite: AppSpriteKey? = null,
+    style: AppHubRowStyle = AppHubRowStyle.Tile,
+    showChevron: Boolean = true,
+    titleMaxLines: Int = 2,
+    trailing: (@Composable () -> Unit)? = null,
+    extra: (@Composable ColumnScope.() -> Unit)? = null
 ) {
-    Card(
-        modifier = modifier.clickable(onClick = onClick),
-        shape = AppChromeDefaults.CardShape,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = AppChromeDefaults.pixelCardBorder(),
-        elevation = CardDefaults.cardElevation(defaultElevation = AppChromeDefaults.CardElevation)
+    val large = style == AppHubRowStyle.Large
+    val isPixel = LocalAppVisualStyle.current.isPixel
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = if (large) RoundedCornerShape(20.dp) else AppChromeDefaults.InnerCardShape,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f)
     ) {
-        Column(
+        Row(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(18.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+                .fillMaxWidth()
+                .padding(
+                    horizontal = if (large) 18.dp else 14.dp,
+                    vertical = if (large) 18.dp else 12.dp
+                ),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            if (sprite != null && LocalAppVisualStyle.current.isPixel) {
-                PixelSpriteImage(sprite, Modifier.size(48.dp), iconContentDescription)
-            } else if (icon != null) {
-                Surface(
-                    modifier = Modifier.size(48.dp),
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primaryContainer
-                ) {
-                    AppIcon(
-                        icon = icon,
-                        contentDescription = iconContentDescription,
-                        modifier = Modifier.padding(if (LocalAppVisualStyle.current.isPixel) 8.dp else 12.dp),
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+            if (icon != null) {
+                when (style) {
+                    AppHubRowStyle.Plain -> AppIcon(
+                        icon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(if (isPixel) 32.dp else 24.dp),
                         sprite = sprite
                     )
+                    AppHubRowStyle.Tile -> Surface(
+                        modifier = Modifier.size(36.dp),
+                        shape = RoundedCornerShape(11.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
+                    ) {
+                        AppIcon(
+                            icon,
+                            contentDescription = null,
+                            modifier = Modifier.padding(if (isPixel) 4.dp else 8.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                            sprite = sprite
+                        )
+                    }
+                    AppHubRowStyle.Large -> Surface(
+                        modifier = Modifier.size(48.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.74f)
+                    ) {
+                        AppIcon(
+                            icon,
+                            contentDescription = null,
+                            modifier = Modifier.padding(if (isPixel) 8.dp else 12.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                            sprite = sprite
+                        )
+                    }
                 }
-            } else {
-                Text(text = emoji, style = MaterialTheme.typography.displaySmall)
             }
-            Spacer(modifier = Modifier.height(10.dp))
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis
-            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(if (large) 4.dp else 2.dp)
+            ) {
+                Text(
+                    text = title,
+                    style = if (large) {
+                        MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                    } else {
+                        MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Medium)
+                    },
+                    maxLines = titleMaxLines,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (!subtitle.isNullOrBlank()) {
+                    Text(
+                        text = subtitle,
+                        style = if (large) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = if (large) Int.MAX_VALUE else 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                extra?.invoke(this)
+            }
+            trailing?.invoke()
+            if (showChevron) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }

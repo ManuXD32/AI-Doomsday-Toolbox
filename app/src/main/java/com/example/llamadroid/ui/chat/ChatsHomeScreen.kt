@@ -46,6 +46,7 @@ import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.ui.ai.llama.LlamaChatListContent
 import com.example.llamadroid.ui.components.AppChromeDefaults
 import com.example.llamadroid.ui.components.AppContentColumn
+import com.example.llamadroid.ui.components.AppHubRow
 import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.ui.components.AppPageHeader
 import com.example.llamadroid.ui.components.AppScrollableTabRow
@@ -120,10 +121,11 @@ fun ChatsHomeScreen(navController: NavController) {
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         item(key = "open_agent") {
-                            ChatsLinkRow(
+                            AppHubRow(
                                 title = stringResource(R.string.ui_chats_open_agent),
-                                supporting = stringResource(R.string.ui_chats_open_agent_desc),
-                                onClick = { navController.navigate(Screen.Agent.route) }
+                                subtitle = stringResource(R.string.ui_chats_open_agent_desc),
+                                onClick = { navController.navigate(Screen.Agent.route) },
+                                titleMaxLines = 1
                             )
                         }
                         if (projects.isEmpty()) {
@@ -137,12 +139,13 @@ fun ChatsHomeScreen(navController: NavController) {
                             }
                         }
                         items(projects, key = { "project_${it.id}" }) { project ->
-                            ChatsLinkRow(
+                            AppHubRow(
                                 title = project.title.ifBlank { project.projectFolder },
-                                supporting = project.projectFolder,
+                                subtitle = project.projectFolder,
                                 onClick = {
                                     navController.navigate(Screen.Agent.createRoute(project.id))
-                                }
+                                },
+                                titleMaxLines = 1
                             )
                         }
                         item(key = "fab_space") { Box(modifier = Modifier.heightIn(min = 72.dp)) }
@@ -167,41 +170,6 @@ fun ChatsHomeScreen(navController: NavController) {
                     modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 8.dp)
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun ChatsLinkRow(title: String, supporting: String?, onClick: () -> Unit) {
-    Surface(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        shape = AppChromeDefaults.InnerCardShape,
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f)
-    ) {
-        Row(
-            modifier = Modifier.padding(12.dp).heightIn(min = 40.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                if (!supporting.isNullOrBlank()) {
-                    Text(
-                        text = supporting,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
         }
     }
 }

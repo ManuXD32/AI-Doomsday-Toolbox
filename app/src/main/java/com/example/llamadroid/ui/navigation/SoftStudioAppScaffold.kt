@@ -32,6 +32,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -74,6 +76,8 @@ fun SoftStudioAppScaffold(
     destinations: List<AppNavigationDestination>,
     snackbarHostState: SnackbarHostState,
     onUniversalKey: (UniversalKey) -> Unit = {},
+    onSearch: () -> Unit = {},
+    onSettings: () -> Unit = {},
     isFirstRun: Boolean = false,
     onTour: (() -> Unit)? = null,
     onCloseTour: (() -> Unit)? = null,
@@ -125,7 +129,7 @@ fun SoftStudioAppScaffold(
                             selected = key == selectedKey,
                             icon = { AppIcon(key.icon, null, sprite = key.sprite) },
                             modifier = Modifier.testTag("studio_drawer_${key.route}")
-                                .walkthroughTarget(if (key == UniversalKey.SETTINGS) "drawer.settings" else "drawer.root.${key.route}"),
+                                .walkthroughTarget("drawer.root.${key.route}"),
                             onClick = {
                                 scope.launch {
                                     drawerState.close()
@@ -134,21 +138,30 @@ fun SoftStudioAppScaffold(
                             }
                         )
                     }
-                    // Tools and Library are not bar items; the drawer keeps them as secondary entries.
-                    destinations.filter { d -> UniversalKey.entries.none { it.route == d.route } }.forEach { destination ->
-                        NavigationDrawerItem(
-                            label = { Text(destination.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                            selected = destination.isSelected(currentRoute),
-                            icon = { AppIcon(destination.icon, null, sprite = rootSprite(destination.route)) },
-                            modifier = Modifier.testTag("studio_drawer_${destination.route}").walkthroughTarget("drawer.root.${destination.route}"),
-                            onClick = {
-                                scope.launch {
-                                    drawerState.close()
-                                    destination.onClick()
-                                }
+                    NavigationDrawerItem(
+                        label = { Text(stringResource(R.string.studio_nav_search), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        selected = baseRoute == "global_search",
+                        icon = { Icon(Icons.Default.Search, null) },
+                        modifier = Modifier.testTag("studio_drawer_global_search").walkthroughTarget("drawer.search"),
+                        onClick = {
+                            scope.launch {
+                                drawerState.close()
+                                onSearch()
                             }
-                        )
-                    }
+                        }
+                    )
+                    NavigationDrawerItem(
+                        label = { Text(stringResource(R.string.settings_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        selected = baseRoute == "settings" || baseRoute?.startsWith("settings_") == true,
+                        icon = { AppIcon(Icons.Default.Settings, null, sprite = AppSpriteKey.SETTINGS) },
+                        modifier = Modifier.testTag("studio_drawer_settings").walkthroughTarget("drawer.settings"),
+                        onClick = {
+                            scope.launch {
+                                drawerState.close()
+                                onSettings()
+                            }
+                        }
+                    )
                     }
                 }
             }
@@ -180,6 +193,12 @@ fun SoftStudioAppScaffold(
                                 }
                             }
                             if (currentRoute != AppRootDestination.Home.route) FeatureGuideAction()
+                            IconButton(onClick = onSearch, modifier = Modifier.testTag("soft_studio_search")) {
+                                Icon(Icons.Default.Search, stringResource(R.string.studio_nav_search))
+                            }
+                            IconButton(onClick = onSettings, modifier = Modifier.testTag("soft_studio_settings").walkthroughTarget("shell.settings")) {
+                                Icon(Icons.Default.Settings, stringResource(R.string.settings_title))
+                            }
                         },
                         colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
                     )
@@ -224,13 +243,3 @@ fun SoftStudioAppScaffold(
 
 private fun rootLabel(destinations: List<AppNavigationDestination>, root: AppRootDestination): String? =
     destinations.firstOrNull { it.route == root.route }?.label
-
-/** Pixel sprite for each root destination; unknown routes fall back to the vector-name lookup. */
-private fun rootSprite(route: String): AppSpriteKey? = when (route) {
-    AppRootDestination.Home.route -> AppSpriteKey.HOME
-    AppRootDestination.Chats.route -> AppSpriteKey.CHATS
-    AppRootDestination.Tools.route -> AppSpriteKey.TOOLS
-    AppRootDestination.Library.route -> AppSpriteKey.LIBRARY
-    AppRootDestination.Tama.route -> AppSpriteKey.TAMA
-    else -> null
-}

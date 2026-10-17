@@ -2,6 +2,11 @@ package com.example.llamadroid.ui
 
 import com.example.llamadroid.ui.navigation.navigateToRoot
 import com.example.llamadroid.ui.navigation.navigateToUniversalKey
+import com.example.llamadroid.ui.navigation.navigateToSettings
+import com.example.llamadroid.ui.navigation.UniversalKey
+import com.example.llamadroid.ui.search.GlobalSearchScreen
+import com.example.llamadroid.ui.servers.ServersHubScreen
+import com.example.llamadroid.ui.ai.ToolUsageStore
 import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 
 import com.example.llamadroid.ui.walkthrough.*
@@ -12,6 +17,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalDensity
+import androidx.navigation.NavController
 import androidx.navigation.NavType
 
 import androidx.navigation.navArgument
@@ -25,7 +31,6 @@ import androidx.compose.animation.core.tween
 import com.example.llamadroid.ui.navigation.AppRootDestination
 import com.example.llamadroid.ui.navigation.AppRoutePresentations
 import com.example.llamadroid.ui.navigation.SoftStudioAppScaffold
-import com.example.llamadroid.ui.library.LibraryScreen
 import com.example.llamadroid.ui.library.AllMediaGalleryScreen
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
@@ -56,7 +61,6 @@ import com.example.llamadroid.ui.pdf.PDFToolboxScreen
 import com.example.llamadroid.ui.pdf.PDFSummaryScreen
 import com.example.llamadroid.ui.ai.AIHubScreen
 import com.example.llamadroid.ui.ai.AiServersHubScreen
-import com.example.llamadroid.ui.ai.ToolCatalog
 import com.example.llamadroid.ui.ai.ImageGenScreen
 import com.example.llamadroid.ui.ai.GenerationQueueScreen
 import com.example.llamadroid.ui.ai.GenerationQueueHistoryScreen
@@ -79,8 +83,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.unit.dp
 import androidx.compose.material3.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -121,7 +123,6 @@ import com.example.llamadroid.ui.distributed.WorkerModeScreen
 import com.example.llamadroid.ui.distributed.MasterModeScreen
 import com.example.llamadroid.ui.distributed.NetworkVisualizationScreen
 import com.example.llamadroid.ui.distributed.SdDistributedHubScreen
-import com.example.llamadroid.ui.distributed.SdDistributedGalleryScreen
 import com.example.llamadroid.ui.distributed.SdDistributedMasterScreen
 import com.example.llamadroid.ui.distributed.SdDistributedNetworkScreen
 import com.example.llamadroid.ui.distributed.SdDistributedRunConfigScreen
@@ -209,6 +210,14 @@ fun LlamaApp(
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
+    val toolUsageContext = LocalContext.current
+    DisposableEffect(navController) {
+        val listener = NavController.OnDestinationChangedListener { _, destination, _ ->
+            ToolUsageStore.recordRoute(toolUsageContext, destination.route)
+        }
+        navController.addOnDestinationChangedListener(listener)
+        onDispose { navController.removeOnDestinationChangedListener(listener) }
+    }
     
     // Check for first run
     val context = LocalContext.current
@@ -509,17 +518,12 @@ fun LlamaApp(
         }
     }
 
-    val directNavigationDestinations = listOf(
-        Triple(AppRootDestination.Home, R.string.studio_nav_home, Icons.Default.Home),
-        Triple(AppRootDestination.Chats, R.string.studio_nav_chats, Icons.Default.Forum),
-        Triple(AppRootDestination.Tools, R.string.studio_nav_tools, Icons.Default.GridView),
-        Triple(AppRootDestination.Library, R.string.studio_nav_library, Icons.Default.FolderOpen),
-        Triple(AppRootDestination.Tama, R.string.studio_nav_tama, Icons.Default.FavoriteBorder)
-    ).map { (root, labelRes, icon) ->
+    val directNavigationDestinations = UniversalKey.entries.map { key ->
+        val root = AppRootDestination.entries.first { it.route == key.route }
         AppNavigationDestination(
             route = root.route,
-            label = stringResource(labelRes),
-            icon = icon,
+            label = stringResource(key.label),
+            icon = key.icon,
             isSelected = { route -> AppRoutePresentations.forRoute(route).parent == root },
             onClick = { navigateFromAppNavigation(root) }
         )
@@ -570,7 +574,7 @@ fun LlamaApp(
         val root = AppRootDestination.entries.firstOrNull { it.route == route }
         if (root != null) navigateFromAppNavigation(root)
         else if ('{' !in route && '}' !in route) {
-            navController.navigate(if (route == Screen.Chat.route) Screen.LlamaServers.route else route) { launchSingleTop = true }
+            navController.navigate(if (route == Screen.Chat.route) Screen.Chats.route else route) { launchSingleTop = true }
         }
     }
     CompositionLocalProvider(LocalWalkthroughTargets provides tourTargets,
@@ -584,6 +588,8 @@ fun LlamaApp(
         destinations = directNavigationDestinations,
         snackbarHostState = snackbarHostState,
         onUniversalKey = { navController.navigateToUniversalKey(it) },
+        onSearch = { navController.navigate("global_search") { launchSingleTop = true } },
+        onSettings = { navController.navigateToSettings() },
         isFirstRun = showWelcome && !hasCompletedWelcome,
         onTour = {
             tour.openGuide()
@@ -630,10 +636,29 @@ fun LlamaApp(
             composable(Screen.Stats.route) { StatsScreen(navController) }
             composable(Screen.Logs.route) { LogsScreen(navController) }
             // AI screens
-            composable(Screen.AIHub.route) { AIHubScreen(navController) }
+            composable(
+                "${Screen.AIHub.route}?tab={tab}",
+                arguments = listOf(navArgument("tab") { type = NavType.StringType; defaultValue = "tools" })
+            ) { entry ->
+                AIHubScreen(navController, initialTab = entry.arguments?.getString("tab") ?: "tools")
+            }
             composable(Screen.Chats.route) { com.example.llamadroid.ui.chat.ChatsHomeScreen(navController) }
-            composable(Screen.Library.route) { LibraryScreen(navController) }
-            composable(Screen.AllMediaGallery.route) { AllMediaGalleryScreen(navController) }
+            composable(Screen.Library.route) { AIHubScreen(navController, initialTab = "library") }
+            composable("global_search") { GlobalSearchScreen(navController) }
+            composable("servers_hub") { ServersHubScreen(navController) }
+            composable(
+                "${Screen.AllMediaGallery.route}?type={type}&source={source}",
+                arguments = listOf(
+                    navArgument("type") { type = NavType.StringType; nullable = true; defaultValue = null },
+                    navArgument("source") { type = NavType.StringType; nullable = true; defaultValue = null }
+                )
+            ) { entry ->
+                AllMediaGalleryScreen(
+                    navController,
+                    initialType = entry.arguments?.getString("type"),
+                    initialSource = entry.arguments?.getString("source")
+                )
+            }
             composable(Screen.AiServersHub.route) { AiServersHubScreen(navController) }
             composable(Screen.FileServer.route) {
                 com.example.llamadroid.ui.components.AppScreenScaffold(
@@ -656,9 +681,6 @@ fun LlamaApp(
             ) { backStackEntry ->
                 val serverPort = backStackEntry.arguments?.getInt("serverPort")?.takeIf { it in 1..65535 }
                 ChatScreen(navController, serverPortOverride = serverPort)
-            }
-            composable(Screen.LlamaServers.route) {
-                com.example.llamadroid.ui.chat.ChatsHomeScreen(navController) // servers live only in the chats view
             }
             composable(
                 route = "${Screen.ImageGen.route}?startMode={startMode}&tab={tab}",
@@ -719,7 +741,7 @@ fun LlamaApp(
             composable(Screen.VideoUpscaler.route) { VideoUpscalerScreen(navController) }
             composable(Screen.VideoInterpolation.route) { VideoInterpolationScreen(navController) }
             composable(Screen.SubtitleBurn.route) { SubtitleBurnScreen(navController) }
-            composable(Screen.NotesManager.route) { NotesManagerScreen(navController) }
+            composable(Screen.NotesManager.route) { NotesManagerScreen(navController, asRoot = true) }
             composable(Screen.KnowledgeBase.route) { KnowledgeBaseScreen(navController) }
             composable(
                 Screen.KnowledgeChunkReader.route,
@@ -814,7 +836,9 @@ fun LlamaApp(
             composable(Screen.SdDistributedMaster.route) { SdDistributedMasterScreen(navController) }
             composable(Screen.SdDistributedNetwork.route) { SdDistributedNetworkScreen(navController) }
             composable(Screen.SdDistributedRunConfig.route) { SdDistributedRunConfigScreen(navController) }
-            composable(Screen.SdDistributedGallery.route) { SdDistributedGalleryScreen(navController) }
+            composable(Screen.SdDistributedGallery.route) {
+                AllMediaGalleryScreen(navController, initialType = null, initialSource = "distributed")
+            }
             // Benchmark
             composable(Screen.Benchmark.route) { BenchmarkScreen(navController) }
             composable(Screen.BenchmarkHistory.route) { BenchmarkHistoryScreen(navController) }
@@ -863,6 +887,7 @@ fun LlamaApp(
             
             // FastSD Gallery
             composable(Screen.FastsdGallery.route) {
+                // Kept as its own screen: remote preview, share and delete over SSH (All media links here).
                 com.example.llamadroid.ui.ai.FastsdGalleryScreen(navController)
             }
             
@@ -971,9 +996,6 @@ fun LlamaApp(
             }
             
             // Native Llama Client
-            composable(Screen.LlamaServerList.route) {
-                com.example.llamadroid.ui.chat.ChatsHomeScreen(navController) // servers live only in the chats view
-            }
             composable(Screen.LlamaChatList.route) {
                 com.example.llamadroid.ui.ai.llama.LlamaChatListScreen(navController)
             }

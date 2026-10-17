@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="global_search_hint">Busca herramientas, chats, modelos, notas</string>
+    <string name="global_search_recent_title">Búsquedas recientes</string>
+    <string name="global_search_clear_recent">Borrar búsquedas recientes</string>
+    <string name="global_search_empty_title">No se encontró nada</string>
+    <string name="global_search_empty_desc">Prueba con otra palabra. Funcionan los nombres en español e inglés.</string>
+    <string name="global_search_prompt">Escribe para buscar en toda la app.</string>
+    <string name="global_search_group_chats">Chats</string>
+    <string name="global_search_group_projects">Proyectos del agente</string>
+    <string name="global_search_group_models">Modelos instalados</string>
+    <string name="global_search_group_notes">Notas</string>
+    <string name="global_search_show_all">Mostrar todo</string>
+    <string name="global_search_show_fewer">Mostrar menos</string>
+    <string name="home_not_tried_title">Aún sin probar</string>
+    <string name="home_not_tried_action">Probar</string>
+    <string name="home_new_in_version_title">Novedades de esta versión</string>
+</resources>

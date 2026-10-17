@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="feature_guide_r7_audio_workspace_title">Espacio de audio</string>
+    <string name="feature_recipe_r7_audio_workspace_create_title">Crear audio</string>
+    <string name="feature_step_r7_audio_workspace_create_orient">Audio reúne voz, música, efectos de sonido y voces locales en un solo espacio. Elige el tipo de audio que quieres crear.</string>
+    <string name="feature_step_r7_audio_workspace_create_read">Escribe tu prompt o texto, ejecútalo y reproduce el resultado en el espacio. Los clips terminados se guardan en la galería de audio.</string>
+    <string name="feature_step_r7_audio_workspace_create_recover">Si no se ejecuta nada, abre Modelos de audio desde esta pantalla e instala el modelo que necesita la tarea.</string>
+    <string name="feature_recipe_r7_audio_workspace_queue_title">Poner en cola trabajos de audio largos</string>
+    <string name="feature_step_r7_audio_workspace_queue_orient">Las generaciones de audio largas se pueden añadir a la cola de generación para que sigas usando la app.</string>
+    <string name="feature_step_r7_audio_workspace_queue_read">Abre la cola de generación para seguir el progreso. Un trabajo terminado conserva su archivo de audio y su entrada en el historial.</string>
+    <string name="feature_step_r7_audio_workspace_queue_recover">Si un trabajo falla, lee el error en la cola, corrige el modelo o los ajustes y añádelo de nuevo.</string>
+    <string name="feature_guide_r7_audio_models_title">Modelos de audio</string>
+    <string name="feature_recipe_r7_audio_models_install_title">Instalar modelos de voz</string>
+    <string name="feature_step_r7_audio_models_install_orient">Modelos de audio lista paquetes de modelos de voz recomendados y permite añadir uno propio. Elige el paquete para la voz o el reconocimiento que necesitas.</string>
+    <string name="feature_step_r7_audio_models_install_read">Inicia la descarga y espera a que el paquete aparezca como instalado. Después estará disponible en la herramienta de Audio correspondiente.</string>
+    <string name="feature_step_r7_audio_models_install_recover">Si una descarga falla, revisa el almacenamiento y la conexión, reintenta o usa un paquete propio con un prefijo válido.</string>
+    <string name="feature_guide_r7_generation_queue_title">Cola de generación</string>
+    <string name="feature_recipe_r7_generation_queue_follow_title">Seguir generaciones en cola</string>
+    <string name="feature_step_r7_generation_queue_follow_orient">La cola de generación lista los trabajos de imagen, vídeo y audio que esperan o se están ejecutando, de uno en uno.</string>
+    <string name="feature_step_r7_generation_queue_follow_read">Cada fila muestra su estado y progreso. Los trabajos terminados pasan al historial, donde puedes abrir el resultado.</string>
+    <string name="feature_step_r7_generation_queue_follow_recover">Cancela un trabajo atascado desde su fila o abre el historial para ver por qué falló uno antes de volver a añadirlo.</string>
+    <string name="feature_guide_r7_native_chat_delegation_title">Visor de tarea DeepSeek</string>
+    <string name="feature_recipe_r7_native_chat_delegation_watch_title">Ver una tarea de DeepSeek</string>
+    <string name="feature_step_r7_native_chat_delegation_watch_orient">Este visor muestra un proyecto que el modelo principal pasó al subagente DeepSeek: su estado, fase actual y tiempo transcurrido.</string>
+    <string name="feature_step_r7_native_chat_delegation_watch_read">Desplázate por la conversación del subagente y la actividad de Harness. El uso de contexto y el tamaño de la caché en disco muestran cuánto ha usado.</string>
+    <string name="feature_step_r7_native_chat_delegation_watch_recover">Si muestra Necesita dirección o Falló, lee el error del modelo, copia el diagnóstico y responde en el chat principal para continuar.</string>
+    <string name="feature_guide_r7_server_profile_editor_title">Editor de servidor</string>
+    <string name="feature_recipe_r7_server_profile_editor_edit_title">Editar un servidor de modelo local</string>
+    <string name="feature_step_r7_server_profile_editor_edit_orient">El editor de servidor define cómo un servidor llama.cpp local inicia el modelo elegido, incluido el tamaño de contexto y todas las opciones de arranque.</string>
+    <string name="feature_step_r7_server_profile_editor_edit_read">Guarda para conservar el perfil. Vuelves a Chats, donde el servidor está listo para iniciarse y chatear.</string>
+    <string name="feature_step_r7_server_profile_editor_edit_recover">Si el servidor se cierra o se queda sin memoria, reabre el editor, baja el contexto o la descarga a GPU y guarda de nuevo.</string>
+    <string name="feature_guide_r7_servers_hub_title">Servidores</string>
+    <string name="feature_recipe_r7_servers_hub_overview_title">Gestionar servidores y compartir</string>
+    <string name="feature_step_r7_servers_hub_overview_orient">Servidores reúne servidores de modelo, compartir, inferencia distribuida, Ollama y Termux en un solo lugar. Cada tarjeta tiene un botón Abrir o Gestionar.</string>
+    <string name="feature_step_r7_servers_hub_overview_read">Las tarjetas muestran el estado en vivo, como servidores guardados o la conexión de Termux, para ver qué está activo antes de abrirlo.</string>
+    <string name="feature_step_r7_servers_hub_overview_recover">Si una tarjeta muestra desconectado o nada guardado, ábrela, termina su configuración y vuelve para comprobar el estado.</string>
+    <string name="feature_guide_r7_global_search_title">Búsqueda</string>
+    <string name="feature_recipe_r7_global_search_find_title">Buscar en toda la app</string>
+    <string name="feature_step_r7_global_search_find_orient">La búsqueda global recorre herramientas, chats, proyectos de Agent, modelos instalados y notas. Escribe en el cuadro de búsqueda.</string>
+    <string name="feature_step_r7_global_search_find_read">Los resultados se agrupan por tipo. Usa Mostrar todo para expandir un grupo y toca un resultado para abrirlo. Las búsquedas recientes se guardan para reutilizarlas.</string>
+    <string name="feature_step_r7_global_search_find_recover">Si no aparece nada, prueba otra palabra; los nombres en inglés y en español funcionan. Borra las búsquedas recientes para empezar de cero.</string>
+</resources>

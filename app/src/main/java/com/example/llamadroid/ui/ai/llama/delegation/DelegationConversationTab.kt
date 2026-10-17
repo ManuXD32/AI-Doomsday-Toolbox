@@ -41,9 +41,21 @@ import com.example.llamadroid.ui.components.AppTextDetailsDialog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/** Main LLM <-> subagent messages as two-sided bubbles, plus the final result card. */
+/** Main LLM <-> subagent messages as two-sided bubbles, the final result card and a message box. */
 @Composable
 internal fun DelegationConversationTab(
+    task: NativeChatDelegateTaskEntity,
+    messages: List<NativeChatDelegateMessageEntity>
+) {
+    // AppScreenScaffold already applies the keyboard inset once; don't add a second one here.
+    Column(Modifier.fillMaxSize()) {
+        Box(Modifier.weight(1f).fillMaxWidth()) { DelegationConversationList(task, messages) }
+        DelegationMessageBox(task.chatId)
+    }
+}
+
+@Composable
+private fun DelegationConversationList(
     task: NativeChatDelegateTaskEntity,
     messages: List<NativeChatDelegateMessageEntity>
 ) {

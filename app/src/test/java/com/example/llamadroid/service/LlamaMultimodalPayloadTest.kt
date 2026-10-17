@@ -40,6 +40,33 @@ class LlamaMultimodalPayloadTest {
     }
 
     @Test
+    fun `every image path becomes one image_url part deduped with imagePath first`() {
+        val a = tempFile(".png", byteArrayOf(1))
+        val b = tempFile(".png", byteArrayOf(2))
+        val c = tempFile(".png", byteArrayOf(3))
+
+        val content = buildNativeLlamaUserContent(
+            userMessage = "look",
+            imagePath = a.absolutePath,
+            additionalImagePaths = listOf(b.absolutePath, a.absolutePath, c.absolutePath)
+        )
+
+        val parts = content as List<*>
+        assertEquals(listOf("text", "image_url", "image_url", "image_url"), parts.map { (it as Map<*, *>)["type"] })
+        val urls = parts.drop(1).map { ((it as Map<*, *>)["image_url"] as Map<*, *>)["url"] }
+        assertEquals(
+            listOf("data:image/png;base64,AQ==", "data:image/png;base64,Ag==", "data:image/png;base64,Aw=="),
+            urls
+        )
+        val message = OllamaService.ChatMessage(
+            role = "user", content = "look", imagePath = a.absolutePath,
+            imagePaths = listOf(b.absolutePath, a.absolutePath)
+        )
+        assertEquals(listOf(a.absolutePath, b.absolutePath), message.allImagePaths())
+        assertEquals(listOf("Ag==", "AQ=="), message.ollamaImagePayloads())
+    }
+
+    @Test
     fun `audio attachment serializes as llama input audio data`() {
         val audioFile = tempFile(".wav", byteArrayOf(1, 2, 3, 4))
 

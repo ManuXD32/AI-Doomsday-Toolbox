@@ -46,13 +46,19 @@ object DelegationThreadLives {
         threadsJson: String?,
         currentSession: String?,
         fallbackTitle: String,
-        live: List<DelegationThreadLive>
+        live: List<DelegationThreadLive>,
+        knownSeqs: Map<String, Long> = emptyMap()
     ): List<DelegationThreadLive> {
         val liveById = live.associateBy { it.sessionId }
         val persisted = parseThreads(threadsJson, currentSession, fallbackTitle)
         val merged = persisted.map { (id, title) ->
-            liveById[id]?.let { if (it.title.isBlank()) it.copy(title = title) else it }
-                ?: DelegationThreadLive(id, title, running = false)
+            val remembered = knownSeqs[id] ?: -1L
+            liveById[id]?.let { row ->
+                row.copy(
+                    title = row.title.ifBlank { title },
+                    lastSeq = maxOf(row.lastSeq, remembered)
+                )
+            } ?: DelegationThreadLive(id, title, running = false, lastSeq = remembered)
         }
         val known = persisted.map { it.first }.toSet()
         return merged + live.filter { it.sessionId !in known }

@@ -4202,7 +4202,8 @@ object Migrations {
         HarnessInstallationsMigration.MIGRATION_126_127,
         NativeChatServerBindingMigration.MIGRATION_127_128,
         NativeChatDelegationMigration.MIGRATION_128_129,
-        ImageDescriptionMigration.MIGRATION_129_130
+        ImageDescriptionMigration.MIGRATION_129_130,
+        NativeChatStepsMigration.MIGRATION_130_131
     )
     /**
      * Check if a column exists in a table.

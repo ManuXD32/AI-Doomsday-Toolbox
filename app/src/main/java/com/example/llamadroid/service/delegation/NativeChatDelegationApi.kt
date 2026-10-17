@@ -13,8 +13,12 @@ data class DelegationStartRequest(
     val title: String?,
     /** Chat file references such as `f12` (attachment row) or `img55` (image of message 55). */
     val attachmentRefs: List<String> = emptyList(),
-    /** Reuse the chat's previous project instead of creating a new one. */
-    val continueProject: Boolean = false
+    /** Reuse the chat's previous project instead of creating a new one (ignored when [projectId] is set). */
+    val continueProject: Boolean = false,
+    /** Android-side workspace id of an existing harness project to open (from `deepseek_projects`). */
+    val projectId: String? = null,
+    /** Harness session id of an existing thread in that project to keep using; null = a new thread. */
+    val threadId: String? = null
 )
 
 sealed class DelegationStartResult {
@@ -27,7 +31,9 @@ sealed class DelegationStartResult {
 data class DelegationReply(
     val text: String?,
     val timedOut: Boolean,
-    val state: String
+    val state: String,
+    /** True when the message reopened a finished task (same subagent conversation and harness thread). */
+    val reopened: Boolean = false
 )
 
 /** In-memory live view of a running task for the UI; durable state lives in Room. */
@@ -89,8 +95,24 @@ interface NativeChatDelegationApi {
     /** Model-facing status text, bounded (brief ≤ 1,500 chars, full ≤ 2,500), with the re-arm footer. */
     suspend fun statusText(chatId: Long, detail: DelegationStatusDetail): String
 
-    /** Sends [message] to the subagent and waits up to [waitSeconds] for its reply; resumes stopped tasks. */
-    suspend fun messageSubagent(chatId: Long, message: String, waitSeconds: Int): DelegationReply
+    /**
+     * Sends [message] to the chat's latest task and waits up to [waitSeconds] for the reply to it.
+     * Works in every state: a running task gets it at its next step, a task waiting for the main LLM
+     * takes it as the answer, an interrupted task resumes, and a finished/failed/cancelled task is
+     * reopened (same subagent conversation, same harness project and thread). [attachmentRefs]
+     * (`f12`, `img55`) are copied into the project's `inputs/`. [fromUser] marks a message typed by the
+     * user in the task viewer (shown to the subagent as "[User] ..."); such calls use waitSeconds = 0.
+     */
+    suspend fun messageSubagent(
+        chatId: Long,
+        message: String,
+        waitSeconds: Int,
+        attachmentRefs: List<String> = emptyList(),
+        fromUser: Boolean = false
+    ): DelegationReply
+
+    /** Model-facing list (<= 1,500 chars) of the chat's DeepSeek runtime projects matching [query]. */
+    suspend fun listProjects(chatId: Long, query: String?): String
 
     suspend fun cancelTask(chatId: Long, reason: String?, stopRuntime: Boolean): Boolean
 

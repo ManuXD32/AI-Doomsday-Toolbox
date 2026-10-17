@@ -18,7 +18,8 @@ import org.json.JSONObject
 /** The media kind rendered by a saved-output gallery. */
 enum class MediaGalleryType {
     IMAGE,
-    VIDEO
+    VIDEO,
+    AUDIO
 }
 
 /** The producer that owns a saved output. */
@@ -30,6 +31,8 @@ enum class MediaGallerySource {
     WORKFLOW,
     IMAGE_PROCESSING,
     VIDEO_PROCESSING,
+    ONNX_TTS,
+    AUDIO_WORKSPACE,
     UNKNOWN
 }
 
@@ -47,7 +50,8 @@ value class MediaGalleryIdentity(val value: String)
 enum class MediaGalleryTypeFilter {
     ALL,
     IMAGES,
-    VIDEOS
+    VIDEOS,
+    AUDIO
 }
 
 enum class MediaGallerySourceFilter {
@@ -57,7 +61,9 @@ enum class MediaGallerySourceFilter {
     ONNX,
     TAMA,
     WORKFLOW,
-    PROCESSING
+    PROCESSING,
+    ONNX_TTS,
+    AUDIO_WORKSPACE
 }
 
 enum class MediaGalleryLocationFilter {
@@ -113,6 +119,9 @@ data class MediaGalleryItem(
     val previewFile: File? = file,
     val remotePath: String? = null
 ) {
+    /** On-disk size in bytes (0 for remote or missing files). */
+    val sizeBytes: Long get() = if (remotePath == null && file.isFile) file.length() else 0L
+
     /** Compatibility aliases make the model convenient for older gallery card code. */
     val id: String get() = identity.value
     val kind: MediaGalleryType get() = type
@@ -130,7 +139,9 @@ data class MediaGalleryRoots(
     val videoUpscaleRoot: File,
     val videoInterpolationRoot: File,
     val subtitleOutputRoot: File,
-    val fastSdRoot: File? = null
+    val fastSdRoot: File? = null,
+    val onnxTtsRoot: File? = null,
+    val audioWorkspaceOutputRoot: File? = null
 ) {
     companion object {
         fun fromFilesDir(filesDir: File): MediaGalleryRoots = MediaGalleryRoots(
@@ -145,7 +156,9 @@ data class MediaGalleryRoots(
             backgroundRemovalRoot = File(filesDir, "bgr_output"),
             videoUpscaleRoot = File(filesDir, "video_upscale_output"),
             videoInterpolationRoot = File(filesDir, "video_interpolation_output"),
-            subtitleOutputRoot = File(filesDir, "subtitle_outputs")
+            subtitleOutputRoot = File(filesDir, "subtitle_outputs"),
+            onnxTtsRoot = File(filesDir, "onnx_tts_output"),
+            audioWorkspaceOutputRoot = File(filesDir, "audio_workspace/outputs")
         )
     }
 }
@@ -198,6 +211,9 @@ object MediaGalleryIndex {
         roots.fastSdRoot?.let {
             scanImageRoot(it, MediaGallerySource.FAST_SD, { MediaGalleryLocation.LOCAL }, ::add)
         }
+
+        roots.onnxTtsRoot?.let { MediaGalleryAudioScanner.scanOnnxTts(it, ::add) }
+        roots.audioWorkspaceOutputRoot?.let { MediaGalleryAudioScanner.scanAudioWorkspace(it, ::add) }
 
         remoteFastSdItems.forEach { remote ->
             add(
@@ -379,6 +395,7 @@ object MediaGalleryIndex {
                 MediaGalleryTypeFilter.ALL -> true
                 MediaGalleryTypeFilter.IMAGES -> item.type == MediaGalleryType.IMAGE
                 MediaGalleryTypeFilter.VIDEOS -> item.type == MediaGalleryType.VIDEO
+                MediaGalleryTypeFilter.AUDIO -> item.type == MediaGalleryType.AUDIO
             }
         }
         .filter { item ->
@@ -391,6 +408,8 @@ object MediaGalleryIndex {
                 MediaGallerySourceFilter.WORKFLOW -> item.source == MediaGallerySource.WORKFLOW
                 MediaGallerySourceFilter.PROCESSING -> item.source == MediaGallerySource.IMAGE_PROCESSING ||
                     item.source == MediaGallerySource.VIDEO_PROCESSING
+                MediaGallerySourceFilter.ONNX_TTS -> item.source == MediaGallerySource.ONNX_TTS
+                MediaGallerySourceFilter.AUDIO_WORKSPACE -> item.source == MediaGallerySource.AUDIO_WORKSPACE
             }
         }
         .filter { item ->
@@ -683,6 +702,14 @@ object MediaGalleryIndex {
     private fun mimeTypeFor(file: File): String = when (mediaTypeFor(file)) {
         MediaGalleryType.IMAGE -> imageMimeType(file)
         MediaGalleryType.VIDEO -> videoMimeType(file)
+        // Audio items come from MediaGalleryAudioScanner; listed here only for exhaustiveness.
+        MediaGalleryType.AUDIO -> when (file.extension.lowercase(Locale.US)) {
+            "mp3" -> "audio/mpeg"
+            "ogg" -> "audio/ogg"
+            "m4a", "aac" -> "audio/mp4"
+            "flac" -> "audio/flac"
+            else -> "audio/wav"
+        }
         null -> "application/octet-stream"
     }
 
@@ -744,7 +771,9 @@ object MediaGalleryIndex {
         videoUpscaleRoot,
         videoInterpolationRoot,
         subtitleOutputRoot,
-        fastSdRoot
+        fastSdRoot,
+        onnxTtsRoot,
+        audioWorkspaceOutputRoot
     ).filterNotNull()
 }
 

@@ -95,7 +95,7 @@ class FeatureGuideCatalogTest {
 
         val expected = mapOf(
             "models" to routes(
-                Screen.ModelHub.route, Screen.ModelSources.route, Screen.ModelManager.route,
+                Screen.ModelHub.route, Screen.ModelSources.route, "models",
                 Screen.LLMModels.route, Screen.SDModels.route, Screen.OnnxModels.route,
                 Screen.WhisperModels.route, Screen.LiteRtModels.route, "model_share" // LlamaApp registration
             ),
@@ -127,7 +127,7 @@ class FeatureGuideCatalogTest {
 
         val expected = mapOf(
             "conversations" to routes(
-                Screen.Chat.route, Screen.LlamaServers.route, Screen.LlamaServerList.route,
+                Screen.Chat.route, Screen.Chats.route, "llama_servers", "llama_server_list",
                 Screen.LlamaChatList.route, Screen.LlamaChat.route, Screen.LlamaScheduler.route
             ),
             "agent" to routes(
@@ -139,7 +139,7 @@ class FeatureGuideCatalogTest {
             "organizer" to routes(Screen.NotesManager.route),
             "library" to routes(Screen.Library.route),
             "knowledge" to routes(Screen.KnowledgeBase.route, Screen.KnowledgeChunkReader.route),
-            "offline" to routes(Screen.KiwixHub.route, Screen.ZimManager.route, Screen.KiwixViewer.route),
+            "offline" to routes("kiwix_hub", Screen.ZimManager.route, Screen.KiwixViewer.route),
             "servers" to routes(Screen.AiServersHub.route, Screen.FileServer.route, Screen.OllamaManager.route),
             "distributed" to routes(Screen.DistributedHub.route, Screen.WorkerMode.route, Screen.MasterMode.route, Screen.NetworkVisualization.route),
             "media_runtime" to routes(Screen.SdDistributedHub.route, Screen.SdDistributedWorker.route, Screen.SdDistributedMaster.route, Screen.SdDistributedNetwork.route, Screen.SdDistributedRunConfig.route, Screen.SdDistributedGallery.route),

@@ -56,6 +56,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -84,6 +85,7 @@ import com.example.llamadroid.media.MediaGalleryLocationFilter
 import com.example.llamadroid.media.MediaGallerySource
 import com.example.llamadroid.media.MediaGallerySourceFilter
 import com.example.llamadroid.media.MediaGalleryType
+import com.example.llamadroid.media.parseMediaGalleryRouteFilters
 import com.example.llamadroid.media.MediaGalleryTypeFilter
 import com.example.llamadroid.ui.ai.VideoGalleryDetail
 import com.example.llamadroid.ui.components.AppScreenScaffold
@@ -93,6 +95,7 @@ import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
@@ -100,8 +103,16 @@ import java.util.Date
 import java.util.Locale
 
 @Composable
-fun AllMediaGalleryScreen(navController: NavController) {
+fun AllMediaGalleryScreen(
+    navController: NavController,
+    initialType: String? = null,
+    initialSource: String? = null
+) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val routeFilters = remember(initialType, initialSource) { parseMediaGalleryRouteFilters(initialType, initialSource) }
+    val audioPlayer = rememberGalleryAudioPlayer()
+    var pendingAudioDelete by remember { mutableStateOf<MediaGalleryItem?>(null) }
     val lifecycleOwner = LocalLifecycleOwner.current
     val walkthroughTargets = LocalWalkthroughTargets.current
     val fastSdConnected by SSHService.isConnected.collectAsState()
@@ -112,9 +123,9 @@ fun AllMediaGalleryScreen(navController: NavController) {
     var refreshNonce by remember { mutableIntStateOf(0) }
     var items by remember { mutableStateOf<List<MediaGalleryItem>>(emptyList()) }
     var selectedItem by remember { mutableStateOf<MediaGalleryItem?>(null) }
-    var typeFilterName by rememberSaveable { mutableStateOf(MediaGalleryTypeFilter.ALL.name) }
-    var sourceFilterName by rememberSaveable { mutableStateOf(MediaGallerySourceFilter.ALL.name) }
-    var locationFilterName by rememberSaveable { mutableStateOf(MediaGalleryLocationFilter.ALL.name) }
+    var typeFilterName by rememberSaveable { mutableStateOf(routeFilters.type.name) }
+    var sourceFilterName by rememberSaveable { mutableStateOf(routeFilters.source.name) }
+    var locationFilterName by rememberSaveable { mutableStateOf(routeFilters.location.name) }
     val gridState = rememberSaveable(saver = LazyGridState.Saver) { LazyGridState() }
     val typeFilter = remember(typeFilterName) {
         runCatching { MediaGalleryTypeFilter.valueOf(typeFilterName) }.getOrDefault(MediaGalleryTypeFilter.ALL)
@@ -200,6 +211,7 @@ fun AllMediaGalleryScreen(navController: NavController) {
                             MediaGalleryTypeFilter.ALL -> stringResource(R.string.media_gallery_type_all)
                             MediaGalleryTypeFilter.IMAGES -> stringResource(R.string.media_gallery_type_images)
                             MediaGalleryTypeFilter.VIDEOS -> stringResource(R.string.media_gallery_type_videos)
+                            MediaGalleryTypeFilter.AUDIO -> stringResource(R.string.media_gallery_type_audio)
                         }
                     },
                     selected = typeFilter,
@@ -265,7 +277,31 @@ fun AllMediaGalleryScreen(navController: NavController) {
                     }
                 }
             } else {
-                items(filteredItems, key = { it.identity.value }) { item ->
+                items(
+                    filteredItems,
+                    key = { it.identity.value },
+                    span = { item ->
+                        if (item.type == MediaGalleryType.AUDIO) GridItemSpan(maxLineSpan) else GridItemSpan(1)
+                    }
+                ) { item ->
+                    if (item.type == MediaGalleryType.AUDIO) {
+                        MediaGalleryAudioRow(
+                            item = item,
+                            playing = audioPlayer.playingId == item.identity.value,
+                            metaLine = stringResource(
+                                R.string.media_gallery_item_meta,
+                                sourceLabel(item.source),
+                                formatMediaGalleryDate(item.createdAt) + " · " +
+                                    com.example.llamadroid.util.FormatUtils.Display.formatBytes(context, item.sizeBytes)
+                            ),
+                            onTogglePlay = {
+                                audioPlayer.toggle(item) { message -> toastGalleryAudioError(context, message) }
+                            },
+                            onShare = { shareMedia(context, item) },
+                            onDelete = { pendingAudioDelete = item }
+                        )
+                        return@items
+                    }
                     MediaGalleryCard(
                         item = item,
                         onOpen = {
@@ -286,6 +322,22 @@ fun AllMediaGalleryScreen(navController: NavController) {
                 }
             }
         }
+    }
+
+    pendingAudioDelete?.let { item ->
+        MediaGalleryAudioDeleteDialog(
+            item = item,
+            onDismiss = { pendingAudioDelete = null },
+            onConfirm = {
+                pendingAudioDelete = null
+                if (audioPlayer.playingId == item.identity.value) audioPlayer.release()
+                scope.launch {
+                    val deleted = withContext(Dispatchers.IO) { deleteGalleryAudio(context, item) }
+                    toastGalleryAudioDeleted(context, deleted)
+                    refreshNonce++
+                }
+            }
+        )
     }
 
     selectedItem?.let { item ->
@@ -340,6 +392,8 @@ private fun sourceFilterLabel(filter: MediaGallerySourceFilter): String = when (
     MediaGallerySourceFilter.TAMA -> stringResource(R.string.media_gallery_source_tama)
     MediaGallerySourceFilter.WORKFLOW -> stringResource(R.string.media_gallery_source_workflow)
     MediaGallerySourceFilter.PROCESSING -> stringResource(R.string.media_gallery_source_processing)
+    MediaGallerySourceFilter.ONNX_TTS -> stringResource(R.string.media_gallery_source_onnx_tts)
+    MediaGallerySourceFilter.AUDIO_WORKSPACE -> stringResource(R.string.media_gallery_source_audio_workspace)
 }
 
 @Composable
@@ -577,6 +631,7 @@ private fun MediaGalleryDetailLine(label: String, value: String) {
 private fun loadMediaGalleryThumbnail(item: MediaGalleryItem): Bitmap? = runCatching {
     val preview = item.previewFile?.takeIf { it.isFile } ?: item.file.takeIf { it.isFile } ?: return@runCatching null
     when (item.type) {
+        MediaGalleryType.AUDIO -> null
         MediaGalleryType.IMAGE -> decodeMediaGalleryImage(preview)
         MediaGalleryType.VIDEO -> when {
             preview.extension.equals("webp", ignoreCase = true) -> decodeMediaGalleryImage(preview)
@@ -612,6 +667,8 @@ private fun sourceLabel(source: MediaGallerySource): String = when (source) {
     MediaGallerySource.WORKFLOW -> stringResource(R.string.media_gallery_source_workflow)
     MediaGallerySource.IMAGE_PROCESSING,
     MediaGallerySource.VIDEO_PROCESSING -> stringResource(R.string.media_gallery_source_processing)
+    MediaGallerySource.ONNX_TTS -> stringResource(R.string.media_gallery_source_onnx_tts)
+    MediaGallerySource.AUDIO_WORKSPACE -> stringResource(R.string.media_gallery_source_audio_workspace)
     MediaGallerySource.UNKNOWN -> stringResource(R.string.media_gallery_source_unknown)
 }
 

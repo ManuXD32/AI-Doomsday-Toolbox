@@ -29,11 +29,19 @@ data class ManagedLlamaServerInfo(
     val errorCode: String? = null
 ) {
     val baseUrl: String? get() = profile?.let { HttpEndpointUrlSupport.fromHostPort(managedLlamaConnectHost(it.host), it.serverPort) }
-    fun modelRow(): JSONObject = JSONObject().put("id", "llama:${card.id}")
+    /** True when the card's own model can read images (an mmproj is configured and vision or video is on). */
+    fun hasCardVision(): Boolean = profile?.let { (it.visionEnabled || it.videoEnabled) && !it.mmprojPath.isNullOrBlank() } == true
+
+    /**
+     * [helperVision] advertises images for text-only cards too, because the Harness bridge then
+     * describes them with the vision helper. Callers pass the same flag for every row so the list
+     * stays stable per card.
+     */
+    fun modelRow(helperVision: Boolean = false): JSONObject = JSONObject().put("id", "llama:${card.id}")
         .put("object", "model").put("owned_by", "adt-llama-server").put("name", card.name)
         .put("status", status.name.lowercase()).put("available", errorCode == null)
         .put("capabilitySource", "server").put("contextInherited", true)
-        .put("input_modalities", org.json.JSONArray().put("text"))
+        .put("input_modalities", org.json.JSONArray().put("text").apply { if (hasCardVision() || helperVision) put("image") })
         .apply {
             contextTokens?.takeIf { it > 0 }?.let { put("context_length", it); put("contextWindow", it) }
             errorCode?.let { put("errorCode", it) }

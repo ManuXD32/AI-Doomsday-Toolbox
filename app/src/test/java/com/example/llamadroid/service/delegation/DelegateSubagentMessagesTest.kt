@@ -75,9 +75,9 @@ class DelegateSubagentMessagesTest {
 
     @Test
     fun promptKeepsSystemTextStableAndPolicyAware() {
-        val a = DelegateSubagentPrompt.systemPrompt(DelegationApprovalPolicy.SUBAGENT_DECIDES)
-        assertEquals(a, DelegateSubagentPrompt.systemPrompt(DelegationApprovalPolicy.SUBAGENT_DECIDES))
-        assertTrue(DelegateSubagentPrompt.systemPrompt(DelegationApprovalPolicy.ASK_ME).contains("answered by the user"))
+        val a = DelegateSubagentPrompt.systemPrompt()
+        assertEquals(a, DelegateSubagentPrompt.systemPrompt())
+        assertTrue(DelegateSubagentPrompt.policyRules(DelegationApprovalPolicy.ASK_ME).contains("answered by the user"))
         assertTrue(DelegateSubagentPrompt.inboxMessage(" hi ").startsWith("[Main agent] hi"))
     }
 }

@@ -9,5 +9,5 @@
     <string name="ui_chats_open_agent_desc">Inicia o continúa un proyecto de código con el Agente.</string>
     <string name="ui_chats_agent_empty">Tus proyectos recientes del Agente aparecerán aquí.</string>
     <string name="ui_chats_new_agent">Nuevo proyecto del Agente</string>
-    <string name="chats_open_web_ui">Abrir interfaz web</string>
+    <string name="chats_open_web_ui">Abrir Web UI de llama.cpp</string>
 </resources>

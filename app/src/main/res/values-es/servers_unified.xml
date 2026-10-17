@@ -1,10 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="srv_screen_title">Servidores</string>
-    <string name="srv_screen_subtitle">Modelos locales en este teléfono y servidores remotos, en un solo lugar.</string>
-    <string name="srv_add">Añadir servidor</string>
-    <string name="srv_empty_title">Aún no hay servidores</string>
-    <string name="srv_empty_subtitle">Añade un modelo local de este teléfono o conecta con un servidor remoto para empezar a chatear.</string>
     <string name="srv_status_remote">Remoto</string>
     <string name="srv_status_error">Requiere atención</string>
     <string name="srv_kind_managed">Local</string>

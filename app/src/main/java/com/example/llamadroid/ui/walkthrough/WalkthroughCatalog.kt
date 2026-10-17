@@ -120,6 +120,7 @@ object WalkthroughCatalog {
             descriptionRes = R.string.walkthrough_chapter_infrastructure_description,
             lessons = listOf(
                 toolLesson("servers_hub", R.string.walkthrough_lesson_servers_hub_body, PREVIEW_HOME),
+                toolLesson("web_servers", R.string.walkthrough_lesson_web_servers_body, PREVIEW_HOME),
                 toolLesson("distributed_llm", R.string.walkthrough_lesson_distributed_llm_body, PREVIEW_HOME),
                 toolLesson("distributed_media", R.string.walkthrough_lesson_distributed_media_body, PREVIEW_HOME),
                 toolLesson("benchmark", R.string.walkthrough_lesson_benchmark_body, PREVIEW_HOME),

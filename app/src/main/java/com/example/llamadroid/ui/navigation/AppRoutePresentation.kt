@@ -2,7 +2,7 @@ package com.example.llamadroid.ui.navigation
 
 /** Presentation ownership is independent of the stable public destination strings. */
 enum class AppRootDestination(val route: String) {
-    Home("dashboard"), Chats("chats"), Tools("ai_hub"), Library("library"), Tama("tama")
+    Home("dashboard"), Chats("chats"), Tools("ai_hub"), Tama("tama"), Organizer("notes_manager")
 }
 
 enum class AppNavigationLayout { Bar, Rail, Drawer }
@@ -16,14 +16,9 @@ fun appNavigationLayout(widthDp: Int, heightDp: Int, fontScale: Float): AppNavig
 data class AppRoutePresentation(val parent: AppRootDestination?, val isRoot: Boolean)
 
 object AppRoutePresentations {
-    private val libraryRoutes = setOf(
-        "models", "model_hub", "model_sources", "llm_models", "sd_models", "onnx_models", "whisper_models",
-        "litert_models", "model_share", "knowledge_base", "knowledge_chunk", "kiwix_hub",
-        "zim_manager", "kiwix_viewer", "onnx_tts_gallery", "fastsd_gallery", "sd_distributed_gallery",
-        "all_media_gallery", "notes_manager", "audio_models"
-    )
     private val chatRoutes = setOf(
-        "chat", "llama_servers", "llama_server_list", "llama_chat_list", "llama_chat", "llama_scheduler",
+        "chat", "llama_chat_list", "llama_chat", "llama_scheduler",
+        "server_profile_editor", "native_chat_delegation",
         "agent", "agent_workspace", "agent_proot_terminal", "agent_invocation"
     )
     private val tamaRoutes = setOf(
@@ -36,13 +31,14 @@ object AppRoutePresentations {
         val base = route.substringBefore('?').substringBefore('/')
         val root = AppRootDestination.entries.firstOrNull { it.route == base }
         if (root != null) return AppRoutePresentation(root, true)
+        // Library is a tab inside Tools: the legacy route shares the Tools root chrome.
+        if (base == "library") return AppRoutePresentation(AppRootDestination.Tools, true)
         val parent = when {
             base == "walkthrough" -> AppRootDestination.Home
             base in tamaRoutes -> AppRootDestination.Tama
-            base in chatRoutes -> AppRootDestination.Chats
-            base in libraryRoutes -> AppRootDestination.Library
+            base in chatRoutes || base.startsWith("agent") -> AppRootDestination.Chats
             base == "settings" || base.startsWith("settings_") || base in setOf("about", "logs") -> null
-            else -> AppRootDestination.Tools
+            else -> AppRootDestination.Tools // library, models, galleries, queue, servers and every tool
         }
         return AppRoutePresentation(parent, false)
     }

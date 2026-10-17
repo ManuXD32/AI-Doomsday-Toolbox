@@ -5,6 +5,7 @@ import android.webkit.MimeTypeMap
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.model.LlamaMessageAttachmentEntity
 import com.example.llamadroid.data.model.LlamaMessageAttachmentSource
+import com.example.llamadroid.service.NativeChatWorkspaceSupport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -26,6 +27,32 @@ data class DelegationRefResolution(
 data class DelegationExportedFile(val path: String, val name: String, val attachmentId: Long, val sizeBytes: Long)
 
 data class DelegationExportResult(val files: List<DelegationExportedFile>, val notes: List<String>)
+
+/** A chat file copied into the project's `inputs/` folder. */
+data class DelegationCopiedInput(val ref: String, val displayName: String, val path: String, val file: File)
+
+/** Result of [DelegationFileBridge.copyPending]: [handledRefs] are to be cleared from the task options. */
+data class DelegationPendingCopy(
+    val copied: List<DelegationCopiedInput>,
+    val unknown: List<String>,
+    val handledRefs: List<String>
+) {
+    companion object { val NONE = DelegationPendingCopy(emptyList(), emptyList(), emptyList()) }
+}
+
+/** Pure bookkeeping of `DelegationTaskOptions.pendingAttachmentRefs`. */
+object DelegationPendingRefs {
+    /** [options] without the [handled] refs; refs added meanwhile (by a follow-up) stay pending. */
+    fun cleared(options: DelegationTaskOptions, handled: Collection<String>): DelegationTaskOptions {
+        if (handled.isEmpty() || options.pendingAttachmentRefs.isEmpty()) return options
+        val done = handled.toSet()
+        return options.copy(pendingAttachmentRefs = options.pendingAttachmentRefs.filterNot { it in done })
+    }
+
+    /** [options] with [refs] appended (order kept, duplicates dropped). */
+    fun added(options: DelegationTaskOptions, refs: List<String>): DelegationTaskOptions =
+        options.copy(pendingAttachmentRefs = (options.pendingAttachmentRefs + refs).distinct())
+}
 
 /** Pure reference parsing and naming. */
 object DelegationFileRefs {
@@ -84,7 +111,27 @@ class DelegationFileBridge(context: Context) {
     }
 
     /**
-     * Copies [paths] from the project into `files/llama_chat_files/<chatId>/` and inserts pending
+     * Copies every ref in [options]`.pendingAttachmentRefs` into the project's `inputs/` folder through
+     * the session [sessionId]. Unknown refs are reported, not fatal. The caller clears
+     * [DelegationPendingCopy.handledRefs] from the task row with [DelegationPendingRefs.cleared].
+     */
+    suspend fun copyPending(
+        driver: DelegateHarnessDriver,
+        sessionId: String,
+        chatId: Long,
+        options: DelegationTaskOptions
+    ): DelegationPendingCopy {
+        val refs = options.pendingAttachmentRefs.distinct()
+        if (refs.isEmpty()) return DelegationPendingCopy.NONE
+        val resolution = resolve(chatId, refs)
+        val paths = if (resolution.inputs.isEmpty()) emptyList()
+        else driver.copyInputs(sessionId, resolution.inputs.map { it.displayName to it.file })
+        val copied = resolution.inputs.zip(paths) { input, path -> DelegationCopiedInput(input.ref, input.displayName, path, input.file) }
+        return DelegationPendingCopy(copied, resolution.unknown, refs)
+    }
+
+    /**
+     * Copies [paths] from the project into `files/native_chat_workspaces/<chatId>/results/` and inserts pending
      * DEEPSEEK attachment rows. Failures are skipped and reported in [DelegationExportResult.notes].
      */
     suspend fun exportResults(
@@ -94,7 +141,7 @@ class DelegationFileBridge(context: Context) {
         taskId: Long,
         paths: List<String>
     ): DelegationExportResult {
-        val dir = File(appContext.filesDir, "llama_chat_files/$chatId")
+        val dir = NativeChatWorkspaceSupport.subDir(appContext, chatId, NativeChatWorkspaceSupport.RESULTS_DIR)
         val files = mutableListOf<DelegationExportedFile>()
         val notes = mutableListOf<String>()
         for (path in paths.distinct().take(DelegationFileRefs.MAX_RESULT_FILES)) {

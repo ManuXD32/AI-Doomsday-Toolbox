@@ -8,8 +8,8 @@ internal object FeatureOtherGuides {
         FeatureGuide(
             id = "conversations",
             titleRes = R.string.feature_guide_conversations_title,
-            route = "llama_servers",
-            routeBases = setOf("chat", "llama_servers", "llama_server_list", "llama_chat_list", "llama_chat", "llama_scheduler"),
+            route = "chats",
+            routeBases = setOf("chat", "chats", "llama_servers", "llama_server_list", "llama_chat_list", "llama_chat", "llama_scheduler"),
             recipes = listOf(
                 otherRecipe(
                     id = "conversations.chat",
@@ -26,7 +26,7 @@ internal object FeatureOtherGuides {
                     id = "conversations.native_management",
                     titleRes = R.string.feature_recipe_conversations_native_management_title,
                     previewKey = "conversations_native_management",
-                    route = "llama_server_list",
+                    route = "chats",
                     targetId = "llama.servers",
                     eventId = "llama.server_card",
                     orientBodyRes = R.string.feature_step_conversations_native_management_orient_body,
@@ -59,7 +59,7 @@ internal object FeatureOtherGuides {
                     id = "conversations.server_selection",
                     titleRes = R.string.feature_recipe_conversations_server_selection_title,
                     previewKey = "conversations_server_selection",
-                    route = "llama_servers",
+                    route = "chats",
                     targetId = "llama.server_selection",
                     eventId = "llama.server_selection",
                     orientBodyRes = R.string.feature_step_conversations_server_selection_orient_body,

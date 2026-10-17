@@ -8,4 +8,7 @@
     <string name="studio_nav_menu">Abrir navegación</string>
     <string name="studio_nav_close">Cerrar navegación</string>
     <string name="studio_more_actions">Más acciones</string>
+    <string name="studio_bar_tools">Herram.</string>
+    <string name="studio_bar_organizer">Agenda</string>
+    <string name="studio_nav_search">Buscar</string>
 </resources>

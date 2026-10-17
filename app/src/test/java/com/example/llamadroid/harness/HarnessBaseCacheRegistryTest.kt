@@ -47,4 +47,17 @@ class HarnessBaseCacheRegistryTest {
         assertEquals("4|gemma.gguf|abc", key.prefixHash)
         assertEquals(key.fileStem, HarnessBaseCacheRegistry.baseKey(4, "gemma.gguf", "abc").fileStem)
     }
+
+    @Test fun thinkingFlagChangesHashOnlyWhenGiven() {
+        val plain = HarnessBaseCacheRegistry.prefixHash(messages("sys"), tools("a", "b"))
+        val on = HarnessBaseCacheRegistry.prefixHash(messages("sys"), tools("a", "b"), true)
+        val off = HarnessBaseCacheRegistry.prefixHash(messages("sys"), tools("a", "b"), false)
+        assertNotEquals(on, off)
+        assertNotEquals(plain, on)
+    }
+
+    @Test fun agentToolsParsesOpenAiToolArray() {
+        val parsed = HarnessBaseCacheRegistry.agentTools(tools("a", "b"))
+        assertEquals(listOf("read"), parsed.map { it.name })
+    }
 }

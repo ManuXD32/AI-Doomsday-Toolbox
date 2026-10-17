@@ -66,12 +66,12 @@ internal fun DelegationThreadCard(thread: DelegationThreadLive, onClick: () -> U
                     )
                 }
             }
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                ContextUsageRing(percent, size = 32.dp)
-                Text(
-                    percent?.let { "$it%" } ?: "--",
-                    style = MaterialTheme.typography.labelSmall, maxLines = 1
-                )
+            // No context data (window unknown): hide the ring instead of showing "--".
+            if (percent != null) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    ContextUsageRing(percent, size = 32.dp)
+                    Text("$percent%", style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                }
             }
         }
         if (promptPercent != null) {

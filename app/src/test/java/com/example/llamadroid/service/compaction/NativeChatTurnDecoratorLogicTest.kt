@@ -15,6 +15,20 @@ class NativeChatTurnDecoratorLogicTest {
     private val notice = LlamaMessageKind.DELEGATION_NOTICE
 
     @Test
+    fun workspaceRelativePathOnlyInsideRoot() {
+        val root = java.nio.file.Files.createTempDirectory("ws").toFile()
+        try {
+            val file = java.io.File(root, "attachments/report.zip")
+            assertEquals("attachments/report.zip", NativeChatTurnDecoratorLogic.workspaceRelativePath(root, file))
+            assertNull(NativeChatTurnDecoratorLogic.workspaceRelativePath(root, java.io.File(root.parentFile, "x.txt")))
+            assertNull(NativeChatTurnDecoratorLogic.workspaceRelativePath(root, java.io.File(root, "../x.txt")))
+            assertNull(NativeChatTurnDecoratorLogic.workspaceRelativePath(root, root))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun bindTargetIsNewestUnansweredOrdinaryUser() {
         val history = listOf(msg(1, "user", "a"), msg(2, "assistant", "b"), msg(3, "user", "c"), msg(4, "user", "[n]", notice))
         assertEquals(3L, NativeChatTurnDecoratorLogic.bindTargetMessageId(history))

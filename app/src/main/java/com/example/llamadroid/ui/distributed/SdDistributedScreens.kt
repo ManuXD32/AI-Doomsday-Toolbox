@@ -2462,7 +2462,8 @@ private fun toSdGeneratedMediaItem(item: MediaGalleryItem): SdGeneratedMediaItem
         file = item.file,
         kind = when (item.type) {
             MediaGalleryType.IMAGE -> SdGeneratedMediaKind.IMAGE
-            MediaGalleryType.VIDEO -> SdGeneratedMediaKind.VIDEO
+            // AUDIO never carries distributed proof; it is mapped only to keep the when exhaustive.
+            MediaGalleryType.VIDEO, MediaGalleryType.AUDIO -> SdGeneratedMediaKind.VIDEO
         },
         mode = item.mode,
         prompt = item.prompt,

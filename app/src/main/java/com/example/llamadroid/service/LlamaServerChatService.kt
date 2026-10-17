@@ -51,7 +51,9 @@ data class LlamaServerRequestOptions(
      * default remains for ordinary callers; an owned Harness request sets this
      * to zero and lets request cancellation/slot ownership end the stream.
      */
-    val streamReadTimeoutMs: Int = 1_800_000
+    val streamReadTimeoutMs: Int = 1_800_000,
+    /** Sends an assistant message's `thinking` back as `reasoning_content` (native chat tool turns only). */
+    val sendReasoningContent: Boolean = false
 )
 
 data class LlamaPromptProcessingProgress(
@@ -597,7 +599,7 @@ class LlamaServerChatService {
                                 val jsonStr = data.removePrefix("data: ").trim()
                                 runCatching { parseLlamaServerUsage(JSONObject(jsonStr)) }
                                     .getOrNull()
-                                    ?.let { usage = it }
+                                    ?.let { usage = mergeLlamaServerUsage(usage, it) }
                                 break
                             }
                         }
@@ -613,7 +615,7 @@ class LlamaServerChatService {
                             generation.slotId = chunk.optInt("id_slot")
                         }
                         parseLlamaPromptProcessingProgress(chunk)?.let { onPromptProgress(it) }
-                        parseLlamaServerUsage(chunk)?.let { usage = it }
+                        parseLlamaServerUsage(chunk)?.let { usage = mergeLlamaServerUsage(usage, it) }
                         val choices = chunk.optJSONArray("choices") ?: continue
                         if (choices.length() == 0) continue
 
@@ -1003,16 +1005,21 @@ internal fun buildLlamaServerChatRequestPayload(
         "messages" to normalizedMessages.map { msg ->
             linkedMapOf<String, Any?>(
                 "role" to msg.role,
-                "content" to if (!msg.imagePath.isNullOrBlank() || !msg.audioPath.isNullOrBlank()) {
+                "content" to if (msg.allImagePaths().isNotEmpty() || !msg.audioPath.isNullOrBlank()) {
                     buildNativeLlamaUserContent(
                         userMessage = msg.content,
                         imagePath = msg.imagePath,
+                        additionalImagePaths = msg.imagePaths,
                         audioPath = msg.audioPath
                     )
                 } else {
                     msg.content
                 }
             ).apply {
+                // Earlier rounds' reasoning of the current turn goes back so the model keeps its train of thought.
+                if (requestOptions.sendReasoningContent && msg.role == "assistant" && !msg.thinking.isNullOrBlank()) {
+                    put("reasoning_content", msg.thinking)
+                }
                 msg.toolCalls?.takeIf { it.isNotEmpty() }?.let { calls ->
                     put(
                         "tool_calls",
@@ -1304,15 +1311,46 @@ internal data class LlamaServerStreamChannelCounts(
 )
 
 internal fun parseLlamaServerUsage(chunk: JSONObject): OllamaService.ChatUsage? {
-    val usage = chunk.optJSONObject("usage") ?: return null
-    val promptTokens = usage.optInt("prompt_tokens").takeIf { it > 0 }
-    val completionTokens = usage.optInt("completion_tokens").takeIf { it > 0 }
-    val totalTokens = usage.optInt("total_tokens").takeIf { it > 0 }
-    if (promptTokens == null && completionTokens == null && totalTokens == null) return null
+    val usage = chunk.optJSONObject("usage")
+    val timings = chunk.optJSONObject("timings")
+    val promptTokens = usage?.optInt("prompt_tokens")?.takeIf { it > 0 }
+    val completionTokens = usage?.optInt("completion_tokens")?.takeIf { it > 0 }
+    val totalTokens = usage?.optInt("total_tokens")?.takeIf { it > 0 }
+    val predictedTokens = timings?.optInt("predicted_n")?.takeIf { it > 0 }
+    val predictedMs = timings?.optDouble("predicted_ms", 0.0)?.takeIf { it > 0.0 }
+    val processed = timings?.takeIf { it.has("prompt_n") }?.optInt("prompt_n")?.takeIf { it >= 0 }
+    if (promptTokens == null && completionTokens == null && totalTokens == null &&
+        (predictedTokens == null || predictedMs == null)
+    ) return null
     return OllamaService.ChatUsage(
         promptTokens = promptTokens,
         completionTokens = completionTokens,
         totalTokens = totalTokens,
-        backend = "llama-server"
+        backend = "llama-server",
+        predictedTokens = predictedTokens,
+        predictedMs = predictedMs,
+        promptProcessedTokens = processed
+    )
+}
+
+/**
+ * Merges the usage of the final chunk with the one of the trailing usage frame: llama-server may put
+ * `timings` and `usage` in different chunks, and a later chunk must not erase what an earlier one carried.
+ */
+internal fun mergeLlamaServerUsage(
+    previous: OllamaService.ChatUsage?,
+    next: OllamaService.ChatUsage
+): OllamaService.ChatUsage {
+    if (previous == null) return next
+    return OllamaService.ChatUsage(
+        promptTokens = next.promptTokens ?: previous.promptTokens,
+        completionTokens = next.completionTokens ?: previous.completionTokens,
+        totalTokens = next.totalTokens ?: previous.totalTokens,
+        totalDurationNs = next.totalDurationNs ?: previous.totalDurationNs,
+        evalDurationNs = next.evalDurationNs ?: previous.evalDurationNs,
+        backend = next.backend ?: previous.backend,
+        predictedTokens = next.predictedTokens ?: previous.predictedTokens,
+        predictedMs = next.predictedMs ?: previous.predictedMs,
+        promptProcessedTokens = next.promptProcessedTokens ?: previous.promptProcessedTokens
     )
 }

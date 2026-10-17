@@ -679,7 +679,7 @@
     <string name="lang_jpn">Japanese</string>
     
     <!-- Model Hub -->
-    <string name="models_hub">Model Hub</string>
+    <string name="models_hub">Models</string>
     <string name="models_download">Download Models</string>
     <string name="models_installed">Installed Models</string>
     <string name="models_share">Share Models</string>
@@ -886,6 +886,7 @@
     <string name="general_output_folder">Output Folder</string>
     <string name="general_output_default">Default (app internal storage)</string>
     <string name="general_output_hint">Used for images, transcriptions, and upscaled videos</string>
+    <string name="general_helper_models_hint">Helper models (title generation, vision) are in Chats ⋮ → Helper models.</string>
     <string name="general_language">Language</string>
     <string name="general_language_system">System Default</string>
     <string name="general_language_en">English</string>
@@ -2142,7 +2143,7 @@
     <string name="enhancer_enhancing">Enhancing prompt…</string>
     
     <!-- Kiwix Offline Library -->
-    <string name="kiwix_title">Kiwix Offline Library</string>
+    <string name="kiwix_title">Offline wiki</string>
     <string name="kiwix_lan_access">LAN Access</string>
     <string name="kiwix_lan_enabled">Other devices can access library</string>
     <string name="kiwix_lan_disabled">Local only</string>
@@ -2732,7 +2733,7 @@
     <string name="settings_theme">Theme</string>
     <string name="settings_language">Language</string>
     <string name="settings_battery_title">Battery Optimization</string>
-    <string name="settings_kiwix_title">Kiwix Offline Library</string>
+    <string name="settings_kiwix_title">Offline wiki</string>
     <string name="settings_threads">Threads</string>
     <string name="settings_context">Context Size</string>
     
@@ -7466,9 +7467,8 @@
     <string name="onnx_models_badge_unsupported_legacy">Legacy unsupported</string>
     <string name="bgr_export_warning_unavailable">The BgR output folder could not be opened.</string>
     <string name="bgr_export_warning_failed">Could not mirror BgR output: %1$s</string>
-    <string name="ai_servers_hub_title">Servers Hub</string>
+    <string name="ai_servers_hub_title">Web UI servers</string>
     <string name="ai_servers_hub_subtitle">Local web UIs for every AI tool</string>
-    <string name="ai_servers_hub_card_desc">Share AI tools through browser servers with QR codes, users, and logs</string>
     <string name="ai_servers_hub_hero_title">AI servers, neatly gathered</string>
     <string name="ai_servers_hub_hero_subtitle">Start one tool server or the whole set, choose private or LAN access, and hand people a browser UI that works well on phones and laptops.</string>
     <string name="ai_servers_running_badge">%1$d/%2$d running</string>
@@ -8847,5 +8847,5 @@
     <string name="generation_queue_retry_files_discarded">Saved retry files discarded</string>
     <string name="generation_queue_start_blocked_title">Generation queue needs attention</string>
     <string name="generation_queue_start_blocked_message">Android could not start background processing. Open the app and run the queue.</string>
-    <string name="onnx_models_tab_catalog">Catalog</string>
+    <string name="onnx_models_tab_catalog">Discover</string>
 </resources>

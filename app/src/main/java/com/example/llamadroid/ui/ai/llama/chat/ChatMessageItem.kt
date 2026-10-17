@@ -246,6 +246,15 @@ fun LlamaMessageItem(
                                 EmbeddedDocumentAttachment(document = embeddedDocument)
                             }
 
+                            if (!isUser && !message.stepsJson.isNullOrBlank()) {
+                                ChatMessageSteps(
+                                    stepsJson = message.stepsJson,
+                                    messageKey = message.id,
+                                    generating = false,
+                                    onKnowledgeLinkClick = onKnowledgeLinkClick
+                                )
+                            }
+
                             val thinkStartRegex = Regex("<[^>]*?(?:think|thought|Thought|Think)[^>]*?>")
                             val renderedContent = if (isUser) displayContent else message.content
                             val hasThinkingTags = thinkStartRegex.containsMatchIn(renderedContent)
@@ -551,6 +560,7 @@ fun ThinkingMessageContent(
     onKnowledgeLinkClick: (String) -> Boolean = { false }
 ) {
     var isExpanded by remember { mutableStateOf(forceExpand) }
+    var showFullThinking by remember { mutableStateOf(false) }
 
     // Auto-update expansion state when forceExpand changes (e.g. at start of generation)
     LaunchedEffect(forceExpand) {
@@ -601,14 +611,53 @@ fun ThinkingMessageContent(
                         Spacer(modifier = Modifier.height(4.dp))
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         Spacer(modifier = Modifier.height(4.dp))
-                        MarkdownText(
-                            text = thinkingContent,
-                            textColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                            onLinkClick = onKnowledgeLinkClick
-                        )
+                        val streamingThinking = forceExpand && !isThinkingFinished
+                        val preview = remember(thinkingContent, streamingThinking) {
+                            thinkingPreview(thinkingContent, streamingThinking)
+                        }
+                        val bodyColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                        if (preview.hiddenChars > 0 && streamingThinking) {
+                            Text(
+                                text = stringResource(
+                                    R.string.chat_thinking_earlier_chars,
+                                    remember(preview.hiddenChars) { "%,d".format(preview.hiddenChars) }
+                                ),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                        if (preview.plain) {
+                            Text(
+                                text = preview.text,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = bodyColor
+                            )
+                        } else {
+                            MarkdownText(
+                                text = preview.text,
+                                textColor = bodyColor,
+                                onLinkClick = onKnowledgeLinkClick
+                            )
+                        }
+                        if (preview.truncated) {
+                            TextButton(
+                                onClick = { showFullThinking = true },
+                                modifier = Modifier.heightIn(min = 48.dp)
+                            ) {
+                                Text(stringResource(R.string.chat_thinking_show_all), maxLines = 1)
+                            }
+                        }
                     }
                 }
             }
+        }
+
+        if (showFullThinking) {
+            com.example.llamadroid.ui.components.AppTextDetailsDialog(
+                title = stringResource(R.string.llama_thinking_process),
+                text = thinkingContent,
+                onDismiss = { showFullThinking = false }
+            )
         }
 
         if (finalResponse.isNotEmpty()) {

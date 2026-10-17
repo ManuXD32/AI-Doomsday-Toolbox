@@ -3,7 +3,7 @@
     <string name="model_library_error_source_duplicate">Este enlace ya está guardado. Selecciónalo en Enlaces guardados para reutilizarlo.</string>
     <string name="model_library_title">Biblioteca de modelos</string>
     <string name="model_library_subtitle">Fuentes guardadas, paquetes y archivos pendientes de inspección</string>
-    <string name="model_library_hub_title">Fuentes y paquetes guardados</string>
+    <string name="model_library_hub_title">Fuentes de modelos</string>
     <string name="model_library_hub_desc">Conserva juntos los enlaces, paquetes multipartes, procedencia y archivos pendientes.</string>
     <string name="model_library_sources_tab">Fuentes</string>
     <string name="model_library_pending_tab">Desconocidos</string>

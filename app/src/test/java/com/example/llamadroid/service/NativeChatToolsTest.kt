@@ -36,7 +36,7 @@ class NativeChatToolsTest {
         assertFalse(config.toolsEnabled)
         assertFalse(config.imageIterationEnabled)
         assertFalse(config.hasEnabledTools())
-        assertEquals(12, config.maxToolRounds)
+        assertEquals(20, config.maxToolRounds)
     }
 
     @Test
@@ -352,6 +352,9 @@ class NativeChatToolsTest {
 
         assertEquals(
             setOf(
+                // Workspace list/read come with any enabled chat tools (attachments live in the workspace).
+                NativeChatToolRuntime.TOOL_LIST_WORKSPACE_FILES,
+                NativeChatToolRuntime.TOOL_READ_WORKSPACE_FILE,
                 NativeChatToolRuntime.TOOL_KB_SEARCH,
                 NativeChatToolRuntime.TOOL_KB_READ_CHUNK,
                 NativeChatToolRuntime.TOOL_KB_READ_SOURCE,
@@ -391,6 +394,9 @@ class NativeChatToolsTest {
         val tools = NativeChatToolRuntime().availableTools(effective).map { it.name }.toSet()
         assertEquals(
             setOf(
+                // Workspace list/read come with any enabled chat tools (attachments live in the workspace).
+                NativeChatToolRuntime.TOOL_LIST_WORKSPACE_FILES,
+                NativeChatToolRuntime.TOOL_READ_WORKSPACE_FILE,
                 NativeChatToolRuntime.TOOL_KB_SEARCH,
                 NativeChatToolRuntime.TOOL_KB_READ_CHUNK,
                 NativeChatToolRuntime.TOOL_KB_READ_SOURCE,

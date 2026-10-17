@@ -106,22 +106,77 @@ object VisionDescriptionService {
         thinking: Boolean
     ): LlamaMessageImageDescriptionEntity? {
         val path = message.imagePath ?: return null
-        val body = withContext(Dispatchers.IO) {
-            ImageFallbackLogic.buildRequestBody(fileToDataUrl(path, inferImageMimeType(path)), thinking)
-        }
-        val response = try {
-            post(baseUrl, body)
-        } catch (error: java.io.IOException) {
-            DebugLog.log("$TAG: image request failed (${error.javaClass.simpleName})")
-            return null
-        }
-        val description = ImageFallbackLogic.parseDescription(response) ?: return null
+        val dataUrl = withContext(Dispatchers.IO) { fileToDataUrl(path, inferImageMimeType(path)) }
+        val description = describeDataUrl(baseUrl, dataUrl, thinking) ?: return null
         return LlamaMessageImageDescriptionEntity(
             messageId = message.id,
             imagePath = path,
             description = description,
             model = modelName
         )
+    }
+
+    /** Shared by chats and the harness: one image request to a running helper server. Null on failure. */
+    private suspend fun describeDataUrl(baseUrl: String, dataUrl: String, thinking: Boolean): String? {
+        val body = withContext(Dispatchers.IO) { ImageFallbackLogic.buildRequestBody(dataUrl, thinking) }
+        val response = try {
+            post(baseUrl, body)
+        } catch (error: java.io.IOException) {
+            DebugLog.log("$TAG: image request failed (${error.javaClass.simpleName})")
+            return null
+        }
+        return ImageFallbackLogic.parseDescription(response)
+    }
+
+    /** Whether the helper is switched on and a card is chosen (cheap; no file or RAM checks). */
+    fun isConfigured(context: Context): Boolean {
+        val settings = VisionHelperSettings(context.applicationContext)
+        return settings.enabled && settings.serverRowId > 0L
+    }
+
+    /** Outcome of describing raw data URLs outside any chat. */
+    internal sealed interface DataUrlOutcome {
+        /** One entry per input URL, null where that image got no usable description. */
+        data class Done(val texts: List<String?>) : DataUrlOutcome
+        /** [reason] is a short English reason fit for model-facing text. */
+        data class Unavailable(val reason: String) : DataUrlOutcome
+    }
+
+    internal const val REASON_NOT_SET_UP = "no vision helper is set up"
+    internal const val REASON_NO_RAM = "not enough free RAM next to the loaded model"
+    internal const val REASON_FAILED = "the helper failed"
+
+    /**
+     * Runs the helper once (a single temporary server start) over [dataUrls]. Never throws for helper
+     * problems; cancellation propagates.
+     */
+    internal suspend fun describeDataUrls(context: Context, dataUrls: List<String>): DataUrlOutcome {
+        if (dataUrls.isEmpty()) return DataUrlOutcome.Done(emptyList())
+        val app = context.applicationContext
+        val settings = VisionHelperSettings(app)
+        if (!settings.enabled || settings.serverRowId <= 0L) return DataUrlOutcome.Unavailable(REASON_NOT_SET_UP)
+        return try {
+            val db = AppDatabase.getDatabase(app)
+            val info = ManagedLlamaServerCoordinator(app, db).catalog().firstOrNull { it.card.id == settings.serverRowId }
+            val profile = info?.profile
+            val modelPath = profile?.modelPath?.takeIf { File(it).isFile }
+            val mmprojPath = profile?.mmprojPath?.takeIf { it.isNotBlank() && File(it).isFile }
+            if (info == null || info.errorCode != null || profile == null || modelPath == null || mmprojPath == null) {
+                DebugLog.log("$TAG: helper card unavailable")
+                return DataUrlOutcome.Unavailable(REASON_NOT_SET_UP)
+            }
+            val ram = EphemeralLlamaServer.ramDecision(app, File(modelPath).length(), File(mmprojPath).length())
+            if (!ram.ok) return DataUrlOutcome.Unavailable(REASON_NO_RAM)
+            val launch = EphemeralLlamaServer.lowImpactProfile(profile, modelPath, mmprojPath, CONTEXT_TOKENS)
+            val texts = EphemeralLlamaServer.run(app, LlamaServerSessionIds.VISION_HELPER, launch) { baseUrl ->
+                dataUrls.map { describeDataUrl(baseUrl, it, settings.thinking) }
+            }
+            DataUrlOutcome.Done(texts)
+        } catch (error: Exception) {
+            if (error is CancellationException && error !is kotlinx.coroutines.TimeoutCancellationException) throw error
+            DebugLog.log("$TAG: helper failed (${error.javaClass.simpleName})")
+            DataUrlOutcome.Unavailable(REASON_FAILED)
+        }
     }
 
     private suspend fun post(baseUrl: String, body: String): String = withContext(Dispatchers.IO) {

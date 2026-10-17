@@ -16,6 +16,7 @@ internal fun llamaVideoStreamMarker(index: Int): String =
 internal fun buildNativeLlamaUserContent(
     userMessage: String,
     imagePath: String? = null,
+    additionalImagePaths: List<String> = emptyList(),
     audioPath: String? = null,
     videoPath: String? = null,
     videoData: String? = null,
@@ -36,7 +37,8 @@ internal fun buildNativeLlamaUserContent(
                 if (path !in this) add(path)
             }
     }
-    val hasAttachments = !imagePath.isNullOrBlank() ||
+    val imagePaths = (listOfNotNull(imagePath) + additionalImagePaths).filter { it.isNotBlank() }.distinct()
+    val hasAttachments = imagePaths.isNotEmpty() ||
         embeddedAudioPaths.isNotEmpty() ||
         (includeVideo && !videoPath.isNullOrBlank()) ||
         videoFrameData.isNotEmpty() || !videoObservation.isNullOrBlank()
@@ -49,14 +51,12 @@ internal fun buildNativeLlamaUserContent(
         parts += mapOf("type" to "text", "text" to userMessage)
     }
 
-    imagePath
-        ?.takeIf { it.isNotBlank() }
-        ?.let { path ->
-            parts += mapOf(
-                "type" to "image_url",
-                "image_url" to mapOf("url" to fileToDataUrl(path, inferImageMimeType(path)))
-            )
-        }
+    imagePaths.forEach { path ->
+        parts += mapOf(
+            "type" to "image_url",
+            "image_url" to mapOf("url" to fileToDataUrl(path, inferImageMimeType(path)))
+        )
+    }
 
     videoPath
         ?.takeIf { includeVideo }

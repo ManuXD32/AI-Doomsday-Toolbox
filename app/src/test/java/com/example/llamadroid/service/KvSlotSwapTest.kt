@@ -52,3 +52,52 @@ class KvSlotSwapTest {
         assertFalse(holder.copy(idTask = null).matches(KvSlotFact(0, 4096, null, 100)))
     }
 }
+
+class KvUtilitySlotTest {
+    @Test
+    fun `failed slots read is unknown not disturbed`() {
+        assertFalse(isHolderDisturbed(hasHolder = true, slotsKnown = false, holderMatches = false))
+        assertTrue(isHolderDisturbed(hasHolder = true, slotsKnown = true, holderMatches = false))
+        assertFalse(isHolderDisturbed(hasHolder = true, slotsKnown = true, holderMatches = true))
+        assertFalse(isHolderDisturbed(hasHolder = false, slotsKnown = true, holderMatches = false))
+    }
+
+    @Test
+    fun `restart is inferred only from a successful slots read`() {
+        assertFalse(shouldInferRestart(slotsKnown = false, previousMaxId = 12, maxId = -1))
+        assertTrue(shouldInferRestart(slotsKnown = true, previousMaxId = 12, maxId = -1))
+        assertFalse(shouldInferRestart(slotsKnown = true, previousMaxId = null, maxId = -1))
+        assertFalse(shouldInferRestart(slotsKnown = true, previousMaxId = 3, maxId = 5))
+    }
+
+    @Test
+    fun `holder with unreadable facts is trusted`() {
+        val h = KvSlotHolderState(KvCacheKey.Chat(1), true, true, null, null, 0, factsKnown = false)
+        assertTrue(h.matches(null))
+        val known = h.copy(factsKnown = true)
+        assertFalse(known.matches(null))
+    }
+
+    @Test
+    fun `utility slot prefers a never-held slot`() {
+        assertEquals(KvUtilitySlotChoice(1, false), chooseUtilitySlot(3, mapOf(0 to true), setOf(2)))
+    }
+
+    @Test
+    fun `utility slot avoids live turns then saves an idle holder`() {
+        assertEquals(KvUtilitySlotChoice(1, true), chooseUtilitySlot(2, mapOf(0 to true, 1 to false), emptySet()))
+    }
+
+    @Test
+    fun `single slot is swap saved and shared`() {
+        assertEquals(KvUtilitySlotChoice(0, true), chooseUtilitySlot(1, mapOf(0 to true), emptySet()))
+        assertEquals(KvUtilitySlotChoice(0, true), chooseUtilitySlot(1, emptyMap(), setOf(0)))
+        assertEquals(null, chooseUtilitySlot(0, emptyMap(), emptySet()))
+    }
+
+    @Test
+    fun `slots body parsing distinguishes error pages from empty`() {
+        assertEquals(null, parseKvSlotsOrNull("<html>"))
+        assertEquals(emptyList<KvSlotFact>(), parseKvSlotsOrNull("[]"))
+    }
+}

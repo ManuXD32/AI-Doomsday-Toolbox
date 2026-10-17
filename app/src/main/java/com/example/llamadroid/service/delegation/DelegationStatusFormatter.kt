@@ -1,5 +1,6 @@
 package com.example.llamadroid.service.delegation
 
+import com.example.llamadroid.data.model.NativeChatDelegateMessageEntity
 import com.example.llamadroid.data.model.NativeChatDelegateTaskEntity
 import com.example.llamadroid.data.model.NativeChatDelegateTaskState
 import org.json.JSONArray
@@ -17,6 +18,7 @@ object DelegationStatusFormatter {
     const val BRIEF_MAX_CHARS = 1_500
     const val FULL_MAX_CHARS = 2_500
     private const val BRIEF_DIGEST_LINES = 3
+    const val SUB_MESSAGE_CHARS = 600
 
     fun parseResultFiles(json: String?): List<DelegationResultFileRef> {
         if (json.isNullOrBlank()) return emptyList()
@@ -37,7 +39,8 @@ object DelegationStatusFormatter {
         task: NativeChatDelegateTaskEntity,
         live: DelegationLiveStatus?,
         detail: DelegationStatusDetail,
-        nowMs: Long = System.currentTimeMillis()
+        nowMs: Long = System.currentTimeMillis(),
+        subMessage: NativeChatDelegateMessageEntity? = null
     ): String {
         val limit = if (detail == DelegationStatusDetail.FULL) FULL_MAX_CHARS else BRIEF_MAX_CHARS
         val active = task.state in NativeChatDelegateTaskState.ACTIVE
@@ -55,6 +58,9 @@ object DelegationStatusFormatter {
         if (active && pending > 0) lines += "Harness is waiting on $pending pending item(s)."
         if (active && task.state == NativeChatDelegateTaskState.WAITING_MAIN) {
             lines += "The subagent asked you a question: answer it with deepseek_task_message."
+        }
+        subMessage?.takeIf { it.content.isNotBlank() }?.let {
+            lines += "Subagent ${it.toolName ?: "reply"}: " + it.content.trim().take(SUB_MESSAGE_CHARS)
         }
         if (task.state == NativeChatDelegateTaskState.NEEDS_DIRECTION || task.state == NativeChatDelegateTaskState.INTERRUPTED) {
             lines += "The task is stopped. Use deepseek_task_message to guide/resume it or deepseek_task_cancel."
@@ -124,4 +130,7 @@ object DelegationResultNotice {
 
     fun question(text: String): String =
         "[DeepSeek subagent question] ${text.trim().take(1_200)} Answer with deepseek_task_message."
+
+    fun reply(text: String): String =
+        "[DeepSeek subagent reply] ${text.trim().take(1_200)} Relay it to the user if relevant; use deepseek_task_message to continue the conversation."
 }

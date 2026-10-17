@@ -62,6 +62,7 @@ internal fun ChatMessageList(
     onOpenToolActivity: () -> Unit,
     onContinue: () -> Unit,
     modifier: Modifier = Modifier,
+    streamingMessage: LlamaMessageEntity? = null,
     compactions: List<NativeChatCompactionEntity> = emptyList(),
     attachmentsByMessage: Map<Long, List<LlamaMessageAttachmentEntity>> = emptyMap()
 ) {
@@ -127,6 +128,15 @@ internal fun ChatMessageList(
             streamingGenerationState?.let { genState ->
                 item {
                     Column(modifier = Modifier.padding(8.dp)) {
+                        if (!streamingMessage?.stepsJson.isNullOrBlank()) {
+                            ChatMessageSteps(
+                                stepsJson = streamingMessage?.stepsJson,
+                                messageKey = streamingMessage?.id ?: 0L,
+                                generating = true,
+                                onKnowledgeLinkClick = onKnowledgeLinkClick,
+                                modifier = Modifier.padding(bottom = 6.dp)
+                            )
+                        }
                         if (!genState.thinking.isNullOrBlank()) {
                             ThinkingMessageContent(
                                 genState.thinking,
@@ -209,7 +219,7 @@ internal fun ChatMessageList(
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f)
                             )
-                            if (genState.toolEvents.isNotEmpty()) {
+                            if (genState.toolEvents.isNotEmpty() && streamingMessage?.stepsJson.isNullOrBlank()) {
                                 TextButton(
                                     onClick = onOpenToolActivity,
                                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)

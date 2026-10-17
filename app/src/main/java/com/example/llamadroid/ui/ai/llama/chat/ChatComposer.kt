@@ -172,7 +172,8 @@ internal fun ChatComposer(
     showAttachFile: Boolean = false,
     onPickFile: () -> Unit = {},
     pendingFiles: List<LlamaMessageAttachmentEntity> = emptyList(),
-    onRemovePendingFile: (LlamaMessageAttachmentEntity) -> Unit = {}
+    onRemovePendingFile: (LlamaMessageAttachmentEntity) -> Unit = {},
+    isImportingFile: Boolean = false
 ) {
     val context = LocalContext.current
     var showAttachmentMenu by remember { mutableStateOf(false) }
@@ -218,6 +219,22 @@ internal fun ChatComposer(
                     onPreview = onPreviewVideo,
                     onRemove = onRemoveVideo
                 )
+            }
+
+            if (isImportingFile) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                    Text(
+                        text = stringResource(R.string.native_chat_attachments_adding_file),
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
 
             if (pendingFiles.isNotEmpty()) {
@@ -372,7 +389,7 @@ internal fun ChatComposer(
                         pendingFiles.isNotEmpty()
                     IconButton(
                         onClick = { if (canSend) onSend() },
-                        enabled = canSend && queuedState == null && !isCallActiveForChat,
+                        enabled = canSend && queuedState == null && !isCallActiveForChat && !isImportingFile,
                         modifier = Modifier
                             .background(MaterialTheme.colorScheme.primary, CircleShape)
                             .size(48.dp)

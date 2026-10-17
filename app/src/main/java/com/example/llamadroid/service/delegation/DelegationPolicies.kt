@@ -57,6 +57,7 @@ object DelegationWakePolicy {
         NativeChatDelegationWakeKind.TASK_FINISHED -> 4
         NativeChatDelegationWakeKind.NEEDS_DIRECTION -> 3
         NativeChatDelegationWakeKind.SUBAGENT_QUESTION -> 2
+        NativeChatDelegationWakeKind.SUBAGENT_REPLY -> 2
         NativeChatDelegationWakeKind.CHECK_ALARM -> 1
         else -> 0
     }
@@ -88,6 +89,7 @@ object DelegationNotices {
         NativeChatDelegationWakeKind.TASK_FINISHED -> "$TAG_FINISHED Call deepseek_task_status to read the result."
         NativeChatDelegationWakeKind.NEEDS_DIRECTION -> "[DeepSeek task needs direction] Call deepseek_task_status, then decide how to continue."
         NativeChatDelegationWakeKind.SUBAGENT_QUESTION -> "[DeepSeek subagent question] The subagent asked a question. Call deepseek_task_status to read it."
+        NativeChatDelegationWakeKind.SUBAGENT_REPLY -> "[DeepSeek subagent reply] The subagent replied. Call deepseek_task_status to read it."
         else -> "$TAG_CHECK Call deepseek_task_status to get an update."
     }
 

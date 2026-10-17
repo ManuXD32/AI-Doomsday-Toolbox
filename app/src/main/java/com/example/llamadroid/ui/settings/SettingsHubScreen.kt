@@ -32,7 +32,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.llamadroid.R
-import com.example.llamadroid.ui.components.AppIcon
+import com.example.llamadroid.ui.components.AppHubRow
+import com.example.llamadroid.ui.components.AppHubRowStyle
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.theme.LocalAppVisualStyle
 import com.example.llamadroid.ui.theme.sprites.AppSpriteKey
@@ -98,29 +99,21 @@ fun SettingsHubScreen(navController: NavController) {
                         modifier = Modifier.padding(top = 8.dp, start = 4.dp))
                 }
                 items(section.entries, key = { it.route }) { entry ->
-                Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerLow) {
-                    Row(
-                        Modifier.fillMaxWidth().heightIn(min = 72.dp)
-                            .testTag("studio_settings_${entry.route}").walkthroughTarget("settings.${entry.route}")
-                            .clickable {
-                                tourTargets?.recordEvent("settings.${entry.route}")
-                                navController.navigate(entry.route)
-                            }
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        AppIcon(entry.icon, null, tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(if (LocalAppVisualStyle.current.isPixel) 32.dp else 24.dp), sprite = entry.sprite)
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(stringResource(entry.title), style = MaterialTheme.typography.titleMedium)
-                            Text(stringResource(entry.description), style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+                    AppHubRow(
+                        title = stringResource(entry.title),
+                        subtitle = stringResource(entry.description),
+                        icon = entry.icon,
+                        sprite = entry.sprite,
+                        style = AppHubRowStyle.Plain,
+                        onClick = {
+                            tourTargets?.recordEvent("settings.${entry.route}")
+                            navController.navigate(entry.route)
+                        },
+                        modifier = Modifier.heightIn(min = 72.dp)
+                            .testTag("studio_settings_${entry.route}")
+                            .walkthroughTarget("settings.${entry.route}")
+                    )
                 }
-            }
             }
         }
     }

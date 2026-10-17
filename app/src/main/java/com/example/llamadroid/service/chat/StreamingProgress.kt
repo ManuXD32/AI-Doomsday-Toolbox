@@ -1,6 +1,9 @@
 package com.example.llamadroid.service
 
 import com.example.llamadroid.service.LlamaClientService.ToolActivityEvent
+import com.example.llamadroid.service.chat.DecodeTimings
+import com.example.llamadroid.service.chat.GenerationSpeedTracker
+import com.example.llamadroid.service.chat.NativeChatStepRecorder
 import kotlinx.coroutines.*
 
 internal data class StreamingProgress(
@@ -30,6 +33,12 @@ internal data class StreamingProgress(
     var lastStateUpdateMs: Long = 0L,
     var lastTokenAtMs: Long = System.currentTimeMillis()
 ) {
+    /** Visible steps of the reply being generated (tool turns and resumed replies); null for plain replies. */
+    var stepRecorder: NativeChatStepRecorder? = null
+
+    /** Decode tokens and time summed over the reply's model calls (tool execution excluded). */
+    val speed = GenerationSpeedTracker()
+
     fun resetForNewStream(nowMs: Long = System.currentTimeMillis()) {
         streamRequestStartTimeMs = nowMs
         firstTokenReceivedAtMs = null
@@ -43,6 +52,7 @@ internal data class StreamingProgress(
         promptCached = 0
         lastStateUpdateMs = 0L
         lastTokenAtMs = nowMs
+        speed.beginRound()
     }
 
     fun markFirstTokenReceived(nowMs: Long = System.currentTimeMillis()) {
@@ -50,6 +60,37 @@ internal data class StreamingProgress(
             firstTokenReceivedAtMs = nowMs
         }
         lastTokenAtMs = nowMs
+        speed.onToken(nowMs)
+    }
+
+    /** Streaming speed shown while generating: decode only, the call in progress counted from its first token. */
+    fun liveTokensPerSecond(nowMs: Long = System.currentTimeMillis()): Double =
+        speed.liveTokensPerSecond(nowMs) ?: legacyTokensPerSecond(nowMs)
+
+    /**
+     * Speed stored on the reply: server timings summed over the calls, else the engine's own figure, else
+     * the streaming window of the calls, else the old whole-reply estimate.
+     */
+    fun finalTokensPerSecond(): Double =
+        if (speed.timedCalls > 0) speed.finalTokensPerSecond() ?: legacyTokensPerSecond()
+        else reportedTokensPerSecond ?: speed.finalTokensPerSecond() ?: legacyTokensPerSecond()
+
+    /** Prompt tokens stored on the reply: processed ones (cache hits excluded) when reported, else the summed usage. */
+    fun displayPromptTokens(): Int = if (speed.hasProcessedPrompt()) speed.processedPromptTokens else promptTokens
+
+    /** Folds one finished call's usage into the totals. */
+    fun absorbCallUsage(usage: OllamaService.ChatUsage?) {
+        usage?.promptTokens?.let { promptTokens += it }
+        usage?.completionTokens?.let { completed ->
+            completionTokens += completed
+            tokenCount = completionTokens
+        }
+        speed.endRound(DecodeTimings.from(usage))
+    }
+
+    private fun legacyTokensPerSecond(nowMs: Long = System.currentTimeMillis()): Double {
+        val elapsed = generationElapsedSeconds(nowMs)
+        return if (elapsed > 0.0) tokenCount / elapsed else 0.0
     }
 
     fun generationElapsedMs(nowMs: Long = System.currentTimeMillis()): Long =

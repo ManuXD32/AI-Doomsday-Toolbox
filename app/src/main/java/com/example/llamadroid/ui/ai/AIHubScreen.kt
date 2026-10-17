@@ -5,6 +5,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -37,6 +38,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -54,13 +56,16 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import java.util.Locale
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.edit
 import androidx.navigation.NavController
+import com.example.llamadroid.BuildConfig
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.ui.components.AppChromeDefaults
@@ -69,7 +74,12 @@ import com.example.llamadroid.ui.theme.sprites.AppSpriteKey
 import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.ui.components.AppPageHeader
+import com.example.llamadroid.ui.components.AppScrollableTabRow
 import com.example.llamadroid.ui.components.AppSectionCard
+import com.example.llamadroid.ui.library.LibraryContent
+import com.example.llamadroid.ui.search.GlobalSearchMatcher
+import com.example.llamadroid.ui.search.SearchFields
+import com.example.llamadroid.ui.search.resourcesFor
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.ui.settings.ImageGenSettingsContent
 import com.example.llamadroid.ui.settings.PDFSettingsContent
@@ -84,9 +94,45 @@ import com.example.llamadroid.ui.settings.WhisperSettingsContent
 private const val PINNED_TOOLS_PREFS = "ai_tool_pins"
 private const val PINNED_TOOLS_KEY = "pinned_tool_ids"
 
+private const val TAB_TOOLS = 0
+private const val TAB_LIBRARY = 1
+
+private fun hubTabIndex(tab: String?): Int = if (tab == "library") TAB_LIBRARY else TAB_TOOLS
+
+/** Tools page: a Tools tab (today's grouped catalog) and a Library tab (models, knowledge, creations). */
+@Composable
+fun AIHubScreen(navController: NavController, initialTab: String = "tools") {
+    var tabIndex by rememberSaveable(initialTab) { mutableStateOf(hubTabIndex(initialTab)) }
+    AppPageBackground {
+        Column(modifier = Modifier.fillMaxSize()) {
+            AppScrollableTabRow(selectedTabIndex = tabIndex) {
+                Tab(
+                    selected = tabIndex == TAB_TOOLS,
+                    onClick = { tabIndex = TAB_TOOLS },
+                    modifier = Modifier.testTag("ai_hub_tab_tools"),
+                    text = { Text(stringResource(R.string.studio_nav_tools), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                )
+                Tab(
+                    selected = tabIndex == TAB_LIBRARY,
+                    onClick = { tabIndex = TAB_LIBRARY },
+                    modifier = Modifier.testTag("ai_hub_tab_library").walkthroughTarget("library.tab"),
+                    text = { Text(stringResource(R.string.studio_nav_library), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                )
+            }
+            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                if (tabIndex == TAB_LIBRARY) {
+                    LibraryContent(navController)
+                } else {
+                    ToolsTab(navController)
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AIHubScreen(navController: NavController) {
+private fun ToolsTab(navController: NavController) {
     val context = LocalContext.current
     val settingsRepo = remember { SettingsRepository(context) }
     val pinPrefs = remember {
@@ -98,23 +144,33 @@ fun AIHubScreen(navController: NavController) {
         mutableStateOf(pinPrefs.getStringSet(PINNED_TOOLS_KEY, emptySet()).orEmpty())
     }
     var selectedSettingsTool by remember { mutableStateOf<AIToolDefinition?>(null) }
+    val openedTools = remember { ToolUsageStore.lastOpened(context) }
     val categoryTitles = ToolCategory.entries.associateWith { stringResource(it.titleRes) }
-    val toolUiItems = ToolCatalog.tools.filter { it.showInHub }.map { tool ->
+    val en = remember(context) { resourcesFor(context, Locale.ENGLISH) }
+    val es = remember(context) { resourcesFor(context, Locale.forLanguageTag("es")) }
+    val toolUiItems = ToolCatalog.gridTools.map { tool ->
         ToolUiItem(
             definition = tool,
             title = stringResource(tool.titleRes),
             description = stringResource(tool.descriptionRes),
-            categoryTitle = categoryTitles.getValue(tool.category)
+            categoryTitle = categoryTitles.getValue(tool.category),
+            fields = SearchFields(
+                titles = listOf(en.getString(tool.titleRes), es.getString(tool.titleRes)),
+                keywords = tool.keywords + tool.keywordsEs + en.getString(tool.category.titleRes) + es.getString(tool.category.titleRes),
+                text = listOf(en.getString(tool.descriptionRes), es.getString(tool.descriptionRes))
+            ),
+            badge = when {
+                tool.addedIn == BuildConfig.VERSION_NAME -> ToolBadge.NEW
+                !openedTools.containsKey(tool.id) -> ToolBadge.NOT_TRIED
+                else -> null
+            }
         )
     }
     val filteredTools = remember(query, toolUiItems) {
-        val normalizedQuery = query.trim().lowercase()
-        if (normalizedQuery.isBlank()) {
+        if (query.isBlank()) {
             toolUiItems
         } else {
-            toolUiItems.filter { item ->
-                item.searchText.contains(normalizedQuery)
-            }
+            toolUiItems.filter { GlobalSearchMatcher.score(query, it.fields) > 0 }
         }
     }
     val groupedTools = ToolCategory.entries.mapNotNull { category ->
@@ -131,7 +187,7 @@ fun AIHubScreen(navController: NavController) {
             pinnedToolIds - toolId
         }
         pinnedToolIds = next
-        pinPrefs.edit().putStringSet(PINNED_TOOLS_KEY, next.toSet()).apply()
+        pinPrefs.edit { putStringSet(PINNED_TOOLS_KEY, next.toSet()) }
     }
 
     fun openTool(item: ToolUiItem) {
@@ -166,112 +222,112 @@ fun AIHubScreen(navController: NavController) {
         val index = tourKeys.indexOf(tourTargets?.requestedId)
         if (index >= 0 && toolListState.layoutInfo.visibleItemsInfo.none { it.index == index }) toolListState.scrollToItem(index)
     }
-    AppPageBackground {
-        LazyColumn(
-            state = toolListState,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            item(key = "search") {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                AppPageHeader(
-                    title = stringResource(R.string.studio_nav_tools),
-                    subtitle = stringResource(R.string.ui_redesign_tools_subtitle)
-                )
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    modifier = Modifier.fillMaxWidth().testTag("studio_tool_search").walkthroughTarget("tools.search"),
-                    singleLine = true,
-                    shape = RoundedCornerShape(18.dp),
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Default.Search,
-                            contentDescription = null
-                        )
-                    },
-                    trailingIcon = {
-                        if (query.isNotBlank()) {
-                            IconButton(onClick = { query = "" }) {
-                                Icon(
-                                    imageVector = Icons.Default.Close,
-                                    contentDescription = stringResource(R.string.action_clear)
-                                )
-                            }
-                        }
-                    },
-                    label = {
-                        Text(stringResource(R.string.ai_tools_search_label), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                )
-                            }
-            }
-                if (pinnedTools.isEmpty() && groupedTools.isEmpty()) {
-                    item {
-                        AppSectionCard {
-                            Text(
-                                text = stringResource(R.string.soft_studio_tools_empty_title),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                text = stringResource(R.string.soft_studio_tools_empty_desc),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+    LazyColumn(
+        state = toolListState,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item(key = "search") {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            AppPageHeader(
+                title = stringResource(R.string.studio_nav_tools),
+                subtitle = stringResource(R.string.ui_redesign_tools_subtitle)
+            )
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth().testTag("studio_tool_search").walkthroughTarget("tools.search"),
+                singleLine = true,
+                shape = RoundedCornerShape(18.dp),
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = null
+                    )
+                },
+                trailingIcon = {
+                    if (query.isNotBlank()) {
+                        IconButton(onClick = { query = "" }) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = stringResource(R.string.action_clear)
                             )
                         }
                     }
+                },
+                label = {
+                    Text(stringResource(R.string.ai_tools_search_label), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-
-                if (pinnedTools.isNotEmpty()) {
-                    item {
-                        ToolCategoryHeader(
-                            title = stringResource(R.string.soft_studio_tools_pinned),
-                            count = pinnedTools.size
-                        )
-                    }
-                    items(pinnedTools, key = { "pinned-${it.definition.id}" }) { item ->
-                        ToolHubCard(
-                            id = item.definition.id,
-                            icon = item.definition.icon,
-                            sprite = item.definition.sprite,
-                            category = item.definition.category,
-                            title = item.title,
-                            description = item.description,
-                            hasSettings = item.definition.settingsAction !is ToolSettingsAction.None,
-                            isPinned = true,
-                            onOpen = { openTool(item) },
-                            onSettings = { selectedSettingsTool = item.definition },
-                            onTogglePinned = { setToolPinned(item.definition.id, false) }
-                        )
-                    }
-                }
-
-                groupedTools.forEach { (category, tools) ->
-                    item {
-                        ToolCategoryHeader(
-                            title = categoryTitles.getValue(category),
-                            count = tools.size
-                        )
-                    }
-                    items(tools, key = { it.definition.id }) { item ->
-                        ToolHubCard(
-                            id = item.definition.id,
-                            icon = item.definition.icon,
-                            sprite = item.definition.sprite,
-                            category = item.definition.category,
-                            title = item.title,
-                            description = item.description,
-                            hasSettings = item.definition.settingsAction !is ToolSettingsAction.None,
-                            isPinned = false,
-                            onOpen = { openTool(item) },
-                            onSettings = { selectedSettingsTool = item.definition },
-                            onTogglePinned = { setToolPinned(item.definition.id, true) }
-                        )
-                    }
-                }
+            )
+                        }
         }
+            if (pinnedTools.isEmpty() && groupedTools.isEmpty()) {
+                item {
+                    AppSectionCard {
+                        Text(
+                            text = stringResource(R.string.soft_studio_tools_empty_title),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = stringResource(R.string.soft_studio_tools_empty_desc),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            if (pinnedTools.isNotEmpty()) {
+                item {
+                    ToolCategoryHeader(
+                        title = stringResource(R.string.soft_studio_tools_pinned),
+                        count = pinnedTools.size
+                    )
+                }
+                items(pinnedTools, key = { "pinned-${it.definition.id}" }) { item ->
+                    ToolHubCard(
+                        id = item.definition.id,
+                        icon = item.definition.icon,
+                        sprite = item.definition.sprite,
+                        category = item.definition.category,
+                        badge = item.badge,
+                        title = item.title,
+                        description = item.description,
+                        hasSettings = item.definition.settingsAction !is ToolSettingsAction.None,
+                        isPinned = true,
+                        onOpen = { openTool(item) },
+                        onSettings = { selectedSettingsTool = item.definition },
+                        onTogglePinned = { setToolPinned(item.definition.id, false) }
+                    )
+                }
+            }
+
+            groupedTools.forEach { (category, tools) ->
+                item {
+                    ToolCategoryHeader(
+                        title = categoryTitles.getValue(category),
+                        count = tools.size
+                    )
+                }
+                items(tools, key = { it.definition.id }) { item ->
+                    ToolHubCard(
+                        id = item.definition.id,
+                        icon = item.definition.icon,
+                        sprite = item.definition.sprite,
+                        category = item.definition.category,
+                        badge = item.badge,
+                        title = item.title,
+                        description = item.description,
+                        hasSettings = item.definition.settingsAction !is ToolSettingsAction.None,
+                        isPinned = false,
+                        onOpen = { openTool(item) },
+                        onSettings = { selectedSettingsTool = item.definition },
+                        onTogglePinned = { setToolPinned(item.definition.id, true) }
+                    )
+                }
+            }
     }
 }
 
@@ -302,22 +358,19 @@ internal fun ChatServerPickerDialog(
     )
 }
 
+private enum class ToolBadge(val labelRes: Int) {
+    NEW(R.string.tool_badge_new),
+    NOT_TRIED(R.string.tool_badge_not_tried)
+}
+
 private data class ToolUiItem(
     val definition: AIToolDefinition,
     val title: String,
     val description: String,
-    val categoryTitle: String
-) {
-    val searchText: String = buildString {
-        append(title.lowercase())
-        append(' ')
-        append(description.lowercase())
-        append(' ')
-        append(categoryTitle.lowercase())
-        append(' ')
-        append(definition.keywords.joinToString(" ").lowercase())
-    }
-}
+    val categoryTitle: String,
+    val fields: SearchFields,
+    val badge: ToolBadge?
+)
 
 @Composable
 private fun ToolCategoryHeader(
@@ -361,6 +414,7 @@ private fun ToolHubCard(
     icon: ImageVector,
     sprite: AppSpriteKey?,
     category: ToolCategory,
+    badge: ToolBadge?,
     title: String,
     description: String,
     hasSettings: Boolean,
@@ -370,6 +424,7 @@ private fun ToolHubCard(
     onTogglePinned: () -> Unit
 ) {
     val accent = when (category) {
+        ToolCategory.ASSISTANTS -> MaterialTheme.colorScheme.primary
         ToolCategory.CREATE -> MaterialTheme.colorScheme.tertiary
         ToolCategory.VOICE -> MaterialTheme.colorScheme.secondary
         ToolCategory.DOCUMENTS -> MaterialTheme.colorScheme.primary
@@ -410,6 +465,23 @@ private fun ToolHubCard(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
+                if (badge != null) {
+                    Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = if (badge == ToolBadge.NEW) MaterialTheme.colorScheme.tertiaryContainer
+                        else MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Text(
+                            text = stringResource(badge.labelRes),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = if (badge == ToolBadge.NEW) MaterialTheme.colorScheme.onTertiaryContainer
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
                 Text(
                     text = description,
                     style = MaterialTheme.typography.bodySmall,

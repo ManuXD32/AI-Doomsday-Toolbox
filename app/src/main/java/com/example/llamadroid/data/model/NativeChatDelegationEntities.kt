@@ -61,6 +61,8 @@ object NativeChatDelegationWakeKind {
     const val TASK_FINISHED = "TASK_FINISHED"
     const val CHECK_ALARM = "CHECK_ALARM"
     const val SUBAGENT_QUESTION = "SUBAGENT_QUESTION"
+    /** A subagent reply the main LLM did not receive inside its `deepseek_task_message` wait. */
+    const val SUBAGENT_REPLY = "SUBAGENT_REPLY"
     const val NEEDS_DIRECTION = "NEEDS_DIRECTION"
 }
 
@@ -123,7 +125,11 @@ data class NativeChatDelegateTaskEntity(
     @ColumnInfo(defaultValue = "0") val ctxWindowTokens: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
-    val finishedAt: Long? = null
+    val finishedAt: Long? = null,
+    /** `DelegationTaskOptions` JSON: project/thread choice and attachments still to copy (survives Continue). */
+    val optionsJson: String? = null,
+    /** How many times a finished task was reopened by a follow-up message (0 = first round). */
+    @ColumnInfo(defaultValue = "0") val followUpCount: Int = 0
 )
 
 /**
@@ -159,7 +165,13 @@ data class NativeChatDelegateMessageEntity(
     @ColumnInfo(defaultValue = "0") val compactedOut: Boolean = false,
     /** A `<compacted-summary>` message produced by compaction. */
     @ColumnInfo(defaultValue = "0") val isSummary: Boolean = false,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    /**
+     * Mailbox flag. A [NativeChatDelegateMessageRole.MAIN_TO_SUB] row is false until it is injected
+     * into the subagent conversation; a [NativeChatDelegateMessageRole.SUB_TO_MAIN] reply/question is
+     * false until the main LLM received it (inside its wait or through a chat wake). Other rows: true.
+     */
+    @ColumnInfo(defaultValue = "1") val delivered: Boolean = true
 )
 
 /**

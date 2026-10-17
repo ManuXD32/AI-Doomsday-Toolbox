@@ -1,10 +1,8 @@
 package com.example.llamadroid.service.perf
 
-import com.example.llamadroid.service.LlamaBinaryCapabilities
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LockedScreenPerformanceTest {
@@ -31,40 +29,75 @@ class LockedScreenPerformanceTest {
     }
 
     @Test
-    fun tuneReducesThreadsKeepsBatchAndAddsPriority() {
-        val caps = LlamaBinaryCapabilities(setOf("--prio", "--prio-batch"))
+    fun tuneReducesThreadsKeepsBatchAndNeverAddsPrio() {
         val result = LockedScreenLaunchTuning.tune(
-            listOf("llama-server", "-t", "8", "-c", "4096"), options, caps, "0-5"
+            listOf("llama-server", "-t", "8", "-c", "4096"), options, "0-5"
         )
         assertEquals("6", result.args[result.args.indexOf("-t") + 1])
         assertEquals("8", result.args[result.args.indexOf("--threads-batch") + 1])
-        assertEquals("2", result.args[result.args.indexOf("--prio") + 1])
-        assertEquals("2", result.args[result.args.indexOf("--prio-batch") + 1])
+        assertFalse(result.args.contains("--prio"))
+        assertFalse(result.args.contains("--prio-batch"))
         assertEquals(PriorityState.REQUESTED, result.priorityState)
     }
 
     @Test
-    fun tuneKeepsExplicitBatchAndSkipsUnsupportedPriority() {
+    fun tuneKeepsExplicitBatchAndUserTypedPrio() {
         val result = LockedScreenLaunchTuning.tune(
-            listOf("llama-server", "--threads", "8", "--threads-batch", "3"),
-            options, LlamaBinaryCapabilities(setOf("--threads")), "0-3"
+            listOf("llama-server", "--threads", "8", "--threads-batch", "3", "--prio", "1"),
+            options, "0-3"
         )
-        assertEquals(listOf("llama-server", "--threads", "4", "--threads-batch", "3"), result.args)
-        assertEquals(PriorityState.UNSUPPORTED, result.priorityState)
+        assertEquals(
+            listOf("llama-server", "--threads", "4", "--threads-batch", "3", "--prio", "1"),
+            result.args
+        )
         val off = LockedScreenLaunchTuning.tune(
-            listOf("llama-server", "-t", "8"), options.copy(threadFit = false, threadPriority = false),
-            LlamaBinaryCapabilities.ALLOW_ALL, "0-1"
+            listOf("llama-server", "-t", "8"), options.copy(threadFit = false, threadPriority = false), "0-1"
         )
         assertEquals(listOf("llama-server", "-t", "8"), off.args)
         assertEquals(PriorityState.OFF, off.priorityState)
-        val allowAll = LockedScreenLaunchTuning.tune(listOf("x", "-t", "2"), options, LlamaBinaryCapabilities.ALLOW_ALL, null)
-        assertEquals(PriorityState.UNSUPPORTED, allowAll.priorityState)
     }
 
     @Test
-    fun priorityWarningDetection() {
-        assertTrue(LockedScreenLaunchTuning.isPriorityWarning("warn: failed to set thread priority 2 : Operation not permitted (1)"))
-        assertFalse(LockedScreenLaunchTuning.isPriorityWarning("server is listening on http://127.0.0.1:8080"))
+    fun niceParserHandlesOddCommandNames() {
+        val tail = "S 1 100 100 0 -1 4194560 100 0 0 0 5 6 0 0 20 -8 12 0 12345 1 2"
+        assertEquals(-8, ThreadPriorityMath.niceOf("4242 (llama-server) $tail"))
+        assertEquals(-8, ThreadPriorityMath.niceOf("4243 (a b) (c) $tail"))
+        assertEquals(0, ThreadPriorityMath.niceOf("4244 (x) S 1 100 100 0 -1 4194560 100 0 0 0 5 6 0 0 20 0 12 0 1"))
+        assertNull(ThreadPriorityMath.niceOf("garbage"))
+        assertNull(ThreadPriorityMath.niceOf("1 (x) S 1 2"))
+    }
+
+    @Test
+    fun priorityClassification() {
+        assertEquals(PriorityState.REQUESTED, ThreadPriorityMath.classify(emptyList()).state)
+        assertEquals(PriorityState.APPLIED, ThreadPriorityMath.classify(listOf(-8, -8, -8, -8, 0)).state)
+        assertEquals(PriorityState.APPLIED, ThreadPriorityMath.classify(listOf(-10, -8)).state)
+        assertEquals(PriorityState.PARTIAL, ThreadPriorityMath.classify(listOf(-8, 0, 0)).state)
+        assertEquals(PriorityOutcome(PriorityState.PARTIAL, 1, 3), ThreadPriorityMath.classify(listOf(-8, 0, 10)))
+        assertEquals(PriorityState.REFUSED, ThreadPriorityMath.classify(listOf(0, 0, 10)).state)
+    }
+
+    @Test
+    fun scanRaisesEachThreadOnceAndReadsNiceBack() {
+        val root = java.nio.file.Files.createTempDirectory("prio-proc").toFile()
+        try {
+            fun task(tid: Int, nice: Int) {
+                val dir = java.io.File(root, "77/task/$tid").apply { mkdirs() }
+                java.io.File(dir, "stat").writeText("$tid (llama srv) S 1 1 1 0 -1 0 0 0 0 0 1 1 0 0 20 $nice 1 0 1")
+            }
+            task(10, -8); task(11, -8); task(12, 0)
+            val calls = mutableListOf<Int>()
+            val raiser = LockedScreenThreadPriority(77, {}, root, setPriority = { calls += it; true })
+            assertEquals(PriorityOutcome(PriorityState.PARTIAL, 2, 3), raiser.scanOnce())
+            assertEquals(3, calls.size)
+            raiser.scanOnce()
+            assertEquals(3, calls.size)
+            task(13, -8)
+            raiser.scanOnce()
+            assertEquals(listOf(13), calls.drop(3))
+        } finally {
+            root.deleteRecursively()
+        }
     }
 
     @Test

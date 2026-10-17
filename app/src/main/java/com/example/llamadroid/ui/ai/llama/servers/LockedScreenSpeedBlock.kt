@@ -92,7 +92,16 @@ fun LockedScreenSpeedBlock(port: Int, modifier: Modifier = Modifier) {
                         )
                     )
                 }
-                Line(stringResource(R.string.locked_screen_priority, stringResource(priorityRes(report.priorityState))))
+                val priorityText = if (report.priorityState == PriorityState.PARTIAL.name) {
+                    stringResource(
+                        R.string.locked_screen_priority_partial,
+                        report.priorityRaisedThreads,
+                        report.priorityTotalThreads
+                    )
+                } else {
+                    stringResource(priorityRes(report.priorityState))
+                }
+                Line(stringResource(R.string.locked_screen_priority, priorityText))
                 val hint = if (report.hintState == HintState.REFUSED.name && !report.hintDetail.isNullOrBlank()) {
                     stringResource(R.string.locked_screen_hints_refused, report.hintDetail)
                 } else {

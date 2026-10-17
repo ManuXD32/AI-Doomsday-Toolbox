@@ -19,6 +19,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -101,7 +102,7 @@ import java.util.*
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NotesManagerScreen(navController: NavController) {
+fun NotesManagerScreen(navController: NavController, asRoot: Boolean = false) {
     val context = LocalContext.current
     val resources = LocalResources.current
     val walkthroughTargets = LocalWalkthroughTargets.current
@@ -245,13 +246,18 @@ fun NotesManagerScreen(navController: NavController) {
         }
     }
 
-    AppScreenScaffold(
+    if (asRoot) {
+        BackHandler(enabled = selectedOrganizerTab == 0 && selectedNoteIds.isNotEmpty()) {
+            selectedNoteIds = emptySet()
+        }
+    }
+    OrganizerFrame(
+        asRoot = asRoot,
         title = if (selectedOrganizerTab == 0 && selectedNoteIds.isNotEmpty()) {
             stringResource(R.string.notes_selected_count, selectedNoteIds.size)
         } else {
             stringResource(R.string.organizer_title)
         },
-        subtitle = null,
         onBack = {
             if (selectedOrganizerTab == 0 && selectedNoteIds.isNotEmpty()) {
                 selectedNoteIds = emptySet()

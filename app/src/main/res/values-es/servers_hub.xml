@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="servers_hub_title">Servidores</string>
+    <string name="servers_hub_subtitle">Servidores de modelos, compartir, distribuido y Termux en un solo lugar</string>
+    <string name="servers_hub_models_title">Servidores de modelos</string>
+    <string name="servers_hub_models_subtitle">Servidores locales y remotos que usan tus chats</string>
+    <string name="servers_hub_sharing_title">Compartir</string>
+    <string name="servers_hub_sharing_subtitle">Comparte herramientas, archivos y wikis sin conexion con otros dispositivos</string>
+    <string name="servers_hub_share_browser_title">Servidores web UI</string>
+    <string name="servers_hub_share_browser_subtitle">Apps web de chat, imágenes y flujos para navegadores</string>
+    <string name="servers_hub_share_browser_status">Servidores web</string>
+    <string name="servers_hub_open">Abrir</string>
+    <string name="servers_hub_manage">Gestionar</string>
+    <string name="servers_hub_ollama_title">Ollama</string>
+    <string name="servers_hub_ollama_subtitle">Conecta con servidores Ollama y gestiona sus modelos</string>
+    <string name="servers_hub_ollama_saved">Servidores guardados</string>
+    <string name="servers_hub_distributed_title">Distribuido</string>
+    <string name="servers_hub_distributed_subtitle">Reparte el trabajo entre telefonos de confianza de tu red</string>
+    <string name="servers_hub_run_settings_title">Ajustes de ejecucion</string>
+    <string name="servers_hub_run_settings_desc">Opciones de ejecucion para la generacion de medios distribuida</string>
+    <string name="servers_hub_termux_title">Servicios de Termux</string>
+    <string name="servers_hub_termux_subtitle">Enlace SSH con Termux para herramientas de terminal y archivos</string>
+    <string name="servers_hub_termux_connection">Conexion SSH</string>
+    <string name="servers_hub_termux_connected">Conectado</string>
+    <string name="servers_hub_termux_disconnected">Sin conexion</string>
+</resources>

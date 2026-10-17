@@ -13,7 +13,6 @@ import com.example.llamadroid.data.model.NativeChatDelegateTaskState
 import com.example.llamadroid.data.model.NativeChatDelegationWakeKind
 import com.example.llamadroid.service.KvCacheKey
 import com.example.llamadroid.service.KvSlotOwnerSpec
-import com.example.llamadroid.service.NativeChatGenerationStates
 import com.example.llamadroid.service.LlamaServerChatService
 import com.example.llamadroid.service.LlamaServerRequestOptions
 import com.example.llamadroid.service.LlamaServerSamplingParams
@@ -21,6 +20,7 @@ import com.example.llamadroid.service.LlamaServerUsageLease
 import com.example.llamadroid.service.NativeChatKvCacheCoordinator
 import com.example.llamadroid.service.OllamaService
 import com.example.llamadroid.service.OllamaService.ChatMessage
+import com.example.llamadroid.service.chat.NativeChatModelActivity
 import com.example.llamadroid.service.UnifiedNotificationManager
 import com.example.llamadroid.service.compaction.CompactionProfile
 import com.example.llamadroid.service.compaction.ConversationCompactor
@@ -29,10 +29,11 @@ import com.example.llamadroid.util.DebugLog
 import com.google.gson.Gson
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.coroutineContext
 
 /** Parses an `apiParams` JSON object the same way `LlamaClientService` does. */
@@ -50,8 +51,7 @@ private const val PROGRESS_THROTTLE_MS = 250L
 
 /** Per-run inputs that exist only when the task is first started (not on Continue). */
 internal class DelegationLoopStart(
-    val inputs: List<DelegationResolvedInput>,
-    val continuePrevious: Boolean
+    val inputs: List<DelegationResolvedInput>
 )
 
 /**
@@ -82,6 +82,7 @@ internal class DelegateSubagentLoop(
     private lateinit var toolbox: DelegateSubagentToolbox
     private var driver: DelegateHarnessDriver? = null
     private val chatService = LlamaServerChatService()
+    private var options = DelegationTaskOptions()
     private var title = ""
     private var compactionCount = 0
     private var ctxUsed = 0
@@ -108,6 +109,7 @@ internal class DelegateSubagentLoop(
             val loadedChat = db.llamaChatDao().getChatById(task.chatId) ?: return
             chat = loadedChat
             title = task.title
+            options = DelegationTaskOptions.decode(task.optionsJson)
             config = NativeChatDelegationConfig.fromParams(parseDelegationParams(chat.apiParams))
             guards = DelegationGuards(task.subagentModelCalls, task.harnessPrompts)
             compactionCount = task.compactionCount
@@ -163,7 +165,11 @@ internal class DelegateSubagentLoop(
             context, taskDao.getById(taskId) ?: throw TaskGone(), chat, config, drv, chatServer, server,
             start?.inputs.orEmpty(), guards, inbox, this, DelegateServerResolver.chatMaxOutput(chatParams)
         )
-        if (task.harnessSessionId != null) toolbox.reattach()
+        // Resumed or reopened task: reattach its project and threads, so the harness agent keeps its context.
+        when {
+            task.workspaceId != null -> event(if (toolbox.restoreProject()?.startsWith("Project ") == true) "project_reattached" else "project_reattach_failed")
+            task.harnessSessionId != null -> toolbox.reattach()
+        }
         repairDanglingToolCalls()
         seedFirstMessage(task)
         guards.resetStreaks()
@@ -175,7 +181,7 @@ internal class DelegateSubagentLoop(
     // ---- main loop --------------------------------------------------------------------------
 
     private suspend fun mainLoop() {
-        val system = ChatMessage(role = "system", content = DelegateSubagentPrompt.systemPrompt(config.approvalPolicy))
+        val system = ChatMessage(role = "system", content = DelegateSubagentPrompt.systemPrompt())
         val tools = DelegateSubagentToolDefs.all()
         while (true) {
             coroutineContext.ensureActive()
@@ -255,31 +261,40 @@ internal class DelegateSubagentLoop(
         }
     }
 
+    /** Waits for an undelivered main-to-subagent row (the answer to a question, or a follow-up). */
     private suspend fun waitForMainAnswer(): Boolean {
         phase("waiting_main", NativeChatDelegateTaskState.WAITING_MAIN)
-        while (!inbox.hasPending()) {
+        while (true) {
             coroutineContext.ensureActive()
             ensureTask()
+            inbox.clearPending()
+            if (msgDao.getUndeliveredMainToSub(taskId).isNotEmpty()) return true
             val gate = guards.beforeModelCall()
             if (gate is GuardDecision.Fail) { fail(gate.code, gate.reason); return false }
             inbox.await(60_000L)
         }
-        return true
     }
 
+    /**
+     * Holds back only while the main chat has a MODEL request in flight on the same endpoint. A main
+     * chat waiting inside a tool (for example `deepseek_task_message`) does not block the subagent.
+     */
     private suspend fun waitForMainChatIdle() {
         if (config.parallelRequests) return
         var waited = false
         while (mainChatHoldsEndpoint()) {
             if (!waited) { phase("queued"); waited = true }
             coroutineContext.ensureActive()
-            delay(1_000L)
+            // Wakes as soon as the in-flight map changes; the timeout re-checks the endpoint.
+            withTimeoutOrNull(1_000L) {
+                NativeChatModelActivity.inFlight.first { !it.containsKey(chatId) }
+            }
         }
     }
 
-    /** True while the main chat is busy AND runs on the same physical endpoint as this subagent. */
+    /** True while the main chat's model call is in flight AND it runs on the same physical endpoint as this subagent. */
     private suspend fun mainChatHoldsEndpoint(): Boolean {
-        if (!NativeChatGenerationStates.isBusy(chatId)) return false
+        if (!NativeChatModelActivity.isModelCallInFlight(chatId)) return false
         val mainServer = chat.serverId?.let { db.llamaServerDao().getServerById(it) }
         return DelegateEndpointSharing.sameEndpoint(
             mainServerId = mainServer?.id,
@@ -289,11 +304,19 @@ internal class DelegateSubagentLoop(
         )
     }
 
+    /**
+     * Injects every undelivered MAIN_TO_SUB row as a USER row, oldest first. Each injection claims
+     * the row and appends its copy in one transaction, so nothing is lost or duplicated by a crash.
+     */
     private suspend fun injectInbox() {
-        val messages = inbox.drain()
-        if (messages.isEmpty()) return
-        messages.forEach { appendRow(NativeChatDelegateMessageRole.USER, DelegateSubagentPrompt.inboxMessage(it)) }
-        phase("model_call", NativeChatDelegateTaskState.RUNNING)
+        inbox.clearPending()
+        val rows = msgDao.getUndeliveredMainToSub(taskId)
+        var injected = false
+        for (row in rows) if (msgDao.deliverMainToSub(row)) injected = true
+        if (injected) {
+            options = DelegationTaskOptions.decode(taskDao.getById(taskId)?.optionsJson)
+            phase("model_call", NativeChatDelegateTaskState.RUNNING)
+        }
     }
 
     private suspend fun seedFirstMessage(task: NativeChatDelegateTaskEntity) {
@@ -308,7 +331,7 @@ internal class DelegateSubagentLoop(
                 contextTokens = server.contextTokens,
                 maxOutputTokens = server.maxOutputTokens,
                 policy = config.approvalPolicy,
-                continuePrevious = start?.continuePrevious == true
+                options = options
             )
         )
     }
@@ -345,7 +368,9 @@ internal class DelegateSubagentLoop(
         )
         var lastProgressMs = 0L
         val response = try { NativeChatKvCacheCoordinator(context).withSlot(server.baseUrl, server.row, spec) { lease ->
-            lease.request { slot ->
+            // Shared base (system + tools) only where this task's own cache persists too.
+            val base = if (spec.persist) DelegateSubagentBase.hint(server.baseUrl, server.row.modelName, thinkingEnabled) else null
+            lease.request(base) { slot ->
                 chatService.chatWithToolsStreaming(
                     baseUrl = server.baseUrl,
                     messages = messages,
@@ -477,6 +502,7 @@ internal class DelegateSubagentLoop(
         taskDao.setStateWithError(taskId, NativeChatDelegateTaskState.NEEDS_DIRECTION, errorCode, reason.take(300))
         event("runaway_continuation_suspected", errorClass = errorCode ?: "guard")
         event("needs_direction")
+        DelegationMailbox.tick(taskId)
         live { it.copy(state = NativeChatDelegateTaskState.NEEDS_DIRECTION, progressNote = reason.take(300)) }
         DelegationWakeDispatcher.enqueue(
             context, chatId, taskId, NativeChatDelegationWakeKind.NEEDS_DIRECTION,
@@ -489,6 +515,7 @@ internal class DelegateSubagentLoop(
         taskDao.setStateWithError(taskId, state, code, note.take(300))
         event("interrupted", errorClass = code)
         live { it.copy(state = state) }
+        DelegationMailbox.tick(taskId)
         runCatching {
             UnifiedNotificationManager.showDeepSeekTaskNotice(
                 chatId, chatOrNull()?.serverId ?: 0L, chatOrNull()?.title ?: title,
@@ -540,7 +567,9 @@ internal class DelegateSubagentLoop(
         msgDao.append(
             NativeChatDelegateMessageEntity(
                 taskId = taskId, seq = 0, role = role,
-                content = DelegateSubagentMessages.bound(content, DelegateSubagentMessages.MAX_CONTENT_CHARS), toolName = toolName
+                content = DelegateSubagentMessages.bound(content, DelegateSubagentMessages.MAX_CONTENT_CHARS), toolName = toolName,
+                // Mailbox: reply/question/result rows stay undelivered until the main LLM received them.
+                delivered = !(role == NativeChatDelegateMessageRole.SUB_TO_MAIN && toolName in DelegationMailbox.WAITER_KINDS)
             )
         )
 

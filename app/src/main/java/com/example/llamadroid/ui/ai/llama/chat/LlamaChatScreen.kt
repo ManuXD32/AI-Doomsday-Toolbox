@@ -120,7 +120,7 @@ fun LlamaChatScreen(
     // UI State
     val messages by viewModel.messages.collectAsState()
     val attachmentsUi = rememberChatAttachmentsUi(repository, chatId)
-    val pickChatFile = rememberChatFilePicker(chatId)
+    val chatFilePicker = rememberChatFilePicker(chatId)
     val generationState by remember(chatId) { NativeChatGenerationStates.flowFor(chatId) }
         .collectAsState(initial = NativeChatGenerationStates.stateFor(chatId))
     val callState by LlamaCallService.state.collectAsState()
@@ -308,7 +308,8 @@ fun LlamaChatScreen(
                         systemLabel = localizedStrings.noteTranscriptSystem,
                         imageLabel = localizedStrings.noteTranscriptImage,
                         audioLabel = localizedStrings.noteTranscriptAudio,
-                        videoLabel = localizedStrings.noteTranscriptVideo
+                        videoLabel = localizedStrings.noteTranscriptVideo,
+                        stepsLabels = localizedStrings.stepsExportLabels
                     ),
                     type = NoteType.MANUAL,
                     sourceFile = localizedStrings.notesImportSourceNativeChat,
@@ -418,10 +419,12 @@ fun LlamaChatScreen(
         }
     }
     val lastPersistedMessage = messages.lastOrNull()
+    val streamingStepsMessage = lastPersistedMessage?.takeIf { isStreamingResponse && it.role == "assistant" }
     val canContinueChat = !isChatBusy &&
         lastPersistedMessage?.role == "assistant" &&
         (
-            lastPersistedMessage.content.isNotBlank() ||
+            hasUnfinishedSteps(lastPersistedMessage.stepsJson) ||
+                lastPersistedMessage.content.isNotBlank() ||
                 !lastPersistedMessage.thinking.isNullOrBlank() ||
                 !lastPersistedMessage.imagePath.isNullOrBlank() ||
                 !lastPersistedMessage.audioPath.isNullOrBlank() ||
@@ -1059,7 +1062,8 @@ fun LlamaChatScreen(
         streamingGenerationState?.thinking,
         streamingGenerationState?.tokenCount,
         streamingGenerationState?.statusText,
-        activeToolEvents
+        activeToolEvents,
+        streamingStepsMessage?.stepsJson
     ) {
         val persistedLength = displayedMessages.sumOf { message ->
             message.content.length +
@@ -1071,7 +1075,8 @@ fun LlamaChatScreen(
             (streamingGenerationState?.content?.length ?: 0) +
             (streamingGenerationState?.thinking?.length ?: 0) +
             (streamingGenerationState?.tokenCount ?: 0) +
-            activeToolEvents.size
+            activeToolEvents.size +
+            (streamingStepsMessage?.stepsJson?.length ?: 0)
     }
 
     // Auto-scroll whenever streaming content, thinking, or tools change and the user is still at the bottom.
@@ -1322,7 +1327,8 @@ fun LlamaChatScreen(
                 onContinue = { continueGeneration() },
                 modifier = Modifier.weight(1f),
                 compactions = attachmentsUi.compactions,
-                attachmentsByMessage = attachmentsUi.byMessage
+                attachmentsByMessage = attachmentsUi.byMessage,
+                streamingMessage = streamingStepsMessage
             )
 
             ChatServerBanner(
@@ -1375,8 +1381,9 @@ fun LlamaChatScreen(
                 onPickDocument = { documentPickerLauncher.launch(nativeChatDocumentMimeTypes()) },
                 onStartRecording = { startCurrentRecording() },
                 onSend = { sendCurrentMessage() },
-                showAttachFile = settings.delegation.enabled,
-                onPickFile = pickChatFile,
+                showAttachFile = settings.chatToolsEnabledByUser || settings.delegation.enabled,
+                onPickFile = chatFilePicker.launch,
+                isImportingFile = chatFilePicker.importing,
                 pendingFiles = attachmentsUi.pendingFiles,
                 onRemovePendingFile = { file -> scope.launch { removePendingChatFile(context, file) } }
             )

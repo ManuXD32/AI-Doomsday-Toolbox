@@ -1,45 +1,44 @@
 package com.example.llamadroid.service.delegation
 
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.withTimeoutOrNull
-import java.util.concurrent.ConcurrentLinkedQueue
 
 /** An answer from the subagent to the main LLM. [kind] is `reply`, `question` or `result`. */
 data class DelegationSubReply(val kind: String, val text: String)
 
 /**
- * In-memory mailbox of one running task: main-to-subagent messages not yet injected into the
- * subagent conversation, and a stream of the subagent's answers for `messageSubagent` to await.
+ * Low-latency signal of one running task. The durable mailbox (Room rows with `delivered`) is the
+ * truth: [signal] only says "undelivered main-to-subagent rows may exist", so the loop and the
+ * harness wait re-read them. [emitReply] tells the mailbox that the subagent posted a row.
  */
-class DelegationInbox {
-    private val queue = ConcurrentLinkedQueue<String>()
-    private val signal = Channel<Unit>(Channel.CONFLATED)
-    val replies = MutableSharedFlow<DelegationSubReply>(extraBufferCapacity = 16)
+class DelegationInbox(private val onSubReply: (kind: String, text: String) -> Unit = { _, _ -> }) {
+    private val wake = Channel<Unit>(Channel.CONFLATED)
+    @Volatile private var pending = false
 
-    fun post(text: String) {
-        queue.add(text)
-        signal.trySend(Unit)
+    /** Called after a MAIN_TO_SUB row was inserted. */
+    fun signal() {
+        pending = true
+        wake.trySend(Unit)
     }
 
-    fun hasPending(): Boolean = queue.isNotEmpty()
+    fun hasPending(): Boolean = pending
 
-    fun drain(): List<String> {
-        val out = ArrayList<String>()
-        while (true) out += queue.poll() ?: break
-        return out
+    /** The loop calls this BEFORE reading the rows, so a signal during the read is not lost. */
+    fun clearPending() {
+        pending = false
     }
 
-    /** Suspends until a message is pending; false on timeout. */
+    /** Suspends until a signal is pending; false on timeout. */
     suspend fun await(timeoutMs: Long): Boolean {
-        if (hasPending()) return true
+        if (pending) return true
         return withTimeoutOrNull(timeoutMs) {
-            while (!hasPending()) signal.receive()
+            while (!pending) wake.receive()
             true
         } ?: false
     }
 
+    /** The subagent posted a reply/question/result row (already inserted, undelivered). */
     fun emitReply(kind: String, text: String) {
-        replies.tryEmit(DelegationSubReply(kind, text))
+        onSubReply(kind, text)
     }
 }

@@ -59,7 +59,8 @@ object DatabaseBackupManager {
         "llama_chat_files",
         "llama_chat_audio",
         "agent_chat_images",
-        "native_chat_notes_imports"
+        "native_chat_notes_imports",
+        "native_chat_workspaces"
     )
 
     private data class BackupFile(

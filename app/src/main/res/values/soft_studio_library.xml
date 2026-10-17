@@ -24,7 +24,7 @@
     <string name="soft_studio_library_models_desc">Download, import, review, and share the engines used by your tasks.</string>
     <string name="soft_studio_library_knowledge_desc">Build searchable knowledge bases from files, links, and notes.</string>
     <string name="soft_studio_library_offline_desc">Browse ZIM collections and open offline articles without leaving the app.</string>
-    <string name="soft_studio_library_open_offline">Open offline library</string>
+    <string name="soft_studio_library_open_offline">Offline wiki</string>
     <string name="soft_studio_library_open_images">Image gallery</string>
     <string name="soft_studio_library_open_videos">Video gallery</string>
     <string name="soft_studio_library_open_audio">Audio</string>

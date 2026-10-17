@@ -10,6 +10,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
 import com.example.llamadroid.data.model.LlamaMessageEntity
+import com.example.llamadroid.service.chat.NativeChatStepsCodec
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -31,6 +32,7 @@ internal data class LlamaChatLocalizedStrings(
     val noteTranscriptImage: String,
     val noteTranscriptAudio: String,
     val noteTranscriptVideo: String,
+    val stepsExportLabels: StepsExportLabels,
     val notesImportSourceNativeChat: String,
     val saveChatAsNoteSuccess: String,
     val saveChatAsNoteFailedFormat: String,
@@ -61,6 +63,13 @@ internal fun llamaChatLocalizedStrings() = LlamaChatLocalizedStrings(
     noteTranscriptImage = stringResource(R.string.llama_note_transcript_image),
     noteTranscriptAudio = stringResource(R.string.llama_note_transcript_audio),
     noteTranscriptVideo = stringResource(R.string.llama_video_note_label),
+    stepsExportLabels = StepsExportLabels(
+        toolUsed = stringResource(R.string.chat_steps_export_tool_used),
+        statusOk = stringResource(R.string.chat_steps_export_status_ok),
+        statusError = stringResource(R.string.chat_steps_export_status_error),
+        statusSkipped = stringResource(R.string.chat_steps_export_status_skipped),
+        statusRunning = stringResource(R.string.chat_steps_export_status_running)
+    ),
     notesImportSourceNativeChat = stringResource(R.string.notes_import_source_native_chat),
     saveChatAsNoteSuccess = stringResource(R.string.llama_save_chat_as_note_success),
     saveChatAsNoteFailedFormat = stringResource(R.string.llama_save_chat_as_note_failed),
@@ -293,7 +302,8 @@ internal fun llamaMessagesToNoteMarkdown(
     systemLabel: String,
     imageLabel: String,
     audioLabel: String,
-    videoLabel: String
+    videoLabel: String,
+    stepsLabels: StepsExportLabels? = null
 ): String {
     return buildString {
         systemPrompt?.takeIf { it.isNotBlank() }?.let {
@@ -307,6 +317,9 @@ internal fun llamaMessagesToNoteMarkdown(
             append("## ")
             append(message.role.replaceFirstChar { it.titlecase(Locale.getDefault()) })
             append("\n\n")
+            if (stepsLabels != null && message.role == "assistant") {
+                NativeChatStepsCodec.decode(message.stepsJson)?.let { append(stepsToPlainLines(it, stepsLabels)) }
+            }
             append(message.content.trim())
             message.imagePath?.takeIf { it.isNotBlank() }?.let { append("\n\n").append(imageLabel).append(": ").append(it) }
             message.audioPath?.takeIf { it.isNotBlank() }?.let { append("\n\n").append(audioLabel).append(": ").append(it) }

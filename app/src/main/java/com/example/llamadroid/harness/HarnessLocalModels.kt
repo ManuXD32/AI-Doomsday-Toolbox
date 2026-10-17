@@ -229,8 +229,9 @@ class HarnessLocalModels(
                 }
                 .put("input_modalities", JSONArray().put("text").apply { if (model.supportsVision) put("image"); if (model.supportsAudio) put("audio") }))
         }
+        val helperVision = com.example.llamadroid.service.vision.VisionDescriptionService.isConfigured(context)
         managedServers.catalog().forEach { info ->
-            val row = info.modelRow()
+            val row = info.modelRow(helperVision)
             HarnessModelLabels.register("llama:${info.card.id}", info.card.name)
             modelCapabilities.get("llama:${info.card.id}")?.maxOutputTokens
                 ?.takeIf { it in 1L..Int.MAX_VALUE.toLong() }
@@ -262,7 +263,11 @@ class HarnessLocalModels(
         val cardId = modelId.removePrefix("llama:").toLongOrNull()
             ?.takeIf { modelId.startsWith("llama:") && it > 0 } ?: error("MANAGED_MODEL_NOT_FOUND")
         val usage = LlamaServerUsageLease(context, "card:$cardId", this)
-        try { managedServers.prepare(cardId).modelRow() } finally { usage.close() }
+        try {
+            managedServers.prepare(cardId).modelRow(
+                com.example.llamadroid.service.vision.VisionDescriptionService.isConfigured(context)
+            )
+        } finally { usage.close() }
     }
 
     suspend fun stream(request: JSONObject, emit: suspend (JSONObject) -> Unit) {
@@ -301,7 +306,7 @@ class HarnessLocalModels(
                     trace.ownerTicks = it.processStartTimeTicks
                 }
                 streamLlamaServer(
-                    request = request,
+                    rawRequest = request,
                     baseUrl = server.baseUrl ?: error("MANAGED_MODEL_URL_INVALID"),
                     model = server.profile?.modelPath?.substringAfterLast('/') ?: "default",
                     emit = activityEmit,
@@ -310,13 +315,14 @@ class HarnessLocalModels(
                     managedCard = true,
                     capabilityWireId = id,
                     cardId = cardId,
+                    visionCapable = server.hasCardVision(),
                 )
                 HarnessModelServerStability.rule.recordSuccess(cardId)
                 } finally { usage.close() }
             }
             id.startsWith("llama-swap:") -> {
                 streamLlamaServer(
-                    request = request,
+                    rawRequest = request,
                     baseUrl = settings.agentLlamaSwapUrl.value,
                     model = id.removePrefix("llama-swap:"),
                     emit = activityEmit,
@@ -539,7 +545,10 @@ class HarnessLocalModels(
         var heartbeat: Job? = null
         val settings = this.settings
         val model = requireNotNull(database.liteRtModelDao().getById(modelId)) { "MODEL_NOT_FOUND" }
-        val messages = request.getJSONArray("messages").objects()
+        // A model that cannot see images gets cached helper descriptions instead of an error.
+        val messages = (if (model.supportsVision) request.getJSONArray("messages")
+            else rewriteImages(request.getJSONArray("messages"), request.optString("model"), false, null)
+                ?: request.getJSONArray("messages")).objects()
         val media = HarnessLiteRtMedia(context, model, client)
         try {
         media.prepare(messages)
@@ -712,7 +721,7 @@ class HarnessLocalModels(
      * single confirmed-ended recovery, and per-request slot cancellation.
      */
     private suspend fun streamLlamaServer(
-        request: JSONObject,
+        rawRequest: JSONObject,
         baseUrl: String,
         model: String,
         emit: suspend (JSONObject) -> Unit,
@@ -724,7 +733,12 @@ class HarnessLocalModels(
         capabilityWireId: String? = null,
         /** Managed card id; keys the harness DeepSeek base cache. */
         cardId: Long? = null,
+        /** True when the server can read images (mmproj); other servers get image descriptions as text. */
+        visionCapable: Boolean = false,
     ) = coroutineScope {
+        // Moves the per-start port and per-project cwd lines out of the system message so the
+        // system prompt + tools (and the KV base keyed on them) are identical across sessions.
+        val request = HarnessPromptNormalizer.normalizeRequest(rawRequest)
         val completionId = "chatcmpl-${UUID.randomUUID()}"
         val modelName = request.optString("model").ifBlank { model }
         // Keep the correlation tuple on every metadata-only progress frame so
@@ -751,8 +765,20 @@ class HarnessLocalModels(
                 lastFrameAt.set(System.currentTimeMillis())
             }
         }
+        val imageDir = File(context.cacheDir, "harness_inference/${UUID.randomUUID()}")
         val worker = async(Dispatchers.IO) {
             try {
+                val chatMessages = rewriteImages(
+                    request.optJSONArray("messages"), request.optString("model"), visionCapable,
+                    store = { bytes, mime ->
+                        runCatching {
+                            imageDir.mkdirs()
+                            File(imageDir, "${UUID.randomUUID()}.${mime.substringAfter('/').substringBefore('+').ifBlank { "jpg" }}")
+                                .apply { writeBytes(bytes) }.absolutePath
+                        }.getOrNull()
+                    },
+                    cardId = cardId,
+                )
                 val owner = LlamaSlotOwnerKey(
                     endpointGeneration = "$endpointGeneration|$baseUrl",
                     modelConfiguration = model,
@@ -776,7 +802,7 @@ class HarnessLocalModels(
                 }
                 suspend fun runChat(kvSlotId: Int?, kvSlotOwner: LlamaSlotOwnerKey?) = llamaServer.chatWithToolsStreaming(
                     baseUrl = baseUrl,
-                    messages = llamaMessages(request),
+                    messages = llamaMessages(chatMessages),
                     tools = tools,
                     modelLabel = model,
                     thinkingEnabled = request.optBoolean("enable_thinking", true),
@@ -838,8 +864,23 @@ class HarnessLocalModels(
                     ) { lease ->
                         // A matching base restores the processed system prompt + tools for every new
                         // thread or retry, so they skip re-reading the ~10k-token harness prefix.
-                        val base = harnessBaseHint(request, cardId, model)
+                        val base = harnessBaseHint(request, baseUrl, cardId, model)
                         lease.request(base) { slotId -> runChat(slotId, if (slotId == null) owner else null) }
+                    }
+                } else if (managedCard && baseUrl.isNotBlank()) {
+                    // KV cache off: still go through the coordinator with a pin-only lease so it saves any
+                    // chat holder of the slot before this request borrows it (the slot manager alone
+                    // may share a chat's slot without saving it).
+                    NativeChatKvCacheCoordinator(context).withSlot(
+                        baseUrl = baseUrl,
+                        server = null,
+                        spec = KvSlotOwnerSpec(
+                            key = KvCacheKey.Harness(runtimeId, sessionId ?: requestId),
+                            persist = false,
+                            conversationId = "harness:$runtimeId:${sessionId ?: requestId}"
+                        )
+                    ) { lease ->
+                        lease.request(null) { slotId -> runChat(slotId, if (slotId == null) owner else null) }
                     }
                 } else {
                     runChat(null, owner)
@@ -878,6 +919,8 @@ class HarnessLocalModels(
                     )
                 }
             } finally {
+                // The directory was created for this request only (see imageDir above).
+                imageDir.deleteRecursively()
                 heartbeat.cancel()
                 channel.close()
             }
@@ -902,11 +945,12 @@ class HarnessLocalModels(
      * prefix metadata (hash, card, model, size estimate; never the text) for the "Prepare
      * caches" UI. Null when the request has no system prefix or the card is unknown.
      */
-    private fun harnessBaseHint(request: JSONObject, cardId: Long?, model: String): com.example.llamadroid.service.KvBaseHint? {
+    private fun harnessBaseHint(request: JSONObject, baseUrl: String, cardId: Long?, model: String): com.example.llamadroid.service.KvBaseHint? {
         if (cardId == null) return null
         val messages = request.optJSONArray("messages")
         val tools = request.optJSONArray("tools")
-        val hash = HarnessBaseCacheRegistry.prefixHash(messages, tools) ?: return null
+        val thinking = request.optBoolean("enable_thinking", true)
+        val hash = HarnessBaseCacheRegistry.prefixHash(messages, tools, thinking) ?: return null
         runCatching {
             HarnessBaseCacheRegistry.record(
                 context,
@@ -917,12 +961,18 @@ class HarnessLocalModels(
                 ),
                 runtimeId,
             )
+            HarnessBaseCacheRegistry.savePrefix(context, runtimeId, cardId, model, messages, tools, thinking)
         }
-        return HarnessBaseCacheRegistry.hint(cardId, model, hash)
+        // Prefix-only builder: normalized system message(s) + tools + a minimal user turn, never the session's own messages.
+        val systemTexts = HarnessBaseCacheRegistry.leadingSystemTextList(messages)
+        val builder = HarnessBaseCacheRegistry.prefixSender(
+            baseUrl, model, systemTexts, HarnessBaseCacheRegistry.agentTools(tools), thinking
+        )
+        return HarnessBaseCacheRegistry.hint(cardId, model, hash, builder)
     }
 
-    private fun llamaMessages(request: JSONObject): List<OllamaService.ChatMessage> =
-        request.optJSONArray("messages")?.objects().orEmpty().map { message ->
+    private fun llamaMessages(messages: JSONArray?): List<OllamaService.ChatMessage> =
+        messages?.objects().orEmpty().map { message ->
             val calls = message.optJSONArray("tool_calls")?.objects().orEmpty().mapNotNull { call ->
                 val function = call.optJSONObject("function") ?: return@mapNotNull null
                 val name = function.optString("name").trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
@@ -937,26 +987,46 @@ class HarnessLocalModels(
                 content = content(message),
                 toolCalls = calls.takeIf { it.isNotEmpty() },
                 toolCallId = message.optString("tool_call_id").takeIf { it.isNotEmpty() },
-                toolName = message.optString("name").takeIf { it.isNotEmpty() }
+                toolName = message.optString("name").takeIf { it.isNotEmpty() },
+                imagePath = message.optString(HarnessImageParts.KEY_IMAGE_PATH).takeIf { it.isNotEmpty() },
+                imagePaths = message.optJSONArray(HarnessImageParts.KEY_IMAGE_PATHS)?.let { array ->
+                    (0 until array.length()).map { array.optString(it) }.filter { it.isNotEmpty() }
+                }.orEmpty()
             )
         }
 
-    private fun llamaTools(request: JSONObject): List<AgentTool> =
-        request.optJSONArray("tools")?.objects().orEmpty().mapNotNull { item ->
-            val function = item.optJSONObject("function") ?: return@mapNotNull null
-            val name = function.optString("name").trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
-            val schema = function.optJSONObject("parameters") ?: JSONObject()
-            val properties = schema.optJSONObject("properties") ?: JSONObject()
-            AgentTool(
-                name = name,
-                description = function.optString("description"),
-                parameters = properties.keys().asSequence().associateWith { key ->
-                    properties.optJSONObject(key)?.optString("description", key) ?: key
-                },
-                requiredParams = schema.optJSONArray("required")?.strings().orEmpty(),
-                schemaJson = schema.toString()
-            )
+    /**
+     * Applies [HarnessImageParts] to a request's messages and records a metadata-only diagnostics line
+     * (reason only, never image content) when some image could only get a "could not be described" note.
+     */
+    private suspend fun rewriteImages(
+        messages: JSONArray?,
+        wireModel: String,
+        visionCapable: Boolean,
+        store: ((ByteArray, String) -> String?)?,
+        cardId: Long? = null,
+    ): JSONArray? {
+        if (messages == null) return null
+        val result = HarnessImageParts.rewrite(messages, visionCapable, HarnessImageParts.describer(context), store)
+        result.unavailableReasons.distinct().forEach { reason ->
+            runCatching {
+                HarnessModelFailureLog.get(context, runtimeId).record(
+                    HarnessModelFailure(
+                        timestampMs = System.currentTimeMillis(),
+                        code = "IMAGE_DESCRIPTION_UNAVAILABLE",
+                        exceptionClass = "VisionImageDescription",
+                        body = reason,
+                        model = wireModel,
+                        cardId = cardId,
+                    )
+                )
+            }
         }
+        return result.messages
+    }
+
+    private fun llamaTools(request: JSONObject): List<AgentTool> =
+        HarnessBaseCacheRegistry.agentTools(request.optJSONArray("tools"))
 
     /** Preserve the caller's OpenAI tool policy instead of forcing a tool turn. */
     private fun parseHarnessToolChoice(request: JSONObject): String? {
@@ -1035,9 +1105,6 @@ class HarnessLocalModels(
     }
 
     private fun JSONArray.objects(): List<JSONObject> = (0 until length()).mapNotNull { optJSONObject(it) }
-    private fun JSONArray.strings(): List<String> = (0 until length()).mapNotNull { index ->
-        optString(index).takeIf { it.isNotBlank() }
-    }
     private companion object {
         const val HARNESS_CHAT_OWNER = -73501L
         val SAFE_REQUEST_ID = Regex("^[A-Za-z0-9_.:-]{1,128}$")

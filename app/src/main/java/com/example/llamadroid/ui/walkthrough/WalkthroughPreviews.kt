@@ -27,6 +27,8 @@ internal fun lessonPreviewResource(id: String): Int? = when (id) {
     "knowledge" -> R.drawable.tour_lesson_knowledge
     "offline_library" -> R.drawable.tour_lesson_offline_library
     "servers_hub" -> R.drawable.tour_lesson_servers_hub
+    // The old Servers Hub screenshot shows the web UI servers page.
+    "web_servers" -> R.drawable.tour_lesson_servers_hub
     "distributed_llm" -> R.drawable.tour_lesson_distributed_llm
     "distributed_media" -> R.drawable.tour_lesson_distributed_media
     "benchmark" -> R.drawable.tour_lesson_benchmark

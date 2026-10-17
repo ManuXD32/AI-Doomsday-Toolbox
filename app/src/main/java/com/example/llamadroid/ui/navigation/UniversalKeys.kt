@@ -18,8 +18,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -43,22 +43,27 @@ import com.example.llamadroid.ui.theme.sprites.AppSpriteKey
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 
 /**
- * The five destinations of the single app-wide navigation bar/rail/drawer (Home, Chats, Tama,
- * Organizer, Settings), identical on root and deep screens. Declaration order is display order.
- * Tools and Library are reached from Home cards. Icon lookup lives here so themes can swap it once.
+ * The five main screens of the single app-wide navigation bar/rail/drawer (Home, Chats, Tools, Tama,
+ * Organizer), identical on root and deep screens. Declaration order is display order. Settings is a gear
+ * on every main top bar (and an explicit drawer entry), Library is a tab inside Tools. [barLabel] is the
+ * shorter text used under the icons of the bottom bar; the rail and drawer use [label].
+ * Icon lookup lives here so themes can swap it once.
  */
-enum class UniversalKey(val route: String, @StringRes val label: Int, val icon: ImageVector, val sprite: AppSpriteKey) {
+enum class UniversalKey(
+    val route: String,
+    @StringRes val label: Int,
+    val icon: ImageVector,
+    val sprite: AppSpriteKey,
+    @StringRes val barLabel: Int = label
+) {
     DASHBOARD("dashboard", R.string.studio_nav_home, Icons.Default.Home, AppSpriteKey.HOME),
     CHATS("chats", R.string.studio_nav_chats, Icons.Default.Forum, AppSpriteKey.CHATS),
+    TOOLS("ai_hub", R.string.studio_nav_tools, Icons.Default.GridView, AppSpriteKey.TOOLS, R.string.studio_bar_tools),
     TAMA("tama", R.string.studio_nav_tama, Icons.Default.FavoriteBorder, AppSpriteKey.TAMA),
-    ORGANIZER("notes_manager", R.string.soft_studio_home_organizer, Icons.Default.CalendarMonth, AppSpriteKey.ORGANIZER),
-    SETTINGS("settings", R.string.settings_title, Icons.Default.Settings, AppSpriteKey.SETTINGS);
+    ORGANIZER("notes_manager", R.string.soft_studio_home_organizer, Icons.Default.CalendarMonth, AppSpriteKey.ORGANIZER, R.string.studio_bar_organizer);
 
-    /** True when [baseRoute] (query/arguments already stripped) belongs to this key. */
-    fun isCurrent(baseRoute: String?): Boolean = when (this) {
-        SETTINGS -> baseRoute == "settings" || baseRoute?.startsWith("settings_") == true
-        else -> baseRoute == route
-    }
+    /** True when [baseRoute] (query/arguments already stripped) is exactly this key's root route. */
+    fun isCurrent(baseRoute: String?): Boolean = baseRoute == route
 }
 
 enum class UniversalKeysPlacement { STRIP, RAIL, NONE }
@@ -70,15 +75,15 @@ fun universalKeysPlacement(layout: AppNavigationLayout, isFirstRun: Boolean): Un
     else -> UniversalKeysPlacement.STRIP
 }
 
-/** Which key to highlight for [baseRoute] (query/arguments stripped); Tools/Library highlight Home. */
+/** Which key to highlight for [baseRoute] (query/arguments stripped); Settings, About and Logs highlight none. */
 fun selectedUniversalKey(baseRoute: String?): UniversalKey? {
     if (baseRoute == null) return null
-    if (UniversalKey.SETTINGS.isCurrent(baseRoute) || baseRoute == "about" || baseRoute == "logs") return UniversalKey.SETTINGS
-    if (baseRoute == UniversalKey.ORGANIZER.route) return UniversalKey.ORGANIZER
     return when (AppRoutePresentations.forRoute(baseRoute).parent) {
+        AppRootDestination.Home -> UniversalKey.DASHBOARD
         AppRootDestination.Chats -> UniversalKey.CHATS
+        AppRootDestination.Tools -> UniversalKey.TOOLS
         AppRootDestination.Tama -> UniversalKey.TAMA
-        AppRootDestination.Home, AppRootDestination.Tools, AppRootDestination.Library -> UniversalKey.DASHBOARD
+        AppRootDestination.Organizer -> UniversalKey.ORGANIZER
         null -> null
     }
 }
@@ -86,15 +91,13 @@ fun selectedUniversalKey(baseRoute: String?): UniversalKey? {
 /** Labels fit under the icons only on roomy windows at normal font scale. */
 fun universalKeyLabelsVisible(widthDp: Int, fontScale: Float): Boolean = widthDp >= 360 && fontScale < 1.3f
 
-fun NavController.navigateToUniversalKey(key: UniversalKey) {
-    when (key) {
-        UniversalKey.DASHBOARD, UniversalKey.CHATS, UniversalKey.TAMA -> navigateToRoot(key.route)
-        UniversalKey.ORGANIZER, UniversalKey.SETTINGS -> {
-            val onStack = runCatching { getBackStackEntry(key.route) }.getOrNull() != null
-            if (!(onStack && popBackStack(key.route, inclusive = false))) {
-                navigate(key.route) { launchSingleTop = true }
-            }
-        }
+fun NavController.navigateToUniversalKey(key: UniversalKey) = navigateToRoot(key.route)
+
+/** Opens Settings from the gear/drawer entry: single top, reusing the entry already on the stack. */
+fun NavController.navigateToSettings() {
+    val onStack = runCatching { getBackStackEntry(Screen.Settings.route) }.getOrNull() != null
+    if (!(onStack && popBackStack(Screen.Settings.route, inclusive = false))) {
+        navigate(Screen.Settings.route) { launchSingleTop = true }
     }
 }
 
@@ -121,8 +124,8 @@ fun UniversalKeyStrip(currentBaseRoute: String?, onKey: (UniversalKey) -> Unit) 
             ) {
                 UniversalKey.entries.forEach { key ->
                     val selected = key == selectedKey
-                    val label = stringResource(key.label)
-                    val description = stringResource(R.string.universal_key_open, label)
+                    val label = stringResource(key.barLabel)
+                    val description = stringResource(R.string.universal_key_open, stringResource(key.label))
                     val tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                     Column(
                         Modifier.weight(1f).heightIn(min = 48.dp)
@@ -143,8 +146,5 @@ fun UniversalKeyStrip(currentBaseRoute: String?, onKey: (UniversalKey) -> Unit) 
     }
 }
 
-/** Walkthrough anchor of a key: roots keep the historical `root.<route>` ids, Settings keeps `shell.settings`. */
-fun universalKeyTourTarget(key: UniversalKey): String = when (key) {
-    UniversalKey.SETTINGS -> "shell.settings"
-    else -> "root.${key.route}"
-}
+/** Walkthrough anchor of a key: roots keep the historical `root.<route>` ids. */
+fun universalKeyTourTarget(key: UniversalKey): String = "root.${key.route}"

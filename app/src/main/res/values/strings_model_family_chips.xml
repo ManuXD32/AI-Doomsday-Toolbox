@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="model_family_chip_chat">Chat</string>
+    <string name="model_family_chip_images">Images</string>
+    <string name="model_family_chip_onnx">ONNX</string>
+    <string name="model_family_chip_litert">LiteRT</string>
+    <string name="model_family_chip_stt">Speech-to-text</string>
+    <string name="model_family_chip_audio">Audio</string>
+    <string name="model_family_chip_sources">Sources</string>
+</resources>

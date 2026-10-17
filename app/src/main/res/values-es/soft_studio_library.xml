@@ -25,7 +25,7 @@
     <string name="soft_studio_library_models_desc">Descarga, importa, revisa y comparte los motores de tus tareas.</string>
     <string name="soft_studio_library_knowledge_desc">Crea bases de conocimiento buscables a partir de archivos, enlaces y notas.</string>
     <string name="soft_studio_library_offline_desc">Explora colecciones ZIM y abre artículos sin conexión dentro de la app.</string>
-    <string name="soft_studio_library_open_offline">Abrir biblioteca sin conexión</string>
+    <string name="soft_studio_library_open_offline">Wiki sin conexión</string>
     <string name="soft_studio_library_open_images">Galería de imágenes</string>
     <string name="soft_studio_library_open_videos">Galería de vídeos</string>
     <string name="soft_studio_library_open_audio">Audio</string>

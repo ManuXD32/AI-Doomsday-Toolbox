@@ -39,7 +39,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
@@ -186,6 +185,27 @@ class DelegateHarnessDriver(context: Context, val runtimeId: String) : AutoClose
             project.copy(harnessWorkspaceId = location.string("workspaceId") ?: project.harnessWorkspaceId), cleanTitle)
     }
 
+    /**
+     * Make an existing thread of [project] usable by the subagent: it keeps its context, so it is only
+     * registered and watched (no new session). Fails when the thread is unknown, archived or belongs to
+     * another project. The caller selects the model and applies the approval policy afterwards.
+     */
+    suspend fun adoptThread(
+        project: DelegateHarnessProject,
+        sessionId: String,
+        suppressApprovals: Boolean = true,
+    ): DelegateHarnessThread = guarded("THREAD_NOT_FOUND") {
+        requireClient()
+        val session = runtime.dao.session(sessionId)?.takeIf { it.workspaceId == project.workspaceId && !it.archived }
+            ?: throw DelegationHarnessException("THREAD_NOT_FOUND",
+                "That thread does not exist in this project (or it is archived). Use harness_list_threads for valid ids.")
+        val title = runtime.dao.conversations().firstOrNull { it.id == session.conversationId }?.title
+            ?.takeIf { it.isNotBlank() } ?: project.title
+        HarnessDelegatedSessions.register(runtimeId, sessionId, suppressApprovals)
+        attachThread(sessionId)
+        DelegateHarnessThread(sessionId, session.conversationId, project, title.take(80))
+    }
+
     /** Start watching an existing session (e.g. after the app process was restarted). Idempotent. */
     fun attachThread(sessionId: String) {
         if (watches.containsKey(sessionId)) return
@@ -267,21 +287,58 @@ class DelegateHarnessDriver(context: Context, val runtimeId: String) : AutoClose
         }
     }
 
+    /** Makes sure the project's `inputs/` folder exists (also with zero files), local or remote. Best effort. */
+    suspend fun ensureInputsDir(sessionId: String) {
+        runCatching {
+            withContext(Dispatchers.IO) {
+                val scopeInfo = runtime.workspaces.scope(sessionId)
+                if (scopeInfo.localRoot != null) scopeInfo.localFile(DelegateHarnessSupport.INPUTS_DIR).mkdirs()
+                else runtime.files.invoke(scopeInfo, "workspace.mkdir",
+                    org.json.JSONObject().put("path", DelegateHarnessSupport.INPUTS_DIR))
+            }
+        }
+    }
+
     private fun existingInputNames(scopeInfo: HarnessSessionScope): Set<String> {
         if (scopeInfo.localRoot == null) return emptySet()
         return scopeInfo.localFile(DelegateHarnessSupport.INPUTS_DIR).list()?.toSet().orEmpty()
     }
 
+    /**
+     * Upload [file] through the harness `fileUploads` service, as the harness composer does, and return
+     * the receipt id to reference in a `file` content block of [send]. Capped at 16 MiB like the composer.
+     */
+    suspend fun uploadAttachment(sessionId: String, name: String, file: File): String = guarded("ATTACHMENT_UPLOAD_FAILED") {
+        val client = requireClient()
+        if (!file.isFile) throw DelegationHarnessException("INPUT_MISSING", "Attachment '$name' is no longer available.")
+        if (file.length() > DelegateHarnessInputs.MAX_UPLOAD_BYTES) throw DelegationHarnessException("ATTACHMENT_TOO_LARGE",
+            "Attachment '$name' is larger than 16 MiB and cannot be uploaded as an image.")
+        val bytes = withContext(Dispatchers.IO) { file.readBytes() }
+        val result = client.call("fileUploads", "upload", buildJsonObject {
+            put("agentId", sessionId)
+            put("request", buildJsonObject {
+                put("name", name)
+                put("data", android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
+            })
+        })
+        when (result) {
+            is HarnessRpcResult.Failure -> throw DelegationHarnessException(result.error.code,
+                "The harness rejected the upload (${result.error.code}).")
+            is HarnessRpcResult.Success -> result.value.jsonObjectOrNull()?.string("receiptId")?.takeIf { it.isNotBlank() }
+                ?: throw DelegationHarnessException("ATTACHMENT_RECEIPT_MISSING", "The harness did not return an upload receipt.")
+        }
+    }
+
     // ---- prompting ---------------------------------------------------------------------------------
 
     /** Send [prompt] with delivery [mode] `queue` (default) or `steer`. */
-    suspend fun send(sessionId: String, prompt: String, mode: String = "queue") {
+    suspend fun send(sessionId: String, prompt: String, mode: String = "queue", receiptIds: List<String> = emptyList()) {
         val client = requireClient()
         val text = prompt.trim()
         if (text.isEmpty()) throw DelegationHarnessException("PROMPT_EMPTY", "The prompt is empty.")
         attachThread(sessionId)
         val delivery = if (mode == "steer") "steer" else "queue"
-        val content = buildJsonArray { add(buildJsonObject { put("type", "text"); put("text", text) }) }
+        val content = DelegateHarnessInputs.promptBlocks(text, receiptIds)
         val result = promptNativeHarnessSession(client, ordinaryHarnessSessionAddress(sessionId), content, delivery,
             TimeZone.getDefault().id)
         if (result is HarnessRpcResult.Failure) throw DelegationHarnessException(result.error.code,

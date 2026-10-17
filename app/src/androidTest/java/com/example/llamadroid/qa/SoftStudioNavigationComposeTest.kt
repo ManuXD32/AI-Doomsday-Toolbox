@@ -46,18 +46,20 @@ class SoftStudioNavigationComposeTest {
                         AppRootDestination.entries.map { root ->
                             AppNavigationDestination(root.route, root.name, Icons.Default.Home,
                                 onClick = { route = root.route })
-                        }, remember { SnackbarHostState() }, onUniversalKey = { route = it.route; settingsOpened = true }) { Text("Body") }
+                        }, remember { SnackbarHostState() }, onUniversalKey = { route = it.route },
+                        onSettings = { settingsOpened = true }) { Text("Body") }
                 }
             }
         }
         rule.onNodeWithTag("universal_keys_strip").assertIsDisplayed()
         rule.onNodeWithTag("studio_bar_chats").performClick()
         rule.runOnIdle { assertEquals("chats", route) }
-        rule.onNodeWithTag("studio_bar_settings").performClick()
+        rule.onNodeWithTag("soft_studio_settings").performClick()
         rule.runOnIdle { assertTrue(settingsOpened); route = "image_gen?startMode=0" }
         // Identical bar on deep screens.
         rule.onNodeWithTag("universal_keys_strip").assertIsDisplayed()
         rule.onNodeWithTag("studio_bar_dashboard").assertIsDisplayed()
+        rule.onNodeWithTag("studio_bar_ai_hub").assertIsDisplayed()
         rule.onNodeWithTag("studio_bar_tama").assertIsDisplayed()
         rule.onNodeWithTag("studio_bar_notes_manager").assertIsDisplayed()
     }
@@ -70,7 +72,7 @@ class SoftStudioNavigationComposeTest {
                 LocalDensity provides Density(LocalDensity.current.density, 2f)) {
                 LlamaDroidTheme(dynamicColor = false) {
                     val labels = listOf(R.string.studio_nav_home, R.string.studio_nav_chats, R.string.studio_nav_tools,
-                        R.string.studio_nav_library, R.string.studio_nav_tama)
+                        R.string.studio_nav_tama, R.string.soft_studio_home_organizer)
                     SoftStudioAppScaffold(route,
                         AppRootDestination.entries.mapIndexed { i, root ->
                             AppNavigationDestination(root.route, rule.activity.getString(labels[i]), Icons.Default.Home,

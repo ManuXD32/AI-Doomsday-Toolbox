@@ -19,6 +19,36 @@ class ExternalRouteResolverTest {
     }
 
     @Test
+    fun `redirects retired llama server routes to chats`() {
+        assertEquals(Screen.Chats.route, ExternalRouteResolver.resolveRoute("llama_servers"))
+        assertEquals(Screen.Chats.route, ExternalRouteResolver.resolveRoute("llama_server_list"))
+    }
+
+    @Test
+    fun `accepts round seven hub routes`() {
+        listOf(
+            "global_search",
+            "servers_hub",
+            "ai_hub?tab=tools",
+            "ai_hub?tab=library",
+            "all_media_gallery",
+            "all_media_gallery?type=image",
+            "all_media_gallery?type=audio&source=fastsd",
+            "all_media_gallery?source=sd_distributed"
+        ).forEach { route ->
+            assertEquals(route, ExternalRouteResolver.resolveRoute(route))
+        }
+        listOf(
+            "ai_hub?tab=bogus",
+            "all_media_gallery?type=doc",
+            "all_media_gallery?type=image&source=Bad Source",
+            "servers_hub/extra"
+        ).forEach { route ->
+            assertNull(route, ExternalRouteResolver.resolveRoute(route))
+        }
+    }
+
+    @Test
     fun `distinguishes no route from a rejected route`() {
         assertEquals(ExternalRouteResolution.NoRoute, ExternalRouteResolver.resolve(null))
         assertEquals(ExternalRouteResolution.Rejected, ExternalRouteResolver.resolve(" "))

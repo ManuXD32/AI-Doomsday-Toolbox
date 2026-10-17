@@ -3,6 +3,10 @@ package com.example.llamadroid.service
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 
+/** Stable (config-independent) rule so every tool chat shares the same cached prefix. */
+internal const val NATIVE_CHAT_STEP_GUIDANCE =
+    "Work in short visible steps: before a tool call, tell the user in one short sentence what you are about to do; after the results, say briefly what you found. When you have what you need, give the final answer. Never repeat a tool call that already succeeded."
+
 internal fun nativeChatToolAwarenessMessages(
     toolConfig: NativeChatToolConfig,
     knowledgeBaseRoutingGuide: String? = null,
@@ -12,7 +16,7 @@ internal fun nativeChatToolAwarenessMessages(
     add(
         OllamaService.ChatMessage(
             role = "system",
-            content = "You are enclosed in the app runtime. Use only the native tools explicitly available in this turn; do not assume shell access, arbitrary files, network, Android APIs, or external services unless a listed tool provides them."
+            content = "You are enclosed in the app runtime. Use only the native tools explicitly available in this turn; do not assume shell access, arbitrary files, network, Android APIs, or external services unless a listed tool provides them. Files listed in [Attached files: ...] lines on user messages were attached by the user and are available through chat_file_read. $NATIVE_CHAT_STEP_GUIDANCE"
         )
     )
     val currentYear = java.time.LocalDate.now().year
@@ -21,7 +25,7 @@ internal fun nativeChatToolAwarenessMessages(
         add(
             OllamaService.ChatMessage(
                 role = "system",
-                content = "A private workspace is available for this saved chat. Use list/read before editing existing files. Keep files focused, write at most one bounded batch per call, then use append_workspace_file, edit_workspace_lines, or apply_workspace_patch. Do not claim access to files outside this chat workspace."
+                content = "A private workspace is available for this saved chat. Use list/read before editing existing files. Keep files focused, write at most one bounded batch per call, then use append_workspace_file, edit_workspace_lines, or apply_workspace_patch. Do not claim access to workspace files outside this chat workspace; files the user attached (listed in [Attached files: ...] lines) are read with chat_file_read."
             )
         )
     }
@@ -145,6 +149,13 @@ internal fun nativeChatToolAwarenessMessages(
                 content = guidance
             )
         )
+    }
+
+    if (toolConfig.webSearchEnabled || toolConfig.fetchUrlEnabled || toolConfig.kiwixSearchEnabled || toolConfig.knowledgeBaseEnabled) {
+        val citation = "Citation requirement: when tool results include source_citations or KB citation Markdown links, cite web, Kiwix, search_page, fetch_url, and KB-derived claims using the exact Markdown links. If you use numeric citations like [1], make them Markdown links to the matching source URL. If you use KB labels like [AL.pdf chunk 9], keep the full link form [AL.pdf chunk 9](kb://chunk/123)."
+        // Appended to the preceding guidance message (stable text) rather than added as a new message.
+        if (isEmpty()) add(OllamaService.ChatMessage(role = "system", content = citation))
+        else this[lastIndex] = this[lastIndex].let { it.copy(content = it.content + "\n\n" + citation) }
     }
 
     extensionBlocks.filter { it.isNotBlank() }.forEach { add(OllamaService.ChatMessage(role = "system", content = it)) }

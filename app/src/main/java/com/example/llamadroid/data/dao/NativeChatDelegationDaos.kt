@@ -74,6 +74,9 @@ interface NativeChatDelegateTaskDao {
         now: Long = System.currentTimeMillis()
     )
 
+    @Query("UPDATE native_chat_delegate_tasks SET optionsJson = :options, updatedAt = :now WHERE id = :id")
+    suspend fun setOptions(id: Long, options: String?, now: Long = System.currentTimeMillis())
+
     @Query("UPDATE native_chat_delegate_tasks SET progressNote = :note, updatedAt = :now WHERE id = :id")
     suspend fun setProgressNote(id: Long, note: String?, now: Long = System.currentTimeMillis())
 
@@ -147,6 +150,55 @@ interface NativeChatDelegateMessageDao {
     @Transaction
     suspend fun append(message: NativeChatDelegateMessageEntity): Long =
         insert(message.copy(seq = maxSeq(message.taskId) + 1))
+
+    // ---- durable mailbox (SUB_TO_MAIN rows keep their kind reply/question/result/progress in toolName) ----
+
+    /** Main-to-subagent messages the loop has not injected yet, oldest first. */
+    @Query("SELECT * FROM native_chat_delegate_messages WHERE taskId = :taskId AND role = 'main_to_sub' AND delivered = 0 ORDER BY seq ASC")
+    suspend fun getUndeliveredMainToSub(taskId: Long): List<NativeChatDelegateMessageEntity>
+
+    /** Undelivered subagent reply/question/result rows after [afterSeq], oldest first. */
+    @Query(
+        "SELECT * FROM native_chat_delegate_messages WHERE taskId = :taskId AND role = 'sub_to_main' AND delivered = 0 " +
+            "AND seq > :afterSeq AND toolName IN ('reply', 'question', 'result') ORDER BY seq ASC"
+    )
+    suspend fun getUndeliveredSubToMain(taskId: Long, afterSeq: Int): List<NativeChatDelegateMessageEntity>
+
+    /** The newest undelivered subagent reply/question, else the latest one (for the status text). */
+    @Query(
+        "SELECT * FROM native_chat_delegate_messages WHERE taskId = :taskId AND role = 'sub_to_main' " +
+            "AND toolName IN ('reply', 'question') ORDER BY delivered ASC, seq DESC LIMIT 1"
+    )
+    suspend fun getStatusSubMessage(taskId: Long): NativeChatDelegateMessageEntity?
+
+    @Query("SELECT DISTINCT taskId FROM native_chat_delegate_messages WHERE role = 'sub_to_main' AND delivered = 0 AND toolName IN ('reply', 'question', 'result')")
+    suspend fun taskIdsWithUndeliveredSubToMain(): List<Long>
+
+    /** Atomic claim: returns 1 only for the caller that flipped the row from undelivered to delivered. */
+    @Query("UPDATE native_chat_delegate_messages SET delivered = 1 WHERE id = :id AND delivered = 0")
+    suspend fun markDelivered(id: Long): Int
+
+    /** Claims every undelivered SUB_TO_MAIN row of the given kinds; returns how many were claimed. */
+    @Query("UPDATE native_chat_delegate_messages SET delivered = 1 WHERE taskId = :taskId AND role = 'sub_to_main' AND delivered = 0 AND toolName IN (:kinds)")
+    suspend fun markSubToMainDelivered(taskId: Long, kinds: List<String>): Int
+
+    @Query("SELECT seq FROM native_chat_delegate_messages WHERE id = :id")
+    suspend fun seqOf(id: Long): Int
+
+    /** Content of the newest main-to-subagent message (to tell a viewer-typed "[User]" message apart). */
+    @Query("SELECT content FROM native_chat_delegate_messages WHERE taskId = :taskId AND role = 'main_to_sub' ORDER BY seq DESC LIMIT 1")
+    suspend fun latestMainToSubContent(taskId: Long): String?
+
+    /**
+     * Injects one undelivered main-to-subagent row: claims it and appends its USER copy in ONE
+     * transaction, so a crash can neither lose nor duplicate the message.
+     */
+    @Transaction
+    suspend fun deliverMainToSub(row: NativeChatDelegateMessageEntity): Boolean {
+        if (markDelivered(row.id) != 1) return false
+        append(NativeChatDelegateMessageEntity(taskId = row.taskId, seq = 0, role = "user", content = row.content))
+        return true
+    }
 
     @Query("UPDATE native_chat_delegate_messages SET compactedOut = 1 WHERE taskId = :taskId AND seq <= :throughSeq AND isSummary = 0")
     suspend fun markCompactedThrough(taskId: Long, throughSeq: Int)

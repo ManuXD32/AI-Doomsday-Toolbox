@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.llamadroid.R
 import com.example.llamadroid.data.WalkthroughPreferences
 import com.example.llamadroid.ui.navigation.AppRootDestination
+import com.example.llamadroid.ui.navigation.AppRoutePresentations
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -202,15 +203,20 @@ internal fun routeBase(route: String?) = route?.substringBefore('?')?.substringB
 
 /** The actual destination is observed; tapping Next never pretends a required navigation happened. */
 internal fun tourHasArrived(step: TourStep, currentRoute: String?) = routeBase(currentRoute) == routeBase(step.route) ||
-    (step.toolId == "chat" && routeBase(currentRoute) == "llama_servers")
+    (step.toolId == "chat" && routeBase(currentRoute) == "chats")
 
 internal fun tourTarget(step: TourStep, currentRoute: String?, drawerNavigation: Boolean, drawerOpen: Boolean): String? {
     if (tourHasArrived(step, currentRoute)) return step.focusTarget
     val current = routeBase(currentRoute)
-    val root = AppRootDestination.entries.firstOrNull { it.route == current }
+    val root = AppRoutePresentations.forRoute(current).takeIf { it.isRoot }?.parent
     if (current == "settings" && step.route in setOf("about", "logs")) return "settings.${step.route}"
     if (root == null) return "back"
     if (step.route == "settings") return if (drawerNavigation && drawerOpen) "drawer.settings" else "shell.settings"
+    // Library is a tab inside Tools: reach Tools first, then its Library tab.
+    if (routeBase(step.route) == "library") {
+        if (current == "ai_hub") return "library.tab"
+        return if (drawerNavigation) { if (drawerOpen) "drawer.root.ai_hub" else "shell.menu" } else "root.ai_hub"
+    }
     val nextRoot = AppRootDestination.entries.firstOrNull { it.route == routeBase(step.route) }
     if (nextRoot != null) return if (drawerNavigation) { if (drawerOpen) "drawer.root.${nextRoot.route}" else "shell.menu" } else "root.${nextRoot.route}"
     if (current == "ai_hub" && step.toolId != null) return "tool.${step.toolId}"

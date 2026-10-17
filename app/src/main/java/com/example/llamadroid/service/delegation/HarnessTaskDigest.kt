@@ -146,6 +146,8 @@ data class HarnessTaskDigest(
         val values = frame.objectValue("projections")?.objectValue("values")
         if (values != null) next = next.foldProjections(values)
         if (frame.objectValue("assistantStream")?.objectValue("activeAttempt") != null) next = next.copy(running = true)
+        // The opening frame's cursor is the session's last event sequence (applied after the records so none are skipped).
+        frame.long("cursor")?.takeIf { it > next.lastSeq }?.let { next = next.copy(lastSeq = it) }
         return next
     }
 

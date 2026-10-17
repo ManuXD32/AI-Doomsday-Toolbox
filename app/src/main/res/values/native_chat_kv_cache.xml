@@ -37,8 +37,13 @@
     <string name="kv_prepare_caches_intro">A base cache holds the preprocessed system prompt (tool instructions) and tool definitions, so new chats only process their own first message. A chat\'s own cache never overwrites it; it is rebuilt only when missing or when the model, context, tools or template change.</string>
     <string name="kv_prepare_chat_base">Chat base</string>
     <string name="kv_prepare_chat_base_hint">Built from this server\'s default tools. Chats with the same tools restore it; the chat\'s own system prompt and knowledge-base notes are placed after it.</string>
-    <string name="kv_prepare_deepseek_base">DeepSeek base</string>
-    <string name="kv_prepare_deepseek_base_hint">Created automatically by the first DeepSeek Harness request on this server.</string>
+    <string name="kv_prepare_deepseek_base">DeepSeek harness</string>
+    <string name="kv_prepare_deepseek_base_hint">System prompt and tools of the DeepSeek Harness agent (about 10k tokens), with the port and project folder lines moved out so it stays identical. Rebuilt from the last prompt a harness task sent to this server.</string>
+    <string name="kv_prepare_subagent_base">DeepSeek subagent</string>
+    <string name="kv_prepare_subagent_base_hint">System prompt and tools of the DeepSeek subagent, shared by every task on this server. Built with this server\'s default thinking setting, the one the subagent uses.</string>
+    <string name="kv_prepare_harness_need_task">Run one DeepSeek task on this server first.</string>
+    <string name="kv_prepare_used_by">Used by tasks: %1$d · last used %2$s</string>
+    <string name="kv_prepare_used_by_never">Not used by a task yet</string>
     <string name="kv_prepare_action">Prepare</string>
     <string name="kv_prepare_working">Preparing…</string>
     <string name="kv_prepare_clear">Clear</string>
@@ -65,4 +70,9 @@
     <string name="kv_prepare_fail_request">The server rejected the warm-up request. Check that the model is loaded.</string>
     <string name="kv_prepare_fail_disk">Not enough free disk space to save the cache.</string>
     <string name="kv_prepare_fail_save">The cache could not be saved or verified on disk.</string>
+    <string name="native_chat_kv_cache_compress_now">Compress now</string>
+    <string name="native_chat_kv_cache_compressing">Compressing: %1$d / %2$d…</string>
+    <string name="native_chat_kv_cache_compress_saved">Saved %1$s</string>
+    <string name="native_chat_kv_cache_compress_nothing">Nothing could be compressed</string>
+    <string name="native_chat_kv_cache_unpack_speed">Unpack speed: ~%1$s MB/s</string>
 </resources>

@@ -131,6 +131,19 @@ internal fun combineBaseUsage(usages: List<KvBaseUsage>): KvBaseUsage {
 }
 
 /**
+ * Registry keys (`usage:<stem>` and `last:<identity>` -> stem) that point at a base stem with no
+ * file on disk. Pure so it can be unit-tested.
+ */
+internal fun staleRegistryKeys(entries: Map<String, *>, existingStems: Set<String>): List<String> =
+    entries.mapNotNull { (key, value) ->
+        // Only counters of bases that existed (built or restored) and whose file is now gone. Entries
+        // that only record misses of a never-built base, and the `last:` identity entries used to tell
+        // a changed prefix from a first use, stay.
+        val existed = (value as? String)?.let { KvBaseUsage.parse(it) }?.let { it.uses > 0 || it.builtAt > 0L } == true
+        if (key.startsWith("usage:") && key.removePrefix("usage:") !in existingStems && existed) key else null
+    }
+
+/**
  * Small SharedPreferences-backed registry of base-cache decisions, so the "Prepare caches" sheet
  * can prove reuse ("used N times, last miss: ..."). Stores counters and enum names only.
  */
@@ -139,8 +152,16 @@ class KvBaseUsageRegistry(context: Context) {
 
     fun get(key: KvCacheKey.Base): KvBaseUsage = KvBaseUsage.parse(prefs.getString(USAGE + key.fileStem, null))
 
-    /** Combined usage of every chat base on record. */
-    fun chatTotal(): KvBaseUsage = combineBaseUsage(
+    /**
+     * Combined usage of every chat base on record. With [existingStems] (the stems that have files
+     * on disk) entries of deleted bases are pruned first so the totals match the files.
+     */
+    fun chatTotal(existingStems: Set<String>? = null): KvBaseUsage {
+        if (existingStems != null) pruneMissing(existingStems)
+        return chatTotalOfAll()
+    }
+
+    private fun chatTotalOfAll(): KvBaseUsage = combineBaseUsage(
         prefs.all.filterKeys { it.startsWith(USAGE + "base-chat-") }.values.map { KvBaseUsage.parse(it as? String) }
     )
 
@@ -151,7 +172,28 @@ class KvBaseUsageRegistry(context: Context) {
 
     fun recordBuilt(key: KvCacheKey.Base, now: Long = System.currentTimeMillis()) = update(key) { it.withBuilt(now) }
 
-    fun clear(key: KvCacheKey.Base) = prefs.edit { remove(USAGE + key.fileStem) }
+    fun clear(key: KvCacheKey.Base) = clearStems(listOf(key.fileStem))
+
+    /** Drops the counters of deleted base [stems] and the `last:` identity entries that point at them. */
+    fun clearStems(stems: Collection<String>) {
+        if (stems.isEmpty()) return
+        val set = stems.toSet()
+        synchronized(LOCK) {
+            val identities = prefs.all.filter { (k, v) -> k.startsWith(LAST) && (v as? String) in set }.keys
+            prefs.edit {
+                set.forEach { remove(USAGE + it) }
+                identities.forEach { remove(it) }
+            }
+        }
+    }
+
+    /** Removes counters and identities of bases that no longer have files ([existingStems]). */
+    fun pruneMissing(existingStems: Set<String>) {
+        synchronized(LOCK) {
+            val stale = staleRegistryKeys(prefs.all, existingStems)
+            if (stale.isNotEmpty()) prefs.edit { stale.forEach { remove(it) } }
+        }
+    }
 
     /**
      * Remembers the base [key] last used for this server+model identity and returns the previous

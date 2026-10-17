@@ -96,4 +96,12 @@
     <string name="native_chat_delegation_viewer_thread_role_user">Prompt</string>
     <string name="native_chat_delegation_viewer_thread_role_assistant">Harness agent</string>
     <string name="native_chat_delegation_viewer_thread_close">Close</string>
+    <string name="native_chat_delegation_viewer_details_show">Show details</string>
+    <string name="native_chat_delegation_viewer_details_hide">Hide details</string>
+    <string name="native_chat_delegation_viewer_more_actions">More actions</string>
+    <string name="native_chat_delegation_viewer_message_hint">Message the subagent</string>
+    <string name="native_chat_delegation_viewer_message_send">Send message</string>
+    <string name="native_chat_delegation_viewer_message_sent">Message sent (task: %1$s)</string>
+    <string name="native_chat_delegation_viewer_message_reopened">Task reopened with your message</string>
+    <string name="native_chat_delegation_viewer_message_failed">Could not send the message</string>
 </resources>

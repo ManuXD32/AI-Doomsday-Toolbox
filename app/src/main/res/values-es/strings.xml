@@ -701,7 +701,7 @@
     <string name="lang_jpn">Japonés</string>
     
     <!-- Model Hub -->
-    <string name="models_hub">Centro de Modelos</string>
+    <string name="models_hub">Modelos</string>
     <string name="models_download">Descargar</string>
     <string name="models_installed">Instalados</string>
     <string name="models_share">Compartir</string>
@@ -739,7 +739,7 @@
     <string name="models_storage_bar_desc">Almacenamiento del dispositivo: %1$s en total, %2$s libres, %3$s usados por modelos</string>
     <string name="models_tab_installed">Instalados</string>
     <string name="models_tab_downloading">Descargando</string>
-    <string name="models_tab_discover">Explorar</string>
+    <string name="models_tab_discover">Descubrir</string>
     <string name="models_export_error_not_found">Archivo de origen no encontrado</string>
     <string name="models_export_success">Exportado: %s</string>
     <string name="models_export_failed">Fallo al exportar: %s</string>
@@ -919,6 +919,7 @@
     <string name="general_output_folder">Carpeta de Salida</string>
     <string name="general_output_default">Almacenamiento interno</string>
     <string name="general_output_hint">Para imágenes, transcripciones y videos</string>
+    <string name="general_helper_models_hint">Los modelos auxiliares (generación de títulos, visión) están en Chats ⋮ → Modelos auxiliares.</string>
     <string name="general_language">Idioma</string>
     <string name="general_language_system">Sistema</string>
     <string name="general_language_en">English</string>
@@ -2274,7 +2275,7 @@
     <string name="enhancer_enhancing">Mejorando prompt…</string>
     
     <!-- Kiwix Offline Library -->
-    <string name="kiwix_title">Biblioteca Offline Kiwix</string>
+    <string name="kiwix_title">Wiki sin conexión</string>
     <string name="kiwix_lan_access">Acceso LAN</string>
     <string name="kiwix_lan_enabled">Otros dispositivos pueden acceder</string>
     <string name="kiwix_lan_disabled">Solo local</string>
@@ -2872,7 +2873,7 @@
     <string name="settings_theme">Tema</string>
     <string name="settings_language">Idioma</string>
     <string name="settings_battery_title">Optimización de Batería</string>
-    <string name="settings_kiwix_title">Biblioteca Offline Kiwix</string>
+    <string name="settings_kiwix_title">Wiki sin conexión</string>
     <string name="settings_threads">Hilos</string>
     <string name="settings_context">Tamaño de Contexto</string>
     
@@ -7464,9 +7465,8 @@
     <string name="onnx_models_badge_unsupported_legacy">Antiguo no compatible</string>
     <string name="bgr_export_warning_unavailable">No se pudo abrir la carpeta de salida BgR.</string>
     <string name="bgr_export_warning_failed">No se pudo copiar la salida BgR: %1$s</string>
-    <string name="ai_servers_hub_title">Centro de Servidores</string>
+    <string name="ai_servers_hub_title">Servidores web UI</string>
     <string name="ai_servers_hub_subtitle">Web UIs locales para cada herramienta de IA</string>
-    <string name="ai_servers_hub_card_desc">Comparte herramientas de IA con servidores web, QR, usuarios y logs</string>
     <string name="ai_servers_hub_hero_title">Servidores de IA, bien ordenados</string>
     <string name="ai_servers_hub_hero_subtitle">Inicia un servidor o todo el grupo, elige acceso privado o LAN, y comparte una interfaz de navegador que funciona en moviles y portatiles.</string>
     <string name="ai_servers_running_badge">%1$d/%2$d activos</string>
@@ -8847,5 +8847,5 @@
     <string name="generation_queue_retry_files_discarded">Se descartaron los archivos guardados para reintentar</string>
     <string name="generation_queue_start_blocked_title">La cola de generación necesita atención</string>
     <string name="generation_queue_start_blocked_message">Android no pudo iniciar el procesamiento en segundo plano. Abre la aplicación y ejecuta la cola.</string>
-    <string name="onnx_models_tab_catalog">Catálogo</string>
+    <string name="onnx_models_tab_catalog">Descubrir</string>
 </resources>

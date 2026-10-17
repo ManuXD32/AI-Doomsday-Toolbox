@@ -61,6 +61,7 @@ import com.example.llamadroid.data.model.NativeChatDelegateTaskEntity
 import com.example.llamadroid.data.model.NativeChatDelegateTaskState
 import com.example.llamadroid.harness.HarnessProjectFilesNavigator
 import com.example.llamadroid.harness.HarnessRuntimeContent
+import com.example.llamadroid.service.NativeChatWorkspaceSupport
 import com.example.llamadroid.service.delegation.NativeChatDelegation
 import com.example.llamadroid.service.titlegen.TitleGenerationSettings
 import com.example.llamadroid.service.vision.VisionHelperSettings
@@ -266,17 +267,17 @@ internal sealed class ChatFileImportResult {
 }
 
 /**
- * Copies each picked document into `files/llama_chat_files/<chatId>/<timestamp>_<name>` and inserts a
+ * Copies each picked document into `files/native_chat_workspaces/<chatId>/attachments/<name>` (unique names) and inserts a
  * pending USER attachment row. Runs on the IO dispatcher; each file is capped at [CHAT_FILE_MAX_BYTES].
  */
 internal suspend fun importChatFiles(context: Context, chatId: Long, uris: List<Uri>): List<ChatFileImportResult> =
     withContext(Dispatchers.IO) {
         val dao = AppDatabase.getDatabase(context).llamaMessageAttachmentDao()
-        val dir = File(context.filesDir, "llama_chat_files/$chatId").apply { mkdirs() }
+        val dir = NativeChatWorkspaceSupport.subDir(context, chatId, NativeChatWorkspaceSupport.ATTACHMENTS_DIR)
         uris.map { uri ->
             val displayName = runCatching { queryDocumentDisplayName(context, uri) }.getOrNull()
                 ?.takeIf { it.isNotBlank() } ?: "file"
-            val target = File(dir, "${System.currentTimeMillis()}_${sanitizeChatFileName(displayName)}")
+            val target = NativeChatWorkspaceSupport.uniqueFile(dir, sanitizeChatFileName(displayName))
             try {
                 var total = 0L
                 var tooLarge = false
@@ -478,20 +479,29 @@ internal fun rememberChatAttachmentsUi(repository: LlamaRepository, chatId: Long
     return ChatAttachmentsUi(compactions, byMessage, pending)
 }
 
-/** Returns a launcher callback for the composer's "Attach file" item (any mime type, several files). */
+/** The composer's "Attach file" launcher plus whether a picked file is still being imported. */
+internal class ChatFilePicker(val launch: () -> Unit, val importing: Boolean)
+
+/** Returns the launcher for the composer's "Attach file" item (any mime type, several files). */
 @Composable
-internal fun rememberChatFilePicker(chatId: Long): () -> Unit {
+internal fun rememberChatFilePicker(chatId: Long): ChatFilePicker {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    var importing by remember(chatId) { mutableStateOf(false) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         val picked = uris.distinctBy { it.toString() }
         if (picked.isNotEmpty()) {
+            importing = true
             scope.launch {
-                toastChatFileImportErrors(context, importChatFiles(context, chatId, picked))
+                try {
+                    toastChatFileImportErrors(context, importChatFiles(context, chatId, picked))
+                } finally {
+                    importing = false
+                }
             }
         }
     }
-    return { launcher.launch(arrayOf("*/*")) }
+    return ChatFilePicker(launch = { launcher.launch(arrayOf("*/*")) }, importing = importing)
 }
 
 /** Text sent when the user attaches files but types nothing. */

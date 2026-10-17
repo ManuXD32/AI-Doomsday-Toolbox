@@ -94,6 +94,9 @@ class LlamaRepository(
             }
         }
         deleteAttachmentFiles(chatId)
+        runCatching {
+            File(LlamaApplication.instance.filesDir, "native_chat_workspaces/$chatId").deleteRecursively()
+        }
     }
 
     private fun deleteAttachmentFiles(chatId: Long) {
@@ -272,6 +275,29 @@ class LlamaRepository(
         tps: Double,
         generationTimeMs: Long
     ) = messageDao.updateMessageThinkingAndContent(id, content, thinking, promptTokens, completionTokens, tps, generationTimeMs)
+
+    /** Streaming/final flush; [stepsJson] null keeps the stored steps untouched (replies without steps). */
+    suspend fun updateMessageStreaming(
+        id: Long,
+        content: String,
+        thinking: String?,
+        promptTokens: Int,
+        completionTokens: Int,
+        tps: Double,
+        generationTimeMs: Long,
+        stepsJson: String?
+    ) = if (stepsJson == null) {
+        messageDao.updateMessageThinkingAndContent(id, content, thinking, promptTokens, completionTokens, tps, generationTimeMs)
+    } else {
+        messageDao.updateMessageThinkingContentAndSteps(
+            id, content, thinking, promptTokens, completionTokens, tps, generationTimeMs, stepsJson
+        )
+    }
+
+    suspend fun updateMessageSteps(id: Long, stepsJson: String?) = messageDao.updateMessageSteps(id, stepsJson)
+
+    suspend fun updateMessageStepsAndText(id: Long, content: String, thinking: String?, stepsJson: String?) =
+        messageDao.updateMessageStepsAndText(id, content, thinking, stepsJson)
     
     suspend fun deleteMessage(message: LlamaMessageEntity) {
         invalidateCompactionsFrom(message.chatId, message.id)

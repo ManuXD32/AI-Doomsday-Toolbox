@@ -103,6 +103,13 @@ interface KvSlotLease {
      * because the slot lock is not re-entrant.
      */
     suspend fun <T> request(base: KvBaseHint? = null, block: suspend (slotId: Int?) -> T): T
+
+    /**
+     * After a stopped (cancelled) turn: waits until the slot is idle, saves this owner's state to
+     * disk when it persists, and records it as the slot's current holder, so Continue and the next
+     * turn reuse the work instead of an older file. Returns true when a state was saved.
+     */
+    suspend fun saveAfterStop(): Boolean = false
 }
 
 /**

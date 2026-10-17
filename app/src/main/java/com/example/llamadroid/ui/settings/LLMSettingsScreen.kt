@@ -979,8 +979,6 @@ fun LlmSettingsContent(
                 }
             }
             
-            if (isGlobal) item { ChatKvCacheStorageCard() }
-
             // llama.cpp model loading policy
             item {
                 Card(

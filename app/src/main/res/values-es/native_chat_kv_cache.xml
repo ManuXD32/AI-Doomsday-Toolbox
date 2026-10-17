@@ -37,8 +37,13 @@
     <string name="kv_prepare_caches_intro">Una caché base guarda el prompt de sistema (instrucciones de herramientas) y las definiciones de herramientas ya procesados, para que los chats nuevos solo procesen su primer mensaje. La caché propia de un chat nunca la sobrescribe; solo se reconstruye si falta o si cambian el modelo, el contexto, las herramientas o la plantilla.</string>
     <string name="kv_prepare_chat_base">Base de chat</string>
     <string name="kv_prepare_chat_base_hint">Se crea con las herramientas por defecto de este servidor. Los chats con las mismas herramientas la restauran; el prompt de sistema del chat y las notas de bases de conocimiento van después.</string>
-    <string name="kv_prepare_deepseek_base">Base de DeepSeek</string>
-    <string name="kv_prepare_deepseek_base_hint">La crea automáticamente la primera petición de DeepSeek Harness en este servidor.</string>
+    <string name="kv_prepare_deepseek_base">DeepSeek harness</string>
+    <string name="kv_prepare_deepseek_base_hint">Prompt de sistema y herramientas del agente DeepSeek Harness (unos 10k tokens), sin las líneas del puerto y la carpeta del proyecto para que siga idéntico. Se reconstruye con el último prompt que una tarea del harness envió a este servidor.</string>
+    <string name="kv_prepare_subagent_base">Subagente DeepSeek</string>
+    <string name="kv_prepare_subagent_base_hint">Prompt de sistema y herramientas del subagente DeepSeek, compartidos por todas las tareas de este servidor. Se crea con el ajuste de razonamiento por defecto de este servidor, el que usa el subagente.</string>
+    <string name="kv_prepare_harness_need_task">Ejecuta antes una tarea de DeepSeek en este servidor.</string>
+    <string name="kv_prepare_used_by">Usada por tareas: %1$d · último uso %2$s</string>
+    <string name="kv_prepare_used_by_never">Aún no la usa ninguna tarea</string>
     <string name="kv_prepare_action">Preparar</string>
     <string name="kv_prepare_working">Preparando…</string>
     <string name="kv_prepare_clear">Borrar</string>
@@ -65,4 +70,9 @@
     <string name="kv_prepare_fail_request">El servidor rechazó la petición de calentamiento. Comprueba que el modelo está cargado.</string>
     <string name="kv_prepare_fail_disk">No hay espacio libre suficiente en disco para guardar la caché.</string>
     <string name="kv_prepare_fail_save">No se pudo guardar o verificar la caché en disco.</string>
+    <string name="native_chat_kv_cache_compress_now">Comprimir ahora</string>
+    <string name="native_chat_kv_cache_compressing">Comprimiendo: %1$d / %2$d…</string>
+    <string name="native_chat_kv_cache_compress_saved">Ahorro: %1$s</string>
+    <string name="native_chat_kv_cache_compress_nothing">No se pudo comprimir nada</string>
+    <string name="native_chat_kv_cache_unpack_speed">Velocidad de descompresión: ~%1$s MB/s</string>
 </resources>

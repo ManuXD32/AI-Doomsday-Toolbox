@@ -1,7 +1,5 @@
 package com.example.llamadroid.service.perf
 
-import com.example.llamadroid.service.LlamaBinaryCapabilities
-
 /** Why `--threads` was (not) changed. Stored by name in the report, so keep the names stable. */
 enum class ThreadFitReason { DISABLED, UNKNOWN_CPUSET, NOT_IN_COMMAND, FITS, REDUCED }
 
@@ -13,8 +11,11 @@ data class ThreadFitDecision(
     val reason: ThreadFitReason
 )
 
-/** Outcome of the thread-priority request. Stored by name in the report. */
-enum class PriorityState { OFF, UNSUPPORTED, REQUESTED, APPLIED, REFUSED }
+/**
+ * Outcome of the app-side thread-priority request. Stored by name in the report; UNSUPPORTED is only
+ * produced by older reports (it meant the binary lacked `--prio`).
+ */
+enum class PriorityState { OFF, UNSUPPORTED, REQUESTED, APPLIED, PARTIAL, REFUSED }
 
 data class LockedScreenOptions(
     val threadFit: Boolean,
@@ -30,16 +31,6 @@ data class LaunchTuningResult(
 
 /** Pure launch-argument tuning for the locked-screen performance options. */
 object LockedScreenLaunchTuning {
-    /** llama.cpp priority level 2 = "high". */
-    const val PRIORITY_LEVEL = "2"
-
-    /**
-     * llama.cpp (ggml-cpu `ggml_thread_apply_priority`) prints
-     * `warn: failed to set thread priority <n> : <strerror> (<errno>)` when the kernel refuses.
-     */
-    fun isPriorityWarning(line: String): Boolean =
-        line.contains("failed to set thread priority", ignoreCase = true)
-
     fun decideThreadFit(configured: Int, grantedCpus: Int?, enabled: Boolean): ThreadFitDecision = when {
         !enabled -> ThreadFitDecision(configured, configured, grantedCpus, ThreadFitReason.DISABLED)
         grantedCpus == null || grantedCpus <= 0 ->
@@ -51,12 +42,14 @@ object LockedScreenLaunchTuning {
 
     /**
      * Applies thread fit and priority to a finished argument list. [foregroundCpus] is the content
-     * of `/dev/cpuset/foreground/cpus` (null when unreadable).
+     * of `/dev/cpuset/foreground/cpus` (null when unreadable). Thread priority never touches the
+     * arguments: llama.cpp's `--prio` uses SCHED_FIFO, which Android refuses with a warning per thread,
+     * so the app raises the threads itself (see [LockedScreenThreadPriority]). A `--prio` the user
+     * typed in custom arguments passes through untouched.
      */
     fun tune(
         args: List<String>,
         options: LockedScreenOptions,
-        capabilities: LlamaBinaryCapabilities?,
         foregroundCpus: String?
     ): LaunchTuningResult {
         val out = args.toMutableList()
@@ -77,28 +70,7 @@ object LockedScreenLaunchTuning {
                 out.add(configured.toString())
             }
         }
-        val priority = applyPriority(out, options.threadPriority, capabilities)
+        val priority = if (options.threadPriority) PriorityState.REQUESTED else PriorityState.OFF
         return LaunchTuningResult(out, fit, priority)
-    }
-
-    private fun applyPriority(
-        out: MutableList<String>,
-        enabled: Boolean,
-        capabilities: LlamaBinaryCapabilities?
-    ): PriorityState {
-        if (!enabled) return PriorityState.OFF
-        if (capabilities == null || capabilities.allowAll || !capabilities.supports("--prio")) {
-            return PriorityState.UNSUPPORTED
-        }
-        // A user-supplied priority in custom flags wins.
-        if (out.none { it == "--prio" }) {
-            out.add("--prio")
-            out.add(PRIORITY_LEVEL)
-        }
-        if (capabilities.supports("--prio-batch") && out.none { it == "--prio-batch" }) {
-            out.add("--prio-batch")
-            out.add(PRIORITY_LEVEL)
-        }
-        return PriorityState.REQUESTED
     }
 }

@@ -3,7 +3,7 @@
     <string name="model_library_error_source_duplicate">This link is already saved. Select it from Saved links to reuse it.</string>
     <string name="model_library_title">Model library</string>
     <string name="model_library_subtitle">Saved sources, bundles, and files waiting for inspection</string>
-    <string name="model_library_hub_title">Saved sources and bundles</string>
+    <string name="model_library_hub_title">Model sources</string>
     <string name="model_library_hub_desc">Keep model links, multipart bundles, provenance, and pending files together.</string>
     <string name="model_library_sources_tab">Sources</string>
     <string name="model_library_pending_tab">Unknown</string>

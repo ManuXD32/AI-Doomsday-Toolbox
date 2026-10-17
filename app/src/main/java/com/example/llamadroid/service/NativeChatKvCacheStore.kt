@@ -52,9 +52,22 @@ enum class KvCompressionOutcome { COMPRESSED, INCOMPRESSIBLE, SKIPPED }
  * Idle files are gzipped to `<stem>.bin.gz`; llama-server only reads `.bin`, so [unpack] runs
  * before any restore.
  */
-class NativeChatKvCacheStore internal constructor(private val root: File) {
+class NativeChatKvCacheStore internal constructor(
+    private val root: File,
+    /** Called with the stems of every deletion (after the files are gone); resets base counters. */
+    private val onStemsDeleted: (Set<String>) -> Unit = {},
+    /** Called with (uncompressed bytes, elapsed ms) after every successful unpack. */
+    private val onUnpacked: (Long, Long) -> Unit = { _, _ -> }
+) {
 
-    constructor(context: Context) : this(File(context.applicationContext.filesDir, DIR_NAME))
+    constructor(context: Context) : this(
+        File(context.applicationContext.filesDir, DIR_NAME),
+        { stems ->
+            val bases = stems.filter { KvCacheKey.namespaceOfStem(it) == KvCacheNamespace.BASE }
+            if (bases.isNotEmpty()) KvBaseUsageRegistry(context.applicationContext).clearStems(bases)
+        },
+        { bytes, ms -> KvUnpackSpeedStore(context.applicationContext).record(bytes, ms) }
+    )
 
     /** Directory handed to llama-server through `--slot-save-path`. */
     val directory: File get() = root
@@ -109,6 +122,11 @@ class NativeChatKvCacheStore internal constructor(private val root: File) {
     fun delete(key: KvCacheKey) = deleteStem(key.fileStem)
 
     private fun deleteStem(stem: String) {
+        deleteStemFiles(stem)
+        notifyDeleted(setOf(stem))
+    }
+
+    private fun deleteStemFiles(stem: String) {
         slotFile(stem).delete()
         gzFile(stem).delete()
         metaFile(stem).delete()
@@ -117,15 +135,30 @@ class NativeChatKvCacheStore internal constructor(private val root: File) {
         File(root, "$stem.bin.tmp").delete()
     }
 
+    /** Single hook for every delete path: base counters reset and in-memory holders drop the stems. */
+    private fun notifyDeleted(stems: Set<String>) {
+        if (stems.isEmpty()) return
+        runCatching { onStemsDeleted(stems) }
+        deletionListeners.forEach { listener -> runCatching { listener(stems) } }
+    }
+
+    /** Stems that currently have any file in the cache folder (used to prune stale counters). */
+    fun existingStems(): Set<String> = stems()
+
     /** Deletes every cache of one namespace (chat, delegate or harness). */
     fun deleteNamespace(namespace: KvCacheNamespace) {
-        stems().filter { KvCacheKey.namespaceOfStem(it) == namespace }.forEach(::deleteStem)
+        deleteStems(stems().filter { KvCacheKey.namespaceOfStem(it) == namespace })
+    }
+
+    private fun deleteStems(targets: Collection<String>) {
+        targets.forEach(::deleteStemFiles)
+        notifyDeleted(targets.toSet())
     }
 
     /** Deletes every harness cache that belongs to [runtimeId]. */
     fun deleteHarnessRuntime(runtimeId: String) {
         val prefix = KvCacheKey.harnessRuntimeStemPrefix(runtimeId)
-        stems().filter { it.startsWith(prefix) }.forEach(::deleteStem)
+        deleteStems(stems().filter { it.startsWith(prefix) })
     }
 
     /** Bytes used by one harness runtime's caches, including sidecars. */
@@ -171,6 +204,29 @@ class NativeChatKvCacheStore internal constructor(private val root: File) {
             val meta = readMetaOfStem(stem) ?: return@filter false
             !meta.incompressible && nowMs - maxOf(bin.lastModified(), meta.savedAt) > idleMs
         }
+
+    /**
+     * Stems with an uncompressed `.bin` that the compression policy says are due. A stem is due
+     * when idle for at least [KvCompressionPolicy.requiredIdleMs] (1 h for caches that unpack in
+     * about 3 s or less, else 24 h), or always when [ignoreIdle] ("Compress now"). Incompressible
+     * and [protectedStems] are skipped.
+     */
+    fun compressionCandidates(
+        nowMs: Long,
+        bytesPerMs: Double,
+        protectedStems: Set<String>,
+        ignoreIdle: Boolean = false
+    ): List<String> = stems().filter { stem ->
+        if (stem in protectedStems || KvCacheKey.namespaceOfStem(stem) == null) return@filter false
+        val bin = slotFile(stem).takeIf { it.isFile && it.length() > 0L } ?: return@filter false
+        val meta = readMetaOfStem(stem) ?: return@filter false
+        if (meta.incompressible) return@filter false
+        val idleMs = nowMs - maxOf(bin.lastModified(), meta.savedAt)
+        KvCompressionPolicy.isDue(idleMs, bin.length(), bytesPerMs, ignoreIdle)
+    }
+
+    /** Uncompressed size of [stem]'s `.bin`, or 0 when there is none. */
+    fun binBytes(stem: String): Long = slotFile(stem).takeIf { it.isFile }?.length() ?: 0L
 
     /**
      * Compresses one idle `.bin` to `.bin.gz` when a first-MiB sample deflates by at least
@@ -234,6 +290,7 @@ class NativeChatKvCacheStore internal constructor(private val root: File) {
         val expected = readMetaOfStem(stem)?.originalBytes?.takeIf { it > 0L } ?: (gz.length() * 4)
         if (!canSave(expected)) return false
         val temp = File(root, "$stem.bin.tmp")
+        val startedAt = System.nanoTime()
         return try {
             GZIPInputStream(gz.inputStream().buffered(IO_BUFFER), IO_BUFFER).use { input ->
                 temp.outputStream().buffered(IO_BUFFER).use { out -> input.copyTo(out, IO_BUFFER) }
@@ -242,8 +299,11 @@ class NativeChatKvCacheStore internal constructor(private val root: File) {
                 temp.delete()
                 return false
             }
+            val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000L
+            val written = bin.length()
             bin.setLastModified(System.currentTimeMillis())
             gz.delete()
+            runCatching { onUnpacked(written, elapsedMs) }
             true
         } catch (_: IOException) {
             temp.delete()
@@ -256,7 +316,9 @@ class NativeChatKvCacheStore internal constructor(private val root: File) {
         root.listFiles()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
 
     fun clearAll() {
+        val deleted = stems()
         root.listFiles()?.forEach { if (it.isFile) it.delete() }
+        notifyDeleted(deleted)
     }
 
     /**
@@ -290,13 +352,16 @@ class NativeChatKvCacheStore internal constructor(private val root: File) {
         }
         var total = entries.sumOf { it.second }
         var freed = 0L
+        val evicted = mutableListOf<String>()
         for ((stem, bytes, _) in entries.sortedBy { it.third }) {
             if (total <= budgetBytes) break
             if (stem in protectedStems) continue
-            deleteStem(stem)
+            deleteStemFiles(stem)
+            evicted += stem
             total -= bytes
             freed += bytes
         }
+        notifyDeleted(evicted.toSet())
         return freed
     }
 
@@ -322,6 +387,13 @@ class NativeChatKvCacheStore internal constructor(private val root: File) {
 
     companion object {
         const val DIR_NAME = "llama_kv_slots"
+
+        /** Process-wide listeners told which stems were deleted (the coordinator drops its holders). */
+        private val deletionListeners = java.util.concurrent.CopyOnWriteArrayList<(Set<String>) -> Unit>()
+
+        internal fun addDeletionListener(listener: (Set<String>) -> Unit) {
+            deletionListeners.add(listener)
+        }
         const val SLOT_SAVE_PATH_FLAG = "--slot-save-path"
 
         /** Saving is skipped when it would leave less free space than this. */

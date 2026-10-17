@@ -44,7 +44,17 @@ enum class KvCacheEligibility(@StringRes val reasonRes: Int?) {
 }
 
 /** One slot as reported by `GET /slots`. */
-internal data class KvSlotFact(val id: Int, val nCtx: Int, val idTask: Int?, val nPromptTokens: Int)
+internal data class KvSlotFact(
+    val id: Int,
+    val nCtx: Int,
+    val idTask: Int?,
+    val nPromptTokens: Int,
+    /** `is_processing` from `/slots`; null when the server does not report it. */
+    val isProcessing: Boolean? = null
+)
+
+/** True once a slot finished (or never started) its task, so its state can be saved safely. */
+internal fun isSlotSettled(slot: KvSlotFact?): Boolean = slot != null && slot.isProcessing != true
 
 /** Server facts read from `/props` and `/slots`. */
 internal data class KvServerFacts(
@@ -52,7 +62,9 @@ internal data class KvServerFacts(
     val slotNCtx: Int,
     val totalSlots: Int,
     val chatTemplate: String,
-    val slots: List<KvSlotFact>
+    val slots: List<KvSlotFact>,
+    /** False when `/slots` could not be read (timeout/error); `slots` is then empty and means UNKNOWN. */
+    val slotsKnown: Boolean = true
 )
 
 /**
@@ -148,6 +160,65 @@ class NativeChatKvCacheCoordinator(context: Context) {
         } finally {
             unmarkInUse(spec.key)
             LlamaSlotManager.release(reservation)
+        }
+    }
+
+    /**
+     * Runs a background utility request (page summarizer, helper prompts) on a slot that does not
+     * disturb a chat's state. The request body must carry `id_slot = slotId` when [block] gets a
+     * non-null id. Preference: a never-held slot; otherwise a slot whose holder has no live turn,
+     * whose dirty state is saved first (as the swap does) and which is then marked so the holder's
+     * state is restored on its next request (a "utility" holder). Works with a single slot.
+     * Remote, non-llama-server, slotless or unreachable servers run `block(null)`. The whole
+     * [block] runs under the slot lock, so it never interleaves with a chat request on that slot.
+     */
+    suspend fun <T> withUtilitySlot(
+        baseUrl: String,
+        server: LlamaServerEntity?,
+        block: suspend (slotId: Int?) -> T
+    ): T {
+        if (server != null && (!server.isLlamaServerEngine() || !isNativeChatLoopbackHost(server.host))) {
+            return block(null)
+        }
+        val facts = withContext(Dispatchers.IO) { readFacts(baseUrl) } ?: return block(null)
+        if (facts.totalSlots <= 0 || facts.slotNCtx <= 0) return block(null)
+        val endpoint = normalize(baseUrl)
+        val held = holders.entries
+            .filter { it.key.startsWith("$endpoint#") }
+            .associate { it.key.substringAfterLast('#').toInt() to inUseStems.containsKey(it.value.key.fileStem) }
+        val reserved = LlamaSlotManager.snapshotAssignments()
+            .filter { it.owner.allocationKey == endpoint }.mapTo(mutableSetOf()) { it.slotId }
+        val choice = chooseUtilitySlot(facts.totalSlots, held, reserved) ?: return block(null)
+        val counter = activeRequests.computeIfAbsent(endpoint) { AtomicInteger() }
+        counter.incrementAndGet()
+        try {
+            return LlamaSlotManager.withSlotRequest(endpoint, choice.slot) {
+                val hk = slotKey(baseUrl, choice.slot)
+                val holder = holders[hk]
+                if (choice.saveHolder && holder != null && holder.dirty && holder.persists &&
+                    holder.key != UTILITY_KEY && withContext(Dispatchers.IO) { ensureSlotActionsSupported(baseUrl, choice.slot) }
+                ) {
+                    withContext(NonCancellable + Dispatchers.IO) {
+                        val fresh = readFacts(baseUrl)
+                        val fact = fresh?.slots?.firstOrNull { it.id == choice.slot }
+                        // Only save a slot that still holds the holder; an unreadable /slots is trusted.
+                        if (fresh != null && !isHolderDisturbed(true, fresh.slotsKnown, holder.matches(fact))) {
+                            saveSlot(baseUrl, choice.slot, holder.key, holder.server, fresh)
+                        }
+                    }
+                }
+                try {
+                    block(choice.slot)
+                } finally {
+                    if (holder != null || choice.saveHolder) {
+                        withContext(NonCancellable + Dispatchers.IO) {
+                            recordHolder(baseUrl, server, UTILITY_KEY, persists = false, slot = choice.slot, dirty = false)
+                        }
+                    }
+                }
+            }
+        } finally {
+            counter.decrementAndGet()
         }
     }
 
@@ -320,6 +391,17 @@ class NativeChatKvCacheCoordinator(context: Context) {
     ) : KvSlotLease {
         override val slotId: Int? = reservation.slotId
 
+        /** True once a request of this owner ran on the slot, so the slot holds this owner's state. */
+        @Volatile
+        private var ranRequest = false
+
+        override suspend fun saveAfterStop(): Boolean {
+            if (!ranRequest || !spec.persist || spec.key is KvCacheKey.Base) return false
+            return withContext(NonCancellable + Dispatchers.IO) {
+                saveOwnerAfterStop(baseUrl, server, spec.key, reservation.slotId)
+            }
+        }
+
         override suspend fun <T> request(base: KvBaseHint?, block: suspend (slotId: Int?) -> T): T {
             val counter = activeRequests.computeIfAbsent(normalize(baseUrl)) { AtomicInteger() }
             counter.incrementAndGet()
@@ -335,6 +417,7 @@ class NativeChatKvCacheCoordinator(context: Context) {
                 val slot = reservation.slotId
                 cancelDeferredSave(spec.key)
                 val outcome = swapIn(baseUrl, server, spec, slot, onStatus)
+                ranRequest = true
                 val persists = outcome.persists
                 val baseAction = if (base != null && spec.persist && persists) {
                     restoreBaseIfNeeded(baseUrl, server, spec, slot, base, outcome.ownStatePresent, onStatus)
@@ -390,7 +473,7 @@ class NativeChatKvCacheCoordinator(context: Context) {
         if (!persists && !holderNeedsSave) return@withContext SwapOutcome(persists, holder?.key == spec.key)
         val facts = readFacts(baseUrl) ?: return@withContext SwapOutcome(persists, holder?.key == spec.key)
         val slotFact = facts.slots.firstOrNull { it.id == slot }
-        val disturbed = holder != null && !holder.matches(slotFact)
+        val disturbed = isHolderDisturbed(holder != null, facts.slotsKnown, holder?.matches(slotFact) == true)
         val holderIsMe = holder?.key == spec.key && !disturbed
         val myFileValid = persists && !holderIsMe && ownFileValid(server, spec.key, facts)
         val decision = decideSwap(
@@ -527,35 +610,131 @@ class NativeChatKvCacheCoordinator(context: Context) {
         }
     }
 
+    /**
+     * After a stopped turn: waits (up to [STOP_IDLE_WAIT_MS], polling `/slots`) until the slot is
+     * idle, saves the owner's state, then records it as the slot holder from fresh `/slots` facts
+     * and marks it clean, so the "disturbed" check trusts it for Continue and the next turn.
+     */
+    private suspend fun saveOwnerAfterStop(
+        baseUrl: String,
+        server: LlamaServerEntity?,
+        key: KvCacheKey,
+        slot: Int
+    ): Boolean {
+        if (slotActionsSupport[normalize(baseUrl)] != true) return false
+        val deadline = System.currentTimeMillis() + STOP_IDLE_WAIT_MS
+        while (true) {
+            val facts = readFacts(baseUrl) ?: return false
+            if (isSlotSettled(facts.slots.firstOrNull { it.id == slot })) break
+            if (System.currentTimeMillis() >= deadline) {
+                DebugLog.log("NativeChatKvCache: save after stop skipped reason=slot_busy")
+                return false
+            }
+            delay(STOP_POLL_MS)
+        }
+        return LlamaSlotManager.withSlotRequest(normalize(baseUrl), slot) {
+            val facts = readFacts(baseUrl) ?: return@withSlotRequest false
+            val fact = facts.slots.firstOrNull { it.id == slot }
+            if (!isSlotSettled(fact) || (fact?.nPromptTokens ?: 0) <= 0) return@withSlotRequest false
+            if (saveSlot(baseUrl, slot, key, server, facts) != KvSaveResult.OK) return@withSlotRequest false
+            val after = readFacts(baseUrl)?.slots?.firstOrNull { it.id == slot }
+            holders[slotKey(baseUrl, slot)] = KvSlotHolderState(
+                key = key,
+                persists = true,
+                dirty = false,
+                server = server,
+                idTask = after?.idTask,
+                nPromptTokens = after?.nPromptTokens ?: 0
+            )
+            DebugLog.log("NativeChatKvCache: saved after stop ${key.namespace} slot=$slot")
+            true
+        }
+    }
+
     // ---- idle compression ----
 
     /** At most once per hour per process, compresses idle caches in the background. */
     private fun maybeScheduleCompression() {
+        startIdleTimer()
         val now = System.currentTimeMillis()
         val last = lastCompressionMs.get()
         if (now - last < COMPRESSION_INTERVAL_MS || !lastCompressionMs.compareAndSet(last, now)) return
-        scope.launch {
-            runCatching { compressIdleCaches(now) }.onFailure {
-                if (it is kotlinx.coroutines.CancellationException) throw it
-                DebugLog.log("NativeChatKvCache: compression pass failed ${it.javaClass.simpleName}")
-            }
+        scope.launch { runCompressionPass(now) }
+    }
+
+    private suspend fun runCompressionPass(now: Long) {
+        runCatching { compressIdleCaches(now) }.onFailure {
+            if (it is kotlinx.coroutines.CancellationException) throw it
+            DebugLog.log("NativeChatKvCache: compression pass failed ${it.javaClass.simpleName}")
         }
     }
 
-    private suspend fun compressIdleCaches(nowMs: Long) {
-        val protectedStems = holders.values.map { it.key.fileStem }.toMutableSet().apply {
+    /**
+     * Light timer on the shared IO scope: every [IDLE_TIMER_MS] it runs a compression pass when no
+     * lease is active, keeping the hourly throttle. Started once per process; cancelled by
+     * [stopIdleTimer]. Sleeps in `delay`, never a busy loop.
+     */
+    private fun startIdleTimer() {
+        val current = idleTimer.get()
+        if (current?.isActive == true) return
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            while (true) {
+                delay(IDLE_TIMER_MS)
+                if (inUseStems.isNotEmpty() || activeRequests.values.any { it.get() > 0 }) continue
+                val now = System.currentTimeMillis()
+                val last = lastCompressionMs.get()
+                if (now - last < COMPRESSION_INTERVAL_MS || !lastCompressionMs.compareAndSet(last, now)) continue
+                runCompressionPass(now)
+            }
+        }
+        if (idleTimer.compareAndSet(current, job)) job.start() else job.cancel()
+    }
+
+    private fun protectedCompressionStems(): MutableSet<String> =
+        holders.values.map { it.key.fileStem }.toMutableSet().apply {
             addAll(deferredSaves.keys)
             addAll(inUseStems.keys)
         }
-        var compressed = 0
-        for (stem in store.idleCompressionCandidates(nowMs, COMPRESSION_IDLE_MS, protectedStems)) {
-            if (inUseStems.containsKey(stem) || holders.values.any { it.key.fileStem == stem }) continue
-            val outcome = keyMutexes.getOrPut(stem) { Mutex() }.withLock {
-                if (inUseStems.containsKey(stem)) KvCompressionOutcome.SKIPPED else store.compressStem(stem)
-            }
-            if (outcome == KvCompressionOutcome.COMPRESSED) compressed++
+
+    private suspend fun compressIdleCaches(nowMs: Long) {
+        val speed = KvUnpackSpeedStore(appContext).effectiveBytesPerMs()
+        val candidates = store.compressionCandidates(nowMs, speed, protectedCompressionStems())
+        val result = compressStems(candidates) {}
+        if (result.compressed > 0) DebugLog.log("NativeChatKvCache: compressed ${result.compressed} idle caches")
+    }
+
+    /**
+     * "Compress now": compresses every eligible cache immediately, ignoring idle time but still
+     * skipping in-use and holder stems and still applying the first-MiB sample rule. Takes the same
+     * per-stem mutex as saves and restores. Reports progress before and after each stem.
+     */
+    suspend fun compressAllNow(onProgress: (KvCompressProgress) -> Unit = {}): KvCompressResult =
+        withContext(Dispatchers.IO) {
+            val candidates = store.compressionCandidates(
+                System.currentTimeMillis(), KvCompressionPolicy.DEFAULT_BYTES_PER_MS,
+                protectedCompressionStems(), ignoreIdle = true
+            )
+            compressStems(candidates, onProgress)
         }
-        if (compressed > 0) DebugLog.log("NativeChatKvCache: compressed $compressed idle caches")
+
+    private suspend fun compressStems(
+        candidates: List<String>,
+        onProgress: (KvCompressProgress) -> Unit
+    ): KvCompressResult {
+        val savedBefore = store.compressionSavedBytes()
+        var compressed = 0
+        onProgress(KvCompressProgress(0, candidates.size))
+        candidates.forEachIndexed { index, stem ->
+            if (!inUseStems.containsKey(stem) && holders.values.none { it.key.fileStem == stem }) {
+                val outcome = keyMutexes.getOrPut(stem) { Mutex() }.withLock {
+                    if (inUseStems.containsKey(stem)) KvCompressionOutcome.SKIPPED else store.compressStem(stem)
+                }
+                if (outcome == KvCompressionOutcome.COMPRESSED) compressed++
+            }
+            onProgress(KvCompressProgress(index + 1, candidates.size))
+        }
+        val saved = (store.compressionSavedBytes() - savedBefore).coerceAtLeast(0L)
+        return KvCompressResult(compressed, saved)
     }
 
     private suspend fun saveIfHolder(baseUrl: String, slot: Int, key: KvCacheKey, requireDirty: Boolean) {
@@ -595,15 +774,19 @@ class NativeChatKvCacheCoordinator(context: Context) {
         slot: Int,
         dirty: Boolean = true
     ) {
-        val fact = runCatching { httpGet("${baseUrl.trimEnd('/')}/slots") }.getOrNull()
-            ?.let { parseKvSlots(it) }?.firstOrNull { it.id == slot }
+        val parsed = runCatching { httpGet("${baseUrl.trimEnd('/')}/slots") }.getOrNull()
+            ?.let { parseKvSlotsOrNull(it) }
+        val fact = parsed?.firstOrNull { it.id == slot }
+        // An unreadable /slots keeps the holder trusted (factsKnown=false) instead of storing facts
+        // that can never match, which made every following request restore an older file.
         holders[slotKey(baseUrl, slot)] = KvSlotHolderState(
             key = key,
             persists = persists,
             dirty = dirty,
             server = server,
             idTask = fact?.idTask,
-            nPromptTokens = fact?.nPromptTokens ?: 0
+            nPromptTokens = fact?.nPromptTokens ?: 0,
+            factsKnown = fact != null
         )
     }
 
@@ -782,9 +965,14 @@ class NativeChatKvCacheCoordinator(context: Context) {
     private fun readFacts(baseUrl: String): KvServerFacts? {
         val props = runCatching { httpGet("${baseUrl.trimEnd('/')}/props") }.getOrNull()
             ?.let { parseKvServerProps(it) } ?: return null
-        val slots = runCatching { httpGet("${baseUrl.trimEnd('/')}/slots") }.getOrNull()
-            ?.let { parseKvSlots(it) }.orEmpty()
-        val facts = props.copy(slots = slots, totalSlots = props.totalSlots.takeIf { it > 0 } ?: slots.size)
+        val parsedSlots = runCatching { httpGet("${baseUrl.trimEnd('/')}/slots") }.getOrNull()
+            ?.let { parseKvSlotsOrNull(it) }
+        val slots = parsedSlots.orEmpty()
+        val facts = props.copy(
+            slots = slots,
+            totalSlots = props.totalSlots.takeIf { it > 0 } ?: slots.size,
+            slotsKnown = parsedSlots != null
+        )
         observe(baseUrl, facts)
         return facts
     }
@@ -845,6 +1033,9 @@ class NativeChatKvCacheCoordinator(context: Context) {
     }
 
     companion object {
+        /** Holder recorded on a slot a utility request advanced; matches no chat, so chats restore their file. */
+        private val UTILITY_KEY: KvCacheKey = KvCacheKey.Chat(Long.MIN_VALUE)
+
         private const val RESTORE_TIMEOUT_MS = 120_000
         private const val SAVE_TIMEOUT_MS = 120_000
         private const val PROBE_TIMEOUT_MS = 8_000
@@ -861,7 +1052,13 @@ class NativeChatKvCacheCoordinator(context: Context) {
         internal const val BASE_BUDGET_BYTES = 1L * 1024 * 1024 * 1024
 
         internal const val COMPRESSION_INTERVAL_MS = 60L * 60 * 1000
-        internal const val COMPRESSION_IDLE_MS = 24L * 60 * 60 * 1000
+
+        /** Idle timer period; the hourly throttle still applies. */
+        internal const val IDLE_TIMER_MS = 30L * 60 * 1000
+
+        /** After a stop: how long to wait for the slot to go idle, and the `/slots` polling period. */
+        internal const val STOP_IDLE_WAIT_MS = 10_000L
+        internal const val STOP_POLL_MS = 250L
 
         private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         private val keyMutexes = ConcurrentHashMap<String, Mutex>()
@@ -871,6 +1068,19 @@ class NativeChatKvCacheCoordinator(context: Context) {
         private val slotActionsSupport = ConcurrentHashMap<String, Boolean>()
         private val lastMaxIdTask = ConcurrentHashMap<String, Int>()
         private val lastCompressionMs = AtomicLong(0L)
+        private val idleTimer = java.util.concurrent.atomic.AtomicReference<Job?>(null)
+
+        init {
+            // Deleted caches (Erase all, Clear, eviction, failed restore) must not stay recorded as slot holders.
+            NativeChatKvCacheStore.addDeletionListener { stems ->
+                holders.values.removeAll { it.key.fileStem in stems }
+            }
+        }
+
+        /** Cancels the idle compression timer (tests / shutdown). */
+        internal fun stopIdleTimer() {
+            idleTimer.getAndSet(null)?.cancel()
+        }
 
         /** Base stems being built right now (prepare or background rebuild). */
         private val baseBuilds: MutableSet<String> = ConcurrentHashMap.newKeySet()
@@ -906,9 +1116,10 @@ class NativeChatKvCacheCoordinator(context: Context) {
          * blank after tasks were seen) marks a restart of the endpoint.
          */
         private fun observe(baseUrl: String, facts: KvServerFacts) {
+            if (!facts.slotsKnown) return
             val maxId = facts.slots.mapNotNull { it.idTask }.maxOrNull() ?: -1
             val previous = lastMaxIdTask.put(normalize(baseUrl), maxId)
-            if (previous != null && maxId < previous) onServerRestarted(baseUrl, keepLastId = maxId)
+            if (shouldInferRestart(true, previous, maxId)) onServerRestarted(baseUrl, keepLastId = maxId)
         }
 
         /** Clears slot-support, holder and dirty state of one physical endpoint. */
@@ -923,7 +1134,7 @@ class NativeChatKvCacheCoordinator(context: Context) {
         internal fun resetForTest() {
             keyMutexes.clear(); holders.clear(); slotActionsSupport.clear(); lastMaxIdTask.clear()
             deferredSaves.values.forEach { it.cancel() }; deferredSaves.clear(); restartLocks.clear()
-            inUseStems.clear(); lastCompressionMs.set(0L)
+            inUseStems.clear(); lastCompressionMs.set(0L); stopIdleTimer()
             baseBuilds.clear(); baseBuildAttempts.clear(); activeRequests.clear()
         }
     }
@@ -966,7 +1177,10 @@ internal fun parseKvServerProps(body: String): KvServerFacts? = runCatching {
     )
 }.getOrNull()
 
-internal fun parseKvSlots(body: String): List<KvSlotFact> = runCatching {
+internal fun parseKvSlots(body: String): List<KvSlotFact> = parseKvSlotsOrNull(body).orEmpty()
+
+/** Null when [body] is not a JSON array (an error page), so callers can tell UNKNOWN from empty. */
+internal fun parseKvSlotsOrNull(body: String): List<KvSlotFact>? = runCatching {
     val array = JSONArray(body)
     (0 until array.length()).mapNotNull { index ->
         val slot = array.optJSONObject(index) ?: return@mapNotNull null
@@ -974,7 +1188,8 @@ internal fun parseKvSlots(body: String): List<KvSlotFact> = runCatching {
             id = slot.optInt("id", index),
             nCtx = slot.optInt("n_ctx"),
             idTask = if (slot.has("id_task")) slot.optInt("id_task") else null,
-            nPromptTokens = slot.optInt("n_prompt_tokens")
+            nPromptTokens = slot.optInt("n_prompt_tokens"),
+            isProcessing = if (slot.has("is_processing")) slot.optBoolean("is_processing") else null
         )
     }
-}.getOrDefault(emptyList())
+}.getOrNull()

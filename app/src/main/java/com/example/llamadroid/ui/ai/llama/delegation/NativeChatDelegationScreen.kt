@@ -5,20 +5,25 @@ import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.PrimaryTabRow
@@ -103,14 +108,8 @@ private fun DelegationContent(
         .collectAsState(initial = emptyList<NativeChatDelegateMessageEntity>())
     var tab by rememberSaveable { mutableIntStateOf(0) }
     Column(Modifier.fillMaxSize()) {
-        // The header can be taller than a small phone allows; keep it bounded and scrollable.
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .heightIn(max = 300.dp)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-        ) {
+        // Compact header; its expandable details are bounded and scrollable on their own.
+        Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
             DelegationHeader(navController, api, chatId, task)
         }
         PrimaryTabRow(selectedTabIndex = tab) {
@@ -136,7 +135,6 @@ private fun DelegationContent(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DelegationHeader(
     navController: NavController,
@@ -168,115 +166,168 @@ private fun DelegationHeader(
     var confirmCancel by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
 
+    val workspaceId = task.workspaceId
+    val canContinue = task.state == NativeChatDelegateTaskState.INTERRUPTED ||
+        task.state == NativeChatDelegateTaskState.NEEDS_DIRECTION
+    var expanded by rememberSaveable(task.id) { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
+
     AppSectionCard {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    task.title,
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                StateChip(task.state)
-                Text(
-                    stringResource(R.string.native_chat_delegation_viewer_elapsed, formatDelegationElapsed(elapsed)),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                task.title,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
             ContextUsageRing(
                 percentUsed = percent,
+                size = 28.dp,
                 isWorking = isLive,
                 contentDescription = percent?.let {
                     stringResource(R.string.native_chat_delegation_viewer_context_cd, it)
                 }
             )
-        }
-        live?.phase?.takeIf { it.isNotBlank() && isLive }?.let { phase ->
-            val phaseText = delegationPhaseLabelRes(phase)?.let { stringResource(it) } ?: phase
-            Text(
-                stringResource(R.string.native_chat_delegation_viewer_phase_label, phaseText),
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-        if (isLive) DelegationProgressLines(live)
-        (live?.progressNote ?: task.progressNote)?.takeIf { it.isNotBlank() }?.let {
-            Text(it, style = MaterialTheme.typography.bodyMedium, maxLines = 4, overflow = TextOverflow.Ellipsis)
-        }
-        Text(
-            text = if (percent != null) {
-                stringResource(R.string.native_chat_delegation_viewer_context_label) + ": " +
-                    stringResource(
-                        R.string.native_chat_delegation_viewer_context_percent, percent,
-                        com.example.llamadroid.ui.ai.llama.chat.formatTokenCount(window)
-                    )
-            } else stringResource(R.string.native_chat_delegation_viewer_context_unknown),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        if (task.compactionCount > 0) {
-            Text(
-                stringResource(R.string.native_chat_delegation_viewer_compactions, task.compactionCount),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        task.lastErrorCode?.takeIf { it.isNotBlank() }?.let { code ->
-            val text = delegationErrorLabelRes(code)?.let { stringResource(it) }
-                ?: stringResource(R.string.native_chat_delegation_viewer_error_unknown, code)
-            Text(
-                stringResource(R.string.native_chat_delegation_viewer_error_label, text),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error
-            )
-        }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                stringResource(
-                    R.string.native_chat_delegation_viewer_cache_size,
-                    Formatter.formatShortFileSize(context, cacheBytes)
-                ),
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            TextButton(onClick = { confirmClear = true }, enabled = cacheBytes > 0) {
-                Text(stringResource(R.string.native_chat_delegation_viewer_cache_clear), maxLines = 1)
+            if (percent != null) {
+                Text(
+                    "$percent%",
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1
+                )
             }
-        }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (isLive) {
-                OutlinedButton(onClick = { confirmCancel = true }) {
-                    Text(stringResource(R.string.native_chat_delegation_viewer_cancel), maxLines = 1)
+            IconButton(onClick = { expanded = !expanded }, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = stringResource(
+                        if (expanded) R.string.native_chat_delegation_viewer_details_hide
+                        else R.string.native_chat_delegation_viewer_details_show
+                    )
+                )
+            }
+            Box {
+                IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(36.dp)) {
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = stringResource(R.string.native_chat_delegation_viewer_more_actions)
+                    )
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    if (isLive) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.native_chat_delegation_viewer_cancel), maxLines = 1) },
+                            onClick = { menuOpen = false; confirmCancel = true }
+                        )
+                    }
+                    if (canContinue) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.native_chat_delegation_viewer_continue_task), maxLines = 1) },
+                            onClick = {
+                                menuOpen = false
+                                scope.launch {
+                                    val ok = runCatching { api.continueTask(chatId) }.getOrDefault(false)
+                                    if (!ok) Toast.makeText(
+                                        context, R.string.native_chat_delegation_viewer_continue_failed, Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            }
+                        )
+                    }
+                    if (workspaceId != null) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.native_chat_delegation_viewer_open_files), maxLines = 1) },
+                            onClick = {
+                                menuOpen = false
+                                scope.launch {
+                                    val ok = runCatching {
+                                        HarnessProjectFilesNavigator.openProjectFiles(context, navController, task.runtimeId, workspaceId)
+                                    }.getOrDefault(false)
+                                    if (!ok) Toast.makeText(
+                                        context, R.string.native_chat_delegation_viewer_open_files_failed, Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            }
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.native_chat_delegation_viewer_cache_clear), maxLines = 1) },
+                        enabled = cacheBytes > 0,
+                        onClick = { menuOpen = false; confirmClear = true }
+                    )
                 }
             }
-            if (task.state == NativeChatDelegateTaskState.INTERRUPTED ||
-                task.state == NativeChatDelegateTaskState.NEEDS_DIRECTION
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            StateChip(task.state)
+            Text(
+                stringResource(R.string.native_chat_delegation_viewer_elapsed, formatDelegationElapsed(elapsed)),
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (expanded) {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 260.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Button(onClick = {
-                    scope.launch {
-                        val ok = runCatching { api.continueTask(chatId) }.getOrDefault(false)
-                        if (!ok) Toast.makeText(
-                            context, R.string.native_chat_delegation_viewer_continue_failed, Toast.LENGTH_SHORT
-                        ).show()
+                live?.phase?.takeIf { it.isNotBlank() && isLive }?.let { phase ->
+                    val phaseText = delegationPhaseLabelRes(phase)?.let { stringResource(it) } ?: phase
+                    Text(
+                        stringResource(R.string.native_chat_delegation_viewer_phase_label, phaseText),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (isLive) DelegationProgressLines(live)
+                (live?.progressNote ?: task.progressNote)?.takeIf { it.isNotBlank() }?.let {
+                    Text(it, style = MaterialTheme.typography.bodyMedium, maxLines = 4, overflow = TextOverflow.Ellipsis)
+                }
+                Text(
+                    text = if (percent != null) {
+                        stringResource(R.string.native_chat_delegation_viewer_context_label) + ": " +
+                            stringResource(
+                                R.string.native_chat_delegation_viewer_context_percent, percent,
+                                com.example.llamadroid.ui.ai.llama.chat.formatTokenCount(window)
+                            )
+                    } else stringResource(R.string.native_chat_delegation_viewer_context_unknown),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (task.compactionCount > 0) {
+                    Text(
+                        stringResource(R.string.native_chat_delegation_viewer_compactions, task.compactionCount),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                task.lastErrorCode?.takeIf { it.isNotBlank() }?.let { code ->
+                    val text = delegationErrorLabelRes(code)?.let { stringResource(it) }
+                        ?: stringResource(R.string.native_chat_delegation_viewer_error_unknown, code)
+                    Text(
+                        stringResource(R.string.native_chat_delegation_viewer_error_label, text),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        stringResource(
+                            R.string.native_chat_delegation_viewer_cache_size,
+                            Formatter.formatShortFileSize(context, cacheBytes)
+                        ),
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    TextButton(onClick = { confirmClear = true }, enabled = cacheBytes > 0) {
+                        Text(stringResource(R.string.native_chat_delegation_viewer_cache_clear), maxLines = 1)
                     }
-                }) { Text(stringResource(R.string.native_chat_delegation_viewer_continue_task), maxLines = 1) }
-            }
-            val workspaceId = task.workspaceId
-            if (workspaceId != null) {
-                OutlinedButton(onClick = {
-                    scope.launch {
-                        val ok = runCatching {
-                            HarnessProjectFilesNavigator.openProjectFiles(context, navController, task.runtimeId, workspaceId)
-                        }.getOrDefault(false)
-                        if (!ok) Toast.makeText(
-                            context, R.string.native_chat_delegation_viewer_open_files_failed, Toast.LENGTH_SHORT
-                        ).show()
-                    }
-                }) { Text(stringResource(R.string.native_chat_delegation_viewer_open_files), maxLines = 1) }
+                }
             }
         }
     }

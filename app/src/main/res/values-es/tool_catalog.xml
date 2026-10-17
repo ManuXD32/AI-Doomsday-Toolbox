@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tool_catalog_category_assistants">Asistentes</string>
+    <string name="tool_catalog_servers_title">Servidores</string>
+    <string name="tool_catalog_servers_desc">Servidores de modelos, compartir, inferencia distribuida, Termux y Ollama en un solo lugar.</string>
+    <string name="tool_catalog_web_servers_title">Servidores web UI</string>
+    <string name="tool_catalog_web_servers_desc">Ejecuta apps web de chat, generación de imágenes y flujos que abres en un navegador</string>
+    <string name="tool_catalog_global_search_title">Buscar en todo</string>
+    <string name="tool_catalog_global_search_desc">Encuentra herramientas, ajustes, chats, proyectos, modelos y notas.</string>
+    <string name="tool_catalog_recipe_manga_title">Traducir manga</string>
+    <string name="tool_catalog_recipe_manga_desc">Receta de Flujos: lee, traduce y recompone páginas de manga.</string>
+    <string name="tool_catalog_recipe_subtitles_title">Traducir subtítulos</string>
+    <string name="tool_catalog_recipe_subtitles_desc">Receta de Flujos: traduce un archivo de subtítulos a otro idioma.</string>
+    <string name="tool_catalog_recipe_dubbing_title">Doblar un video</string>
+    <string name="tool_catalog_recipe_dubbing_desc">Receta de Flujos: transcribe, traduce y dobla contenido a otro idioma.</string>
+    <string name="tool_catalog_recipe_transcribe_title">Transcribir y resumir</string>
+    <string name="tool_catalog_recipe_transcribe_desc">Receta de Flujos: convierte audio en texto y un resumen breve.</string>
+    <string name="tool_catalog_recipe_upscale_title">Generar y ampliar una imagen</string>
+    <string name="tool_catalog_recipe_upscale_desc">Receta de Flujos: crea una imagen desde texto y luego amplíala.</string>
+    <string name="tool_badge_new">Nuevo</string>
+    <string name="tool_badge_not_tried">Sin probar</string>
+</resources>

@@ -16,6 +16,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -38,6 +39,7 @@ import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.model.LlamaServerEntity
 import com.example.llamadroid.data.repository.UnifiedServer
 import com.example.llamadroid.harness.HarnessBaseCacheRegistry
+import com.example.llamadroid.harness.HarnessPrefix
 import com.example.llamadroid.service.KvBaseFailure
 import com.example.llamadroid.service.KvBaseMissReason
 import com.example.llamadroid.service.KvBasePrepareResult
@@ -49,6 +51,7 @@ import com.example.llamadroid.service.NativeChatKvCacheCoordinator
 import com.example.llamadroid.service.NativeChatKvCacheStore
 import com.example.llamadroid.service.NativeChatToolConfig
 import com.example.llamadroid.service.NativeChatToolRuntime
+import com.example.llamadroid.service.delegation.DelegateSubagentBase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -69,6 +72,14 @@ fun PrepareCachesSheet(server: UnifiedServer, onDismiss: () -> Unit) {
     var chatBytes by remember { mutableLongStateOf(0L) }
     var deepSeekBytes by remember { mutableLongStateOf(0L) }
     var hasDeepSeekInfo by remember { mutableStateOf(false) }
+    var subBytes by remember { mutableLongStateOf(0L) }
+    var subUsage by remember { mutableStateOf(KvBaseUsage()) }
+    var subWorking by remember { mutableStateOf(false) }
+    var subFailure by remember { mutableStateOf<KvBaseFailure?>(null) }
+    var harnessUsage by remember { mutableStateOf(KvBaseUsage()) }
+    var harnessPrefix by remember { mutableStateOf<HarnessPrefix?>(null) }
+    var harnessWorking by remember { mutableStateOf(false) }
+    var harnessFailure by remember { mutableStateOf<KvBaseFailure?>(null) }
     var working by remember { mutableStateOf(false) }
     var failure by remember { mutableStateOf<KvBaseFailure?>(null) }
     var keptExisting by remember { mutableStateOf(false) }
@@ -82,10 +93,22 @@ fun PrepareCachesSheet(server: UnifiedServer, onDismiss: () -> Unit) {
             chatBytes = chatKey?.let { store.sizeBytes(it) } ?: 0L
             val registry = KvBaseUsageRegistry(context)
             usage = chatKey?.let { registry.get(it) } ?: KvBaseUsage()
-            chatTotal = registry.chatTotal()
+            chatTotal = registry.chatTotal(store.existingStems())
             val info = server.cardId?.let { HarnessBaseCacheRegistry.latest(context, it) }
             hasDeepSeekInfo = info != null
-            deepSeekBytes = info?.let { store.sizeBytes(HarnessBaseCacheRegistry.baseKey(it.cardId, it.model, it.prefixHash)) } ?: 0L
+            val cardId = server.cardId
+            val prefix = cardId?.let { HarnessBaseCacheRegistry.loadPrefix(context, it) }
+            harnessPrefix = prefix
+            val harnessKey = if (cardId != null && prefix != null) {
+                HarnessBaseCacheRegistry.baseKey(cardId, prefix.model, prefix.prefixHash)
+            } else {
+                info?.let { HarnessBaseCacheRegistry.baseKey(it.cardId, it.model, it.prefixHash) }
+            }
+            deepSeekBytes = harnessKey?.let { store.sizeBytes(it) } ?: 0L
+            harnessUsage = harnessKey?.let { registry.get(it) } ?: KvBaseUsage()
+            val subKey = entity?.let { subagentHint(it)?.key }
+            subBytes = subKey?.let { store.sizeBytes(it) } ?: 0L
+            subUsage = subKey?.let { registry.get(it) } ?: KvBaseUsage()
         }
     }
 
@@ -188,33 +211,122 @@ fun PrepareCachesSheet(server: UnifiedServer, onDismiss: () -> Unit) {
             }
             HorizontalDivider()
             BaseRow(
-                title = stringResource(R.string.kv_prepare_deepseek_base),
-                hint = stringResource(R.string.kv_prepare_deepseek_base_hint),
-                status = if (deepSeekBytes > 0L) {
-                    stringResource(R.string.kv_prepare_status_ready, Formatter.formatShortFileSize(context, deepSeekBytes))
+                title = stringResource(R.string.kv_prepare_subagent_base),
+                hint = stringResource(R.string.kv_prepare_subagent_base_hint),
+                status = if (subWorking) {
+                    stringResource(R.string.kv_prepare_working)
+                } else if (subBytes > 0L) {
+                    stringResource(R.string.kv_prepare_status_ready, Formatter.formatShortFileSize(context, subBytes))
                 } else {
                     stringResource(R.string.kv_prepare_status_none)
                 },
-                actionLabel = stringResource(R.string.kv_prepare_clear),
-                actionEnabled = hasDeepSeekInfo && deepSeekBytes > 0L,
+                actionLabel = stringResource(
+                    if (subBytes > 0L) R.string.kv_prepare_action_rebuild else R.string.kv_prepare_action
+                ),
+                actionEnabled = !subWorking,
                 onAction = {
+                    subWorking = true
+                    subFailure = null
+                    val force = subBytes > 0L
                     scope.launch {
-                        withContext(Dispatchers.IO) {
-                            server.cardId?.let { cardId ->
-                                HarnessBaseCacheRegistry.latest(context, cardId)?.let {
-                                    store.delete(HarnessBaseCacheRegistry.baseKey(it.cardId, it.model, it.prefixHash))
-                                }
-                                HarnessBaseCacheRegistry.clear(context, cardId)
-                            }
-                        }
+                        val result = withContext(Dispatchers.IO) { prepareSubagentBase(context, server, force) }
+                        if (result is KvBasePrepareResult.Failed) subFailure = result.reason
+                        subWorking = false
                         refresh++
                     }
                 }
             )
+            BaseStatusLines(subBytes, subWorking, subUsage, subFailure)
+            HorizontalDivider()
+            val prefix = harnessPrefix
+            BaseRow(
+                title = stringResource(R.string.kv_prepare_deepseek_base),
+                hint = stringResource(
+                    if (prefix == null) R.string.kv_prepare_harness_need_task else R.string.kv_prepare_deepseek_base_hint
+                ),
+                status = if (harnessWorking) {
+                    stringResource(R.string.kv_prepare_working)
+                } else if (deepSeekBytes > 0L) {
+                    stringResource(R.string.kv_prepare_status_ready, Formatter.formatShortFileSize(context, deepSeekBytes))
+                } else {
+                    stringResource(R.string.kv_prepare_status_none)
+                },
+                actionLabel = stringResource(
+                    if (deepSeekBytes > 0L) R.string.kv_prepare_action_rebuild else R.string.kv_prepare_action
+                ),
+                actionEnabled = prefix != null && !harnessWorking,
+                onAction = {
+                    harnessWorking = true
+                    harnessFailure = null
+                    val force = deepSeekBytes > 0L
+                    scope.launch {
+                        val result = withContext(Dispatchers.IO) { prepareHarnessBase(context, server, force) }
+                        if (result is KvBasePrepareResult.Failed) harnessFailure = result.reason
+                        harnessWorking = false
+                        refresh++
+                    }
+                }
+            )
+            BaseStatusLines(deepSeekBytes, harnessWorking, harnessUsage, harnessFailure)
+            if (hasDeepSeekInfo && deepSeekBytes > 0L) {
+                TextButton(
+                    onClick = {
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                server.cardId?.let { cardId ->
+                                    HarnessBaseCacheRegistry.latest(context, cardId)?.let {
+                                        store.delete(HarnessBaseCacheRegistry.baseKey(it.cardId, it.model, it.prefixHash))
+                                    }
+                                    harnessPrefix?.let {
+                                        store.delete(HarnessBaseCacheRegistry.baseKey(cardId, it.model, it.prefixHash))
+                                    }
+                                    HarnessBaseCacheRegistry.clear(context, cardId)
+                                }
+                            }
+                            refresh++
+                        }
+                    }
+                ) { Text(stringResource(R.string.kv_prepare_clear), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            }
             OutlinedButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.kv_prepare_close), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
+    }
+}
+
+/** "Used by" counts and the failure line shown under a subagent or harness base row. */
+@Composable
+private fun BaseStatusLines(bytes: Long, working: Boolean, usage: KvBaseUsage, failure: KvBaseFailure?) {
+    if (!working && bytes > 0L) {
+        Text(
+            if (usage.uses > 0) {
+                stringResource(
+                    R.string.kv_prepare_used_by,
+                    usage.uses,
+                    DateUtils.getRelativeTimeSpanString(
+                        usage.lastUsedAt, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS
+                    ).toString()
+                )
+            } else {
+                stringResource(R.string.kv_prepare_used_by_never)
+            },
+            style = MaterialTheme.typography.bodySmall
+        )
+        usage.lastMissReason?.takeIf { usage.misses > 0 }?.let {
+            Text(
+                stringResource(R.string.kv_prepare_last_miss, stringResource(missReasonRes(it))),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+    failure?.let { reason ->
+        Text(
+            stringResource(failureRes(reason)),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error
+        )
     }
 }
 
@@ -267,6 +379,47 @@ private fun missReasonRes(reason: KvBaseMissReason): Int = when (reason) {
     KvBaseMissReason.RESTORE_FAILED -> R.string.kv_prepare_miss_restore
 }
 
+/** Subagent base hint for [entity]: the loop's thinking default and the server's model. */
+private fun subagentHint(entity: LlamaServerEntity) = DelegateSubagentBase.hint(
+    entity.baseUrl(),
+    entity.modelName?.takeIf { it.isNotBlank() },
+    DelegateSubagentBase.thinkingFor(entity.defaultApiParams)
+)
+
+private suspend fun prepareSubagentBase(
+    context: android.content.Context,
+    server: UnifiedServer,
+    force: Boolean
+): KvBasePrepareResult {
+    val entity = server.rowId?.let { AppDatabase.getDatabase(context).llamaServerDao().getServerById(it) }
+        ?: return KvBasePrepareResult.Failed(KvBaseFailure.SERVER_UNREACHABLE)
+    if (!entity.isLlamaServerEngine()) return KvBasePrepareResult.Failed(KvBaseFailure.UNSUPPORTED_ENGINE)
+    val hint = subagentHint(entity)
+    val send = hint?.builder ?: return KvBasePrepareResult.Failed(KvBaseFailure.NO_PREFIX)
+    return NativeChatKvCacheCoordinator(context).prepareBase(server = entity, key = hint.key, force = force, send = send)
+}
+
+/** Rebuilds the harness base from the last normalized prompt recorded for this card. */
+private suspend fun prepareHarnessBase(
+    context: android.content.Context,
+    server: UnifiedServer,
+    force: Boolean
+): KvBasePrepareResult {
+    val entity = server.rowId?.let { AppDatabase.getDatabase(context).llamaServerDao().getServerById(it) }
+        ?: return KvBasePrepareResult.Failed(KvBaseFailure.SERVER_UNREACHABLE)
+    if (!entity.isLlamaServerEngine()) return KvBasePrepareResult.Failed(KvBaseFailure.UNSUPPORTED_ENGINE)
+    val cardId = server.cardId ?: return KvBasePrepareResult.Failed(KvBaseFailure.NO_PREFIX)
+    val prefix = HarnessBaseCacheRegistry.loadPrefix(context, cardId)
+        ?: return KvBasePrepareResult.Failed(KvBaseFailure.NO_PREFIX)
+    val tools = HarnessBaseCacheRegistry.agentTools(runCatching { org.json.JSONArray(prefix.toolsJson) }.getOrNull())
+    return NativeChatKvCacheCoordinator(context).prepareBase(
+        server = entity,
+        key = HarnessBaseCacheRegistry.baseKey(cardId, prefix.model, prefix.prefixHash),
+        force = force,
+        send = HarnessBaseCacheRegistry.prefixSender(entity.baseUrl(), prefix.model, prefix.systemTexts, tools, prefix.thinking)
+    )
+}
+
 /** Stable prefix of the server defaults: awareness text and default tool definitions. */
 private fun chatBasePrefix(
     context: android.content.Context,
@@ -277,7 +430,11 @@ private fun chatBasePrefix(
     // Same extensions as the chat service, so DeepSeek tools and awareness match a chat's prefix.
     val runtime = NativeChatToolRuntime(
         context = app,
-        extensions = listOf(com.example.llamadroid.service.delegation.NativeChatDelegationTools(app))
+        // Same extensions, in the same order, as LlamaClientService, so the prepared prefix matches real chats.
+        extensions = listOf(
+            com.example.llamadroid.service.delegation.NativeChatDelegationTools(app),
+            com.example.llamadroid.service.NativeChatAttachmentTools(app)
+        )
     )
     val tools = runtime.availableTools(config)
     return NativeChatBasePrefix.stableText(config, runtime.extensionAwareness(config)) to tools

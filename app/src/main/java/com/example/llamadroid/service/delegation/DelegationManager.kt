@@ -8,6 +8,7 @@ import com.example.llamadroid.data.model.NativeChatDelegateMessageEntity
 import com.example.llamadroid.data.model.NativeChatDelegateMessageRole
 import com.example.llamadroid.data.model.NativeChatDelegateTaskEntity
 import com.example.llamadroid.data.model.NativeChatDelegateTaskState
+import com.example.llamadroid.data.model.NativeChatDelegationWakeKind
 import com.example.llamadroid.harness.HarnessAppRuntime
 import com.example.llamadroid.harness.HarnessDelegatedSessions
 import com.example.llamadroid.service.KvCacheKey
@@ -21,8 +22,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -88,18 +87,46 @@ class DelegationManager private constructor(context: Context) : NativeChatDelega
         val title = request.title?.trim()?.take(60)?.takeIf { it.isNotEmpty() }
             ?: brief.replace(Regex("\\s+"), " ").take(60)
         val id = taskDao.insertIfNoneActive(
-            NativeChatDelegateTaskEntity(chatId = request.chatId, title = title, request = brief, runtimeId = runtimeId)
+            NativeChatDelegateTaskEntity(
+                chatId = request.chatId, title = title, request = brief, runtimeId = runtimeId,
+                optionsJson = DelegationTaskOptions(
+                    projectId = request.projectId, continueProject = request.continueProject,
+                    threadId = request.threadId, pendingAttachmentRefs = request.attachmentRefs
+                ).encode()
+            )
         ) ?: return reject("task_active", "A DeepSeek task is already active in this chat. Use deepseek_task_status, deepseek_task_message or deepseek_task_cancel.")
         msgDao.append(
             NativeChatDelegateMessageEntity(taskId = id, seq = 0, role = NativeChatDelegateMessageRole.MAIN_TO_SUB,
                 content = DelegateSubagentMessages.bound(brief, DelegateSubagentMessages.MAX_CONTENT_CHARS))
         )
         journal(id, "task_started", count = resolution.inputs.size)
-        launch(id, request.chatId, DelegationLoopStart(resolution.inputs, request.continueProject), DelegationInbox())
+        launch(id, request.chatId, DelegationLoopStart(resolution.inputs))
         return DelegationStartResult.Started(id)
     }
 
-    private fun launch(taskId: Long, chatId: Long, start: DelegationLoopStart?, inbox: DelegationInbox): RunningTask {
+    private fun newInbox(taskId: Long, chatId: Long) = DelegationInbox { kind, text ->
+        // The subagent posted a reply/question/result row. A waiter re-queries on the tick; a reply with
+        // no waiter becomes a chat wake right away. Questions are woken by the subagent tool (the
+        // dispatcher skips them while a waiter holds the chat) and results by TASK_FINISHED.
+        DelegationMailbox.tick(taskId)
+        if (kind == DelegationMailbox.KIND_REPLY && !DelegationMailbox.hasWaiter(chatId)) {
+            scope.launch {
+                val lastAsk = runCatching { msgDao.latestMainToSubContent(taskId) }.getOrNull()
+                if (lastAsk?.startsWith(DelegationMailbox.USER_PREFIX) == true) {
+                    // A reply to a message the user typed in the task viewer: it is shown there and
+                    // does not start a main-chat turn.
+                    runCatching { msgDao.markSubToMainDelivered(taskId, listOf(DelegationMailbox.KIND_REPLY)) }
+                } else {
+                    DelegationWakeDispatcher.enqueue(
+                        appContext, chatId, taskId, NativeChatDelegationWakeKind.SUBAGENT_REPLY, DelegationResultNotice.reply(text)
+                    )
+                }
+            }
+        }
+    }
+
+    private fun launch(taskId: Long, chatId: Long, start: DelegationLoopStart?): RunningTask {
+        val inbox = newInbox(taskId, chatId)
         val loop = DelegateSubagentLoop(appContext, taskId, chatId, inbox, live, scope, start)
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
@@ -117,6 +144,7 @@ class DelegationManager private constructor(context: Context) : NativeChatDelega
     private suspend fun onLoopEnded(taskId: Long) {
         running.remove(taskId)
         live.update { it - taskId }
+        DelegationMailbox.tick(taskId)
         // A loop that ends while the row still says "live" died unexpectedly: make it resumable.
         runCatching {
             val task = taskDao.getById(taskId)
@@ -133,41 +161,132 @@ class DelegationManager private constructor(context: Context) : NativeChatDelega
         if (task.state == NativeChatDelegateTaskState.INTERRUPTED || task.state == NativeChatDelegateTaskState.NEEDS_DIRECTION) {
             taskDao.setStateWithError(task.id, NativeChatDelegateTaskState.STARTING_RUNTIME, null, null)
         }
-        launch(task.id, task.chatId, null, DelegationInbox())
+        launch(task.id, task.chatId, null)
     }
 
     // ---- model-facing operations ---------------------------------------------------------------
 
     override suspend fun statusText(chatId: Long, detail: DelegationStatusDetail): String {
         val task = taskDao.getLatestForChat(chatId) ?: return "No DeepSeek task has been started in this chat."
-        return DelegationStatusFormatter.statusText(task, live.value[task.id], detail)
+        // The newest undelivered (else latest) subagent reply/question is shown and counts as delivered.
+        val sub = msgDao.getStatusSubMessage(task.id)
+        if (sub != null && !sub.delivered) msgDao.markDelivered(sub.id)
+        return DelegationStatusFormatter.statusText(task, live.value[task.id], detail, subMessage = sub)
     }
 
-    override suspend fun messageSubagent(chatId: Long, message: String, waitSeconds: Int): DelegationReply {
-        val active = taskDao.getForChatInStates(chatId, NativeChatDelegateTaskState.ACTIVE.toList())
-        if (active == null) {
-            val latest = taskDao.getLatestForChat(chatId)
-                ?: return DelegationReply("There is no DeepSeek task in this chat.", false, "NONE")
+    override suspend fun listProjects(chatId: Long, query: String?): String =
+        DelegationProjectCatalog.listText(appContext, chatId, query)
+
+    override suspend fun messageSubagent(
+        chatId: Long,
+        message: String,
+        waitSeconds: Int,
+        attachmentRefs: List<String>,
+        fromUser: Boolean
+    ): DelegationReply {
+        val latest = taskDao.getLatestForChat(chatId)
+            ?: return DelegationReply(
+                "There is no DeepSeek task in this chat yet. Use deepseek_task_start to start one.", false, "NONE"
+            )
+        if (message.isBlank()) return DelegationReply("message is required.", false, latest.state)
+        val refs = attachmentRefs.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        val resolution = if (refs.isEmpty()) null else DelegationFileBridge(appContext).resolve(chatId, refs)
+        if (resolution != null && resolution.unknown.isNotEmpty()) {
             return DelegationReply(
-                "The task is not active (${latest.state}). " + DelegationStatusFormatter.statusText(latest, null, DelegationStatusDetail.BRIEF),
+                "Unknown or unavailable attachment(s): ${resolution.unknown.joinToString(", ")}. Use the ids from the attached-files lines of this chat (for example f12 or img55).",
                 false, latest.state
             )
         }
-        msgDao.append(
-            NativeChatDelegateMessageEntity(taskId = active.id, seq = 0, role = NativeChatDelegateMessageRole.MAIN_TO_SUB,
-                content = DelegateSubagentMessages.bound(message, DelegateSubagentMessages.MAX_CONTENT_CHARS))
-        )
-        val runningTask = ensureRunning(active)
-        val waitMs = waitSeconds.coerceIn(0, DelegationToolArgs.MAX_WAIT_SECONDS) * 1000L
-        val reply: DelegationSubReply? = coroutineScope {
-            val deferred = async(start = CoroutineStart.UNDISPATCHED) {
-                if (waitMs > 0) withTimeoutOrNull(waitMs) { runningTask.inbox.replies.first() } else null
+        val posted = launchMutex.withLock {
+            // Re-read under the lock: the loop may have changed the state meanwhile.
+            val task = taskDao.getById(latest.id) ?: return@withLock null
+            val reopen = DelegationMailbox.isTerminal(task.state)
+            val options = DelegationTaskOptions.decode(task.optionsJson)
+            val merged = if (refs.isEmpty()) options
+            else options.copy(pendingAttachmentRefs = DelegationMailbox.mergeRefs(options.pendingAttachmentRefs, refs))
+            val optionsJson = if (refs.isEmpty() && !reopen) null else merged.encode()
+            if (reopen) {
+                // A finishing loop may still be winding down; wait for it so the new loop is the only one.
+                running[task.id]?.let { old -> withTimeoutOrNull(REOPEN_JOIN_TIMEOUT_MS) { old.job.join() } }
+                taskDao.update(DelegationMailbox.reopened(task, optionsJson, System.currentTimeMillis()))
+                journal(task.id, "task_reopened")
+            } else if (optionsJson != null) {
+                taskDao.setOptions(task.id, optionsJson)
             }
-            runningTask.inbox.post(message)
-            deferred.await()
+            val content = DelegationMailbox.followUpContent(
+                DelegateSubagentMessages.bound(message, DelegateSubagentMessages.MAX_CONTENT_CHARS - 800),
+                fromUser, resolution?.inputs?.map { it.displayName }.orEmpty(), reopen
+            )
+            val rowId = msgDao.append(
+                NativeChatDelegateMessageEntity(
+                    taskId = task.id, seq = 0, role = NativeChatDelegateMessageRole.MAIN_TO_SUB,
+                    content = DelegateSubagentMessages.bound(content, DelegateSubagentMessages.MAX_CONTENT_CHARS), delivered = false
+                )
+            )
+            val fresh = taskDao.getById(task.id) ?: task
+            val runningTask = running[task.id] ?: run {
+                if (fresh.state == NativeChatDelegateTaskState.INTERRUPTED || fresh.state == NativeChatDelegateTaskState.NEEDS_DIRECTION) {
+                    taskDao.setStateWithError(fresh.id, NativeChatDelegateTaskState.STARTING_RUNTIME, null, null)
+                }
+                launch(fresh.id, fresh.chatId, null)
+            }
+            runningTask.inbox.signal()
+            Triple(fresh.id, msgDao.seqOf(rowId), reopen)
+        } ?: return DelegationReply("There is no DeepSeek task in this chat.", false, "NONE")
+        val (taskId, postedSeq, reopened) = posted
+        val waitMs = if (fromUser) 0L else waitSeconds.coerceIn(0, DelegationToolArgs.MAX_WAIT_SECONDS) * 1000L
+        if (waitMs <= 0L) {
+            return DelegationReply(null, true, taskDao.getById(taskId)?.state ?: latest.state, reopened)
         }
-        val state = taskDao.getById(active.id)?.state ?: active.state
-        return DelegationReply(reply?.text, reply == null, state)
+        val reply = awaitSubReply(chatId, taskId, postedSeq, waitMs)
+        val state = taskDao.getById(taskId)?.state ?: latest.state
+        return DelegationReply(reply?.content, reply == null, state, reopened)
+    }
+
+    /**
+     * DB-backed wait for the first undelivered reply/question/result after [postedSeq]: re-queries on
+     * every mailbox tick (and at least every [WAIT_RECHECK_MS]), claims the row atomically, and on
+     * timeout hands anything that arrived late to a chat wake.
+     */
+    private suspend fun awaitSubReply(chatId: Long, taskId: Long, postedSeq: Int, waitMs: Long): NativeChatDelegateMessageEntity? {
+        DelegationMailbox.beginWait(chatId)
+        var timedOut = false
+        try {
+            val flow = DelegationMailbox.versionFlow(taskId)
+            val deadline = System.currentTimeMillis() + waitMs
+            while (true) {
+                val seen = flow.value
+                val rows = msgDao.getUndeliveredSubToMain(taskId, postedSeq)
+                for (row in DelegationMailbox.orderedReplies(rows, postedSeq)) {
+                    if (msgDao.markDelivered(row.id) == 1) return row
+                }
+                val state = taskDao.getById(taskId)?.state ?: return null
+                val left = deadline - System.currentTimeMillis()
+                if (DelegationMailbox.stalled(state) && !running.containsKey(taskId)) return null
+                if (left <= 0L) { timedOut = true; return null }
+                withTimeoutOrNull(minOf(left, WAIT_RECHECK_MS)) { flow.first { it != seen } }
+            }
+        } finally {
+            DelegationMailbox.endWait(chatId)
+            if (timedOut) wakeLateRows(chatId, taskId, postedSeq)
+        }
+    }
+
+    /** After a waiter gave up: replies/questions that are still undelivered become chat wakes. */
+    private suspend fun wakeLateRows(chatId: Long, taskId: Long, postedSeq: Int) {
+        val rows = msgDao.getUndeliveredSubToMain(taskId, postedSeq).filter { it.toolName in DelegationMailbox.WAKE_KINDS }
+        wakeRows(chatId, taskId, rows)
+    }
+
+    /** Enqueues one wake per kind present in [rows] (newest text); the dispatcher claims the rows. */
+    private fun wakeRows(chatId: Long, taskId: Long, rows: List<NativeChatDelegateMessageEntity>) {
+        for (kind in DelegationMailbox.WAKE_KINDS) {
+            val newest = rows.filter { it.toolName == kind }.maxByOrNull { it.seq } ?: continue
+            val wakeKind = DelegationMailbox.wakeKindFor(kind) ?: continue
+            val notice = if (kind == DelegationMailbox.KIND_QUESTION) DelegationResultNotice.question(newest.content)
+            else DelegationResultNotice.reply(newest.content)
+            DelegationWakeDispatcher.enqueue(appContext, chatId, taskId, wakeKind, notice)
+        }
     }
 
     override suspend fun cancelTask(chatId: Long, reason: String?, stopRuntime: Boolean): Boolean {
@@ -190,6 +309,7 @@ class DelegationManager private constructor(context: Context) : NativeChatDelega
         live.update { it - task.id }
         cancelHarnessThreads(task)
         runCatching { DelegationAlarmScheduler.cancel(appContext, task.id) }
+        DelegationMailbox.tick(task.id)
         journal(task.id, "cancelled")
         if (stopRuntime) {
             runCatching { HarnessAppRuntime.forRuntime(appContext, task.runtimeId).stop() }
@@ -258,7 +378,24 @@ class DelegationManager private constructor(context: Context) : NativeChatDelega
             }
         }
         runCatching { DelegationAlarmScheduler.rescheduleAll(appContext) }
+        reconcileMailbox()
         DelegationWakeDispatcher.deliverPending(appContext)
+    }
+
+    /**
+     * Undelivered subagent replies/questions of non-terminal tasks become wakes; rows of finished
+     * tasks are marked delivered (the TASK_FINISHED wake already carries the result).
+     */
+    private suspend fun reconcileMailbox() {
+        for (taskId in msgDao.taskIdsWithUndeliveredSubToMain()) {
+            val task = taskDao.getById(taskId) ?: continue
+            if (DelegationMailbox.isTerminal(task.state)) {
+                msgDao.markSubToMainDelivered(taskId, listOf("reply", "question", "result"))
+                continue
+            }
+            val rows = msgDao.getUndeliveredSubToMain(taskId, 0).filter { it.toolName in DelegationMailbox.WAKE_KINDS }
+            wakeRows(task.chatId, taskId, rows)
+        }
     }
 
     private suspend fun journal(taskId: Long, type: String, count: Int? = null, errorClass: String? = null) {
@@ -272,6 +409,8 @@ class DelegationManager private constructor(context: Context) : NativeChatDelega
 
     companion object {
         private const val HARNESS_CANCEL_TIMEOUT_MS = 10_000L
+        private const val REOPEN_JOIN_TIMEOUT_MS = 5_000L
+        private const val WAIT_RECHECK_MS = 2_000L
         @Volatile private var instance: DelegationManager? = null
 
         fun get(context: Context): DelegationManager =

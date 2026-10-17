@@ -62,6 +62,18 @@ object NativeChatTurnDecoratorLogic {
         }
     }
 
+    /**
+     * Workspace-relative path of [file] (`attachments/report.zip`) when it lies inside [workspaceRoot]
+     * (canonical check), else null.
+     */
+    fun workspaceRelativePath(workspaceRoot: java.io.File, file: java.io.File): String? = runCatching {
+        val root = workspaceRoot.canonicalFile.path.trimEnd(java.io.File.separatorChar) + java.io.File.separator
+        val path = file.canonicalFile.path
+        if (path.startsWith(root) && path.length > root.length) {
+            path.substring(root.length).replace(java.io.File.separatorChar, '/')
+        } else null
+    }.getOrNull()
+
     /** `[Attached files: f12 report.pdf (1.2 MB), img55 photo.jpg (340 KB)]`, or null when empty. */
     fun manifestLine(items: List<AttachmentManifestItem>): String? {
         if (items.isEmpty()) return null

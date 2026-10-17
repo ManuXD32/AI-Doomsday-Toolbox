@@ -177,7 +177,12 @@ data class LlamaMessageEntity(
     val generationTimeMs: Long = 0L,
     val videoPath: String? = null,
     /** Null for ordinary messages; see [LlamaMessageKind] for app-written notices. */
-    val kind: String? = null
+    val kind: String? = null,
+    /**
+     * Visible work steps of an assistant reply (intermediate text, tool calls and bounded results),
+     * encoded by `NativeChatStepsCodec`; null when the reply has no steps. [content] stays the final answer.
+     */
+    val stepsJson: String? = null
 )
 
 object LlamaScheduledTaskScheduleType {

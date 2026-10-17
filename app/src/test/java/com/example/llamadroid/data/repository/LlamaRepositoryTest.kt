@@ -295,6 +295,18 @@ private class FakeLlamaMessageDao : LlamaMessageDao {
         tps: Double,
         generationTimeMs: Long
     ) = Unit
+    override suspend fun updateMessageThinkingContentAndSteps(
+        id: Long,
+        content: String,
+        thinking: String?,
+        promptTokens: Int,
+        completionTokens: Int,
+        tps: Double,
+        generationTimeMs: Long,
+        stepsJson: String?
+    ) = Unit
+    override suspend fun updateMessageSteps(id: Long, stepsJson: String?) = Unit
+    override suspend fun updateMessageStepsAndText(id: Long, content: String, thinking: String?, stepsJson: String?) = Unit
     override suspend fun updateMessageTruncatedStatus(id: Long, isTruncated: Boolean) = Unit
     override suspend fun updateMessageAudioPath(id: Long, audioPath: String?) = Unit
 }

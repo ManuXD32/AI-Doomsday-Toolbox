@@ -125,7 +125,7 @@ class WalkthroughAppFlowTest {
         assertStep("tama")
         next()
         assertStep("settings")
-        rule.onNodeWithTag("studio_bar_settings").assertIsDisplayed().performClick()
+        rule.onNodeWithTag("soft_studio_settings").assertIsDisplayed().performClick()
         assertRoute("settings")
         assertStep("settings")
         next()
@@ -235,7 +235,7 @@ class WalkthroughAppFlowTest {
     }
 
     private fun clickRoot(route: String) {
-        rule.onNodeWithTag(if (route == "ai_hub" || route == "library") "home_card_$route" else "studio_bar_$route").assertIsDisplayed().performClick()
+        rule.onNodeWithTag("studio_bar_$route").assertIsDisplayed().performClick()
         assertRoute(route)
     }
 
@@ -279,7 +279,7 @@ class WalkthroughAppFlowTest {
     }
 
     private fun expectedLessonRoute(lesson: WalkthroughLesson): String =
-        if (lesson.id == "chat") "llama_servers" else routeBase(lesson.route)
+        if (lesson.id == "chat") "chats" else routeBase(lesson.route)
 
     private fun returnToDashboard() {
         dismissTamaCreationDialogIfPresent()
