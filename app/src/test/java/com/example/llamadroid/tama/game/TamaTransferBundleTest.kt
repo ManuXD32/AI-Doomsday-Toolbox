@@ -352,6 +352,26 @@ class TamaTransferBundleTest {
     }
 
     @Test
+    fun `v21 export with removed livingWorld section still parses and is dropped on re-encode`() {
+        val v21 = """
+            {
+              "version": 21,
+              "exportDate": 1000,
+              "pet": {"id": "pet-v21", "name": "Old"},
+              "livingWorld": {"worlds": [], "actors": [{"id": "a"}]}
+            }
+        """.trimIndent()
+
+        val parsed = parseTamaTransferBundle(v21, json)
+        val reencoded = json.encodeToString(parsed)
+
+        assertEquals(21, parsed.version)
+        assertEquals("pet-v21", parsed.pet.id)
+        assertTrue(!reencoded.contains("livingWorld"))
+        assertEquals(22, TamaTransferBundle(pet = parsed.pet).version)
+    }
+
+    @Test
     fun `replacement pet ids clears all existing pets plus imported pet`() {
         val ids = replacementPetIds(
             existingPetIds = listOf("pet-a", "pet-b", " ", "pet-a"),

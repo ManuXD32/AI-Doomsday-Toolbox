@@ -80,6 +80,24 @@ internal object FeatureRound7Guides {
                         r7Step("r7.native_chat_delegation_watch.read", R.string.feature_step_result_title, R.string.feature_step_r7_native_chat_delegation_watch_read, "chat"),
                         r7Step("r7.native_chat_delegation_watch.recover", R.string.feature_step_recover_title, R.string.feature_step_r7_native_chat_delegation_watch_recover, "chat")
                     )
+                ),
+                FeatureRecipe(
+                    id = "r7.native_chat_delegation_correct",
+                    titleRes = R.string.feature_recipe_r7_delegation_correct_title,
+                    steps = listOf(
+                        r7Step("r7.native_chat_delegation_correct.orient", R.string.feature_step_purpose_title, R.string.feature_step_r7_delegation_correct_orient, "chat"),
+                        r7Step("r7.native_chat_delegation_correct.read", R.string.feature_step_result_title, R.string.feature_step_r7_delegation_correct_read, "chat"),
+                        r7Step("r7.native_chat_delegation_correct.recover", R.string.feature_step_recover_title, R.string.feature_step_r7_delegation_correct_recover, "chat")
+                    )
+                ),
+                FeatureRecipe(
+                    id = "r7.native_chat_delegation_files",
+                    titleRes = R.string.feature_recipe_r7_delegation_files_title,
+                    steps = listOf(
+                        r7Step("r7.native_chat_delegation_files.orient", R.string.feature_step_purpose_title, R.string.feature_step_r7_delegation_files_orient, "chat"),
+                        r7Step("r7.native_chat_delegation_files.read", R.string.feature_step_result_title, R.string.feature_step_r7_delegation_files_read, "chat"),
+                        r7Step("r7.native_chat_delegation_files.recover", R.string.feature_step_recover_title, R.string.feature_step_r7_delegation_files_recover, "chat")
+                    )
                 )
             )
         ),

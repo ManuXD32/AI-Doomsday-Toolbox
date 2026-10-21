@@ -31,6 +31,7 @@ if [[ "${ADT_HARNESS_QA_X86:-false}" == "true" ]]; then
   PROOT_PATCH="$ROOT_DIR/asset_debian/patches/proot-renameat-android.patch"
   PROOT_PATCH_REL="asset_debian/patches/proot-renameat-android.patch"
   PROOT_SOURCE_BUILD=true
+  PROOT_VERSION="5.1.107.92"
   SHMEM_URL="https://packages.termux.dev/apt/termux-main/pool/main/liba/libandroid-shmem/libandroid-shmem_0.7_x86_64.deb"
   SHMEM_SHA256="ffa9e4c87467b158b148d0ff92dda796aa038276c2075af3269cdcdb06f25797"
   TALLOC_URL="https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.4.3_x86_64.deb"
@@ -44,18 +45,19 @@ else
   ABI_LABEL="arm64-v8a"
   FILE_PATTERN="ARM aarch64"
   CLANG="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
-  PROOT_URL="https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.92_aarch64.deb"
-  PROOT_SHA256="1f1c983509701f6826f568482c70673ee453a9ba38c9f5fa445a472d6b7524e9"
+  PROOT_URL="https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.96_aarch64.deb"
+  PROOT_SHA256="8199dca06dccb693ec09fb1759e3e1ad08b4863f0c11c612f89c20bd9ecdc1a0"
   PROOT_SOURCE_URL=""
   PROOT_SOURCE_SHA256=""
   PROOT_SOURCE_COMMIT=""
   PROOT_PATCH=""
   PROOT_PATCH_REL=""
   PROOT_SOURCE_BUILD=false
+  PROOT_VERSION="5.1.107.96"
   SHMEM_URL="https://packages.termux.dev/apt/termux-main/pool/main/liba/libandroid-shmem/libandroid-shmem_0.7_aarch64.deb"
   SHMEM_SHA256="0da3a24d558b93c92bcf8d611e0826a99ff96e396b148e6cdf33b47c47c57ff6"
-  TALLOC_URL="https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.4.3_aarch64.deb"
-  TALLOC_SHA256="ac81ad623d74c209718b9f3acb2dd702cc8a88c431e820d212229910b4db29da"
+  TALLOC_URL="https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.5.0_aarch64.deb"
+  TALLOC_SHA256="556591f43bb773ad8777e1a29522640866a55f95dab71914418b94a8c58ad5a7"
   COMPILER="aarch64-linux-android26-clang"
 fi
 
@@ -123,7 +125,7 @@ dpkg-deb -x "$work_dir/libtalloc.deb" "$work_dir/talloc"
 proot="$work_dir/proot/data/data/com.termux/files/usr/bin/proot"
 loader="$work_dir/proot/data/data/com.termux/files/usr/libexec/proot/loader"
 shmem="$work_dir/shmem/data/data/com.termux/files/usr/lib/libandroid-shmem.so"
-talloc="$work_dir/talloc/data/data/com.termux/files/usr/lib/libtalloc.so.2.4.3"
+talloc="$(find "$work_dir/talloc/data/data/com.termux/files/usr/lib" -maxdepth 1 -type f -name 'libtalloc.so.2.*' -print -quit)"
 
 if [[ "$PROOT_SOURCE_BUILD" == true ]]; then
   download_and_verify "$PROOT_SOURCE_URL" "$PROOT_SOURCE_SHA256" "$work_dir/proot-source.zip"
@@ -208,7 +210,7 @@ cat > "$PROVENANCE_DIR/native-provenance.json" <<EOF_PROVENANCE
     "sourceArchiveSha256": "${PROOT_SOURCE_SHA256:-}",
     "patch": "${PROOT_PATCH_REL:-}",
     "patchSha256": "$(if [[ -n "${PROOT_PATCH:-}" ]]; then sha256sum "$PROOT_PATCH" | cut -d' ' -f1; fi)",
-    "version": "5.1.107.92",
+    "version": "$PROOT_VERSION",
     "license": "GPL-2.0-or-later",
     "loaderOverride": "PROOT_LOADER=libproot_loader.so",
     "runtimeLibraryPath": "\$ORIGIN"

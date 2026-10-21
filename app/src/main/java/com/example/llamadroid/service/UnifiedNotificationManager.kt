@@ -106,6 +106,7 @@ object UnifiedNotificationManager {
         PDF_SUMMARY("📄", "PDF Summary"),
         PDF_TRANSLATION("🌐", "PDF Translation"),
         FILE_SERVER("📂", "File Server"),
+        FILE_STATION("🗂️", "File Station"),
         MODEL_SHARE("🔁", "Model Share"),
         LLAMA_SERVER("🦙", "LLM Server"),
         LLAMA_CLIENT("💭", "Llama Chat"),
@@ -695,6 +696,7 @@ object UnifiedNotificationManager {
             TaskType.PDF_SUMMARY -> android.R.drawable.ic_menu_agenda
             TaskType.PDF_TRANSLATION -> android.R.drawable.ic_menu_upload
             TaskType.FILE_SERVER -> android.R.drawable.ic_menu_share
+            TaskType.FILE_STATION -> android.R.drawable.ic_menu_share
             TaskType.MODEL_SHARE -> android.R.drawable.ic_menu_upload
             TaskType.LLAMA_SERVER -> android.R.drawable.ic_menu_manage
             TaskType.LLAMA_CLIENT -> android.R.drawable.ic_menu_send
@@ -780,6 +782,13 @@ object UnifiedNotificationManager {
                 android.R.drawable.ic_menu_close_clear_cancel,
                 appContext.getString(R.string.action_cancel),
                 createCancelOnnxBgrPendingIntent(task.id)
+            )
+        }
+        if (task.type == TaskType.FILE_STATION && !task.isComplete && !task.isError) {
+            builder.addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                appContext.getString(R.string.fs_notification_stop),
+                createStopFileStationPendingIntent(task.id)
             )
         }
         if (task.type == TaskType.VIDEO_INTERPOLATION && !task.isComplete && !task.isError) {
@@ -932,6 +941,13 @@ object UnifiedNotificationManager {
                 createCancelOnnxBgrPendingIntent(taskId)
             )
         }
+        if (task.type == TaskType.FILE_STATION) {
+            builder.addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                appContext.getString(R.string.fs_notification_stop),
+                createStopFileStationPendingIntent(taskId)
+            )
+        }
         if (task.type == TaskType.VIDEO_INTERPOLATION) {
             builder.addAction(
                 android.R.drawable.ic_menu_close_clear_cancel,
@@ -940,6 +956,15 @@ object UnifiedNotificationManager {
             )
         }
         return builder.build()
+    }
+
+    private fun createStopFileStationPendingIntent(requestCode: Int): PendingIntent {
+        return PendingIntent.getService(
+            appContext,
+            requestCode + 70_000,
+            com.example.llamadroid.service.filestation.FileStationRuntime.stopIntent(appContext),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
     }
 
     private fun createCancelVideoInterpolationPendingIntent(requestCode: Int): PendingIntent {

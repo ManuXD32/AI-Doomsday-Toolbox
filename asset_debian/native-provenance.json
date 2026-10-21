@@ -2,16 +2,21 @@
   "architecture": "arm64-v8a",
   "qaOnly": false,
   "proot": {
-    "source": "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.92_aarch64.deb",
-    "sha256": "1f1c983509701f6826f568482c70673ee453a9ba38c9f5fa445a472d6b7524e9",
-    "version": "5.1.107.92",
+    "source": "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.96_aarch64.deb",
+    "sha256": "8199dca06dccb693ec09fb1759e3e1ad08b4863f0c11c612f89c20bd9ecdc1a0",
+    "sourceCommit": "",
+    "sourceArchive": "",
+    "sourceArchiveSha256": "",
+    "patch": "",
+    "patchSha256": "",
+    "version": "5.1.107.96",
     "license": "GPL-2.0-or-later",
     "loaderOverride": "PROOT_LOADER=libproot_loader.so",
     "runtimeLibraryPath": "$ORIGIN"
   },
   "dependencies": {
     "libandroid-shmem.so": "0da3a24d558b93c92bcf8d611e0826a99ff96e396b148e6cdf33b47c47c57ff6",
-    "libtalloc.so.2": "ac81ad623d74c209718b9f3acb2dd702cc8a88c431e820d212229910b4db29da",
+    "libtalloc.so.2": "556591f43bb773ad8777e1a29522640866a55f95dab71914418b94a8c58ad5a7",
     "patchedSoname": "libtalloc_2.so"
   },
   "broker": {

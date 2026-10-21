@@ -1,7 +1,7 @@
 package com.example.llamadroid.wear
 
 import com.example.llamadroid.tama.data.LocationType
-import com.example.llamadroid.tama.world.core.LegacyLocationAliases
+import com.example.llamadroid.tama.data.LegacyLocationAliases
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -19,14 +19,9 @@ class TamaWearLocationUiTest {
     }
 
     @Test
-    fun generatedFacilityIdsDoNotFallBackToHome() {
+    fun farmBarnKeepsItsFacilityPresentationAndUnknownIdsUseTheLandmarkFallback() {
         assertEquals(LocationType.FARM, TamaWearLocationCatalog.resolve("farm_barn").type)
-        assertEquals(LocationType.SHOP, TamaWearLocationCatalog.resolve("market_stall").type)
-        assertEquals(LocationType.HOME, TamaWearLocationCatalog.resolve("npc_home_a").type)
-        assertEquals(
-            "tama/backgrounds/street_market.png",
-            TamaWearLocationCatalog.resolve("market_stall").backgroundAssetPath
-        )
+        assertTrue(TamaWearLocationCatalog.resolve("farm_barn").canonical)
+        assertEquals(false, TamaWearLocationCatalog.resolve("market_stall").canonical)
     }
 }
-

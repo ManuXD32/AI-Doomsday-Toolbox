@@ -46,6 +46,13 @@ interface NativeChatDelegateTaskDao {
     @Query("SELECT * FROM native_chat_delegate_tasks WHERE pendingWakeKind IS NOT NULL ORDER BY pendingWakeAt ASC")
     suspend fun getWithPendingWakes(): List<NativeChatDelegateTaskEntity>
 
+    /** The task driving (or having created) a harness thread; used to resolve per-chat tool settings. */
+    @Query(
+        "SELECT * FROM native_chat_delegate_tasks WHERE harnessSessionId = :sessionId " +
+            "OR harnessThreadsJson LIKE '%\"' || :sessionId || '\"%' ORDER BY createdAt DESC, id DESC LIMIT 1"
+    )
+    suspend fun getByHarnessSession(sessionId: String): NativeChatDelegateTaskEntity?
+
     /** The most recent finished task of a chat that created a project; used by `project = continue`. */
     @Query(
         "SELECT * FROM native_chat_delegate_tasks WHERE chatId = :chatId AND workspaceId IS NOT NULL " +

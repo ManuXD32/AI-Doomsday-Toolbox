@@ -3,15 +3,7 @@
     <string name="soft_studio_home_title">Tu IA, a mano</string>
     <string name="soft_studio_home_new_chat">Nuevo chat</string>
     <string name="soft_studio_home_organizer">Organizador</string>
-    <string name="soft_studio_home_file_server">Servidor de archivos</string>
-    <string name="soft_studio_home_file_server_desc">Comparte una carpeta en tu red local cuando lo necesites.</string>
-    <string name="soft_studio_home_file_server_choose_folder">Elegir carpeta</string>
-    <string name="soft_studio_home_file_server_start">Iniciar servidor de archivos</string>
-    <string name="soft_studio_home_file_server_stop">Detener servidor de archivos</string>
-    <string name="soft_studio_home_file_server_folder_missing">No hay carpeta seleccionada</string>
-    <string name="soft_studio_home_file_server_running_at">Disponible en %1$s</string>
-    <string name="soft_studio_home_file_server_show_qr">Mostrar códigos de acceso</string>
-    <string name="soft_studio_home_file_server_hide_qr">Ocultar códigos de acceso</string>
+    <string name="soft_studio_home_file_server_desc">Explora, edita, convierte y comparte tus carpetas desde cualquier navegador de tu red.</string>
     <string name="soft_studio_tools_category_create">Crear</string>
     <string name="soft_studio_tools_category_voice">Voz</string>
     <string name="soft_studio_tools_empty_title">No hay herramientas coincidentes</string>

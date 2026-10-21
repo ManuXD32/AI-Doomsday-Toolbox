@@ -29,8 +29,6 @@
     <string name="general_prompt_caches_erase_all">Borrar todo</string>
     <string name="general_prompt_caches_erase_title">¿Borrar todas las cachés de prompts en disco?</string>
     <string name="general_prompt_caches_erase_message">Los chats, los subagentes DeepSeek y los agentes del harness volverán a procesar sus prompts la próxima vez. Las conversaciones no se ven afectadas.</string>
-    <string name="native_chat_kv_cache_unpacking">Descomprimiendo caché…</string>
-    <string name="native_chat_kv_cache_saved_by_compression">Ahorro por compresión: %1$s</string>
     <string name="native_chat_kv_cache_namespace_base">Cachés base</string>
     <string name="kv_prepare_caches_button">Preparar cachés</string>
     <string name="kv_prepare_caches_title">Preparar cachés</string>
@@ -70,9 +68,4 @@
     <string name="kv_prepare_fail_request">El servidor rechazó la petición de calentamiento. Comprueba que el modelo está cargado.</string>
     <string name="kv_prepare_fail_disk">No hay espacio libre suficiente en disco para guardar la caché.</string>
     <string name="kv_prepare_fail_save">No se pudo guardar o verificar la caché en disco.</string>
-    <string name="native_chat_kv_cache_compress_now">Comprimir ahora</string>
-    <string name="native_chat_kv_cache_compressing">Comprimiendo: %1$d / %2$d…</string>
-    <string name="native_chat_kv_cache_compress_saved">Ahorro: %1$s</string>
-    <string name="native_chat_kv_cache_compress_nothing">No se pudo comprimir nada</string>
-    <string name="native_chat_kv_cache_unpack_speed">Velocidad de descompresión: ~%1$s MB/s</string>
 </resources>

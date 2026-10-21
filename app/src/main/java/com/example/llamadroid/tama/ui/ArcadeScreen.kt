@@ -64,15 +64,15 @@ import com.example.llamadroid.tama.data.PetSpeciesLine
 import com.example.llamadroid.tama.data.PetSpriteState
 import com.example.llamadroid.tama.data.TamaPet
 import com.example.llamadroid.tama.data.mapPetActionToSpriteState
-import com.example.llamadroid.tama.world.presentation.ArcadeReceiptStatus
-import com.example.llamadroid.tama.world.presentation.ArcadeSessionReceipt
-import com.example.llamadroid.tama.world.presentation.ArcadeSessionRequest
-import com.example.llamadroid.tama.world.presentation.ArcadeSessionLease
-import com.example.llamadroid.tama.world.presentation.ArcadeSessionLeaseStatus
-import com.example.llamadroid.tama.world.presentation.ArcadeSessionRecovery
-import com.example.llamadroid.tama.world.presentation.ArcadeSessionRecoveryStatus
-import com.example.llamadroid.tama.world.presentation.ArcadeSessionTerminal
-import com.example.llamadroid.tama.world.presentation.ArcadeWorldActionBridge
+import com.example.llamadroid.tama.game.ArcadeReceiptStatus
+import com.example.llamadroid.tama.game.ArcadeSessionReceipt
+import com.example.llamadroid.tama.game.ArcadeSessionRequest
+import com.example.llamadroid.tama.game.ArcadeSessionLease
+import com.example.llamadroid.tama.game.ArcadeSessionLeaseStatus
+import com.example.llamadroid.tama.game.ArcadeSessionRecovery
+import com.example.llamadroid.tama.game.ArcadeSessionRecoveryStatus
+import com.example.llamadroid.tama.game.ArcadeSessionTerminal
+import com.example.llamadroid.tama.game.ArcadeSessionBridge
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import androidx.navigation.NavController
@@ -160,7 +160,7 @@ private data class ArcadeSubmitOutcome(
 fun ArcadeScreen(
     navController: NavController,
     pet: TamaPet,
-    worldActionBridge: ArcadeWorldActionBridge = ArcadeWorldActionBridge.Unavailable
+    arcadeSessionBridge: ArcadeSessionBridge = ArcadeSessionBridge.Unavailable
 ) {
     val scrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
@@ -231,7 +231,7 @@ fun ArcadeScreen(
     LaunchedEffect(pet.id, sessionRecoveryAttempt) {
         sessionRecoveryLoaded = false
         val recovery = try {
-            worldActionBridge.recover(pet.id)
+            arcadeSessionBridge.recover(pet.id)
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -246,9 +246,9 @@ fun ArcadeScreen(
         sessionRecoveryLoaded = true
     }
 
-    // Create the durable world lease before the local game timer starts. The
+    // Create the durable session lease before the local game timer starts. The
     // development fallback returns UNAVAILABLE and therefore keeps the game
-    // blocked; it never claims a reward or changes simulation state.
+    // blocked; it never claims a reward.
     LaunchedEffect(
         arcadeMode,
         catchSessionId,
@@ -273,7 +273,7 @@ fun ArcadeScreen(
         )
         sessionStarting = true
         val lease = try {
-            worldActionBridge.begin(request)
+            arcadeSessionBridge.begin(request)
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -308,7 +308,7 @@ fun ArcadeScreen(
         sessionCancelling = true
         coroutineScope.launch {
             val acknowledged = try {
-                worldActionBridge.acknowledge(request)
+                arcadeSessionBridge.acknowledge(request)
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -338,7 +338,7 @@ fun ArcadeScreen(
                 score = 0
             )
             val receipt = try {
-                worldActionBridge.cancel(request)
+                arcadeSessionBridge.cancel(request)
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -396,7 +396,7 @@ fun ArcadeScreen(
         catchResult = summary.copy(coins = 0, happiness = 0, receiptStatus = ArcadeReceiptStatus.SUBMITTING)
         sessionLease = sessionLease?.copy(status = ArcadeSessionLeaseStatus.RUNNING)
         coroutineScope.launch {
-            val outcome = submitArcadeSession(worldActionBridge, request)
+            val outcome = submitArcadeSession(arcadeSessionBridge, request)
             if (catchSessionId != request.sessionId) return@launch
             val receipt = outcome.receipt
             catchResult = summary.copy(
@@ -417,7 +417,7 @@ fun ArcadeScreen(
         memoryResult = summary.copy(coins = 0, happiness = 0)
         sessionLease = sessionLease?.copy(status = ArcadeSessionLeaseStatus.RUNNING)
         coroutineScope.launch {
-            val outcome = submitArcadeSession(worldActionBridge, request)
+            val outcome = submitArcadeSession(arcadeSessionBridge, request)
             if (memorySessionId != request.sessionId) return@launch
             val receipt = outcome.receipt
             memoryReceiptStatus = receipt.status
@@ -919,7 +919,7 @@ private fun ArcadeReceiptStatus.isTerminal(): Boolean = when (this) {
 }
 
 private suspend fun submitArcadeSession(
-    bridge: ArcadeWorldActionBridge,
+    bridge: ArcadeSessionBridge,
     request: ArcadeSessionRequest
 ): ArcadeSubmitOutcome {
     return try {

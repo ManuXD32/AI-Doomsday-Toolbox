@@ -89,6 +89,7 @@ class DelegationMailboxTest {
     fun replyNoticeIsTaggedAndBounded() {
         val n = DelegationResultNotice.reply("x".repeat(5000))
         assertTrue(n.startsWith("[DeepSeek subagent reply] "))
+        assertTrue(n.contains("Reply from the DeepSeek subagent (not the user): "))
         assertTrue(n.length < 1_500)
     }
 }

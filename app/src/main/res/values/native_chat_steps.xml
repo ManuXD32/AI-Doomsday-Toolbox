@@ -26,4 +26,7 @@
     <string name="chat_steps_export_status_running">interrupted</string>
     <string name="chat_thinking_show_all">Show all</string>
     <string name="chat_thinking_earlier_chars">… %1$s earlier characters</string>
+    <string name="chat_message_role_user">You</string>
+    <string name="chat_message_role_assistant">Assistant</string>
+    <string name="chat_message_role_system">System</string>
 </resources>

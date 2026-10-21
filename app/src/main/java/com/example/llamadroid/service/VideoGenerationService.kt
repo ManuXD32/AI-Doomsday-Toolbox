@@ -451,6 +451,8 @@ class VideoGenerationService : Service() {
                 totalStepsHint = config.steps.coerceAtLeast(1),
                 startedAtMs = SystemClock.elapsedRealtime()
             )
+            val nativeOutputBuffer = SdNativeOutputBuffer()
+            val nativePhaseTracker = VideoNativePhaseTracker()
             val progressPublishMutex = Mutex()
             var pendingSamplingSnapshot: SdProgressSnapshot? = null
             var lastSamplingProgressPublishMs = 0L
@@ -499,6 +501,8 @@ class VideoGenerationService : Service() {
             suspend fun handleSamplingOutput(text: String, appendToLog: Boolean) {
                 markActivity(config.mode, "generating")
                 stageTimings = stageTimings.withLine(text)
+                nativePhaseTracker.update(text)
+                if (appendToLog) nativeOutputBuffer.add(text)
                 if (appendToLog) {
                     DebugLog.log("[VIDEO-GEN] $text")
                 }
@@ -542,8 +546,16 @@ class VideoGenerationService : Service() {
                     publishPendingSamplingSnapshot(force = true)
                     modeProcesses.remove(lane)
                     if (sdExitCode != 0) {
-                        throw IllegalStateException(
-                            getString(R.string.video_gen_error_generation_failed, sdExitCode)
+                        val acceleratorBinary = DeviceAcceleration.isAcceleratorBinary(candidateBinary)
+                        throw videoNativeFailureException(
+                            classifyVideoNativeFailure(
+                                exitCode = sdExitCode,
+                                recentOutput = nativeOutputBuffer.snapshot(),
+                                phase = nativePhaseTracker.phase,
+                                acceleratorBinary = acceleratorBinary
+                            ),
+                            usedTae = videoRunUsesTae(config),
+                            acceleratorBinary = acceleratorBinary
                         )
                     }
                 }
@@ -554,6 +566,7 @@ class VideoGenerationService : Service() {
             return resolveGeneratedNativeOutput(outputAvi)
         }
 
+        verifyVideoTaeBeforeLaunch(config)
         val generatedAvi = runCatching {
             runSamplingWithBinary(sdBinary, binaryCapabilities)
         }.getOrElse { error ->

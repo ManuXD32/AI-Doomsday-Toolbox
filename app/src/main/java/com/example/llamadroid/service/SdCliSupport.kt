@@ -122,6 +122,31 @@ internal fun sdVaeTileSizeForBinary(stored: String, capabilities: SdBinaryCapabi
     return numbers.joinToString("x") { (it * SD_VAE_SPATIAL_SCALE).toString() }
 }
 
+/**
+ * stable-diffusion.cpp f0aac52+ defaults flash attention and direct convolutions to `auto`
+ * (probed per backend) and deprecates `--diffusion-fa`/`--diffusion-conv-direct`/`--vae-conv-direct`.
+ * Binaries whose help lists `--flash-attn` and `--conv-direct` get explicit values so the
+ * app's on/off toggles behave as they did on older builds. Unknown or older binaries keep the legacy flags.
+ */
+internal fun sdUsesModuleAccelerationFlags(capabilities: SdBinaryCapabilities?): Boolean =
+    capabilities != null && capabilities.supports("--flash-attn") && capabilities.supports("--conv-direct")
+
+internal fun sdModuleAccelerationArgs(
+    diffusionFlashAttn: Boolean,
+    diffusionConvDirect: Boolean,
+    vaeConvDirect: Boolean
+): List<String> {
+    val conv = buildList {
+        add("off")
+        if (diffusionConvDirect) add("diffusion=on,controlnet=on")
+        if (vaeConvDirect) add("vae=on")
+    }.joinToString(",")
+    return listOf(
+        "--flash-attn", if (diffusionFlashAttn) "off,diffusion=on" else "off",
+        "--conv-direct", conv
+    )
+}
+
 fun inferSdFamilyForConfig(config: SDConfig): Pair<SdModelFamily?, String?> {
     val explicitFamily = SdModelFamily.fromStoredValue(config.modelFamily)
     if (explicitFamily != null) {
@@ -506,19 +531,25 @@ fun buildSdCommandArgs(
         requireFlag("--flow-shift")
         args.addAll(listOf("--flow-shift", config.flowShift.toString()))
     }
-    if (config.diffusionFa && spec.supportsDiffusionFa) {
-        requireFlag("--diffusion-fa")
-        args.add("--diffusion-fa")
-    }
-    if (config.diffusionConvDirect) {
-        requireFlag("--diffusion-conv-direct")
-        args.add("--diffusion-conv-direct")
+    val diffusionFaOn = config.diffusionFa && spec.supportsDiffusionFa
+    val vaeConvDirectOn = config.vaeConvDirect && spec.supportsVaeConvDirect
+    if (sdUsesModuleAccelerationFlags(binaryCapabilities)) {
+        args.addAll(sdModuleAccelerationArgs(diffusionFaOn, config.diffusionConvDirect, vaeConvDirectOn))
+    } else {
+        if (diffusionFaOn) {
+            requireFlag("--diffusion-fa")
+            args.add("--diffusion-fa")
+        }
+        if (config.diffusionConvDirect) {
+            requireFlag("--diffusion-conv-direct")
+            args.add("--diffusion-conv-direct")
+        }
     }
     if (config.mmap && spec.supportsMmap) {
         requireFlag("--mmap")
         args.add("--mmap")
     }
-    if (config.vaeConvDirect && spec.supportsVaeConvDirect) {
+    if (!sdUsesModuleAccelerationFlags(binaryCapabilities) && vaeConvDirectOn) {
         requireFlag("--vae-conv-direct")
         args.add("--vae-conv-direct")
     }

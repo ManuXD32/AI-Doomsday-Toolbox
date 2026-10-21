@@ -44,6 +44,9 @@ class VideoMediaProcessorTest {
         assertTrue(command.contains("-nostdin"))
         assertTrue(command.contains("-ss"))
         assertTrue(command.contains("-t"))
+        // FFmpeg 9 removed -vsync; -fps_mode works on the old n6.1 builds too.
+        assertTrue(!command.contains("-vsync"))
+        assertEquals("vfr", command[command.indexOf("-fps_mode") + 1])
     }
 
     @Test

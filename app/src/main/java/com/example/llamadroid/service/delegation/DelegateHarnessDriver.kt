@@ -88,7 +88,7 @@ data class DelegateApprovalOutcome(val preset: String?, val applied: Boolean, va
  * [DelegationHarnessException] (render with [DelegationHarnessException.toToolError]); the caller
  * must [close] the driver when the task ends so no coroutine leaks.
  */
-class DelegateHarnessDriver(context: Context, val runtimeId: String) : AutoCloseable {
+class DelegateHarnessDriver(context: Context, val runtimeId: String) : AutoCloseable, DelegateHarnessPort {
     private val appContext = context.applicationContext
     private val runtime: HarnessAppRuntime get() = HarnessAppRuntime.forRuntime(appContext, runtimeId)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -132,7 +132,7 @@ class DelegateHarnessDriver(context: Context, val runtimeId: String) : AutoClose
 
     // ---- projects and threads -----------------------------------------------------------------
 
-    suspend fun createProject(title: String): DelegateHarnessProject = guarded("PROJECT_CREATE_FAILED") {
+    override suspend fun createProject(title: String): DelegateHarnessProject = guarded("PROJECT_CREATE_FAILED") {
         requireClient()
         val workspace = runtime.workspaces.createWorkspace(title.trim().ifBlank { "DeepSeek task" }.take(80))
         val location = com.example.llamadroid.harness.prepareHarnessProject(runtime, workspace)
@@ -140,7 +140,7 @@ class DelegateHarnessDriver(context: Context, val runtimeId: String) : AutoClose
     }
 
     /** Find an existing project without `openWorkspace` side effects (used by `continue`). */
-    suspend fun openProject(workspaceId: String): DelegateHarnessProject = guarded("PROJECT_NOT_FOUND") {
+    override suspend fun openProject(workspaceId: String): DelegateHarnessProject = guarded("PROJECT_NOT_FOUND") {
         val workspace = runtime.dao.workspace(workspaceId) ?: throw DelegationHarnessException(
             "PROJECT_NOT_FOUND", "The previous project no longer exists. Create a new project instead.")
         DelegateHarnessProject(workspace.id, workspace.title, workspace.guestPath, workspace.harnessWorkspaceId)
@@ -150,10 +150,10 @@ class DelegateHarnessDriver(context: Context, val runtimeId: String) : AutoClose
      * Create a harness session in [project], index it for the app UI and start watching it.
      * [suppressApprovals] false keeps approval notifications for the user ("Ask me" policy).
      */
-    suspend fun createThread(
+    override suspend fun createThread(
         project: DelegateHarnessProject,
         title: String,
-        suppressApprovals: Boolean = true,
+        suppressApprovals: Boolean,
     ): DelegateHarnessThread = guarded("THREAD_CREATE_FAILED") {
         val client = requireClient()
         val workspace = runtime.dao.workspace(project.workspaceId) ?: throw DelegationHarnessException(
@@ -190,20 +190,42 @@ class DelegateHarnessDriver(context: Context, val runtimeId: String) : AutoClose
      * registered and watched (no new session). Fails when the thread is unknown, archived or belongs to
      * another project. The caller selects the model and applies the approval policy afterwards.
      */
-    suspend fun adoptThread(
+    override suspend fun adoptThread(
         project: DelegateHarnessProject,
         sessionId: String,
-        suppressApprovals: Boolean = true,
+        suppressApprovals: Boolean,
     ): DelegateHarnessThread = guarded("THREAD_NOT_FOUND") {
         requireClient()
         val session = runtime.dao.session(sessionId)?.takeIf { it.workspaceId == project.workspaceId && !it.archived }
             ?: throw DelegationHarnessException("THREAD_NOT_FOUND",
-                "That thread does not exist in this project (or it is archived). Use harness_list_threads for valid ids.")
+                "That thread does not exist in this project (or it is archived).")
         val title = runtime.dao.conversations().firstOrNull { it.id == session.conversationId }?.title
             ?.takeIf { it.isNotBlank() } ?: project.title
         HarnessDelegatedSessions.register(runtimeId, sessionId, suppressApprovals)
         attachThread(sessionId)
         DelegateHarnessThread(sessionId, session.conversationId, project, title.take(80))
+    }
+
+    /**
+     * Cheapest reliable existence check: `session/page` with `throughSeq = -1` returns an empty page for a
+     * session the harness has and `session/not-found` for one it does not (the controller never activates
+     * the agent for it). Any other failure or exception means "can't tell" and returns true.
+     */
+    override suspend fun sessionKnown(sessionId: String): Boolean {
+        val client = readyClient() ?: return true
+        val address = ordinaryHarnessSessionAddress(sessionId).toWire() ?: return true
+        val result = try {
+            client.pageSession(buildJsonObject {
+                put("address", address)
+                put("throughSeq", -1L)
+                put("maxMessages", 1)
+            })
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return true
+        }
+        return !(result is HarnessRpcResult.Failure && isSessionNotFoundCode(result.error.code))
     }
 
     /** Start watching an existing session (e.g. after the app process was restarted). Idempotent. */
@@ -229,7 +251,9 @@ class DelegateHarnessDriver(context: Context, val runtimeId: String) : AutoClose
 
     // ---- model, permissions, inputs --------------------------------------------------------------
 
-    suspend fun selectModel(sessionId: String, binding: HarnessModelBinding, reasoningEffort: String? = null) {
+    override suspend fun selectModel(sessionId: String, binding: HarnessModelBinding) = selectModel(sessionId, binding, null)
+
+    suspend fun selectModel(sessionId: String, binding: HarnessModelBinding, reasoningEffort: String?) {
         val client = requireClient()
         val result = client.selectSessionModel(buildJsonObject {
             put("sessionId", sessionId)
@@ -242,7 +266,7 @@ class DelegateHarnessDriver(context: Context, val runtimeId: String) : AutoClose
     }
 
     /** `/permission workspace-write` (subagent decides, ask me) or `/permission danger-full-access`. */
-    suspend fun applyApprovalPolicy(sessionId: String, policy: DelegationApprovalPolicy): DelegateApprovalOutcome {
+    override suspend fun applyApprovalPolicy(sessionId: String, policy: DelegationApprovalPolicy): DelegateApprovalOutcome {
         val client = requireClient()
         HarnessDelegatedSessions.register(runtimeId, sessionId, suppressApprovals = policy != DelegationApprovalPolicy.ASK_ME)
         val wanted = if (policy == DelegationApprovalPolicy.FULL_ACCESS) "danger-full-access" else "workspace-write"
@@ -713,6 +737,8 @@ class DelegateHarnessDriver(context: Context, val runtimeId: String) : AutoClose
         private const val MAX_TRANSCRIPT_PAGES = 20
         private const val TRANSCRIPT_PAGE_MESSAGES = 20
         private const val TRANSCRIPT_LINE_CHARS = 600
+
+        internal fun isSessionNotFoundCode(code: String): Boolean = code == "session/not-found"
 
         /** Pick the catalog value for [wanted] (exact, then loose match); null when unavailable. */
         internal fun pickPermissionPreset(wanted: String, available: List<String>): String? {

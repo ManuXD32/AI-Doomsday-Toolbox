@@ -11,6 +11,7 @@ import com.example.llamadroid.data.model.NativeChatDelegateMessageRole
 import com.example.llamadroid.data.model.NativeChatDelegateTaskEntity
 import com.example.llamadroid.data.model.NativeChatDelegateTaskState
 import com.example.llamadroid.data.model.NativeChatDelegationWakeKind
+import com.example.llamadroid.harness.HarnessAppRuntime
 import com.example.llamadroid.service.KvCacheKey
 import com.example.llamadroid.service.KvSlotOwnerSpec
 import com.example.llamadroid.service.LlamaServerChatService
@@ -135,6 +136,17 @@ internal class DelegateSubagentLoop(
         }
     }
 
+    private suspend fun bindModel(
+        drv: DelegateHarnessDriver,
+        runtimeId: String,
+        chatServer: com.example.llamadroid.data.model.LlamaServerEntity?,
+        chatParams: Map<String, Any>
+    ): HarnessModelBinding = DelegateHarnessModelBinder.bind(
+        context, HarnessAppRuntime.forRuntime(context, runtimeId), drv.ensureRuntime(), config.harnessServer, chatServer,
+        fallbackContextTokens = chat.contextSize,
+        fallbackMaxOutputTokens = DelegateServerResolver.chatMaxOutput(chatParams) ?: server.maxOutputTokens
+    )
+
     private fun mapStartCode(code: String): String = when (code) {
         "HARNESS_RUNTIME_REQUIRED", "HARNESS_RUNTIME_UNAVAILABLE" -> "runtime_missing"
         else -> "runtime_stopped"
@@ -161,17 +173,41 @@ internal class DelegateSubagentLoop(
         taskDao.setProgressNote(taskId, null)
         live { it.copy(progressNote = null) }
         val chatServer = resolver.rowFor(chat, DelegationServerChoice.SameAsChat).first
-        toolbox = DelegateSubagentToolbox(
-            context, taskDao.getById(taskId) ?: throw TaskGone(), chat, config, drv, chatServer, server,
-            start?.inputs.orEmpty(), guards, inbox, this, DelegateServerResolver.chatMaxOutput(chatParams)
-        )
-        // Resumed or reopened task: reattach its project and threads, so the harness agent keeps its context.
-        when {
-            task.workspaceId != null -> event(if (toolbox.restoreProject()?.startsWith("Project ") == true) "project_reattached" else "project_reattach_failed")
-            task.harnessSessionId != null -> toolbox.reattach()
+        val bindResult = try {
+            val current = taskDao.getById(taskId) ?: throw TaskGone()
+            DelegateProjectBinder(drv, DelegateRoomBindStore(taskDao)).bind(
+                current, options, config.approvalPolicy,
+                newProject = options.newProject, freshThread = options.freshThread
+            ) { bindModel(drv, task.runtimeId, chatServer, chatParams) }
+        } catch (e: DelegationHarnessException) {
+            if (e.code == "PROJECT_UNAVAILABLE") {
+                event("project_bind_failed", errorClass = e.code)
+                throw DelegationLoopStop(NativeChatDelegateTaskState.INTERRUPTED, "project_unavailable", e.message.orEmpty())
+            }
+            throw e
         }
+        event(if (bindResult.projectCreated) "project_created" else "project_opened",
+            status = if (bindResult.resumed) "resumed" else "new_thread")
+        if (bindResult.replaced) event("thread_replaced")
+        if (options.newProject || options.freshThread) {
+            options = DelegateLoopBind.consumed(options)
+            taskDao.getById(taskId)?.let { taskDao.update(it.copy(optionsJson = options.encode())) }
+        }
+        val boundTask = taskDao.getById(taskId) ?: throw TaskGone()
+        toolbox = DelegateSubagentToolbox(
+            context, boundTask, chat, config, drv, chatServer,
+            start?.inputs.orEmpty(), bindResult, guards, inbox, this
+        )
+        val inputsNote = toolbox.afterBind()
+        // Shown in the status/viewer; the subagent note asks the model to tell the main assistant (a reply row
+        // here would be taken as the answer by a deepseek_task_message waiter).
+        bindResult.mainNotice?.let { progress(it) }
+        val projectNote = DelegateLoopBind.projectNote(bindResult, inputsNote)
+        val isNewConversation = DelegateSubagentMessages.modelRows(msgDao.getActiveForTask(taskId)).isEmpty()
         repairDanglingToolCalls()
-        seedFirstMessage(task)
+        // A resumed or reopened task is told where it is again (merged with the next user message).
+        if (!isNewConversation) appendRow(NativeChatDelegateMessageRole.USER, DelegateSubagentPrompt.systemNote(projectNote))
+        seedFirstMessage(task, projectNote)
         guards.resetStreaks()
         phase("model_call", NativeChatDelegateTaskState.RUNNING)
         mainLoop()
@@ -319,7 +355,7 @@ internal class DelegateSubagentLoop(
         }
     }
 
-    private suspend fun seedFirstMessage(task: NativeChatDelegateTaskEntity) {
+    private suspend fun seedFirstMessage(task: NativeChatDelegateTaskEntity, projectNote: String) {
         val rows = msgDao.getActiveForTask(taskId)
         if (DelegateSubagentMessages.modelRows(rows).isNotEmpty()) return
         appendRow(
@@ -331,7 +367,8 @@ internal class DelegateSubagentLoop(
                 contextTokens = server.contextTokens,
                 maxOutputTokens = server.maxOutputTokens,
                 policy = config.approvalPolicy,
-                options = options
+                options = options,
+                projectNote = projectNote
             )
         )
     }

@@ -465,6 +465,61 @@ class SdCliSupportTest {
         assertEquals("abc", sdVaeTileSizeForBinary("abc", newHelp))
     }
 
+    @Test
+    fun `flash attention and conv direct are explicit only for binaries that list the new options`() {
+        val newCaps = parseSdBinaryCapabilities(
+            """
+              -m, --model  -p, --prompt  -o, --output  -s, --seed  -W, --width  -H, --height  -M, --mode img_gen txt2img
+              --steps  --cfg-scale  --sampling-method
+              --flash-attn on|off|auto
+              --conv-direct on|off|auto
+              --diffusion-fa  deprecated; use --flash-attn off,diffusion=on
+              --diffusion-conv-direct  deprecated
+            """.trimIndent()
+        )
+        val oldCaps = parseSdBinaryCapabilities(
+            """
+              -m, --model  -p, --prompt  -o, --output  -s, --seed  -W, --width  -H, --height  -M, --mode img_gen txt2img
+              --steps  --cfg-scale  --sampling-method
+              --diffusion-fa  use flash attention in the diffusion model only
+              --diffusion-conv-direct  use ggml_conv2d_direct in the diffusion model
+              --vae-conv-direct  use direct convs in the vae model
+            """.trimIndent()
+        )
+        assertTrue(sdUsesModuleAccelerationFlags(newCaps))
+        assertFalse(sdUsesModuleAccelerationFlags(oldCaps))
+        assertFalse(sdUsesModuleAccelerationFlags(null))
+
+        fun config(fa: Boolean, conv: Boolean, vae: Boolean) = SDConfig(
+            mode = SDMode.TXT2IMG,
+            modelPath = "/models/sd15.safetensors",
+            modelFamily = "checkpoint",
+            modelVariant = "sd1",
+            prompt = "a clear lake",
+            outputPath = "/tmp/out.png",
+            diffusionFa = fa,
+            diffusionConvDirect = conv,
+            vaeConvDirect = vae
+        )
+
+        val offArgs = buildSdCommandArgs(config(false, false, false), binaryCapabilities = newCaps)
+        assertEquals("off", offArgs[offArgs.indexOf("--flash-attn") + 1])
+        assertEquals("off", offArgs[offArgs.indexOf("--conv-direct") + 1])
+        assertFalse(offArgs.contains("--diffusion-fa"))
+
+        val onArgs = buildSdCommandArgs(config(true, true, true), binaryCapabilities = newCaps)
+        assertEquals("off,diffusion=on", onArgs[onArgs.indexOf("--flash-attn") + 1])
+        assertEquals("off,diffusion=on,controlnet=on,vae=on", onArgs[onArgs.indexOf("--conv-direct") + 1])
+        assertFalse(onArgs.contains("--vae-conv-direct"))
+
+        val legacy = buildSdCommandArgs(config(false, false, false), binaryCapabilities = oldCaps)
+        assertFalse(legacy.contains("--flash-attn"))
+        assertFalse(legacy.contains("--conv-direct"))
+        val legacyOn = buildSdCommandArgs(config(true, true, true), binaryCapabilities = oldCaps)
+        assertTrue(legacyOn.contains("--diffusion-fa"))
+        assertTrue(legacyOn.contains("--vae-conv-direct"))
+    }
+
     @Test(expected = SdUnsupportedModesException::class)
     fun `dedicated ADetailer mode requires binary support`() {
         val detector = File.createTempFile("detector", ".safetensors")

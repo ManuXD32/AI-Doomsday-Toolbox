@@ -124,8 +124,9 @@ internal fun DelegationFilesAction(bar: ChatDelegationBar, task: NativeChatDeleg
             Icon(Icons.Default.Folder, contentDescription = stringResource(R.string.native_chat_compaction_files))
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-            if (workspaceId != null && runtimeId != null && !projectUnavailable) {
+            run {
                 DropdownMenuItem(
+                    enabled = workspaceId != null && runtimeId != null && !projectUnavailable,
                     text = {
                         Text(
                             stringResource(R.string.native_chat_compaction_files_project),
@@ -136,6 +137,7 @@ internal fun DelegationFilesAction(bar: ChatDelegationBar, task: NativeChatDeleg
                     onClick = {
                         menuOpen = false
                         scope.launch {
+                            if (runtimeId == null || workspaceId == null) return@launch
                             val opened = HarnessProjectFilesNavigator.openProjectFiles(
                                 context, bar.navController, runtimeId, workspaceId
                             )

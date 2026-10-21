@@ -146,7 +146,8 @@ import com.example.llamadroid.sd.SdLoraSpec
 import com.example.llamadroid.sd.SdParamsBackendMode
 import com.example.llamadroid.sd.SdRuntimeBackendMode
 import com.example.llamadroid.sd.SdVideoComponentRole
-import com.example.llamadroid.sd.SdVideoFamily
+import com.example.llamadroid.sd.SdCuratedPresets
+import com.example.llamadroid.sd.SdTaeCheck
 import com.example.llamadroid.sd.SdVideoFamilyProfiles
 import com.example.llamadroid.sd.SdVideoInputs
 import com.example.llamadroid.sd.SdVideoMainModelLayout
@@ -574,6 +575,11 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
         }
     }
 
+    val videoTaeCheck by produceState<SdTaeCheck?>(null, videoEditorOptions, availableVideoModels) {
+        value = null
+        value = withContext(Dispatchers.IO) { videoTaePreflight(videoEditorOptions) }
+    }
+
     val generateVideo = generation@ fun(addToQueue: Boolean) {
         val mode = if (selectedMode == 1) VideoGenerationMode.IMG2VID else VideoGenerationMode.TXT2VID
         val frames = videoFramesText.toIntOrNull()
@@ -618,6 +624,10 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
             }
             videoPathsAvailable != true -> {
                 errorMessage = resources.getString(R.string.video_controls_unavailable_values_hint)
+                return
+            }
+            videoTaeErrorMessage(resources, videoTaeCheck) != null -> {
+                errorMessage = videoTaeErrorMessage(resources, videoTaeCheck)
                 return
             }
             mode == VideoGenerationMode.IMG2VID && effectiveVideoInputPath == null -> {
@@ -810,17 +820,9 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
 
     fun applyLingBotProfile() {
         val bundle = lingBotBundle ?: return
-        val installedById = bundle.files.mapNotNull { file ->
-            file.installedSdCuratedModel(bundle, lingBotInstalledModels)?.let { file.id to it.path }
-        }.toMap()
-        if (installedById.size != bundle.files.size) return
+        val components = SdCuratedPresets.resolveLingBotComponents(bundle, lingBotInstalledModels) ?: return
+        val preset = SdCuratedPresets.LingBotPhone
         reuseBackendOverrides = null
-        val components = com.example.llamadroid.sd.SdVideoComponentPaths(
-            diffusionModelPath = installedById["lingbot-dense-13b"],
-            llmPath = installedById["lingbot-qwen3-vl-4b-q4"],
-            taePath = installedById["lingbot-taew21"],
-            vaePath = null
-        )
         val examplePrompt = resources.getString(R.string.video_lingbot_example_prompt)
         // Mode restoration must observe the preset prompt, including when switching from I2V.
         VideoGenerationStateHolder.txt2vid.updatePrompt(examplePrompt)
@@ -831,23 +833,23 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
         prompt = examplePrompt
         negativePrompt = resources.getString(R.string.video_lingbot_example_negative)
         selectedVideoModelPath = components.diffusionModelPath
-        useVae = false
+        useVae = preset.USE_VAE
         selectedVaePath = null
         useT5xxl = false
         selectedT5xxlPath = null
-        videoFramesText = "9"
-        fpsText = "4"
-        widthText = "256"
-        heightText = "144"
-        stepsText = "12"
-        cfgScaleText = "3"
+        videoFramesText = preset.FRAMES.toString()
+        fpsText = preset.FPS.toString()
+        widthText = preset.WIDTH.toString()
+        heightText = preset.HEIGHT.toString()
+        stepsText = preset.STEPS.toString()
+        cfgScaleText = preset.CFG_SCALE_TEXT
         flowShiftEnabled = true
-        flowShiftText = "3"
-        threadsText = "4"
-        mmap = true
-        diffusionFa = true
-        selectedSampler = SamplingMethod.EULER
-        selectedScheduler = null
+        flowShiftText = preset.FLOW_SHIFT_TEXT
+        threadsText = preset.THREADS.toString()
+        mmap = preset.MMAP
+        diffusionFa = preset.DIFFUSION_FA
+        selectedSampler = preset.SAMPLER
+        selectedScheduler = preset.SCHEDULER
         videoLoras = emptyList()
         videoHighNoiseLoras = emptyList()
         videoLoraApplyMode = SdLoraApplyMode.fromStoredValue(null)
@@ -856,16 +858,7 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
         manualCommandFlags = ""
         errorMessage = null
         warningMessage = null
-        videoRuntimeOptions = VideoRuntimeOptions(
-            videoFamily = SdVideoFamily.LINGBOT_VIDEO,
-            videoVariant = "dense_1.3b",
-            workflow = SdVideoWorkflow.TEXT_TO_VIDEO,
-            videoComponents = components,
-            videoInputs = SdVideoInputs(),
-            useTae = true,
-            seed = 42L,
-            promptFormat = com.example.llamadroid.sd.SdVideoPromptFormat.LINGBOT_CAPTION_JSON
-        )
+        videoRuntimeOptions = SdCuratedPresets.lingBotRuntimeOptions(components)
     }
 
     fun applyVideoReuse(payload: VideoReusePayload, verifiedSources: Map<String, String> = emptyMap()) {

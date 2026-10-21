@@ -1,0 +1,33 @@
+{
+  "libraries": [
+    {
+      "name": "@toast-ui/editor",
+      "version": "3.2.2",
+      "license": "MIT",
+      "source": "https://uicdn.toast.com/editor/3.2.2/",
+      "trust": "trust-on-first-use (no npm integrity)",
+      "files": {
+        "toastui-editor/toastui-editor-all.min.js": "f50e1b7c0fc4e5d9a1ccd0d8be78cb3a950ccb3bf676fbf1627810c76aeaedd8",
+        "toastui-editor/toastui-editor.min.css": "c70e24c68fefc205e8e504edc07fd6a5efd3044a623b4be7e3ac16cc8a736ed9",
+        "toastui-editor/toastui-editor-dark.min.css": "68d4eb725ef9040c9713a4b140a2bcbfd38a8aee91f1b476bb9c2425b02ccd15",
+        "toastui-editor/es-es.min.js": "bdd20ac6992394b658c2a668972ad72d331f70192e40c21f6656c9bef77fd5ca"
+      }
+    },
+    {
+      "name": "mathjs",
+      "version": "15.2.0",
+      "license": "Apache-2.0",
+      "files": {
+        "mathjs/math.js": "b4de1e31da7797c3daaf7b8dae3b1d8bb0a7296c9cc8590f9359ac0250f8ddd6"
+      }
+    },
+    {
+      "name": "dompurify",
+      "version": "3.4.17",
+      "license": "(MPL-2.0 OR Apache-2.0)",
+      "files": {
+        "dompurify/purify.min.js": "cd37898f9782adf54820c413191b5691803f0f137c799d6edcfd38523b4c2c31"
+      }
+    }
+  ]
+}

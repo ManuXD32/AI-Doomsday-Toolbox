@@ -13,7 +13,9 @@ import com.example.llamadroid.ui.agent.harness.NativeHarnessCapabilities
 import com.example.llamadroid.ui.agent.harness.NativeHarnessCustomProviderModel
 import com.example.llamadroid.ui.agent.harness.NativeHarnessCustomProviderRequest
 import com.example.llamadroid.ui.agent.harness.NativeHarnessProviderGateway
+import com.example.llamadroid.ui.agent.harness.NATIVE_CUSTOM_PROVIDER_MAX_STREAM_IDLE_TIMEOUT_MS
 import com.example.llamadroid.ui.agent.harness.buildNativeCustomProviderProfile
+import com.example.llamadroid.ui.agent.harness.nativeCustomProviderTimeoutUpgradeOperations
 import com.example.llamadroid.ui.agent.harness.canonicalHarnessProviderId
 import com.example.llamadroid.ui.agent.harness.int
 import com.example.llamadroid.ui.agent.harness.jsonObjectOrNull
@@ -61,7 +63,7 @@ internal object DelegateHarnessRouting {
     const val ROUTE_PREFIX = "adt-chat-srv-"
 
     /** Maximum `streamIdleTimeoutMs` the pinned provider plugin accepts (it rejects 0 and larger values). */
-    const val STREAM_IDLE_TIMEOUT_MS = 2147483647L
+    const val STREAM_IDLE_TIMEOUT_MS = NATIVE_CUSTOM_PROVIDER_MAX_STREAM_IDLE_TIMEOUT_MS
     const val DEFAULT_CONTEXT = 8192
     const val DEFAULT_MAX_OUTPUT = 2048
 
@@ -261,6 +263,14 @@ object DelegateHarnessModelBinder {
             }
             if (result is HarnessRpcResult.Failure) throw DelegationHarnessException(result.error.code.ifBlank { "PROVIDER_WRITE_FAILED" },
                 "The custom provider for the chat server could not be written (${result.error.code}).")
+        } else {
+            // Nothing was written: take the chance to give older routes the default stream idle limit (conflicts ignored).
+            val upgrades = nativeCustomProviderTimeoutUpgradeOperations(namespace["value"]?.jsonObjectOrNull())
+            if (upgrades.isNotEmpty()) {
+                NativeHarnessCapabilities.mutateSettings(
+                    client, NATIVE_CUSTOM_PROVIDER_SETTINGS_NAMESPACE, buildJsonArray { upgrades.forEach { add(it) } }, revision,
+                )
+            }
         }
         val providers = loadCatalog(runtime, client)
         val provider = DelegateHarnessRouting.resolveProvider(providers, plan.modelId, preferred = request.route)

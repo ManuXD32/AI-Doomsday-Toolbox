@@ -321,8 +321,8 @@ object ToolCatalog {
             keywords = listOf("ollama", "server", "model", "infrastructure"),
             keywordsEs = listOf("ollama", "servidor", "modelo", "infraestructura")),
         tool("file_server", ToolCategory.SHARE_NETWORK, Icons.Default.Public, R.string.dashboard_file_server, R.string.soft_studio_home_file_server_desc, Screen.FileServer.route,
-            keywords = listOf("file server", "share", "lan", "infrastructure"),
-            keywordsEs = listOf("servidor de archivos", "compartir", "red local", "archivos")),
+            keywords = listOf("file server", "file station", "share", "lan", "infrastructure", "files", "editor", "pdf", "calculator"),
+            keywordsEs = listOf("servidor de archivos", "estacion de archivos", "compartir", "red local", "archivos", "editor", "pdf", "calculadora")),
         // Advanced
         tool("benchmark", ToolCategory.ADVANCED, Icons.Default.Speed, R.string.hub_benchmark, R.string.hub_benchmark_desc, Screen.Benchmark.route,
             routePatterns = listOf(Screen.Benchmark.route, Screen.BenchmarkHistory.route),

@@ -2,6 +2,7 @@ package com.example.llamadroid.service.compaction
 
 import com.example.llamadroid.data.model.LlamaMessageEntity
 import com.example.llamadroid.data.model.LlamaMessageKind
+import com.example.llamadroid.service.delegation.NativeChatNoticeFraming
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -108,7 +109,11 @@ class NativeChatTurnDecoratorLogicTest {
         )
         val out = NativeChatTurnDecoratorLogic.mergeConsecutiveUsers(history)
         assertEquals(listOf("user", "assistant", "user"), out.map { it.role })
-        assertEquals("a\n\n[DeepSeek task finished]", out[0].content)
+        val framed = NativeChatNoticeFraming.NOTICE_PREFIX + "\n[DeepSeek task finished]"
+        assertEquals("[User]\na\n\n$framed", out[0].content)
+        assertEquals(framed, NativeChatTurnDecoratorLogic.mergeConsecutiveUsers(listOf(msg(1, "user", framed, notice)))[0].content)
+        assertEquals(null, NativeChatNoticeFraming.hintTarget(listOf(msg(1, "user", "a"), msg(2, "user", "n", notice))))
+        assertEquals("a", NativeChatNoticeFraming.hintTarget(listOf(msg(1, "user", "a"))))
         assertEquals(2L, out[0].id)
         assertEquals("user", out.last().role)
     }

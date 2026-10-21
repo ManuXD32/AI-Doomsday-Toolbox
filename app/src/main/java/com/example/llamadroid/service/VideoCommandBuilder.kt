@@ -82,7 +82,13 @@ fun buildVideoCommandArgs(
                 code = SdVideoWorkflowErrorCode.UNSUPPORTED_WORKFLOW
             )
         }
-        val prerequisites = profile.validate(paths, inputs, workflow)
+        // Validate only the decoder that will be emitted below: a saved but unused TAE is ignored.
+        val taeEmitted = !paths.taePath.isNullOrBlank() && (config.useTae || paths.vaePath.isNullOrBlank())
+        val prerequisites = profile.validate(
+            if (taeEmitted) paths else paths.copy(taePath = null, taeLatentChannels = null),
+            inputs,
+            workflow
+        )
         if (!prerequisites.isSatisfied) {
             throw SdVideoPrerequisiteException(profile, prerequisites)
         }
@@ -321,13 +327,18 @@ fun buildVideoCommandArgs(
 
     appendHiresArgs(args, config.hires, paths.hiresUpscalersDir, paths.hiresUpscaler, ::requireFlag)
 
-    if (config.diffusionFa) {
-        addBare("--diffusion-fa")
+    val moduleAcceleration = sdUsesModuleAccelerationFlags(binaryCapabilities)
+    if (moduleAcceleration) {
+        args.addAll(sdModuleAccelerationArgs(config.diffusionFa, config.diffusionConvDirect, config.vaeConvDirect))
+    } else {
+        if (config.diffusionFa) {
+            addBare("--diffusion-fa")
+        }
+        if (config.diffusionConvDirect) {
+            addBare("--diffusion-conv-direct")
+        }
     }
-    if (config.diffusionConvDirect) {
-        addBare("--diffusion-conv-direct")
-    }
-    if (config.vaeConvDirect) {
+    if (config.vaeConvDirect && !moduleAcceleration) {
         addBare("--vae-conv-direct")
     }
     if (config.mmap) {

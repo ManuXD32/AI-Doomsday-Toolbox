@@ -27,8 +27,8 @@ internal object FeatureOtherGuides {
                     titleRes = R.string.feature_recipe_conversations_native_management_title,
                     previewKey = "conversations_native_management",
                     route = "chats",
-                    targetId = "llama.servers",
-                    eventId = "llama.server_card",
+                    targetId = null,
+                    eventId = null,
                     orientBodyRes = R.string.feature_step_conversations_native_management_orient_body,
                     readBodyRes = R.string.feature_step_conversations_native_management_read_body,
                     recoverBodyRes = R.string.feature_step_conversations_native_management_recover_body
@@ -60,11 +60,33 @@ internal object FeatureOtherGuides {
                     titleRes = R.string.feature_recipe_conversations_server_selection_title,
                     previewKey = "conversations_server_selection",
                     route = "chats",
-                    targetId = "llama.server_selection",
-                    eventId = "llama.server_selection",
+                    targetId = null,
+                    eventId = null,
                     orientBodyRes = R.string.feature_step_conversations_server_selection_orient_body,
                     readBodyRes = R.string.feature_step_conversations_server_selection_read_body,
                     recoverBodyRes = R.string.feature_step_conversations_server_selection_recover_body
+                ),
+                otherRecipe(
+                    id = "conversations.delegation_start",
+                    titleRes = R.string.feature_recipe_r7_delegation_start_title,
+                    previewKey = "chat",
+                    route = null, // Chat settings live inside the open chat; keep that page.
+                    targetId = null,
+                    eventId = null,
+                    orientBodyRes = R.string.feature_step_r7_delegation_start_orient,
+                    readBodyRes = R.string.feature_step_r7_delegation_start_read,
+                    recoverBodyRes = R.string.feature_step_r7_delegation_start_recover
+                ),
+                otherRecipe(
+                    id = "conversations.servers_caches",
+                    titleRes = R.string.feature_recipe_r7_servers_caches_title,
+                    previewKey = "servers_hub",
+                    route = "chats",
+                    targetId = null,
+                    eventId = null,
+                    orientBodyRes = R.string.feature_step_r7_servers_caches_orient,
+                    readBodyRes = R.string.feature_step_r7_servers_caches_read,
+                    recoverBodyRes = R.string.feature_step_r7_servers_caches_recover
                 )
             )
         ),
@@ -79,8 +101,8 @@ internal object FeatureOtherGuides {
                     titleRes = R.string.feature_recipe_agent_quickstart_title,
                     previewKey = "agent",
                     route = "agent",
-                    targetId = "agent.workspace",
-                    eventId = "agent.workspace",
+                    targetId = null,
+                    eventId = null,
                     orientBodyRes = R.string.feature_step_agent_quickstart_orient_body,
                     readBodyRes = R.string.feature_step_agent_quickstart_read_body,
                     recoverBodyRes = R.string.feature_step_agent_quickstart_recover_body
@@ -91,7 +113,7 @@ internal object FeatureOtherGuides {
                     previewKey = "agent",
                     route = "agent_workspace",
                     targetId = "agent.projects",
-                    eventId = "agent.project",
+                    eventId = "agent.projects",
                     orientBodyRes = R.string.feature_step_agent_projects_orient_body,
                     readBodyRes = R.string.feature_step_agent_projects_read_body,
                     recoverBodyRes = R.string.feature_step_agent_projects_recover_body
@@ -300,6 +322,17 @@ internal object FeatureOtherGuides {
                     orientBodyRes = R.string.feature_step_servers_files_orient_body,
                     readBodyRes = R.string.feature_step_servers_files_read_body,
                     recoverBodyRes = R.string.feature_step_servers_files_recover_body
+                ),
+                otherRecipe(
+                    id = "servers.file_station_web",
+                    titleRes = R.string.feature_recipe_r7_file_station_web_title,
+                    previewKey = "file_server",
+                    route = "file_server",
+                    targetId = "file_server.folder",
+                    eventId = null,
+                    orientBodyRes = R.string.feature_step_r7_file_station_web_orient,
+                    readBodyRes = R.string.feature_step_r7_file_station_web_read,
+                    recoverBodyRes = R.string.feature_step_r7_file_station_web_recover
                 ),
                 otherRecipe(
                     id = "servers.ollama",
@@ -590,7 +623,7 @@ private fun otherRecipe(
     titleRes: Int,
     previewKey: String,
     route: String?,
-    targetId: String,
+    targetId: String?,
     eventId: String?,
     orientBodyRes: Int,
     readBodyRes: Int,

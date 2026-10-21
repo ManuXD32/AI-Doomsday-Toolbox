@@ -10,6 +10,8 @@ import kotlinx.serialization.json.Json
  * - [projectId]: Android-side harness workspace id of an existing project to open; null = see [continueProject].
  * - [continueProject]: reuse the chat's previous project when [projectId] is null.
  * - [threadId]: harness session id of an existing thread to keep using; null = a new thread.
+ * - [newProject]: start a new project even when this chat already has one (explicit `project:"new"`).
+ * - [freshThread]: open a new thread instead of reusing the last one (explicit `thread:"new"`); the loop clears it once bound.
  * - [pendingAttachmentRefs]: chat file references (`f12`, `img55`) not yet copied into the project's `inputs/`.
  */
 @Serializable
@@ -17,7 +19,9 @@ data class DelegationTaskOptions(
     val projectId: String? = null,
     val continueProject: Boolean = false,
     val threadId: String? = null,
-    val pendingAttachmentRefs: List<String> = emptyList()
+    val pendingAttachmentRefs: List<String> = emptyList(),
+    val newProject: Boolean = false,
+    val freshThread: Boolean = false
 ) {
     fun encode(): String = JSON.encodeToString(serializer(), this)
 

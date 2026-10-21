@@ -1601,11 +1601,11 @@ private class WearRequestRouter(
         val tile = farmRepository.ensureUnlockedFarmTiles(pet.id).firstOrNull { it.id == tileId }
             ?: throw IllegalArgumentException(appContext.getString(R.string.wear_bridge_invalid_id))
         val action = when (request.action) {
-            "till" -> com.example.llamadroid.tama.world.core.ActionId.TILL_SOIL
-            "water" -> com.example.llamadroid.tama.world.core.ActionId.POUR_WATER
-            "plant" -> com.example.llamadroid.tama.world.core.ActionId.PLANT
-            "harvest" -> if (tile.crop?.isDecayed == true) com.example.llamadroid.tama.world.core.ActionId.REMOVE_DEAD_CROP
-                else com.example.llamadroid.tama.world.core.ActionId.HARVEST_CROP
+            "till" -> com.example.llamadroid.tama.game.FarmPlotAction.TILL_SOIL
+            "water" -> com.example.llamadroid.tama.game.FarmPlotAction.POUR_WATER
+            "plant" -> com.example.llamadroid.tama.game.FarmPlotAction.PLANT
+            "harvest" -> if (tile.crop?.isDecayed == true) com.example.llamadroid.tama.game.FarmPlotAction.REMOVE_DEAD_CROP
+                else com.example.llamadroid.tama.game.FarmPlotAction.HARVEST_CROP
             else -> null
         }
         val arguments = if (request.action == "plant") {
@@ -1613,7 +1613,7 @@ private class WearRequestRouter(
                 ?: throw IllegalStateException(appContext.getString(R.string.wear_tama_no_seed))
             mapOf("cropId" to seed.id.removePrefix("seed_"))
         } else emptyMap()
-        val result = if (action != null) com.example.llamadroid.tama.world.runtime.WorldFarmActions.request(
+        val result = if (action != null) com.example.llamadroid.tama.game.ClassicFarmPlots.request(
             appContext, tamaGameEngine, tile.id, action, arguments
         ) else appContext.getString(R.string.wear_tama_action_needs_phone_args)
         return ok(request.meta, TamaFarmSnapshot.serializer(), currentFarmSnapshot(pet.id, result))

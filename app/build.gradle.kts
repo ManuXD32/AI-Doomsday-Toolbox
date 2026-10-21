@@ -261,7 +261,7 @@ android {
     }
     
     testOptions {
-        // Room integration tests use the canonical resource catalog and world manifests.
+        // Room integration tests use the canonical resource catalog and animation manifests.
         unitTests.isIncludeAndroidResources = true
     }
 
@@ -406,9 +406,6 @@ tasks.matching { it.name == "bundleRelease" }.configureEach {
 
 dependencies {
     implementation(project(":wear-protocol"))
-    implementation(project(":tama-world-core"))
-    implementation(project(":tama-world-policy"))
-    implementation(project(":tama-world-training"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -477,7 +474,7 @@ dependencies {
     implementation("org.apache.hadoop:hadoop-client-runtime:3.4.1")
 
     // Official ONNX Runtime Android backend for local ONNX execution
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.26.0")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.31.0")
 
     // LiteRT-LM chat backend for CPU/GPU packaged models
     // Keep the audited ABI pin shared by the hash gate and runtime dependency.
@@ -535,6 +532,9 @@ dependencies {
     testImplementation("org.json:json:20240303")
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.work.testing)
+    // Opt-in Robolectric screenshot renderer (-Pscreenshots=true); compose test rules on the JVM.
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.ui.test.junit4)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
@@ -638,4 +638,36 @@ tasks.matching { it.name == "signReleaseBundle" }.configureEach {
 }
 tasks.matching { it.name == "bundleRelease" }.configureEach {
     finalizedBy("checkReleaseFeatureSplitSizes", "checkReleaseBundle16KbAlignment")
+}
+
+// Opt-in real-screen screenshot renderer (docs/screenshot-renderer.md). Normal unit-test runs skip
+// everything under screenshots/render; -Pscreenshots=true runs only those classes. Options are passed
+// as Gradle properties: -Padt.shots.profile=phone -Padt.shots.locale=en -Padt.shots.keys=a,b
+// -Padt.shots.out=/path -Padt.shots.repoRoot=/path
+val screenshotsRequested = providers.gradleProperty("screenshots").map { it == "true" }.orElse(false).get()
+tasks.withType<Test>().configureEach {
+    if (screenshotsRequested) {
+        include("**/screenshots/render/**")
+        listOf("profile", "locale", "keys", "out", "repoRoot").forEach { key ->
+            providers.gradleProperty("adt.shots.$key").orNull?.let { systemProperty("adt.shots.$key", it) }
+        }
+        if (providers.gradleProperty("adt.shots.out").orNull == null) {
+            systemProperty("adt.shots.out", layout.buildDirectory.dir("screenshots").get().asFile.absolutePath)
+        }
+        if (providers.gradleProperty("adt.shots.repoRoot").orNull == null) {
+            systemProperty("adt.shots.repoRoot", rootDir.absolutePath)
+        }
+        systemProperty("robolectric.pixelCopyRenderMode", "hardware")
+        // Dead proxy so accidental network calls fail fast (localhost stays excluded).
+        systemProperty("http.proxyHost", "127.0.0.1")
+        systemProperty("http.proxyPort", "9")
+        systemProperty("https.proxyHost", "127.0.0.1")
+        systemProperty("https.proxyPort", "9")
+        maxHeapSize = "6g"
+        outputs.upToDateWhen { false }
+        outputs.cacheIf { false }
+        testLogging { showStandardStreams = true }
+    } else {
+        exclude("**/screenshots/render/**")
+    }
 }

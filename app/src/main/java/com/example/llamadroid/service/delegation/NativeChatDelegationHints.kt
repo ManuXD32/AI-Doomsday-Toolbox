@@ -9,9 +9,9 @@ object NativeChatDelegationHints {
     const val MIN_MESSAGE_CHARS = 12
 
     const val HINT_AUTO =
-        "This request looks like coding/project work: delegate it with deepseek_task_start unless it is a tiny snippet."
+        "This request looks like coding/project work: delegate it unless it is a tiny snippet. If it corrects or changes work of an existing DeepSeek task in this chat, send it to that task with deepseek_task_message; otherwise start one with deepseek_task_start."
     const val HINT_PREFER =
-        "Coding, file or project request: delegate it with deepseek_task_start instead of writing it in the chat."
+        "Coding, file or project request: delegate it instead of writing it in the chat. If it corrects or changes work of an existing DeepSeek task in this chat, send it to that task with deepseek_task_message; otherwise start one with deepseek_task_start."
 
     private const val L = "(?<![\\p{L}\\p{N}_])"
     private const val R = "(?![\\p{L}\\p{N}_])"

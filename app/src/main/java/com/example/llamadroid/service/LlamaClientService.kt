@@ -2067,7 +2067,7 @@ class LlamaClientService : Service() {
         // One-turn hints from the enabled extensions are sent ONCE, right after the user message, and
         // recorded as a note so every later round and replay keeps them in place.
         if (!resuming) {
-            history.lastOrNull { it.role == "user" }?.content?.let { steps.turnHints(turnHintTexts(effectiveToolConfig, it)) }
+            com.example.llamadroid.service.delegation.NativeChatNoticeFraming.hintTarget(history)?.let { steps.turnHints(turnHintTexts(effectiveToolConfig, it)) }
         }
 
         suspend fun runModelCall(availableTools: List<AgentTool>): OllamaService.ChatResponse {

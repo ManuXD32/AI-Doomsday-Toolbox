@@ -3165,7 +3165,8 @@ private fun AssetImage(
 private fun Context.localizedTamaLocationLabel(locationId: String?, suppliedLabel: String?): String {
     val id = locationId?.trim()?.lowercase().orEmpty()
     val labelRes = when {
-        id == "fixed_0_0" || id == "home" || id == "house" -> R.string.wear_tama_location_home
+        id == "fixed_0_0" || id == "home" || id == "house" ||
+            id == "world" || id == "hometown" || id.startsWith("world_") -> R.string.wear_tama_location_home
         id == "fixed_1_0" || id == "shop" || id == "store" -> R.string.wear_tama_location_shop
         id == "fixed_2_0" || id == "park" -> R.string.wear_tama_location_park
         id == "fixed_3_0" || id == "hospital" || id == "clinic" -> R.string.wear_tama_location_hospital
@@ -3182,7 +3183,6 @@ private fun Context.localizedTamaLocationLabel(locationId: String?, suppliedLabe
         id == "npc_home_a" || id.endsWith("npc_home_a") -> R.string.wear_tama_location_npc_home
         id == "npc_home_b" || id.endsWith("npc_home_b") -> R.string.wear_tama_location_npc_home
         id == "npc_home_c" || id.endsWith("npc_home_c") -> R.string.wear_tama_location_npc_home
-        id == "world" || id == "hometown" || id.startsWith("world_") -> R.string.wear_tama_location_world
         else -> null
     }
     if (labelRes != null) return getString(labelRes)

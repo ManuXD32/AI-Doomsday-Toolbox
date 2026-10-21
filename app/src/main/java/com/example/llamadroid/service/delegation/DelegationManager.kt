@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -91,7 +92,8 @@ class DelegationManager private constructor(context: Context) : NativeChatDelega
                 chatId = request.chatId, title = title, request = brief, runtimeId = runtimeId,
                 optionsJson = DelegationTaskOptions(
                     projectId = request.projectId, continueProject = request.continueProject,
-                    threadId = request.threadId, pendingAttachmentRefs = request.attachmentRefs
+                    threadId = request.threadId, pendingAttachmentRefs = request.attachmentRefs,
+                    newProject = request.newProject, freshThread = request.freshThread
                 ).encode()
             )
         ) ?: return reject("task_active", "A DeepSeek task is already active in this chat. Use deepseek_task_status, deepseek_task_message or deepseek_task_cancel.")
@@ -128,21 +130,24 @@ class DelegationManager private constructor(context: Context) : NativeChatDelega
     private fun launch(taskId: Long, chatId: Long, start: DelegationLoopStart?): RunningTask {
         val inbox = newInbox(taskId, chatId)
         val loop = DelegateSubagentLoop(appContext, taskId, chatId, inbox, live, scope, start)
+        var self: RunningTask? = null
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 loop.run()
             } finally {
-                withContext(NonCancellable) { onLoopEnded(taskId) }
+                withContext(NonCancellable) { onLoopEnded(taskId, self) }
             }
         }
         val task = RunningTask(loop, job, inbox)
+        self = task
         running[taskId] = task
         job.start()
         return task
     }
 
-    private suspend fun onLoopEnded(taskId: Long) {
-        running.remove(taskId)
+    private suspend fun onLoopEnded(taskId: Long, self: RunningTask?) {
+        // A replaced loop (reopen after a join timeout) must not touch the new loop's registration or state.
+        if (!DelegationRunGuard.endIfCurrent(running, taskId, self)) return
         live.update { it - taskId }
         DelegationMailbox.tick(taskId)
         // A loop that ends while the row still says "live" died unexpectedly: make it resumable.
@@ -186,15 +191,15 @@ class DelegationManager private constructor(context: Context) : NativeChatDelega
     ): DelegationReply {
         val latest = taskDao.getLatestForChat(chatId)
             ?: return DelegationReply(
-                "There is no DeepSeek task in this chat yet. Use deepseek_task_start to start one.", false, "NONE"
+                "There is no DeepSeek task in this chat yet. Use deepseek_task_start to start one.", false, "NONE", posted = false
             )
-        if (message.isBlank()) return DelegationReply("message is required.", false, latest.state)
+        if (message.isBlank()) return DelegationReply("message is required.", false, latest.state, posted = false)
         val refs = attachmentRefs.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
         val resolution = if (refs.isEmpty()) null else DelegationFileBridge(appContext).resolve(chatId, refs)
         if (resolution != null && resolution.unknown.isNotEmpty()) {
             return DelegationReply(
                 "Unknown or unavailable attachment(s): ${resolution.unknown.joinToString(", ")}. Use the ids from the attached-files lines of this chat (for example f12 or img55).",
-                false, latest.state
+                false, latest.state, posted = false
             )
         }
         val posted = launchMutex.withLock {
@@ -206,8 +211,15 @@ class DelegationManager private constructor(context: Context) : NativeChatDelega
             else options.copy(pendingAttachmentRefs = DelegationMailbox.mergeRefs(options.pendingAttachmentRefs, refs))
             val optionsJson = if (refs.isEmpty() && !reopen) null else merged.encode()
             if (reopen) {
-                // A finishing loop may still be winding down; wait for it so the new loop is the only one.
-                running[task.id]?.let { old -> withTimeoutOrNull(REOPEN_JOIN_TIMEOUT_MS) { old.job.join() } }
+                // A finishing loop may still be winding down; wait for it, and cancel it when it does not end,
+                // so the new loop is the only one.
+                running[task.id]?.let { old ->
+                    val ended = withTimeoutOrNull(REOPEN_JOIN_TIMEOUT_MS) { old.job.join(); true } == true
+                    if (!ended) {
+                        old.loop.stopModelRequest()
+                        withContext(NonCancellable) { old.job.cancelAndJoin() }
+                    }
+                }
                 taskDao.update(DelegationMailbox.reopened(task, optionsJson, System.currentTimeMillis()))
                 journal(task.id, "task_reopened")
             } else if (optionsJson != null) {
@@ -232,7 +244,7 @@ class DelegationManager private constructor(context: Context) : NativeChatDelega
             }
             runningTask.inbox.signal()
             Triple(fresh.id, msgDao.seqOf(rowId), reopen)
-        } ?: return DelegationReply("There is no DeepSeek task in this chat.", false, "NONE")
+        } ?: return DelegationReply("There is no DeepSeek task in this chat.", false, "NONE", posted = false)
         val (taskId, postedSeq, reopened) = posted
         val waitMs = if (fromUser) 0L else waitSeconds.coerceIn(0, DelegationToolArgs.MAX_WAIT_SECONDS) * 1000L
         if (waitMs <= 0L) {

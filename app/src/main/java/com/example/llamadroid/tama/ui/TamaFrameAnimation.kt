@@ -24,31 +24,26 @@ import coil.compose.AsyncImage
 import com.example.llamadroid.tama.data.GrowthStage
 import com.example.llamadroid.tama.data.PetSpeciesLine
 import com.example.llamadroid.tama.data.PetSpriteState
-import com.example.llamadroid.tama.world.ui.WorldAssetEntry
-import com.example.llamadroid.tama.world.ui.WorldAssetManifest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.decodeFromString
-import kotlinx.serialization.json.Json
 import kotlin.math.roundToInt
 
 private const val HOME_MANIFEST = "tama/animations/manifest.json"
 private const val HOME_ATLAS_BYTE_LIMIT = 32 * 1024 * 1024
 
-private data class HomeSheet(val definition: WorldAssetEntry, val bitmap: Bitmap)
+private data class HomeSheet(val definition: TamaAnimationEntry, val bitmap: Bitmap)
 
 /** One bounded shared decode cache. Animation selects rectangles without modifying pet pixels. */
 private object HomeAnimationAssets {
-    private val json = Json { ignoreUnknownKeys = true }
-    private var manifest: WorldAssetManifest? = null
+    private var manifest: TamaAnimationManifest? = null
     private val bitmaps = object : LruCache<String, Bitmap>(HOME_ATLAS_BYTE_LIMIT) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
     }
 
     suspend fun load(assets: AssetManager, id: String): HomeSheet? = withContext(Dispatchers.IO) {
         val catalog = synchronized(this@HomeAnimationAssets) { manifest } ?: runCatching {
-            assets.open(HOME_MANIFEST).bufferedReader().use { json.decodeFromString<WorldAssetManifest>(it.readText()) }
+            assets.open(HOME_MANIFEST).bufferedReader().use { parseTamaAnimationManifest(it.readText()) }
         }.getOrNull()?.also { loaded -> synchronized(this@HomeAnimationAssets) { manifest = loaded } }
             ?: return@withContext null
         if (catalog.schemaVersion != 1) return@withContext null

@@ -52,13 +52,37 @@ class HarnessHeartbeatAndLabelsTest {
     }
 
     @Test
-    fun customProfileCarriesIdleTimeoutOnlyWhenRequested() {
+    fun customProfileDefaultsIdleTimeoutAndKeepsUserValue() {
         val base = NativeHarnessCustomProviderRequest(
             route = "adt-chat-srv-1", api = "openai-completions", baseUrl = "http://127.0.0.1:8080/v1",
             models = listOf(NativeHarnessCustomProviderModel(id = "m")),
         )
-        assertFalse(buildNativeCustomProviderProfile(base).containsKey("streamIdleTimeoutMs"))
+        assertEquals("1800000", buildNativeCustomProviderProfile(base)["streamIdleTimeoutMs"].toString())
         val withTimeout = buildNativeCustomProviderProfile(base.copy(streamIdleTimeoutMs = 2147483647L))
         assertEquals("2147483647", withTimeout["streamIdleTimeoutMs"].toString())
+    }
+
+    @Test
+    fun customProfileUserTimeoutIsKeptAndClamped() {
+        val base = NativeHarnessCustomProviderRequest(
+            route = "mine", api = "openai-completions", baseUrl = "http://127.0.0.1:8080/v1",
+            models = listOf(NativeHarnessCustomProviderModel(id = "m")),
+        )
+        assertEquals("60000", buildNativeCustomProviderProfile(base.copy(streamIdleTimeoutMs = 60_000L))["streamIdleTimeoutMs"].toString())
+        assertEquals("2147483647", buildNativeCustomProviderProfile(base.copy(streamIdleTimeoutMs = Long.MAX_VALUE))["streamIdleTimeoutMs"].toString())
+    }
+
+    @Test
+    fun timeoutUpgradeOnlyTouchesProfilesWithoutTheField() {
+        val value = kotlinx.serialization.json.Json.parseToJsonElement(
+            """{"providers":{"old":{"api":"openai-completions","baseURL":"http://h/v1"},
+               "mine":{"api":"openai-completions","baseURL":"http://h/v1","streamIdleTimeoutMs":60000},
+               "empty":{}}}"""
+        ) as kotlinx.serialization.json.JsonObject
+        val ops = com.example.llamadroid.ui.agent.harness.nativeCustomProviderTimeoutUpgradeOperations(value)
+        assertEquals(1, ops.size)
+        assertTrue(ops[0].toString().contains("\"old\""))
+        assertTrue(ops[0].toString().contains("1800000"))
+        assertTrue(com.example.llamadroid.ui.agent.harness.nativeCustomProviderTimeoutUpgradeOperations(null).isEmpty())
     }
 }

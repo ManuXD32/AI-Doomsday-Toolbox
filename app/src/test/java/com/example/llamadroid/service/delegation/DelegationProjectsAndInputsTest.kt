@@ -12,13 +12,38 @@ class DelegationProjectsAndInputsTest {
 
     @Test
     fun projectAndThreadChoicesParse() {
-        assertEquals(DelegationToolArgs.ProjectChoice.New, DelegationToolArgs.parseProjectChoice(null))
+        assertEquals(DelegationToolArgs.ProjectChoice.Omitted, DelegationToolArgs.parseProjectChoice(null))
+        assertEquals(DelegationToolArgs.ProjectChoice.Omitted, DelegationToolArgs.parseProjectChoice("  "))
         assertEquals(DelegationToolArgs.ProjectChoice.New, DelegationToolArgs.parseProjectChoice(" NEW "))
         assertEquals(DelegationToolArgs.ProjectChoice.Continue, DelegationToolArgs.parseProjectChoice("Continue"))
         assertEquals(DelegationToolArgs.ProjectChoice.Id("ws-123"), DelegationToolArgs.parseProjectChoice("\"ws-123\""))
         assertNull(DelegationToolArgs.parseThreadChoice(""))
         assertNull(DelegationToolArgs.parseThreadChoice("new"))
         assertEquals("sess-9", DelegationToolArgs.parseThreadChoice(" sess-9 "))
+    }
+
+    @Test
+    fun omittedProjectReopensOnlyTerminalTaskWithWorkspace() {
+        val omitted = DelegationToolArgs.ProjectChoice.Omitted
+        assertTrue(DelegationToolArgs.reopensLastTask(omitted, null, "COMPLETED", "ws-1"))
+        assertTrue(DelegationToolArgs.reopensLastTask(omitted, null, "FAILED", "ws-1"))
+        assertTrue(DelegationToolArgs.reopensLastTask(omitted, null, "CANCELLED", "ws-1"))
+        assertFalse(DelegationToolArgs.reopensLastTask(DelegationToolArgs.ProjectChoice.New, null, "COMPLETED", "ws-1"))
+        assertFalse(DelegationToolArgs.reopensLastTask(omitted, null, "COMPLETED", null))
+        assertFalse(DelegationToolArgs.reopensLastTask(omitted, null, null, "ws-1"))
+        assertFalse(DelegationToolArgs.reopensLastTask(omitted, null, "RUNNING", "ws-1"))
+        assertTrue(DelegationToolArgs.reopensLastTask(omitted, null, "INTERRUPTED", "ws-1"))
+        assertTrue(DelegationToolArgs.reopensLastTask(omitted, null, "NEEDS_DIRECTION", "ws-1"))
+        for (live in listOf("QUEUED", "STARTING_RUNTIME", "WAITING_HARNESS", "WAITING_MAIN")) {
+            assertFalse(live, DelegationToolArgs.reopensLastTask(omitted, null, live, "ws-1"))
+        }
+        assertFalse(DelegationToolArgs.reopensLastTask(omitted, null, "INTERRUPTED", null))
+        assertFalse(DelegationToolArgs.reopensLastTask(omitted, null, "COMPLETED", "ws-1", freshThread = true))
+        assertTrue(DelegationToolArgs.parseFreshThread(" \"new\" "))
+        assertFalse(DelegationToolArgs.parseFreshThread(null))
+        assertFalse(DelegationToolArgs.parseFreshThread(""))
+        assertFalse(DelegationToolArgs.parseFreshThread("sess-9"))
+        assertFalse(DelegationToolArgs.reopensLastTask(omitted, "sess-1", "COMPLETED", "ws-1"))
     }
 
     @Test
@@ -102,7 +127,7 @@ class DelegationProjectsAndInputsTest {
         val reopened = NativeChatDelegationTools.formatMessageReply(DelegationReply(null, true, "running", reopened = true))
         assertTrue(reopened.startsWith("The finished task was reopened"))
         assertTrue(reopened.contains("working on it"))
-        assertEquals("done", NativeChatDelegationTools.formatMessageReply(DelegationReply("done", false, "running")))
+        assertEquals(DelegationResultNotice.REPLY_LABEL + "done", NativeChatDelegationTools.formatMessageReply(DelegationReply("done", false, "running")))
         assertTrue(NativeChatDelegationTools.formatMessageReply(DelegationReply(null, true, "running")).startsWith("no reply yet"))
     }
 
@@ -110,12 +135,27 @@ class DelegationProjectsAndInputsTest {
     fun subagentToolSurfaceIsStaticAndComplete() {
         val names = DelegateSubagentToolDefs.all().map { it.name }
         assertEquals(names.size, names.toSet().size)
-        for (n in listOf("harness_list_projects", "harness_open_project", "harness_list_threads", "harness_open_thread")) {
-            assertTrue(n, n in names)
-        }
+        assertEquals(
+            listOf("harness_send", "harness_wait", "harness_read", "harness_respond", "harness_cancel_turn", "message_main", "finish_task").sorted(),
+            names.sorted()
+        )
+        val send = DelegateSubagentToolDefs.all().first { it.name == "harness_send" }
+        assertFalse(send.parameters.containsKey("thread"))
+        val read = JSONObject(DelegateSubagentToolDefs.all().first { it.name == "harness_read" }.schemaJson)
+            .getJSONObject("properties").getJSONObject("what").getJSONArray("enum")
+        assertEquals(listOf("transcript", "list", "deliverables"), (0 until read.length()).map { read.getString(it) })
         assertEquals(names, DelegateSubagentToolDefs.all().map { it.name })
         val first = DelegateSubagentPrompt.firstUserMessage("b", emptyList(), "m", 4096, 512, DelegationApprovalPolicy.FULL_ACCESS,
             DelegationTaskOptions(projectId = "ws1", threadId = "s1"))
-        assertTrue(first.contains("harness_open_project with id=ws1") && first.contains("s1"))
+        assertTrue(first.contains("the app opens the project and thread for you."))
+        assertTrue(DelegateSubagentPrompt.firstUserMessage("b", emptyList(), "m", 4096, 512, DelegationApprovalPolicy.FULL_ACCESS,
+            DelegationTaskOptions(), projectNote = "Notes app").contains("- Project: Notes app"))
+        val prompt = DelegateSubagentPrompt.systemPrompt() + first
+        for (n in listOf("harness_create_project", "harness_open_project", "harness_list_threads", "harness_open_thread", "harness_new_thread", "harness_list_projects")) {
+            assertFalse(n, prompt.contains(n))
+        }
+        for (n in listOf("harness_send", "harness_wait", "harness_read", "harness_respond", "harness_cancel_turn", "message_main", "finish_task")) {
+            assertTrue(n, prompt.contains(n))
+        }
     }
 }

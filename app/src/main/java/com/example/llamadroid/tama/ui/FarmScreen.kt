@@ -46,8 +46,8 @@ import com.example.llamadroid.tama.game.TamaGameEngine
 import com.example.llamadroid.tama.game.WorldFarmMaintenance
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import com.example.llamadroid.tama.world.core.ActionId
-import com.example.llamadroid.tama.world.runtime.WorldFarmActions
+import com.example.llamadroid.tama.game.FarmPlotAction
+import com.example.llamadroid.tama.game.ClassicFarmPlots
 import com.example.llamadroid.tama.game.FARM_COMPOSTER_MAX_LEVEL
 import com.example.llamadroid.tama.game.FARM_COMPOSTER_PROCESS_MS
 import com.example.llamadroid.tama.game.FARM_WELL_MAX_LEVEL
@@ -347,7 +347,7 @@ fun FarmScreen(
                 onSeedSelected = { seed ->
                     val plotId = showSeedPicker ?: return@SeedPickerDialog
                     scope.launch {
-                        val message = WorldFarmActions.request(context, gameEngine, plotId, ActionId.PLANT,
+                        val message = ClassicFarmPlots.request(context, gameEngine, plotId, FarmPlotAction.PLANT,
                             mapOf("cropId" to seed.id.removePrefix("seed_")))
                         Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                     }
@@ -1848,15 +1848,15 @@ private fun handleTileClick(
 ) {
     val action = when {
         tool?.id == "hoe" || tool?.id?.startsWith("hoe_") == true ->
-            ActionId.TILL_SOIL.takeIf { tile.status == TileStatus.SOIL && tile.crop == null }
+            FarmPlotAction.TILL_SOIL.takeIf { tile.status == TileStatus.SOIL && tile.crop == null }
         tool?.id == "watering_can" || tool?.id?.startsWith("watering_can_") == true ->
-            ActionId.WATER.takeIf { canWaterFarmTile(tile) }
-        tool?.id == "water" -> ActionId.POUR_WATER.takeIf { canWaterFarmTile(tile) }
-        tool?.id == "fertilizer" -> ActionId.FERTILIZE.takeIf {
+            FarmPlotAction.WATER.takeIf { canWaterFarmTile(tile) }
+        tool?.id == "water" -> FarmPlotAction.POUR_WATER.takeIf { canWaterFarmTile(tile) }
+        tool?.id == "fertilizer" -> FarmPlotAction.FERTILIZE.takeIf {
             tile.crop?.isDecayed == true || (tile.crop != null && tile.crop.stage < 3 && !tile.crop.isFertilized)
         }
-        tool == null && tile.crop?.isDecayed == true -> ActionId.REMOVE_DEAD_CROP
-        tool == null && tile.crop?.stage == 3 -> ActionId.HARVEST_CROP
+        tool == null && tile.crop?.isDecayed == true -> FarmPlotAction.REMOVE_DEAD_CROP
+        tool == null && tile.crop?.stage == 3 -> FarmPlotAction.HARVEST_CROP
         tool == null && tile.status == TileStatus.WET_FARMLAND && tile.crop == null -> {
             onSeedPlantRequest()
             null
@@ -1865,7 +1865,7 @@ private fun handleTileClick(
     }
     action?.let { requested ->
         scope.launch {
-            val message = WorldFarmActions.request(context, gameEngine, tile.id, requested)
+            val message = ClassicFarmPlots.request(context, gameEngine, tile.id, requested)
             Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
         }
     }

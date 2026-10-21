@@ -637,7 +637,7 @@
     <string name="zim_downloading_desc">Downloading ZIM file</string>
     <string name="zim_downloading_toast">Downloading: %s</string>
     <string name="zim_download_failed">Download failed: %s</string>
-    <string name="zim_articles_count">%d articles</string>
+    <string name="zim_articles_count">%1$s articles</string>
     <string name="zim_more_options">More options</string>
     <string name="zim_menu_rename">Rename</string>
     <string name="zim_menu_export">Export to Downloads</string>
@@ -2128,13 +2128,6 @@
     <string name="dist_device_total_ram">Total Device RAM: %d MB</string>
     <string name="dist_device_free_ram">Free RAM: %d MB</string>
     
-    <!-- File Server -->
-    <string name="file_server">File Server</string>
-    <string name="file_server_shared_folder">Shared Folder</string>
-    <string name="file_server_start">Start Server (Port 9111)</string>
-    <string name="file_server_stop">Stop Server</string>
-    <string name="file_server_download_zip">Download as ZIP</string>
-    
     <!-- QR Codes -->
     <string name="qr_connect">Connect via QR</string>
     <string name="qr_scan_files">Scan to access files</string>
@@ -2165,8 +2158,7 @@
     <string name="kiwix_active_downloads">%d active download(s)</string>
     
     <!-- Dashboard Additional -->
-    <string name="dashboard_file_server">File Server</string>
-    <string name="dashboard_shared_folder">Shared Folder</string>
+    <string name="dashboard_file_server">File Station</string>
     <string name="hub_workflows">Workflows</string>
     <string name="hub_workflows_desc">Chain AI operations</string>
     <string name="hub_benchmark">Benchmark</string>
@@ -4042,6 +4034,7 @@
     <string name="dist_worker_added_toast">Added: %1$s (%2$s:%3$s)</string>
     <string name="dist_worker_updated_toast">Worker updated</string>
     <string name="dist_worker_load">%d%% load</string>
+    <string name="dist_worker_load_line">Load: %1$s</string>
     <string name="dist_auto">Auto</string>
     <string name="dist_load_distribution_title">📊 Load Distribution</string>
     <string name="dist_master_load_label">Master: %1$d%% (%2$dMB)</string>
@@ -4665,7 +4658,6 @@
     <string name="video_gen_error_already_running">Another video generation task is already running.</string>
     <string name="video_gen_error_sd_binary_missing">The Stable Diffusion video binary is not available.</string>
     <string name="video_gen_error_ffmpeg_missing">FFmpeg is not available.</string>
-    <string name="video_gen_error_generation_failed">Video generation failed with exit code %1$d.</string>
     <string name="video_gen_error_conversion_failed">MP4 conversion failed with exit code %1$d.</string>
     <string name="video_gen_error_media_processing_timeout">Video generation stopped because the Android background media-processing quota was exhausted. Keep the app in the foreground or reduce frames or steps, then start again.</string>
     <string name="video_gen_warning_output_not_configured">No output folder is configured, so the video stays in app storage only.</string>

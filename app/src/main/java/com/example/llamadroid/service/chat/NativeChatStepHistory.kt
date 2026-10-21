@@ -2,6 +2,7 @@ package com.example.llamadroid.service.chat
 
 import com.example.llamadroid.data.model.LlamaMessageEntity
 import com.example.llamadroid.service.OllamaService
+import com.example.llamadroid.service.ToolArgumentsJson
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -183,12 +184,11 @@ object NativeChatStepHistory {
 
     /** Valid JSON object text plus its string map; a cut-off or malformed value becomes "{}". */
     private fun normalizedArguments(arguments: String?): Pair<String, Map<String, String>> {
-        val raw = arguments?.trim().orEmpty()
-        val parsed = raw.takeIf { it.isNotEmpty() }
-            ?.let { runCatching { JSON.parseToJsonElement(it) as? JsonObject }.getOrNull() }
+        val canonical = ToolArgumentsJson.canonical(arguments)
+        val parsed = runCatching { JSON.parseToJsonElement(canonical) as? JsonObject }.getOrNull()
             ?: return "{}" to emptyMap()
         val map = LinkedHashMap<String, String>()
         parsed.forEach { (key, value) -> map[key] = if (value is JsonPrimitive) value.content else value.toString() }
-        return raw to map
+        return canonical to map
     }
 }

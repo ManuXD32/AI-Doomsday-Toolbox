@@ -899,7 +899,7 @@ class HarnessLocalModels(
                                         .put("id", call.id ?: "call-${UUID.randomUUID()}")
                                         .put("type", "function")
                                         .put("function", JSONObject().put("name", call.name)
-                                            .put("arguments", call.rawArgumentsJson ?: JSONObject(call.arguments).toString()))
+                                            .put("arguments", com.example.llamadroid.service.ToolArgumentsJson.canonical(call.rawArgumentsJson, call.arguments)))
                                 )
                             )
                         )

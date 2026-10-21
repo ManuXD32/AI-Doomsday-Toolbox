@@ -95,6 +95,7 @@ class HarnessAppToolsBridgeTest {
         assertEquals("ONNX", tools.getJSONObject("images_generate").getString("engine"))
         assertTrue(tools.getJSONObject("images_generate").getBoolean("enabled"))
         assertEquals("enabled", tools.getJSONObject("app_web_search").getString("status"))
+        assertTrue(tools.getJSONObject("images_remove_background").has("enabled"))
         assertFalse(response.toString().contains("/data/user/"))
         assertFalse(response.toString().contains("apiKey"))
     }

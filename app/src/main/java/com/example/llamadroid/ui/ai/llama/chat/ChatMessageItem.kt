@@ -321,7 +321,12 @@ fun LlamaMessageItem(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = message.role.replaceFirstChar { it.uppercase() },
+                    text = when (message.role) {
+                        "user" -> stringResource(R.string.chat_message_role_user)
+                        "assistant" -> stringResource(R.string.chat_message_role_assistant)
+                        "system" -> stringResource(R.string.chat_message_role_system)
+                        else -> message.role.replaceFirstChar { it.uppercase() }
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.outline
                 )

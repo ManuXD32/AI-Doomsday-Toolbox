@@ -1,0 +1,26 @@
+/* Editor page (editor.html). Theme variables come from app.css. */
+html, body.editor-body { height: 100%; margin: 0; }
+.editor-body { display: flex; flex-direction: column; background: var(--bg); color: var(--text); }
+.ed-bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--surface); border-bottom: 1px solid var(--border); flex: 0 0 auto; }
+.ed-title { margin: 0; font-size: 16px; font-weight: 600; min-width: 0; display: flex; align-items: center; gap: 6px; }
+.ed-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-dot { color: var(--accent); font-size: 14px; }
+.ed-banner { margin: 8px 12px 0; flex: 0 0 auto; }
+.ed-status { padding: 24px; text-align: center; overflow-wrap: anywhere; }
+.ed-status.error-text { color: var(--danger); }
+.ed-host { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.ed-host > .toastui-editor-defaultUI { flex: 1 1 auto; min-height: 0; }
+.ed-viewer { overflow: auto; padding: 12px 20px; background: var(--surface); flex: 1 1 auto; min-height: 0; }
+
+/* Plain text editor */
+.pt-wrap { display: flex; flex: 1 1 auto; min-height: 0; background: var(--surface); font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; }
+.pt-gutter { flex: 0 0 auto; margin: 0; padding: 8px 8px 8px 12px; text-align: right; color: var(--muted); background: var(--surface2); overflow: hidden; user-select: none; white-space: pre; font: inherit; border-right: 1px solid var(--border); }
+.pt-wrap.wrap .pt-gutter { display: none; }
+.pt-area { flex: 1 1 auto; min-width: 0; margin: 0; padding: 8px 12px; border: 0; outline: none; resize: none; background: var(--surface); color: var(--text); font: inherit; white-space: pre; overflow: auto; tab-size: 2; }
+.pt-wrap.wrap .pt-area { white-space: pre-wrap; overflow-wrap: anywhere; }
+.pt-area:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+
+@media (max-width: 600px) {
+  .ed-bar { flex-wrap: wrap; }
+  .ed-title { flex: 1 1 100%; order: 3; }
+}

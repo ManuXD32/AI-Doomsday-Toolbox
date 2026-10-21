@@ -74,6 +74,7 @@ fun HarnessAppToolsSettingsDialog(runtime: HarnessAppRuntime, onDismiss: () -> U
     val sdLlmVision by settings.agentSdImageGenerationLlmVision.collectAsState()
     val sdPhotoMaker by settings.agentSdImageGenerationPhotoMaker.collectAsState()
     val searchEnabled by settings.agentWebSearchEnabled.collectAsState()
+    val bgrEnabled by settings.agentBackgroundRemovalToolEnabled.collectAsState()
     val isSdEngine = imageEngine.equals("SD", ignoreCase = true)
     val sdSelections = listOf(sdVae, sdTae, sdClipL, sdClipG, sdT5xxl, sdLlm, sdLlmVision, sdPhotoMaker)
     val sdReadiness = remember(models, sdModel, sdSelections) {
@@ -151,6 +152,23 @@ fun HarnessAppToolsSettingsDialog(runtime: HarnessAppRuntime, onDismiss: () -> U
                         TextButton(onClick = { showImageConfiguration = true }) {
                             Text(stringResource(R.string.harness_app_tool_configure_image))
                         }
+                    }
+                }
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                        ToolToggleRow(
+                            title = stringResource(R.string.agent_bgr_tool_name),
+                            description = stringResource(R.string.agent_bgr_tool_enabled_desc),
+                            checked = bgrEnabled,
+                            onCheckedChange = settings::setAgentBackgroundRemovalToolEnabled,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = stringResource(if (bgrEnabled) R.string.harness_app_tool_status_enabled else R.string.harness_app_tool_status_off),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (bgrEnabled) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))) {

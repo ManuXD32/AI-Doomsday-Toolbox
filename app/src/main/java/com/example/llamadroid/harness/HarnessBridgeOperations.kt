@@ -19,6 +19,8 @@ import com.example.llamadroid.service.AgentSkillRepository
 import com.example.llamadroid.service.CustomToolExecutionMode
 import com.example.llamadroid.service.CustomToolHttpExecutor
 import com.example.llamadroid.service.KiwixService
+import com.example.llamadroid.service.NativeChatOnnxBackgroundRemover
+import com.example.llamadroid.service.NativeChatUnifiedImageGenerator
 import com.example.llamadroid.service.SkillPermission
 import com.example.llamadroid.service.agentSdImageToolParams
 import com.example.llamadroid.service.resolveAgentSdImageReadiness
@@ -338,6 +340,7 @@ class HarnessBridgeOperations(
         val enabled = args.getBoolean("enabled")
         when (args.optString("tool")) {
             "images_generate" -> settings.setAgentImageGenerationToolEnabled(enabled)
+            "images_remove_background" -> settings.setAgentBackgroundRemovalToolEnabled(enabled)
             "app_web_search" -> settings.setAgentWebSearchEnabled(enabled)
             else -> error("APP_TOOL_UNKNOWN")
         }
@@ -377,6 +380,7 @@ class HarnessBridgeOperations(
         }
         val imageEnabled = settings.agentImageGenerationToolEnabled.value
         val searchEnabled = settings.agentWebSearchEnabled.value
+        val bgrEnabled = settings.agentBackgroundRemovalToolEnabled.value
         return JSONObject().put("tools", JSONObject()
             .put("images_generate", JSONObject()
                 .put("enabled", imageEnabled)
@@ -387,6 +391,10 @@ class HarnessBridgeOperations(
                 })
                 .put("missingComponents", JSONArray(missingComponents))
                 .put("engine", engine))
+            .put("images_remove_background", JSONObject()
+                .put("enabled", bgrEnabled)
+                .put("ready", bgrEnabled)
+                .put("status", if (bgrEnabled) "enabled" else "off"))
             .put("app_web_search", JSONObject()
                 .put("enabled", searchEnabled)
                 .put("ready", searchEnabled)
@@ -407,12 +415,13 @@ class HarnessBridgeOperations(
 
     private suspend fun image(scope: HarnessSessionScope, method: String, args: JSONObject): JSONObject {
         val temp = File(context.cacheDir, "harness_images/${UUID.randomUUID()}").apply { mkdirs() }
+        val inputFileForPath: suspend (String) -> File = { path ->
+            if (scope.localRoot != null) scope.localFile(path) else File(temp, "input." + File(path).extension.lowercase().takeIf { it in setOf("png", "jpg", "jpeg", "webp", "bmp", "gif") }.orEmpty().ifBlank { "png" })
+                .apply { writeBytes(files.readBytes(scope, path)) }
+        }
         val operations = AgentImageOperations(
             context,
-            inputFileForPath = { path ->
-                if (scope.localRoot != null) scope.localFile(path) else File(temp, "input." + File(path).extension.lowercase().takeIf { it in setOf("png", "jpg", "jpeg", "webp", "bmp", "gif") }.orEmpty().ifBlank { "png" })
-                    .apply { writeBytes(files.readBytes(scope, path)) }
-            },
+            inputFileForPath = inputFileForPath,
             sanitizePath = { path ->
                 if (scope.localRoot != null) scope.localFile(path)
                 val relative = path.removePrefix(scope.workspace.guestPath + "/")
@@ -424,14 +433,45 @@ class HarnessBridgeOperations(
         )
         return try {
             val outputRelativePath = imageOutputRelativePath(scope, method, args)
-            val message = if (method == "images.generate") {
-                operations.generateImage(args.getString("prompt"), args.optString("negativePrompt"), outputRelativePath, settings).getOrThrow()
-            } else {
-                operations.removeImageBackground(args.getString("imagePath"), outputRelativePath, settings).getOrThrow()
+            val sessionId = scope.session.harnessSessionId
+            val delegated = HarnessDelegatedImageSettings(database)
+            val chatGenerationConfig = if (method == "images.generate") delegated.generationConfig(sessionId) else null
+            val chatBgrConfig = if (method == "images.removeBackground") delegated.backgroundRemovalConfig(sessionId) else null
+            val outputGuestPath = scope.workspace.guestPath + "/" + outputRelativePath
+            var chatMask = false
+            val message = when {
+                chatGenerationConfig != null -> {
+                    val generated = NativeChatUnifiedImageGenerator(context, database)
+                        .generateImage(args.getString("prompt").trim(), args.optString("negativePrompt").trim(), chatGenerationConfig)
+                        .getOrThrow()
+                    val out = File(generated.imagePath)
+                    files.writeBytes(scope, outputGuestPath, out.readBytes())
+                    runCatching { out.delete() }
+                    generated.content
+                }
+                chatBgrConfig != null -> {
+                    val input = inputFileForPath(args.getString("imagePath"))
+                    val removed = NativeChatOnnxBackgroundRemover(context, database)
+                        .removeBackground(input.absolutePath, chatBgrConfig).getOrThrow()
+                    val out = File(removed.imagePath)
+                    files.writeBytes(scope, outputGuestPath, out.readBytes())
+                    val mask = File(out.parentFile, out.nameWithoutExtension + "_mask.png")
+                    if (chatBgrConfig.backgroundRemovalParams.exportMask && mask.isFile) {
+                        files.writeBytes(scope, outputGuestPath.substringBeforeLast(".") + "_mask.png", mask.readBytes())
+                        chatMask = true
+                    }
+                    runCatching { out.delete() }
+                    runCatching { mask.delete() }
+                    removed.content
+                }
+                method == "images.generate" ->
+                    operations.generateImage(args.getString("prompt"), args.optString("negativePrompt"), outputRelativePath, settings).getOrThrow()
+                else ->
+                    operations.removeImageBackground(args.getString("imagePath"), outputRelativePath, settings).getOrThrow()
             }
             val artifactPaths = buildList {
                 add(outputRelativePath)
-                if (method == "images.removeBackground" && settings.agentBackgroundRemovalExportMask.value) {
+                if (method == "images.removeBackground" && (chatMask || (chatBgrConfig == null && settings.agentBackgroundRemovalExportMask.value))) {
                     add(outputRelativePath.substringBeforeLast(".") + "_mask.png")
                 }
             }.distinct()

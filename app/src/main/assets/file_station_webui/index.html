@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>File Station</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/css/app.css">
+  <script type="module" src="/js/main.js"></script>
+</head>
+<body data-mode="files">
+  <section id="login-view" class="login-view" hidden>
+    <form id="login-form" class="login-card" autocomplete="on">
+      <div class="login-logo" aria-hidden="true">&#128452;</div>
+      <h1 data-i18n="login.title">Sign in</h1>
+      <p class="muted" data-i18n="login.hint">This File Station is password protected.</p>
+      <label class="field">
+        <span class="field-label" data-i18n="login.password">Password</span>
+        <input id="login-password" class="input" type="password" autocomplete="current-password" required>
+      </label>
+      <p id="login-error" class="error-text" role="alert"></p>
+      <button id="login-submit" class="btn primary" type="submit" data-i18n="login.submit">Sign in</button>
+    </form>
+  </section>
+
+  <div id="app" class="app" hidden>
+    <div id="scrim" class="scrim" hidden></div>
+    <aside id="sidebar" class="sidebar" aria-label="Navigation" data-i18n-aria="nav.label">
+      <div class="brand"><span aria-hidden="true">&#128452;</span> <span data-i18n="app.name">File Station</span></div>
+      <nav>
+        <h3 class="nav-heading" data-i18n="sidebar.volumes">Volumes</h3>
+        <ul id="nav-volumes" class="nav-list"></ul>
+        <h3 class="nav-heading" data-i18n="sidebar.system">System</h3>
+        <ul id="nav-system" class="nav-list"></ul>
+        <h3 id="tools-heading" class="nav-heading" data-i18n="sidebar.tools" hidden>Tools</h3>
+        <ul id="nav-tools" class="nav-list"></ul>
+      </nav>
+    </aside>
+
+    <div class="main-col">
+      <header class="topbar">
+        <button id="menu-btn" class="icon-btn menu-btn" type="button" data-i18n-aria="nav.menu" aria-label="Menu">&#9776;</button>
+        <nav id="breadcrumb" class="breadcrumb files-only" aria-label="Breadcrumb" data-i18n-aria="nav.breadcrumb"></nav>
+        <form id="search-form" class="search" role="search">
+          <input id="search-input" class="input" type="search" data-i18n-ph="search.all" data-i18n-aria="search.label" aria-label="Search">
+        </form>
+        <div class="top-actions">
+          <button id="view-toggle" class="icon-btn files-only" type="button" aria-label="View"></button>
+          <button id="new-btn" class="btn primary files-only" type="button"><span data-i18n="new.label">New</span> &#9662;</button>
+          <button id="upload-btn" class="btn files-only" type="button"><span data-i18n="upload.label">Upload</span> &#9662;</button>
+          <div id="lang-switch" class="seg" role="group" aria-label="Language" data-i18n-aria="lang.label">
+            <button type="button" data-lang="en" aria-pressed="true">EN</button>
+            <button type="button" data-lang="es" aria-pressed="false">ES</button>
+          </div>
+          <button id="theme-btn" class="icon-btn" type="button" data-i18n-aria="theme.label" aria-label="Theme"></button>
+          <button id="logout-btn" class="btn small" type="button" data-i18n="login.logout" hidden>Sign out</button>
+        </div>
+      </header>
+
+      <main id="main" class="main" tabindex="-1">
+        <div id="unprotected-warn" class="banner warn" hidden>
+          <span data-i18n="warn.unprotected">No password is set: anyone on your network can access these files.</span>
+          <button id="warn-dismiss" class="btn small" type="button" data-i18n="common.dismiss">Dismiss</button>
+        </div>
+        <div id="selection-bar" class="selection-bar" role="toolbar" aria-label="Selection actions" data-i18n-aria="sel.bar" hidden>
+          <span id="sel-count" class="sel-count"></span>
+          <button type="button" class="btn small" data-act="download"><span aria-hidden="true">&#11015;</span> <span class="lbl" data-i18n="act.download">Download</span></button>
+          <button type="button" class="btn small" data-act="edit"><span aria-hidden="true">&#9998;</span> <span class="lbl" data-i18n="act.edit">Edit</span></button>
+          <button type="button" class="btn small" data-act="copy"><span aria-hidden="true">&#10697;</span> <span class="lbl" data-i18n="act.copy">Copy</span></button>
+          <button type="button" class="btn small" data-act="move"><span aria-hidden="true">&#10145;</span> <span class="lbl" data-i18n="act.move">Move</span></button>
+          <button type="button" class="btn small" data-act="rename"><span aria-hidden="true">&#9998;</span> <span class="lbl" data-i18n="act.rename">Rename</span></button>
+          <button type="button" class="btn small" data-act="compress"><span aria-hidden="true">&#128476;</span> <span class="lbl" data-i18n="act.compress">Compress</span></button>
+          <button type="button" class="btn small" data-act="extract"><span aria-hidden="true">&#128230;</span> <span class="lbl" data-i18n="act.extract">Extract</span></button>
+          <button type="button" class="btn small" data-act="tools"><span aria-hidden="true">&#129520;</span> <span class="lbl" data-i18n="act.tools">Tools</span> &#9662;</button>
+          <button type="button" class="btn small danger" data-act="delete"><span aria-hidden="true">&#128465;</span> <span class="lbl" data-i18n="act.delete">Delete</span></button>
+          <button type="button" class="icon-btn" data-act="clear" data-i18n-aria="sel.clear" aria-label="Clear selection">&#10005;</button>
+        </div>
+        <section id="view-files" class="view"><div id="files-content"></div></section>
+        <section id="view-trash" class="view" hidden></section>
+        <section id="view-jobs" class="view" hidden></section>
+        <section id="view-tool" class="view" hidden></section>
+        <div id="drop-overlay" class="drop-overlay" hidden><span data-i18n="drop.hint">Drop files to upload</span></div>
+      </main>
+    </div>
+
+    <aside id="upload-panel" class="upload-panel" aria-label="Uploads" data-i18n-aria="upload.panel" hidden>
+      <div class="upload-head">
+        <strong id="upload-title"></strong>
+        <span class="spacer"></span>
+        <button id="upload-clear" class="btn small" type="button" data-i18n="upload.clear">Clear</button>
+        <button id="upload-toggle" class="icon-btn" type="button" data-i18n-aria="upload.toggle" aria-label="Collapse">&#8597;</button>
+      </div>
+      <ul id="upload-list" class="upload-list"></ul>
+    </aside>
+  </div>
+
+  <input id="file-input" type="file" multiple hidden>
+  <input id="folder-input" type="file" webkitdirectory multiple hidden>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+</body>
+</html>

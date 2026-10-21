@@ -33,7 +33,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -57,14 +56,11 @@ import kotlin.math.ceil
 private const val UNKNOWN_LOCATION_ICON_ASSET = "tama/map/unknown.png"
 private const val CLASSIC_MAP_GRID_SIZE = 5
 private val CLASSIC_MAP_MIN_WIDTH = 280.dp
-const val CLASSIC_MAP_SIMULATION_TILE_TAG = "tama_classic_map_development_tile"
 
 /**
  * The authored, fixed town used by the classic Tama experience.
  *
- * The list intentionally stays deterministic. The living world is a separate
- * opt-in route and must not replace this map or silently reopen itself from a
- * persisted world snapshot.
+ * The list intentionally stays deterministic.
  */
 internal fun classicMapLocations(context: Context): List<TamaLocation> {
     val coreLocations = listOf(
@@ -109,7 +105,6 @@ fun TamaMapView(
     currentLocation: TamaLocation?,
     discoveredLocationIds: Set<String>,
     onLocationClick: (TamaLocation) -> Unit,
-    onOpenSimulation: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -151,26 +146,19 @@ fun TamaMapView(
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             for (x in 0 until CLASSIC_MAP_GRID_SIZE) {
-                                if (x == 2 && y == 3) {
-                                    DevelopmentWorldTile(
-                                        onClick = onOpenSimulation,
-                                        modifier = Modifier.weight(1f)
+                                val location = locations.firstOrNull { it.x == x && it.y == y }
+                                val isDiscovered = location != null && (
+                                    location.type == LocationType.HOME ||
+                                        location.isDiscovered ||
+                                        discoveredLocationIds.contains(location.id)
                                     )
-                                } else {
-                                    val location = locations.firstOrNull { it.x == x && it.y == y }
-                                    val isDiscovered = location != null && (
-                                        location.type == LocationType.HOME ||
-                                            location.isDiscovered ||
-                                            discoveredLocationIds.contains(location.id)
-                                        )
-                                    LocationTile(
-                                        location = location,
-                                        isCurrentLocation = location?.id == currentLocation?.id,
-                                        isDiscovered = isDiscovered,
-                                        onClick = { location?.let(onLocationClick) },
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                }
+                                LocationTile(
+                                    location = location,
+                                    isCurrentLocation = location?.id == currentLocation?.id,
+                                    isDiscovered = isDiscovered,
+                                    onClick = { location?.let(onLocationClick) },
+                                    modifier = Modifier.weight(1f)
+                                )
                             }
                         }
                     }
@@ -190,104 +178,7 @@ fun TamaMapView(
             LegendItem(LocationType.ARCADE.mapIconAssetPath, stringResource(R.string.tama_location_arcade))
             LegendItem(LocationType.PARK.mapIconAssetPath, stringResource(R.string.tama_location_park))
             LegendItem(UNKNOWN_LOCATION_ICON_ASSET, stringResource(R.string.tama_location_unknown))
-            DevelopmentLegendItem()
         }
-        Text(
-            text = stringResource(R.string.tama_world_shared_pet_guidance),
-            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-            fontSize = 12.sp,
-            color = TamaDark
-        )
-    }
-}
-
-@Composable
-private fun DevelopmentWorldTile(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val title = stringResource(R.string.tama_classic_map_simulated_world_title)
-    Surface(
-        modifier = Modifier
-            .then(modifier)
-            .heightIn(min = 48.dp)
-            .clickable(onClick = onClick)
-            .testTag(CLASSIC_MAP_SIMULATION_TILE_TAG)
-            .semantics { contentDescription = title },
-        shape = RoundedCornerShape(6.dp),
-        color = TamaDark,
-        contentColor = TamaLight,
-        border = BorderStroke(1.dp, TamaLight.copy(alpha = 0.25f))
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(4.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            TamaUiIcon("🗺", fontSize = 22.sp)
-            Text(
-                text = title,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold,
-                fontSize = 8.sp,
-                textAlign = TextAlign.Center,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis
-            )
-            Surface(
-                color = TamaAccent,
-                contentColor = TamaDark,
-                shape = RoundedCornerShape(3.dp)
-            ) {
-                Text(
-                    text = stringResource(R.string.tama_classic_map_development_badge),
-                    modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp),
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 7.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun DevelopmentLegendItem() {
-    Column(
-        modifier = Modifier
-            .width(220.dp)
-            .heightIn(min = 48.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp)
-    ) {
-        Text(
-            text = stringResource(R.string.tama_classic_map_development_badge),
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Bold,
-            fontSize = 9.sp,
-            color = TamaAccent,
-            maxLines = 1
-        )
-        Text(
-            text = stringResource(R.string.tama_classic_map_simulated_world_title),
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Bold,
-            fontSize = 10.sp,
-            color = TamaAccent,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
-        )
-        Text(
-            text = stringResource(R.string.tama_classic_map_simulated_world_description),
-            fontFamily = FontFamily.Monospace,
-            fontSize = 9.sp,
-            color = TamaAccent,
-            maxLines = 3,
-            overflow = TextOverflow.Ellipsis
-        )
     }
 }
 

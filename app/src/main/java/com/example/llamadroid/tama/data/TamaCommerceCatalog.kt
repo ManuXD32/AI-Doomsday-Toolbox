@@ -2,7 +2,6 @@ package com.example.llamadroid.tama.data
 
 import android.content.Context
 import com.example.llamadroid.R
-import com.example.llamadroid.tama.world.core.LegacyLocationAliases
 
 /** Existing vendor catalogs are the authority for item identity, type and price. */
 object TamaCommerceCatalog {

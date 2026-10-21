@@ -1,6 +1,7 @@
 package com.example.llamadroid.service.compaction
 
 import com.example.llamadroid.data.model.LlamaMessageEntity
+import com.example.llamadroid.service.delegation.NativeChatNoticeFraming
 import com.example.llamadroid.data.model.LlamaMessageKind
 import java.util.Locale
 
@@ -96,12 +97,13 @@ object NativeChatTurnDecoratorLogic {
      */
     fun mergeConsecutiveUsers(list: List<LlamaMessageEntity>): List<LlamaMessageEntity> {
         val out = ArrayList<LlamaMessageEntity>(list.size)
-        for (entity in list) {
+        for (raw in list) {
+            val entity = NativeChatNoticeFraming.frameEntity(raw)
             val prev = out.lastOrNull()
             if (prev != null && prev.role == "user" && entity.role == "user") {
                 out[out.lastIndex] = prev.copy(
                     id = entity.id,
-                    content = listOf(prev.content, entity.content).filter { it.isNotBlank() }.joinToString("\n\n"),
+                    content = NativeChatNoticeFraming.joinParts(prev.content, entity.content),
                     timestamp = entity.timestamp
                 )
             } else {

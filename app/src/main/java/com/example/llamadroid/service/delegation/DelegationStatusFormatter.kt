@@ -60,7 +60,9 @@ object DelegationStatusFormatter {
             lines += "The subagent asked you a question: answer it with deepseek_task_message."
         }
         subMessage?.takeIf { it.content.isNotBlank() }?.let {
-            lines += "Subagent ${it.toolName ?: "reply"}: " + it.content.trim().take(SUB_MESSAGE_CHARS)
+            val label = it.toolName?.takeIf { name -> name != "reply" }?.let { name -> "Subagent $name (not the user): " }
+                ?: DelegationResultNotice.REPLY_LABEL
+            lines += label + it.content.trim().take(SUB_MESSAGE_CHARS)
         }
         if (task.state == NativeChatDelegateTaskState.NEEDS_DIRECTION || task.state == NativeChatDelegateTaskState.INTERRUPTED) {
             lines += "The task is stopped. Use deepseek_task_message to guide/resume it or deepseek_task_cancel."
@@ -109,6 +111,7 @@ object DelegationStatusFormatter {
 object DelegationResultNotice {
     const val MAX_CHARS = 1_800
     private const val MAX_SUMMARY_CHARS = 1_000
+    const val REPLY_LABEL = "Reply from the DeepSeek subagent (not the user): "
 
     fun finished(title: String, status: String, summary: String, files: List<DelegationResultFileRef>): String {
         val tail = buildString {
@@ -132,5 +135,5 @@ object DelegationResultNotice {
         "[DeepSeek subagent question] ${text.trim().take(1_200)} Answer with deepseek_task_message."
 
     fun reply(text: String): String =
-        "[DeepSeek subagent reply] ${text.trim().take(1_200)} Relay it to the user if relevant; use deepseek_task_message to continue the conversation."
+        "[DeepSeek subagent reply] $REPLY_LABEL${text.trim().take(1_200)} Relay it to the user if relevant; use deepseek_task_message to continue the conversation."
 }

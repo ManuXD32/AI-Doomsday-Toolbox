@@ -24,7 +24,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicLong
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -78,6 +77,11 @@ class NativeChatKvCacheCoordinator(context: Context) {
     private val appContext = context.applicationContext
     private val store = NativeChatKvCacheStore(appContext)
 
+    init {
+        // One-time per install cleanup of the removed gzip compression (guarded inside).
+        scope.launch { NativeChatKvCacheStore.runLegacySweepOnce(appContext) }
+    }
+
     /** See [KvCacheEligibility]. Does no I/O. */
     fun eligibility(server: LlamaServerEntity, chat: LlamaChatEntity): KvCacheEligibility =
         kvCacheEligibility(
@@ -113,7 +117,6 @@ class NativeChatKvCacheCoordinator(context: Context) {
         onStatus: (String) -> Unit = {},
         block: suspend (KvSlotLease) -> T
     ): T {
-        maybeScheduleCompression()
         val eligible = eligibility(server, chat) == KvCacheEligibility.ELIGIBLE
         val pin = eligible || (pinOnly && server.isLlamaServerEngine() && isNativeChatLoopbackHost(server.host))
         if (!pin) return block(UnpinnedKvSlotLease)
@@ -139,7 +142,6 @@ class NativeChatKvCacheCoordinator(context: Context) {
         onStatus: (String) -> Unit = {},
         block: suspend (KvSlotLease) -> T
     ): T {
-        maybeScheduleCompression()
         if (server != null && (!server.isLlamaServerEngine() || !isNativeChatLoopbackHost(server.host))) {
             return block(UnpinnedKvSlotLease)
         }
@@ -651,92 +653,6 @@ class NativeChatKvCacheCoordinator(context: Context) {
         }
     }
 
-    // ---- idle compression ----
-
-    /** At most once per hour per process, compresses idle caches in the background. */
-    private fun maybeScheduleCompression() {
-        startIdleTimer()
-        val now = System.currentTimeMillis()
-        val last = lastCompressionMs.get()
-        if (now - last < COMPRESSION_INTERVAL_MS || !lastCompressionMs.compareAndSet(last, now)) return
-        scope.launch { runCompressionPass(now) }
-    }
-
-    private suspend fun runCompressionPass(now: Long) {
-        runCatching { compressIdleCaches(now) }.onFailure {
-            if (it is kotlinx.coroutines.CancellationException) throw it
-            DebugLog.log("NativeChatKvCache: compression pass failed ${it.javaClass.simpleName}")
-        }
-    }
-
-    /**
-     * Light timer on the shared IO scope: every [IDLE_TIMER_MS] it runs a compression pass when no
-     * lease is active, keeping the hourly throttle. Started once per process; cancelled by
-     * [stopIdleTimer]. Sleeps in `delay`, never a busy loop.
-     */
-    private fun startIdleTimer() {
-        val current = idleTimer.get()
-        if (current?.isActive == true) return
-        val job = scope.launch(start = CoroutineStart.LAZY) {
-            while (true) {
-                delay(IDLE_TIMER_MS)
-                if (inUseStems.isNotEmpty() || activeRequests.values.any { it.get() > 0 }) continue
-                val now = System.currentTimeMillis()
-                val last = lastCompressionMs.get()
-                if (now - last < COMPRESSION_INTERVAL_MS || !lastCompressionMs.compareAndSet(last, now)) continue
-                runCompressionPass(now)
-            }
-        }
-        if (idleTimer.compareAndSet(current, job)) job.start() else job.cancel()
-    }
-
-    private fun protectedCompressionStems(): MutableSet<String> =
-        holders.values.map { it.key.fileStem }.toMutableSet().apply {
-            addAll(deferredSaves.keys)
-            addAll(inUseStems.keys)
-        }
-
-    private suspend fun compressIdleCaches(nowMs: Long) {
-        val speed = KvUnpackSpeedStore(appContext).effectiveBytesPerMs()
-        val candidates = store.compressionCandidates(nowMs, speed, protectedCompressionStems())
-        val result = compressStems(candidates) {}
-        if (result.compressed > 0) DebugLog.log("NativeChatKvCache: compressed ${result.compressed} idle caches")
-    }
-
-    /**
-     * "Compress now": compresses every eligible cache immediately, ignoring idle time but still
-     * skipping in-use and holder stems and still applying the first-MiB sample rule. Takes the same
-     * per-stem mutex as saves and restores. Reports progress before and after each stem.
-     */
-    suspend fun compressAllNow(onProgress: (KvCompressProgress) -> Unit = {}): KvCompressResult =
-        withContext(Dispatchers.IO) {
-            val candidates = store.compressionCandidates(
-                System.currentTimeMillis(), KvCompressionPolicy.DEFAULT_BYTES_PER_MS,
-                protectedCompressionStems(), ignoreIdle = true
-            )
-            compressStems(candidates, onProgress)
-        }
-
-    private suspend fun compressStems(
-        candidates: List<String>,
-        onProgress: (KvCompressProgress) -> Unit
-    ): KvCompressResult {
-        val savedBefore = store.compressionSavedBytes()
-        var compressed = 0
-        onProgress(KvCompressProgress(0, candidates.size))
-        candidates.forEachIndexed { index, stem ->
-            if (!inUseStems.containsKey(stem) && holders.values.none { it.key.fileStem == stem }) {
-                val outcome = keyMutexes.getOrPut(stem) { Mutex() }.withLock {
-                    if (inUseStems.containsKey(stem)) KvCompressionOutcome.SKIPPED else store.compressStem(stem)
-                }
-                if (outcome == KvCompressionOutcome.COMPRESSED) compressed++
-            }
-            onProgress(KvCompressProgress(index + 1, candidates.size))
-        }
-        val saved = (store.compressionSavedBytes() - savedBefore).coerceAtLeast(0L)
-        return KvCompressResult(compressed, saved)
-    }
-
     private suspend fun saveIfHolder(baseUrl: String, slot: Int, key: KvCacheKey, requireDirty: Boolean) {
         LlamaSlotManager.withSlotRequest(normalize(baseUrl), slot) {
             withContext(Dispatchers.IO) {
@@ -819,16 +735,6 @@ class NativeChatKvCacheCoordinator(context: Context) {
         val hk = slotKey(baseUrl, slot)
         onStatus(appContext.getString(R.string.native_chat_kv_cache_restoring))
         keyMutex(key).withLock {
-            if (store.isCompressed(key)) {
-                onStatus(appContext.getString(R.string.native_chat_kv_cache_unpacking))
-                if (!store.unpack(key)) {
-                    DebugLog.log("NativeChatKvCache: unpack failed ${key.namespace}")
-                    store.delete(key)
-                    onStatus(appContext.getString(R.string.native_chat_kv_cache_restore_failed))
-                    holders.remove(hk)
-                    return
-                }
-            }
             val result = postSlotAction(baseUrl, slot, "restore", store.slotFileName(key), RESTORE_TIMEOUT_MS)
             if (result.ok) {
                 store.touch(key)
@@ -876,7 +782,6 @@ class NativeChatKvCacheCoordinator(context: Context) {
                 return@withLock KvSaveResult.FAILED
             }
             val json = result.json
-            store.removeCompressedCopy(key)
             store.writeMeta(
                 key,
                 KvCacheMeta(
@@ -1051,11 +956,6 @@ class NativeChatKvCacheCoordinator(context: Context) {
         /** Budget for the shared base caches (system prompt + tools prefixes). */
         internal const val BASE_BUDGET_BYTES = 1L * 1024 * 1024 * 1024
 
-        internal const val COMPRESSION_INTERVAL_MS = 60L * 60 * 1000
-
-        /** Idle timer period; the hourly throttle still applies. */
-        internal const val IDLE_TIMER_MS = 30L * 60 * 1000
-
         /** After a stop: how long to wait for the slot to go idle, and the `/slots` polling period. */
         internal const val STOP_IDLE_WAIT_MS = 10_000L
         internal const val STOP_POLL_MS = 250L
@@ -1067,19 +967,12 @@ class NativeChatKvCacheCoordinator(context: Context) {
         private val holders = ConcurrentHashMap<String, KvSlotHolderState>()
         private val slotActionsSupport = ConcurrentHashMap<String, Boolean>()
         private val lastMaxIdTask = ConcurrentHashMap<String, Int>()
-        private val lastCompressionMs = AtomicLong(0L)
-        private val idleTimer = java.util.concurrent.atomic.AtomicReference<Job?>(null)
 
         init {
             // Deleted caches (Erase all, Clear, eviction, failed restore) must not stay recorded as slot holders.
             NativeChatKvCacheStore.addDeletionListener { stems ->
                 holders.values.removeAll { it.key.fileStem in stems }
             }
-        }
-
-        /** Cancels the idle compression timer (tests / shutdown). */
-        internal fun stopIdleTimer() {
-            idleTimer.getAndSet(null)?.cancel()
         }
 
         /** Base stems being built right now (prepare or background rebuild). */
@@ -1134,7 +1027,7 @@ class NativeChatKvCacheCoordinator(context: Context) {
         internal fun resetForTest() {
             keyMutexes.clear(); holders.clear(); slotActionsSupport.clear(); lastMaxIdTask.clear()
             deferredSaves.values.forEach { it.cancel() }; deferredSaves.clear(); restartLocks.clear()
-            inUseStems.clear(); lastCompressionMs.set(0L); stopIdleTimer()
+            inUseStems.clear()
             baseBuilds.clear(); baseBuildAttempts.clear(); activeRequests.clear()
         }
     }

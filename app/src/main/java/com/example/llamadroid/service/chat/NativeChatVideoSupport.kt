@@ -786,7 +786,7 @@ internal suspend fun LlamaClientService.stageBoundedLocalChatVideoForRuntime(
             "force_original_aspect_ratio=decrease:force_divisible_by=2," +
             "fps=${NativeLlamaVideoSupport.formatFps(boundedFps)}",
         "-frames:v", frameLimit.toString(),
-        "-vsync", "vfr",
+        "-fps_mode", "vfr",
         "-an", "-c:v", "mpeg4", "-q:v", "4",
         output.absolutePath
     )

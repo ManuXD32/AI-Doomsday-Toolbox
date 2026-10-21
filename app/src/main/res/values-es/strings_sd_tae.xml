@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="video_tae_mismatch">Este TAE no coincide con el modelo seleccionado (canales latentes: %1$d, necesarios: %2$d). Elige el TAE correspondiente o usa el VAE del modelo.</string>
+    <string name="video_tae_not_supported">Este modelo de video no puede usar un TAE. Quita el TAE y selecciona el VAE del modelo.</string>
+</resources>

@@ -4,8 +4,8 @@ package com.example.llamadroid.tama.data
 object WorldToolCatalog {
     data class Tool(val id: String, val price: Int, val assetPath: String)
     val tools = listOf(
-        Tool("axe", 200, "tama/world/tools/tool_axe.png"),
-        Tool("pickaxe", 250, "tama/world/tools/tool_pickaxe.png")
+        Tool("axe", 200, "tama/tools/tool_axe.png"),
+        Tool("pickaxe", 250, "tama/tools/tool_pickaxe.png")
     )
     fun price(id: String): Int? = tools.firstOrNull { it.id == id }?.price
 }

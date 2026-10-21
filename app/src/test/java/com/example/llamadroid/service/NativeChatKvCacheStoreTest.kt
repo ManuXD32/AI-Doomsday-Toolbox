@@ -56,7 +56,7 @@ class NativeChatKvCacheStoreTest {
         store.writeMeta(7L, meta)
         assertEquals(meta, store.readMeta(7L))
         val text = File(store.directory, "chat-7.json").readText()
-        assertEquals(setOf("fingerprint", "slotNCtx", "bytes", "tokens", "savedAt", "serverRowId", "originalBytes", "incompressible"),
+        assertEquals(setOf("fingerprint", "slotNCtx", "bytes", "tokens", "savedAt", "serverRowId"),
             org.json.JSONObject(text).keys().asSequence().toSet())
         assertNull(store.readMeta(8L))
     }
@@ -156,5 +156,109 @@ class NativeChatKvCacheStoreTest {
             com.example.llamadroid.data.db.DatabaseBackupManager.PORTABLE_MEDIA_ROOTS
                 .contains(NativeChatKvCacheStore.DIR_NAME)
         )
+    }
+
+    @Test
+    fun `every delete path reports the deleted stems`() {
+        val deleted = mutableListOf<Set<String>>()
+        val store = NativeChatKvCacheStore(File(tmp.root, NativeChatKvCacheStore.DIR_NAME), { deleted += it })
+        val base = KvCacheKey.Base("chat", "p1")
+        val base2 = KvCacheKey.Base("chat", "p2")
+        val chat = KvCacheKey.Chat(5)
+        fun fill() {
+            seed(store, base, ByteArray(10), 1_000L)
+            seed(store, base2, ByteArray(10), 2_000L)
+            seed(store, chat, ByteArray(10), 3_000L)
+        }
+        fill()
+        store.delete(base)
+        assertEquals(setOf(base.fileStem), deleted.last())
+
+        store.deleteNamespace(KvCacheNamespace.BASE)
+        assertEquals(setOf(base2.fileStem), deleted.last())
+
+        fill()
+        store.enforceBudget(1L, protectedStems = setOf(chat.fileStem), namespaces = setOf(KvCacheNamespace.BASE))
+        assertEquals(setOf(base.fileStem, base2.fileStem), deleted.last())
+
+        fill()
+        store.clearAll()
+        assertEquals(setOf(base.fileStem, base2.fileStem, chat.fileStem), deleted.last())
+        assertTrue(store.existingStems().isEmpty())
+    }
+
+    @Test
+    fun `stale registry keys are the ones without files`() {
+        val entries = mapOf(
+            "usage:base-chat-aaaa" to KvBaseUsage(uses = 2).encode(),
+            "usage:base-chat-bbbb" to KvBaseUsage(uses = 1).encode(),
+            "usage:base-chat-cccc" to KvBaseUsage(builtAt = 5L).encode(),
+            // Never built: only misses are recorded, so it is kept for the miss reason.
+            "usage:base-chat-dddd" to KvBaseUsage(misses = 3).encode(),
+            "last:123" to "base-chat-aaaa",
+            "last:456" to "base-chat-gone"
+        )
+        val stale = staleRegistryKeys(entries, setOf("base-chat-aaaa"))
+        assertEquals(setOf("usage:base-chat-bbbb", "usage:base-chat-cccc"), stale.toSet())
+    }
+
+    @Test
+    fun `settled slot means not processing`() {
+        assertTrue(isSlotSettled(KvSlotFact(0, 4096, 3, 10, isProcessing = false)))
+        assertTrue(isSlotSettled(KvSlotFact(0, 4096, 3, 10)))
+        assertFalse(isSlotSettled(KvSlotFact(0, 4096, 3, 10, isProcessing = true)))
+        assertFalse(isSlotSettled(null))
+    }
+
+    @Test
+    fun `base decisions`() {
+        assertTrue(shouldRestoreBase(hasHint = true, ownStatePresent = false, baseFileValid = true))
+        assertFalse(shouldRestoreBase(hasHint = true, ownStatePresent = true, baseFileValid = true))
+        assertFalse(shouldRestoreBase(hasHint = true, ownStatePresent = false, baseFileValid = false))
+        assertFalse(shouldRestoreBase(hasHint = false, ownStatePresent = false, baseFileValid = true))
+        assertTrue(shouldCaptureBase(capture = true, baseFileValid = false, ownStatePresent = false))
+        assertFalse(shouldCaptureBase(capture = true, baseFileValid = true, ownStatePresent = false))
+        assertFalse(shouldCaptureBase(capture = true, baseFileValid = false, ownStatePresent = true))
+        assertFalse(shouldCaptureBase(capture = false, baseFileValid = false, ownStatePresent = false))
+    }
+
+    @Test
+    fun `base key stem is in the base namespace and prefix hash depends on tools and system`() {
+        val key = NativeChatBasePrefix.key("http://127.0.0.1:8080", "m", "sys", emptyList())
+        assertEquals(KvCacheNamespace.BASE, KvCacheKey.namespaceOfStem(key.fileStem))
+        val tool = AgentTool("t", "d", mapOf("a" to "b"))
+        assertTrue(key != NativeChatBasePrefix.key("http://127.0.0.1:8080", "m", "sys", listOf(tool)))
+        assertTrue(key != NativeChatBasePrefix.key("http://127.0.0.1:8080", "m", "sys2", emptyList()))
+        assertEquals(key, NativeChatBasePrefix.key("http://127.0.0.1:8080", "m", "sys", emptyList()))
+    }
+
+    private fun seed(store: NativeChatKvCacheStore, key: KvCacheKey, bytes: ByteArray, savedAt: Long) {
+        store.directory.mkdirs()
+        File(store.directory, store.slotFileName(key)).apply { writeBytes(bytes); setLastModified(savedAt) }
+        store.writeMeta(key, KvCacheMeta("fp", 4096, 0, 10, savedAt, 1L))
+    }
+
+    @Test
+    fun `legacy gzip sweep deletes orphan gz stems and leftovers next to a bin`() {
+        val deleted = mutableListOf<Set<String>>()
+        val store = NativeChatKvCacheStore(File(tmp.root, NativeChatKvCacheStore.DIR_NAME), { deleted += it })
+        store.directory.mkdirs()
+        fun file(name: String, size: Int = 4) = File(store.directory, name).writeBytes(ByteArray(size))
+        // Orphan: only the gzipped copy and its sidecar remain.
+        file("chat-1.bin.gz"); file("chat-1.json")
+        // Orphan: only an interrupted gzip temp.
+        file("chat-2.bin.gz.tmp")
+        // Healthy cache with a stale gz copy and a temp next to it.
+        seed(store, KvCacheKey.Chat(3), ByteArray(10), 1_000L)
+        file("chat-3.bin.gz"); file("chat-3.gz.tmp")
+        // Untouched healthy cache.
+        seed(store, KvCacheKey.Chat(4), ByteArray(10), 1_000L)
+
+        assertEquals(2, store.sweepLegacyCompression())
+
+        assertEquals(setOf("chat-1", "chat-2"), deleted.single())
+        assertEquals(setOf("chat-3.bin", "chat-3.json", "chat-4.bin", "chat-4.json"),
+            store.directory.listFiles()!!.map { it.name }.toSet())
+        assertEquals(0, store.sweepLegacyCompression())
     }
 }

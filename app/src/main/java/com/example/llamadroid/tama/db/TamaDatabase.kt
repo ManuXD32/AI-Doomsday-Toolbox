@@ -7,7 +7,6 @@ import androidx.room.RoomDatabase
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.data.db.RestoreCoordinator
-import com.example.llamadroid.tama.world.persistence.*
 
 /**
  * Room database for Tama virtual pet persistence.
@@ -37,26 +36,15 @@ import com.example.llamadroid.tama.world.persistence.*
         AdventureGateBattleStateEntity::class,
         AdventureGateNightArenaRunEntity::class,
         TamaArtworkEntity::class,
-        TamaWorldEntity::class,
-        TamaWorldActorEntity::class,
-        TamaChunkStateEntity::class,
-        TamaWorldStructureEntity::class,
-        TamaWorldObjectEntity::class,
-        TamaWorldNpcEntity::class,
-        TamaWorldRelationshipEntity::class,
-        TamaWorldEventEntity::class,
-        TamaWorldEpisodeEntity::class,
-        TamaPolicyCheckpointEntity::class,
-        TamaWorldActionReceiptEntity::class
+        TamaActionReceiptEntity::class
     ],
-    version = 44,
+    version = 45,
     exportSchema = true
 )
 abstract class TamaDatabase : RoomDatabase() {
     abstract fun tamaDao(): TamaDao
     abstract fun farmDao(): FarmDao
-    abstract fun worldDao(): TamaWorldDao
-    abstract fun worldActionReceiptDao(): TamaWorldActionReceiptDao
+    abstract fun actionReceiptDao(): TamaActionReceiptDao
     
     companion object {
         @Volatile

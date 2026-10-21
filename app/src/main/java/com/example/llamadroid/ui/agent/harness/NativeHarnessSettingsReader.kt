@@ -25,6 +25,8 @@ internal class NativeHarnessSettingsReader(
 ) {
     private val settingsLock = Mutex()
     private val catalogLock = Mutex()
+    /** Client for which the one-shot stream-idle-timeout upgrade of old provider profiles was tried. */
+    private var timeoutUpgradeClient: HarnessClient? = null
     /** Monotonic guard for reads that outlive an endpoint replacement. */
     private var catalogRequestGeneration = 0L
     /** Last complete provider snapshot used for provider-level catalog failures. */
@@ -63,6 +65,10 @@ internal class NativeHarnessSettingsReader(
                 val revisions = namespaces.mapNotNull { item ->
                     item.string("ns")?.let { it to (item.int("revision") ?: 0) }
                 }.toMap()
+                if (writable && timeoutUpgradeClient !== client) {
+                    timeoutUpgradeClient = client
+                    if (upgradeProviderStreamTimeouts(client, namespaces)) return readSettings(reportFailure)
+                }
                 val sections = namespaces.mapNotNull { item ->
                     val namespace = item.string("ns") ?: return@mapNotNull null
                     HarnessSchemaSection(
@@ -154,6 +160,24 @@ internal class NativeHarnessSettingsReader(
                 }
             }
         }
+    }
+
+    /** Adds the default stream idle timeout to old custom routes that lack one; true when a write succeeded. */
+    private suspend fun upgradeProviderStreamTimeouts(client: HarnessClient, namespaces: List<JsonObject>): Boolean {
+        val namespace = namespaces.firstOrNull { it.string("ns") == NATIVE_CUSTOM_PROVIDER_SETTINGS_NAMESPACE } ?: return false
+        val operations = nativeCustomProviderTimeoutUpgradeOperations(namespace["value"]?.jsonObjectOrNull())
+        if (operations.isEmpty()) return false
+        val result = try {
+            NativeHarnessCapabilities.mutateSettings(
+                client, NATIVE_CUSTOM_PROVIDER_SETTINGS_NAMESPACE,
+                buildJsonArray { operations.forEach { add(it) } }, namespace.int("revision")
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Throwable) {
+            return false
+        }
+        return result is HarnessRpcResult.Success
     }
 
     suspend fun refreshModelCatalog(reportFailure: Boolean) = catalogLock.withLock {

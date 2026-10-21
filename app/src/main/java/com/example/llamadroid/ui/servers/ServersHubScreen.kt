@@ -37,7 +37,7 @@ import com.example.llamadroid.ui.components.AppInfoRow
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppSectionCard
 import com.example.llamadroid.ui.components.AppSectionTitle
-import com.example.llamadroid.ui.dashboard.DashboardFileServerCard
+import com.example.llamadroid.ui.filestation.FileStationSummaryRow
 import com.example.llamadroid.ui.dashboard.DashboardKiwixCard
 import com.example.llamadroid.ui.navigation.Screen
 
@@ -103,7 +103,7 @@ fun ServersHubScreen(navController: NavController) {
                 )
             }
             item(key = "share_browser") { ShareToBrowserSummary(onOpen = { open(Screen.AiServersHub.route) }) }
-            item(key = "file_server") { DashboardFileServerCard() }
+            item(key = "file_server") { FileStationSummaryRow(onOpen = { open(Screen.FileServer.route) }) }
             item(key = "kiwix_server") { DashboardKiwixCard(navController) }
 
             item(key = "ollama") { OllamaSection(onManage = { open(Screen.OllamaManager.route) }) }

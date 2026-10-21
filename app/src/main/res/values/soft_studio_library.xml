@@ -3,15 +3,7 @@
     <string name="soft_studio_home_title">Your AI, on hand</string>
     <string name="soft_studio_home_new_chat">New chat</string>
     <string name="soft_studio_home_organizer">Organizer</string>
-    <string name="soft_studio_home_file_server">File server</string>
-    <string name="soft_studio_home_file_server_desc">Share one folder over your local network when you need it.</string>
-    <string name="soft_studio_home_file_server_choose_folder">Choose folder</string>
-    <string name="soft_studio_home_file_server_start">Start file server</string>
-    <string name="soft_studio_home_file_server_stop">Stop file server</string>
-    <string name="soft_studio_home_file_server_folder_missing">No folder selected</string>
-    <string name="soft_studio_home_file_server_running_at">Available at %1$s</string>
-    <string name="soft_studio_home_file_server_show_qr">Show sharing codes</string>
-    <string name="soft_studio_home_file_server_hide_qr">Hide sharing codes</string>
+    <string name="soft_studio_home_file_server_desc">Browse, edit, convert and share your folders from any browser on your network.</string>
     <string name="soft_studio_tools_category_create">Create</string>
     <string name="soft_studio_tools_category_voice">Voice</string>
     <string name="soft_studio_tools_empty_title">No matching tools</string>

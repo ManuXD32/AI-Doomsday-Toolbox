@@ -70,26 +70,50 @@ object DelegationToolArgs {
 
     /** What `deepseek_task_start(project = ...)` asked for. */
     sealed class ProjectChoice {
+        /** `project` omitted or blank: continue this chat's last DeepSeek project when it can be reopened. */
+        data object Omitted : ProjectChoice()
         data object New : ProjectChoice()
         data object Continue : ProjectChoice()
         data class Id(val id: String) : ProjectChoice()
     }
 
-    /** blank/`new` = [ProjectChoice.New], `continue` = [ProjectChoice.Continue], anything else is a project id. */
+    /** blank = [ProjectChoice.Omitted], `new` = [ProjectChoice.New], `continue` = [ProjectChoice.Continue], anything else is a project id. */
     fun parseProjectChoice(raw: String?): ProjectChoice {
         val text = raw?.trim()?.trim('"', '\'').orEmpty()
         return when (text.lowercase(Locale.ROOT)) {
-            "", "new" -> ProjectChoice.New
+            "" -> ProjectChoice.Omitted
+            "new" -> ProjectChoice.New
             "continue" -> ProjectChoice.Continue
             else -> ProjectChoice.Id(text.take(MAX_ID_CHARS))
         }
     }
+
+    /**
+     * `deepseek_task_start` without `project` reopens the chat's last task (same project and thread)
+     * when it is terminal or stalled (INTERRUPTED, NEEDS_DIRECTION, never a live state) and owns a
+     * harness project; no explicit thread (id or `new`) may be requested.
+     */
+    fun reopensLastTask(
+        choice: ProjectChoice,
+        threadId: String?,
+        lastState: String?,
+        lastWorkspaceId: String?,
+        freshThread: Boolean = false
+    ): Boolean =
+        choice == ProjectChoice.Omitted && threadId == null && !freshThread && lastState != null &&
+            (lastState in com.example.llamadroid.data.model.NativeChatDelegateTaskState.TERMINAL ||
+                lastState == com.example.llamadroid.data.model.NativeChatDelegateTaskState.INTERRUPTED ||
+                lastState == com.example.llamadroid.data.model.NativeChatDelegateTaskState.NEEDS_DIRECTION) &&
+            !lastWorkspaceId.isNullOrBlank()
 
     /** `thread`: blank/`new` = null (a new thread), anything else is a harness session id. */
     fun parseThreadChoice(raw: String?): String? {
         val text = raw?.trim()?.trim('"', '\'').orEmpty()
         return if (text.isEmpty() || text.equals("new", ignoreCase = true)) null else text.take(MAX_ID_CHARS)
     }
+
+    /** True only for an explicit `thread:"new"` (blank means "not specified"). */
+    fun parseFreshThread(raw: String?): Boolean = raw?.trim()?.trim('"', '\'').equals("new", ignoreCase = true)
 
     fun parseFullDetail(raw: String?): Boolean = parseEnum(raw, setOf("brief", "full"), "brief") == "full"
 
@@ -109,8 +133,8 @@ object DelegationToolArgs {
             .put("task", prop("string", "Self-contained brief: the goal, constraints, acceptance criteria and the expected output files. The subagent cannot see this chat."))
             .put("title", prop("string", "Short task title (at most $MAX_TITLE_CHARS characters).").put("maxLength", MAX_TITLE_CHARS))
             .put("attachments", prop("string", "Chat file ids to hand over, comma separated or a JSON array, e.g. \"f12,img55\". If omitted, the files attached to the latest user message are handed over."))
-            .put("project", prop("string", "new (default) starts a fresh project; continue reuses the previous project of this chat; or the id of an existing project from deepseek_projects."))
-            .put("thread", prop("string", "new (default) or the id of an existing thread of that project, to keep the harness agent's context. Needs project=continue or a project id.")),
+            .put("project", prop("string", "Omitted (default) continues this chat's last DeepSeek project by reopening its last task when that task is finished; new starts an unrelated fresh project; continue reuses the previous project of this chat; or the id of an existing project from deepseek_projects."))
+            .put("thread", prop("string", "new opens a fresh thread (default: the chat's last thread of the project is continued automatically).")),
         listOf("task")
     )
 

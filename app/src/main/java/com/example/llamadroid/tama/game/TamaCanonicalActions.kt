@@ -13,14 +13,13 @@ import com.example.llamadroid.tama.data.TamaCommerceCatalog
 import com.example.llamadroid.tama.data.canWork
 import com.example.llamadroid.tama.data.canStudy
 import com.example.llamadroid.tama.data.canTrain
-import com.example.llamadroid.tama.world.core.ActionId
-import com.example.llamadroid.tama.world.core.LegacyLocationAliases
+import com.example.llamadroid.tama.data.LegacyLocationAliases
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.CancellationException
 
-/** Shared validation: direct classic controls or physical development-world actions. */
+/** Shared validation: direct classic controls. */
 internal object TamaCanonicalActions {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -38,7 +37,7 @@ internal object TamaCanonicalActions {
             })
         }
         when (action) {
-            "wakeUp" -> if (!pet.isSleeping) return rejected(R.string.tama_world_already_awake, pet.name)
+            "wakeUp" -> if (!pet.isSleeping) return rejected(R.string.tama_action_already_awake, pet.name)
             "goToBed" -> {
                 if (pet.stage == GrowthStage.EGG) return rejected(R.string.tama_action_egg_cannot_sleep)
                 if (pet.stats.energy >= 100) return rejected(R.string.tama_action_not_tired, pet.name)
@@ -70,81 +69,55 @@ internal object TamaCanonicalActions {
                     tier.requiredExercise, context.getString(tier.titleRes))
             }
         }
-        val rule = when (action) {
-            "goToBed" -> Rule(ActionId.SLEEP, null, LegacyLocationAliases.HOME)
-            "wakeUp" -> Rule(ActionId.WAKE, null)
-            "stopActivity" -> Rule(ActionId.WAIT, null)
-            "startWork" -> Rule(ActionId.WORK, LegacyLocationAliases.WORKPLACE, LegacyLocationAliases.WORKPLACE)
-            "startTraining" -> Rule(ActionId.TRAIN_BOXING, LegacyLocationAliases.BOXING_RING, LegacyLocationAliases.BOXING_RING)
-            "startNormalStudySession", "startPomodoroStudySession" -> Rule(ActionId.STUDY, LegacyLocationAliases.SCHOOL, LegacyLocationAliases.SCHOOL)
-            "startActivity" -> when (ActivityType.valueOf(arguments.getValue("activity"))) {
-                ActivityType.WORKING -> Rule(ActionId.WORK, LegacyLocationAliases.WORKPLACE, LegacyLocationAliases.WORKPLACE)
-                ActivityType.STUDYING -> Rule(ActionId.STUDY, LegacyLocationAliases.SCHOOL, LegacyLocationAliases.SCHOOL)
-                ActivityType.TRAINING -> Rule(ActionId.TRAIN_BOXING, LegacyLocationAliases.BOXING_RING, LegacyLocationAliases.BOXING_RING)
-                ActivityType.RELAXING -> Rule(ActionId.RELAX, LegacyLocationAliases.PARK, LegacyLocationAliases.PARK)
-                ActivityType.NONE -> Rule(ActionId.WAIT, null)
-            }
-            "feed" -> Rule(ActionId.EAT, "meal", LegacyLocationAliases.HOME)
+        // Validation only: every branch rejects or falls through to the classic transaction below.
+        when (action) {
             "feedWithFood" -> {
                 val foodId = arguments.getValue("foodId")
-                val food = TamaFoodCatalog.byId(foodId) ?: return rejected(R.string.tama_world_runtime_action_unavailable)
+                val food = TamaFoodCatalog.byId(foodId) ?: return rejected(R.string.tama_action_unavailable)
                 if (arguments["hungerGain"]?.toIntOrNull() != food.hungerGain ||
                     arguments["happinessGain"]?.toIntOrNull() != food.happinessGain) {
-                    return rejected(R.string.tama_world_runtime_action_unavailable)
+                    return rejected(R.string.tama_action_unavailable)
                 }
                 val free = foodId in setOf("lettuce", "candy")
                 if (!free && pet.inventory.none { it.id == foodId && it.quantity > 0 && it.type == ItemType.FOOD }) {
                     return TamaGameEngine.ActionResult(false, context.getString(R.string.tama_action_no_item_food, foodId))
                 }
-                Rule(ActionId.EAT, foodId, if (free) LegacyLocationAliases.HOME else null)
             }
-            "clean" -> Rule(ActionId.WASH, LegacyLocationAliases.HOME, LegacyLocationAliases.HOME)
-            "play" -> Rule(ActionId.PLAY, LegacyLocationAliases.HOME, LegacyLocationAliases.HOME)
             "buyItem" -> {
                 val item = item(arguments)
-                if (runCatching { requirePositivePurchase(arguments) }.isFailure) return rejected(R.string.tama_world_runtime_action_unavailable)
+                if (runCatching { requirePositivePurchase(arguments) }.isFailure) return rejected(R.string.tama_action_unavailable)
                 val vendor = arguments["vendorId"] ?: LegacyLocationAliases.SHOP
                 val offer = TamaCommerceCatalog.offer(context, item.id, vendor)
                 if (offer == null || item.type != offer.item.type || arguments["pricePerUnit"]?.toIntOrNull() != offer.price) {
-                    return rejected(R.string.tama_world_runtime_action_unavailable)
+                    return rejected(R.string.tama_action_unavailable)
                 }
-                Rule(ActionId.BUY, item.id, vendor)
             }
             "buyLegacyItem" -> {
                 val offer = TamaCommerceCatalog.legacyOffer(context, arguments.getValue("itemName"))
-                if (offer == null || arguments["price"]?.toIntOrNull() != offer.price) return rejected(R.string.tama_world_runtime_action_unavailable)
-                Rule(ActionId.BUY, offer.item.id, LegacyLocationAliases.SHOP)
+                if (offer == null || arguments["price"]?.toIntOrNull() != offer.price) return rejected(R.string.tama_action_unavailable)
             }
             "sellItem" -> {
                 val quantity = arguments["quantity"]?.toIntOrNull() ?: 0
                 val price = arguments["price"]?.toLongOrNull() ?: 0L
                 if (quantity <= 0 || price <= 0 || price != TamaCommerceCatalog.sellPrice(item(arguments).id)?.toLong() ||
-                    price > (Long.MAX_VALUE - pet.money) / quantity) return rejected(R.string.tama_world_runtime_action_unavailable)
-                Rule(ActionId.SELL, item(arguments).id, LegacyLocationAliases.SHOP)
+                    price > (Long.MAX_VALUE - pet.money) / quantity) return rejected(R.string.tama_action_unavailable)
             }
-            "sellToParkSeller" -> {
-                require(arguments.getValue("quantity").toInt() > 0)
-                Rule(ActionId.SELL, item(arguments).id, "market_stall")
-            }
-            "usePotion" -> Rule(ActionId.USE, arguments.getValue("potionId"))
-            "useAdventureGateSupply" -> Rule(ActionId.USE, arguments.getValue("supplyId"))
-            "brewAdventureGatePotion" -> Rule(ActionId.USE_ALCHEMY, LegacyLocationAliases.ALCHEMIST, LegacyLocationAliases.ALCHEMIST)
+            "sellToParkSeller" -> require(arguments.getValue("quantity").toInt() > 0)
+            "goToBed", "wakeUp", "stopActivity", "startWork", "startTraining", "startNormalStudySession",
+            "startPomodoroStudySession", "feed", "clean", "play" -> Unit
+            "startActivity" -> ActivityType.valueOf(arguments.getValue("activity"))
+            "usePotion" -> arguments.getValue("potionId")
+            "useAdventureGateSupply" -> arguments.getValue("supplyId")
+            "brewAdventureGatePotion" -> Unit
             else -> error("unknown_canonical_action")
         }
-        if (!engine.isSimulatedWorldActive) {
-            return try {
-                engine.runClassicTransaction { _, _ -> complete(context, engine, action, arguments) }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                rejected(R.string.tama_world_runtime_action_unavailable)
-            }
+        return try {
+            engine.runClassicTransaction { _, _ -> complete(context, engine, action, arguments) }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            rejected(R.string.tama_action_unavailable)
         }
-        val result = engine.world.queueAction(rule.action, rule.targetId,
-            arguments + ("canonicalAction" to action), rule.destinationId)
-        return TamaGameEngine.ActionResult(result.acceptedCommand,
-            context.getString(if (result.acceptedCommand) R.string.tama_world_runtime_action_queued else R.string.tama_world_runtime_action_unavailable),
-            if (result.acceptedCommand) rule.action.name.lowercase() else "")
     }
 
     /** Called inside a serialized Room transaction by either action path. */
@@ -154,7 +127,7 @@ internal object TamaCanonicalActions {
             if (engine.pet.value?.isSleeping == true) {
                 engine.wakeUpLocked()
                 TamaGameEngine.ActionResult(true, "")
-            } else TamaGameEngine.ActionResult(false, context.getString(R.string.tama_world_already_awake, engine.pet.value?.name.orEmpty()))
+            } else TamaGameEngine.ActionResult(false, context.getString(R.string.tama_action_already_awake, engine.pet.value?.name.orEmpty()))
         }
         "stopActivity" -> engine.stopActivityLocked()
         "startWork" -> engine.startWorkLocked(arguments.getValue("jobId"))
@@ -179,9 +152,6 @@ internal object TamaCanonicalActions {
             val vendor = arguments["vendorId"] ?: LegacyLocationAliases.SHOP
             val offer = TamaCommerceCatalog.offer(context, selected.id, vendor) ?: error("unknown_vendor_offer")
             require(offer.price == arguments.getValue("pricePerUnit").toInt() && offer.item.type == selected.type) { "invalid_vendor_offer" }
-            if (engine.isSimulatedWorldActive) {
-                require(LegacyLocationAliases.normalize(engine.pet.value?.currentLocationId.orEmpty()) == vendor) { "vendor_required" }
-            }
             engine.buyItemLocked(offer.item, arguments.getValue("quantity").toInt(), offer.price)
         }
         "buyLegacyItem" -> {
@@ -208,5 +178,4 @@ internal object TamaCanonicalActions {
     private fun requirePositivePurchase(arguments: Map<String, String>) {
         require(arguments.getValue("quantity").toInt() in 1..1_000_000 && arguments.getValue("pricePerUnit").toInt() > 0) { "invalid_purchase" }
     }
-    private data class Rule(val action: ActionId, val targetId: String?, val destinationId: String? = null)
 }

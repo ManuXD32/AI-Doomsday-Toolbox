@@ -80,4 +80,5 @@
     <string name="native_chat_delegation_mode_prefer">Prefer DeepSeek (any coding or file request)</string>
     <string name="native_chat_delegation_mode_ask">Only when I ask</string>
     <string name="native_chat_delegation_service_status_projects">Listing DeepSeek projects</string>
+    <string name="native_chat_delegation_service_status_project_files">Reading DeepSeek project files</string>
 </resources>

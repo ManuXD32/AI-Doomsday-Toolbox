@@ -67,8 +67,21 @@ class HarnessTaskDigestTest {
             .foldEvent(event("""{"seq":3,"type":"turn/end","data":{"reason":{"kind":"done"}}}"""))
         assertTrue(d.errors.isEmpty())
         assertEquals(HarnessDigestState.IDLE, d.state)
-        assertTrue(d.render().contains("Retried"))
+        assertTrue(d.render().contains("Retried 1x, recovered"))
         assertEquals(1, HarnessTaskDigest.fromJson(d.toJson())?.modelRetries)
+    }
+
+    @Test fun newTurnClearsPreviousErrors() {
+        val failed = HarnessTaskDigest()
+            .foldEvent(event("""{"seq":1,"type":"turn/start","data":{"turn":1}}"""))
+            .foldEvent(event("""{"seq":2,"type":"turn/end","data":{"reason":{"kind":"error","message":"pi-ai stream idle timeout after 300000ms","code":"TIMEOUT"}}}"""))
+        assertEquals(HarnessDigestState.ERROR, failed.state)
+        assertTrue(failed.render().contains("Errors:"))
+        val next = failed.foldEvent(event("""{"seq":3,"type":"turn/start","data":{"turn":2}}"""))
+        assertTrue(next.errors.isEmpty())
+        assertFalse(next.lastTurnFailed)
+        assertEquals("", next.lastFailure)
+        assertFalse(next.render().contains("Errors:"))
     }
 
     @Test fun providerFailureCodeFallsBackToMessageAndIgnoresOtherErrors() {

@@ -377,7 +377,7 @@ class VideoUpscalerService : Service() {
                     "-y",
                     "-i", inputPath,
                     "-qscale:v", "2",  // JPG quality
-                    "-vsync", "0",
+                    "-fps_mode", "passthrough",  // -vsync was removed in FFmpeg 9
                     "${outputDir.absolutePath}/frame%08d.jpg"  // Use JPG instead of PNG (zlib not available)
                 )
                 

@@ -29,8 +29,6 @@
     <string name="general_prompt_caches_erase_all">Erase all</string>
     <string name="general_prompt_caches_erase_title">Erase all prompt disk caches?</string>
     <string name="general_prompt_caches_erase_message">Chats, DeepSeek subagents and harness agents will reprocess their prompts next time. Conversations are not affected.</string>
-    <string name="native_chat_kv_cache_unpacking">Unpacking cache…</string>
-    <string name="native_chat_kv_cache_saved_by_compression">Saved by compression: %1$s</string>
     <string name="native_chat_kv_cache_namespace_base">Base caches</string>
     <string name="kv_prepare_caches_button">Prepare caches</string>
     <string name="kv_prepare_caches_title">Prepare caches</string>
@@ -70,9 +68,4 @@
     <string name="kv_prepare_fail_request">The server rejected the warm-up request. Check that the model is loaded.</string>
     <string name="kv_prepare_fail_disk">Not enough free disk space to save the cache.</string>
     <string name="kv_prepare_fail_save">The cache could not be saved or verified on disk.</string>
-    <string name="native_chat_kv_cache_compress_now">Compress now</string>
-    <string name="native_chat_kv_cache_compressing">Compressing: %1$d / %2$d…</string>
-    <string name="native_chat_kv_cache_compress_saved">Saved %1$s</string>
-    <string name="native_chat_kv_cache_compress_nothing">Nothing could be compressed</string>
-    <string name="native_chat_kv_cache_unpack_speed">Unpack speed: ~%1$s MB/s</string>
 </resources>

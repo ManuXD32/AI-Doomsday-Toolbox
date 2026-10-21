@@ -859,13 +859,13 @@ fun ZimCard(
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        "${zim.language.uppercase()} • ${FormatUtils.formatFileSize(zim.sizeBytes)}",
+                        "${zim.language.uppercase()} • ${android.text.format.Formatter.formatShortFileSize(LocalContext.current, zim.sizeBytes)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     if (zim.articleCount > 0) {
                         Text(
-                            stringResource(R.string.zim_articles_count, zim.articleCount.toInt()),
+                            stringResource(R.string.zim_articles_count, java.text.NumberFormat.getIntegerInstance(java.util.Locale.getDefault()).format(zim.articleCount)),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                         )

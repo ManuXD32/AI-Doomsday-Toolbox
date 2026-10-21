@@ -45,10 +45,8 @@ internal interface SubagentReporter {
     suspend fun saveDigest(json: String)
 }
 
-/** JSON schemas of the thirteen subagent tools. */
+/** JSON schemas of the seven subagent tools (the app opens the project and thread, not the subagent). */
 internal object DelegateSubagentToolDefs {
-    const val CREATE_PROJECT = "harness_create_project"
-    const val NEW_THREAD = "harness_new_thread"
     const val SEND = "harness_send"
     const val WAIT = "harness_wait"
     const val READ = "harness_read"
@@ -56,10 +54,6 @@ internal object DelegateSubagentToolDefs {
     const val CANCEL_TURN = "harness_cancel_turn"
     const val MESSAGE_MAIN = "message_main"
     const val FINISH = "finish_task"
-    const val LIST_PROJECTS = "harness_list_projects"
-    const val OPEN_PROJECT = "harness_open_project"
-    const val LIST_THREADS = "harness_list_threads"
-    const val OPEN_THREAD = "harness_open_thread"
 
     private fun prop(type: String, description: String, enum: List<String>? = null): JSONObject =
         JSONObject().put("type", type).put("description", description).also { o ->
@@ -78,28 +72,19 @@ internal object DelegateSubagentToolDefs {
     }
 
     fun all(): List<AgentTool> = listOf(
-        tool(CREATE_PROJECT,
-            "Create the harness project (workspace) and its first thread, select the model, apply the permission policy and copy the task's input files. Call once, first (or use harness_open_project for an existing project).",
-            mapOf(
-                "title" to prop("string", "Project title."),
-                "continue_previous" to prop("boolean", "Reuse the chat's previous project and its last thread instead of creating a new one.")
-            ), listOf("title")),
-        tool(NEW_THREAD, "Open another thread in the same project (an unrelated subtask).",
-            mapOf("title" to prop("string", "Thread title.")), emptyList()),
         tool(SEND, "Send a prompt to the harness agent. Make it complete and self-contained.",
             mapOf(
                 "prompt" to prop("string", "The prompt, at most 4000 characters."),
-                "thread" to prop("integer", "Thread number (1-based). Default: the current thread."),
                 "mode" to prop("string", "queue (default) or steer (interrupt the running turn).", listOf("queue", "steer")),
                 "attach_inputs" to prop("boolean", "List all input file paths in the prompt; images are attached as images when the harness model can see them. Files that arrived since your last prompt are always listed.")
             ), listOf("prompt")),
         tool(WAIT,
             "Wait until the harness finishes its turn, needs an approval/question/plan answer, you receive a main-agent message, an error occurs or the time runs out. Returns a compact digest.",
             mapOf("max_seconds" to prop("integer", "30 to 1800, default 600.")), emptyList()),
-        tool(READ, "Read a small piece of the project. Output is capped at 6000 characters.",
+        tool(READ, "Read a small piece of the thread. Output is capped at 6000 characters.",
             mapOf(
-                "what" to prop("string", "What to read.", listOf("transcript", "file", "list", "changes", "deliverables")),
-                "path" to prop("string", "Project-relative path (for file and list)."),
+                "what" to prop("string", "What to read.", listOf("transcript", "list", "deliverables")),
+                "path" to prop("string", "Project-relative folder (for list)."),
                 "page" to prop("integer", "Page number, default 0."),
                 "max_chars" to prop("integer", "At most 6000.")
             ), listOf("what")),
@@ -123,21 +108,13 @@ internal object DelegateSubagentToolDefs {
                 "status" to prop("string", "Outcome.", listOf("success", "partial", "failed")),
                 "summary" to prop("string", "What was done and the result, at most 3000 characters."),
                 "files" to prop("string", "Up to 20 project-relative result file paths, comma separated or a JSON array. Default: the harness's presented deliverables.")
-            ), listOf("status", "summary")),
-        tool(LIST_PROJECTS, "List the projects of the DeepSeek runtime (id, title, last activity, threads, whether this chat used it).",
-            mapOf("query" to prop("string", "Optional text to filter project titles.")), emptyList()),
-        tool(OPEN_PROJECT,
-            "Use an existing project as this task's project (alternative to harness_create_project). Selects its last-used thread when the main assistant asked for one, otherwise creates a new thread.",
-            mapOf("id" to prop("string", "Project id from harness_list_projects.")), listOf("id")),
-        tool(LIST_THREADS, "List the threads of the current project (id, title, last activity).", emptyMap(), emptyList()),
-        tool(OPEN_THREAD,
-            "Attach an existing thread of the current project and make it the current thread. The harness agent keeps that thread's context.",
-            mapOf("id" to prop("string", "Thread id from harness_list_threads.")), listOf("id"))
+            ), listOf("status", "summary"))
     )
 }
 
 /**
- * Executes the thirteen subagent tools against one [DelegateHarnessDriver]. Every result is plain
+ * Executes the seven subagent tools against one [DelegateHarnessDriver]. The app already bound the project and
+ * thread ([bound], see [DelegateProjectBinder]); there is a single current thread. Every result is plain
  * English text of at most 6,000 characters; raw harness output is never returned.
  */
 internal class DelegateSubagentToolbox(
@@ -147,12 +124,11 @@ internal class DelegateSubagentToolbox(
     private val config: NativeChatDelegationConfig,
     private val driver: DelegateHarnessDriver,
     private val chatServer: LlamaServerEntity?,
-    private val server: ResolvedDelegationServer,
     private val inputs: List<DelegationResolvedInput>,
+    private val bound: BindResult,
     private val guards: DelegationGuards,
     private val inbox: DelegationInbox,
-    private val reporter: SubagentReporter,
-    private val chatMaxOutput: Int?
+    private val reporter: SubagentReporter
 ) {
     private val db = AppDatabase.getDatabase(context.applicationContext)
     private val taskDao get() = db.nativeChatDelegateTaskDao()
@@ -162,11 +138,8 @@ internal class DelegateSubagentToolbox(
     private class ThreadInfo(val sessionId: String, val title: String)
 
     private val threads = ArrayList<ThreadInfo>()
-    private var currentSession: String? = task.harnessSessionId
-    private var workspaceId: String? = task.workspaceId
-    private var project: DelegateHarnessProject? = null
-    private var conversationId: Long? = task.harnessConversationId
-    private var binding: HarnessModelBinding? = null
+    private var currentSession: String? = bound.thread.sessionId
+    private val binding: HarnessModelBinding = bound.binding
 
     /** A chat file already copied into the project's `inputs/` folder. */
     private class ToolInput(val ref: String, val name: String, val path: String, val file: java.io.File)
@@ -187,31 +160,40 @@ internal class DelegateSubagentToolbox(
         }
     }
 
-    /** Re-attach the watchers of existing threads after a restart or Continue. */
+    /** Re-attach the bound thread's watcher (after a runtime restart); the binder already attached it at bind time. */
     fun reattach() {
-        threads.forEach { thread ->
-            driver.attachThread(thread.sessionId)
-            com.example.llamadroid.harness.HarnessDelegatedSessions.register(
-                task.runtimeId, thread.sessionId, config.approvalPolicy != DelegationApprovalPolicy.ASK_ME)
-        }
-        if (threads.isNotEmpty()) publishThreads()
+        val session = currentSession ?: return
+        driver.attachThread(session)
+        com.example.llamadroid.harness.HarnessDelegatedSessions.register(
+            task.runtimeId, session, config.approvalPolicy != DelegationApprovalPolicy.ASK_ME)
+        publishThreads()
     }
 
     /**
-     * Reattaches the project and threads of a resumed or reopened task (rows `task.workspaceId`,
-     * `task.harnessSessionId`, `task.harnessThreadsJson`) and returns a one-line model-facing note, or
-     * null when the task has no project yet. Pending input files are copied by the next [SEND].
+     * Right after bind: ensures `inputs/`, copies the first-start input files and the task's pending refs of a
+     * NEW task (a resumed task leaves pending refs to the next [SEND], which lists their paths). Returns a
+     * one-line note about skipped files, or null.
      */
-    suspend fun restoreProject(): String? {
-        val ws = workspaceId ?: return null
-        val proj = try {
-            ensureProject()
-        } catch (e: DelegationHarnessException) {
-            return "The project could not be reattached (${e.code}). Use harness_list_projects and harness_open_project."
+    suspend fun afterBind(): String? {
+        val session = checkNotNull(currentSession)
+        var note: String? = null
+        if (inputs.isNotEmpty()) {
+            val paths = driver.copyInputs(session, inputs.map { it.displayName to it.file })
+            inputs.zip(paths).forEach { (input, path) -> allInputs += ToolInput(input.ref, input.displayName, path, input.file) }
+            // Copied once here: clear them from the pending refs so copyPendingInputs does not duplicate them.
+            val done = inputs.map { it.ref }
+            mutateTask { t ->
+                t.copy(optionsJson = DelegationPendingRefs.cleared(DelegationTaskOptions.decode(t.optionsJson), done).encode())
+            }
         }
-        reattach()
-        val number = threads.indexOfFirst { it.sessionId == currentSession } + 1
-        return "Project \"${proj.title}\" ($ws) is reattached; current thread $number of ${threads.size}."
+        driver.ensureInputsDir(session)
+        if (inputs.isNotEmpty()) {
+            val pending = copyPendingInputs(session)
+            if (pending.unknown.isNotEmpty()) note = "Skipped input files (not found): " + pending.unknown.joinToString(", ") + "."
+        }
+        reporter.live { it.copy(harnessBusy = false) }
+        publishThreads()
+        return note
     }
 
     suspend fun execute(call: ToolCall): SubagentToolOutcome {
@@ -251,8 +233,6 @@ internal class DelegateSubagentToolbox(
     private suspend fun dispatch(call: ToolCall): SubagentToolOutcome {
         val args = call.arguments
         return when (call.name) {
-            DelegateSubagentToolDefs.CREATE_PROJECT -> createProject(args)
-            DelegateSubagentToolDefs.NEW_THREAD -> newThreadTool(args)
             DelegateSubagentToolDefs.SEND -> send(args)
             DelegateSubagentToolDefs.WAIT -> waitTool(args)
             DelegateSubagentToolDefs.READ -> read(args)
@@ -260,10 +240,6 @@ internal class DelegateSubagentToolbox(
             DelegateSubagentToolDefs.CANCEL_TURN -> cancelTurn()
             DelegateSubagentToolDefs.MESSAGE_MAIN -> messageMain(args)
             DelegateSubagentToolDefs.FINISH -> finish(args)
-            DelegateSubagentToolDefs.LIST_PROJECTS -> ok(DelegationProjectCatalog.listProjectsText(context, chat.id, task.runtimeId, arg(args, "query")))
-            DelegateSubagentToolDefs.OPEN_PROJECT -> openProjectTool(args)
-            DelegateSubagentToolDefs.LIST_THREADS -> listThreadsTool()
-            DelegateSubagentToolDefs.OPEN_THREAD -> openThreadTool(args)
             else -> err("Unknown tool '${call.name}'. Available: ${DelegateSubagentToolDefs.all().joinToString { it.name }}.")
         }
     }
@@ -289,199 +265,17 @@ internal class DelegateSubagentToolbox(
 
     private fun policySuppresses() = config.approvalPolicy != DelegationApprovalPolicy.ASK_ME
 
-    private fun sessionFor(threadArg: String?): String {
-        val idx = DelegationToolArgs.coerceInt(threadArg)
-        if (idx != null) {
-            return threads.getOrNull(idx - 1)?.sessionId
-                ?: throw DelegationHarnessException("THREAD_NOT_FOUND", "There is no thread $idx. Threads: 1..${threads.size}.")
-        }
-        return currentSession ?: throw DelegationHarnessException("NO_PROJECT", "No project yet. Call harness_create_project first.")
-    }
+    private fun session(): String =
+        currentSession ?: throw DelegationHarnessException("NO_PROJECT", "The app has not opened a thread for this task.")
 
     private suspend fun mutateTask(block: (NativeChatDelegateTaskEntity) -> NativeChatDelegateTaskEntity) {
         val latest = taskDao.getById(taskId) ?: return
         taskDao.update(block(latest).copy(updatedAt = System.currentTimeMillis()))
     }
 
-    private fun threadsJson(): String = JSONArray().also { a ->
-        threads.forEach { a.put(JSONObject().put("id", it.sessionId).put("title", it.title)) }
-    }.toString()
-
-    private suspend fun bindModel(): HarnessModelBinding {
-        binding?.let { return it }
-        val client = driver.ensureRuntime()
-        return DelegateHarnessModelBinder.bind(
-            context, HarnessAppRuntime.forRuntime(context, task.runtimeId), client, config.harnessServer, chatServer,
-            fallbackContextTokens = chat.contextSize,
-            fallbackMaxOutputTokens = chatMaxOutput ?: server.maxOutputTokens
-        ).also { binding = it }
-    }
-
-    private suspend fun openThread(project: DelegateHarnessProject, title: String): Pair<DelegateHarnessThread, String?> {
-        val thread = driver.createThread(project, title, suppressApprovals = policySuppresses())
-        driver.selectModel(thread.sessionId, bindModel())
-        val approval = driver.applyApprovalPolicy(thread.sessionId, config.approvalPolicy)
-        threads += ThreadInfo(thread.sessionId, thread.title)
-        currentSession = thread.sessionId
-        conversationId = thread.conversationId
-        return thread to approval.note
-    }
-
-    private suspend fun ensureProject(): DelegateHarnessProject {
-        project?.let { return it }
-        val ws = workspaceId ?: throw DelegationHarnessException("NO_PROJECT", "No project yet. Call harness_create_project first.")
-        return driver.openProject(ws).also { project = it }
-    }
-
     // ---- tools -----------------------------------------------------------------------------
 
     private suspend fun options() = DelegationTaskOptions.decode(taskDao.getById(taskId)?.optionsJson)
-
-    /** Registers [thread] (an existing or new one) as the current thread of this task. */
-    private suspend fun adoptExisting(proj: DelegateHarnessProject, sessionId: String): Pair<DelegateHarnessThread, String?> {
-        val thread = driver.adoptThread(proj, sessionId, suppressApprovals = policySuppresses())
-        driver.selectModel(thread.sessionId, bindModel())
-        val approval = driver.applyApprovalPolicy(thread.sessionId, config.approvalPolicy)
-        if (threads.none { it.sessionId == thread.sessionId }) threads += ThreadInfo(thread.sessionId, thread.title)
-        currentSession = thread.sessionId
-        conversationId = thread.conversationId
-        return thread to approval.note
-    }
-
-    /**
-     * Shared tail of harness_create_project / harness_open_project: pick the thread (an existing one when
-     * [wantThread] is set; [strictThread] makes an unusable id an error instead of a new thread), copy the
-     * input files, save the task row and describe the result.
-     */
-    private suspend fun enterProject(
-        proj: DelegateHarnessProject,
-        created: Boolean,
-        wantThread: String?,
-        strictThread: Boolean,
-        title: String,
-        firstNote: String?
-    ): SubagentToolOutcome {
-        var note = firstNote
-        project = proj
-        workspaceId = proj.workspaceId
-        reporter.event(if (created) "project_created" else "project_opened")
-        var resumed = false
-        var entered: Pair<DelegateHarnessThread, String?>? = null
-        if (wantThread != null) {
-            try {
-                entered = adoptExisting(proj, wantThread)
-                resumed = true
-            } catch (e: DelegationHarnessException) {
-                if (e.code != "THREAD_NOT_FOUND" || strictThread) throw e
-                note = listOfNotNull(note, "The previous thread could not be reused; a new thread was created.").joinToString(" ")
-            }
-        }
-        val (thread, approvalNote) = entered ?: openThread(proj, title)
-        val initial = if (inputs.isEmpty()) emptyList()
-        else driver.copyInputs(thread.sessionId, inputs.map { it.displayName to it.file })
-        inputs.zip(initial).forEach { (input, path) -> allInputs += ToolInput(input.ref, input.displayName, path, input.file) }
-        if (inputs.isNotEmpty()) {
-            // Copied once here: clear them from the pending refs so copyPendingInputs does not duplicate them.
-            val done = inputs.map { it.ref }
-            mutateTask { t ->
-                t.copy(optionsJson = DelegationPendingRefs.cleared(DelegationTaskOptions.decode(t.optionsJson), done).encode())
-            }
-        }
-        driver.ensureInputsDir(thread.sessionId)
-        val pending = copyPendingInputs(thread.sessionId)
-        val b = bindModel()
-        mutateTask { t ->
-            t.copy(
-                workspaceId = proj.workspaceId, harnessSessionId = thread.sessionId, harnessThreadsJson = threadsJson(),
-                harnessConversationId = thread.conversationId,
-                harnessModelJson = JSONObject().put("provider", b.provider).put("model", b.model)
-                    .put("contextTokens", b.contextTokens ?: JSONObject.NULL).put("maxOutputTokens", b.maxOutputTokens ?: JSONObject.NULL)
-                    .put("route", b.routeKind.name).toString()
-            )
-        }
-        reporter.live { it.copy(harnessBusy = false) }
-        publishThreads()
-        val number = threads.indexOfFirst { it.sessionId == thread.sessionId } + 1
-        return ok(buildString {
-            append("Project \"").append(proj.title).append("\" ").append(if (created) "created" else "opened")
-            if (resumed) append(" with its existing thread $number \"").append(thread.title).append("\" (the harness agent keeps that thread's context).\n")
-            else append(" with thread $number.\n")
-            append("Harness model: ").append(b.model)
-            b.contextTokens?.let { append(" (context ").append(it).append(" tokens)") }
-            append('\n')
-            approvalNote?.let { append("Note: ").append(it).append('\n') }
-            note?.let { append("Note: ").append(it).append('\n') }
-            if (allInputs.isNotEmpty()) append("Input files: ").append(allInputs.joinToString(", ") { it.path }).append('\n')
-            if (pending.unknown.isNotEmpty()) append("Skipped input files (not found): ").append(pending.unknown.joinToString(", ")).append('\n')
-            append("Next: harness_send a complete prompt.")
-        })
-    }
-
-    private suspend fun createProject(args: Map<String, String>): SubagentToolOutcome {
-        if (workspaceId != null) return err("A project already exists for this task. Use harness_send, or harness_new_thread for a new thread.")
-        val title = DelegationToolArgs.boundedText(arg(args, "title"), 80) ?: task.title
-        val opts = options()
-        val chosenId = opts.projectId
-        if (chosenId != null) {
-            // The main assistant picked an existing project: honour it even when the model called create.
-            return openChosen(chosenId, opts.threadId, title)
-        }
-        val wantContinue = DelegationToolArgs.coerceBoolean(arg(args, "continue_previous", "continuePrevious"), false) || opts.continueProject
-        var note: String? = null
-        var reused: DelegateHarnessProject? = null
-        var wantThread: String? = opts.threadId
-        if (wantContinue) {
-            val previous = taskDao.getLatestWithWorkspace(chat.id)?.takeIf { it.id != taskId }
-            if (previous?.workspaceId != null) {
-                reused = try { driver.openProject(previous.workspaceId) } catch (e: DelegationHarnessException) {
-                    note = "The previous project could not be opened (${e.code}); a new project was created."; null
-                }
-                if (wantThread == null) wantThread = previous.harnessSessionId
-            } else note = "There is no previous project in this chat; a new project was created."
-        }
-        val proj = reused ?: driver.createProject(title)
-        return enterProject(proj, created = reused == null, wantThread = wantThread.takeIf { reused != null },
-            strictThread = opts.threadId != null, title = title, firstNote = note)
-    }
-
-    private suspend fun openChosen(id: String, threadId: String?, title: String): SubagentToolOutcome {
-        if (workspaceId != null) return err("A project already exists for this task. Use harness_send, harness_new_thread or harness_open_thread.")
-        val proj = try { driver.openProject(id) } catch (e: DelegationHarnessException) {
-            return err("Project '$id' could not be opened (${e.code}). Use harness_list_projects for valid ids.")
-        }
-        return enterProject(proj, created = false, wantThread = threadId, strictThread = threadId != null, title = title, firstNote = null)
-    }
-
-    private suspend fun openProjectTool(args: Map<String, String>): SubagentToolOutcome {
-        val id = arg(args, "id", "project") ?: return err("id is required (see harness_list_projects).")
-        val opts = options()
-        val thread = opts.threadId.takeIf { id == opts.projectId }
-        return openChosen(id, thread, task.title)
-    }
-
-    private suspend fun listThreadsTool(): SubagentToolOutcome {
-        val ws = workspaceId ?: return err("No project yet. Call harness_create_project or harness_open_project first.")
-        val attached = threads.mapIndexed { i, t -> t.sessionId to i + 1 }.toMap()
-        return ok(DelegationProjectCatalog.listThreadsText(context, task.runtimeId, ws, attached))
-    }
-
-    private suspend fun openThreadTool(args: Map<String, String>): SubagentToolOutcome {
-        val id = arg(args, "id", "thread") ?: return err("id is required (see harness_list_threads).")
-        val proj = ensureProject()
-        val existing = threads.indexOfFirst { it.sessionId == id }
-        val approvalNote: String?
-        if (existing >= 0) {
-            currentSession = id
-            approvalNote = null
-        } else {
-            approvalNote = adoptExisting(proj, id).second
-        }
-        mutateTask { it.copy(harnessSessionId = id, harnessThreadsJson = threadsJson(), harnessConversationId = conversationId) }
-        publishThreads()
-        val number = threads.indexOfFirst { it.sessionId == id } + 1
-        return ok("Thread $number \"${threads[number - 1].title}\" is now the current thread; the harness agent keeps its context." +
-            (approvalNote?.let { "\nNote: $it" } ?: ""))
-    }
 
     private class PendingCopyResult(val items: List<ToolInput>, val unknown: List<String>)
 
@@ -506,19 +300,10 @@ internal class DelegateSubagentToolbox(
         return server?.supportsVision == true
     }
 
-    private suspend fun newThreadTool(args: Map<String, String>): SubagentToolOutcome {
-        val proj = ensureProject()
-        val title = DelegationToolArgs.boundedText(arg(args, "title"), 80) ?: "Thread ${threads.size + 1}"
-        val (thread, approvalNote) = openThread(proj, title)
-        mutateTask { it.copy(harnessSessionId = thread.sessionId, harnessThreadsJson = threadsJson(), harnessConversationId = thread.conversationId) }
-        publishThreads()
-        return ok("Thread ${threads.size} \"${thread.title}\" created and selected." + (approvalNote?.let { "\nNote: $it" } ?: ""))
-    }
-
     private suspend fun send(args: Map<String, String>): SubagentToolOutcome {
         val prompt = DelegationToolArgs.boundedText(arg(args, "prompt", "text"), 4000) ?: return err("prompt is required.")
         val mode = DelegationToolArgs.parseEnum(arg(args, "mode"), setOf("queue", "steer"), "queue")
-        val session = sessionFor(arg(args, "thread"))
+        val session = session()
         if (!guards.canSendPrompt()) {
             return err("The limit of ${DelegationGuards.MAX_HARNESS_PROMPTS} harness prompts was reached. Call finish_task now with what exists.")
         }
@@ -566,7 +351,7 @@ internal class DelegateSubagentToolbox(
     }
 
     private suspend fun waitTool(args: Map<String, String>): SubagentToolOutcome {
-        val session = sessionFor(arg(args, "thread"))
+        val session = session()
         val seconds = (DelegationToolArgs.coerceInt(arg(args, "max_seconds", "maxSeconds")) ?: 600).coerceIn(30, 1800)
         reporter.phase("harness_wait", NativeChatDelegateTaskState.WAITING_HARNESS)
         reporter.live { it.copy(harnessBusy = true) }
@@ -599,7 +384,7 @@ internal class DelegateSubagentToolbox(
         }.getOrNull()
         if (failureCode != null && providerFailures >= DelegationGuards.MAX_PROVIDER_FAILURES) {
             val reason = DelegationProviderFailure.needsDirectionReason(
-                failureCode, DelegationProviderFailure.contextTokensOf(currentModelJson()) ?: binding?.contextTokens?.toInt(),
+                failureCode, DelegationProviderFailure.contextTokensOf(currentModelJson()) ?: binding.contextTokens?.toInt(),
                 failureCause)
             return SubagentToolOutcome(bounded("wait_result: error\n$reason"), isError = true,
                 guard = GuardDecision.NeedsDirection(reason, DelegationProviderFailure.ERROR_CODE))
@@ -661,17 +446,15 @@ internal class DelegateSubagentToolbox(
     }
 
     private suspend fun read(args: Map<String, String>): SubagentToolOutcome {
-        val what = DelegationToolArgs.parseEnum(arg(args, "what"), setOf("transcript", "file", "list", "changes", "deliverables"), "")
-        if (what.isEmpty()) return err("what must be one of transcript, file, list, changes, deliverables.")
-        val session = sessionFor(arg(args, "thread"))
+        val what = DelegationToolArgs.parseEnum(arg(args, "what"), setOf("transcript", "list", "deliverables"), "")
+        if (what.isEmpty()) return err("what must be one of transcript, list, deliverables (reading a single file or the change list is not available; ask the harness agent in a prompt).")
+        val session = session()
         val page = (DelegationToolArgs.coerceInt(arg(args, "page")) ?: 0).coerceAtLeast(0)
         val max = DelegateHarnessSupport.clampChars(DelegationToolArgs.coerceInt(arg(args, "max_chars", "maxChars")))
         val path = arg(args, "path")
         val text = when (what) {
             "transcript" -> driver.readTranscript(session, page, max)
-            "file" -> driver.readFileText(session, path ?: return err("path is required for what=file."), page, max)
             "list" -> driver.listFiles(session, path, max)
-            "changes" -> driver.readChanges(session, max)
             else -> driver.readDeliverables(session, max)
         }
         return ok(text)
@@ -689,22 +472,16 @@ internal class DelegateSubagentToolbox(
         }
         val text = arg(args, "text")
         val options = parseList(arg(args, "options")).takeIf { it.isNotEmpty() }
-        val order = (listOfNotNull(currentSession) + threads.map { it.sessionId }).distinct()
-        if (order.isEmpty()) return err("No project yet. Call harness_create_project first.")
-        var last: DelegationHarnessException? = null
-        for (session in order) {
-            try {
-                return ok(driver.respond(session, id, decision, text, options))
-            } catch (e: DelegationHarnessException) {
-                if (e.code != "INTERACTION_NO_LONGER_PENDING") throw e
-                last = e
-            }
+        return try {
+            ok(driver.respond(session(), id, decision, text, options))
+        } catch (e: DelegationHarnessException) {
+            if (e.code != "INTERACTION_NO_LONGER_PENDING") throw e
+            SubagentToolOutcome(bounded(e.toToolError()), isError = true)
         }
-        return SubagentToolOutcome(bounded(last?.toToolError() ?: "tool_error: item not found"), isError = true)
     }
 
     private suspend fun cancelTurn(): SubagentToolOutcome {
-        driver.cancelTurn(sessionFor(null))
+        driver.cancelTurn(session())
         return ok("Cancel requested for the running turn.")
     }
 
@@ -762,4 +539,18 @@ internal class DelegateSubagentToolbox(
             finished = true
         )
     }
+}
+
+/** Pure thread-reuse rule used by [DelegateProjectBinder] (unit-tested without a database). */
+object DelegateThreadReuse {
+    /** The thread this chat used last in [workspaceId]: the most recent task row with a current thread. */
+    fun lastThread(tasks: List<NativeChatDelegateTaskEntity>, workspaceId: String): String? =
+        tasks.filter { it.workspaceId == workspaceId }
+            .sortedWith(compareByDescending<NativeChatDelegateTaskEntity> { it.createdAt }.thenByDescending { it.id })
+            .firstNotNullOfOrNull { t ->
+                t.harnessSessionId?.takeIf { it.isNotBlank() } ?: runCatching {
+                    val a = JSONArray(t.harnessThreadsJson)
+                    if (a.length() > 0) a.getJSONObject(a.length() - 1).getString("id") else null
+                }.getOrNull()
+            }
 }

@@ -181,7 +181,7 @@
   },
   "hatchFx": {
     "id": "fx_hatch",
-    "path": "tama/world/effects/fx_hatch.png",
+    "path": "tama/effects/fx_hatch.png",
     "frameWidth": 64,
     "frameHeight": 64,
     "columns": 4,

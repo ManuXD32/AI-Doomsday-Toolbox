@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>File Station</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/css/app.css">
+  <link rel="stylesheet" href="/css/editor.css">
+  <script type="module" src="/js/editor.js"></script>
+</head>
+<body class="editor-body">
+  <header class="ed-bar">
+    <a id="ed-back" class="btn small" href="/"><span aria-hidden="true">&#8592;</span> <span data-i18n="editor.back">Back to folder</span></a>
+    <h1 class="ed-title"><span id="ed-name" class="ed-name"></span><span id="ed-dot" class="ed-dot" role="img" data-i18n-title="editor.unsaved" data-i18n-aria="editor.unsaved" hidden>&#9679;</span></h1>
+    <span class="spacer"></span>
+    <button id="ed-wrap" class="btn small" type="button" aria-pressed="false" data-i18n="editor.wrap" hidden>Wrap lines</button>
+    <button id="ed-save" class="btn small primary" type="button" data-i18n="editor.save">Save</button>
+  </header>
+  <div id="ed-readonly" class="banner warn ed-banner" hidden><span data-i18n="editor.readonly">This volume is read-only: changes cannot be saved.</span></div>
+  <div id="ed-status" class="ed-status muted" data-i18n="common.loading">Loading...</div>
+  <main id="ed-host" class="ed-host" hidden></main>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+</body>
+</html>

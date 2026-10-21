@@ -18,7 +18,11 @@ data class DelegationStartRequest(
     /** Android-side workspace id of an existing harness project to open (from `deepseek_projects`). */
     val projectId: String? = null,
     /** Harness session id of an existing thread in that project to keep using; null = a new thread. */
-    val threadId: String? = null
+    val threadId: String? = null,
+    /** Start a new project even when the chat already has one (`project:"new"`). */
+    val newProject: Boolean = false,
+    /** Open a new thread instead of reusing the chat's last one (`thread:"new"`). */
+    val freshThread: Boolean = false
 )
 
 sealed class DelegationStartResult {
@@ -33,7 +37,9 @@ data class DelegationReply(
     val timedOut: Boolean,
     val state: String,
     /** True when the message reopened a finished task (same subagent conversation and harness thread). */
-    val reopened: Boolean = false
+    val reopened: Boolean = false,
+    /** False when the message was not delivered to a task (no task, blank message, unknown attachments). */
+    val posted: Boolean = true
 )
 
 /** In-memory live view of a running task for the UI; durable state lives in Room. */

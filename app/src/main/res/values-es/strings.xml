@@ -659,7 +659,7 @@
     <string name="zim_downloading_desc">Descargando archivo ZIM</string>
     <string name="zim_downloading_toast">Descargando: %s</string>
     <string name="zim_download_failed">Descarga fallida: %s</string>
-    <string name="zim_articles_count">%d artículos</string>
+    <string name="zim_articles_count">%1$s artículos</string>
     <string name="zim_more_options">Más opciones</string>
     <string name="zim_menu_rename">Renombrar</string>
     <string name="zim_menu_export">Exportar a Descargas</string>
@@ -1648,7 +1648,7 @@
     <string name="llama_stream_stats">%1$d tokens · %2$.1f t/s</string>
     <string name="llama_completion_stats">%1$d tokens · %2$.1f t/s</string>
     <string name="llama_completion_stats_with_prompt">%1$d tokens · %2$.1f t/s · %3$d prompt</string>
-    <string name="llama_message_stats">%1$s · %2$d tokens · %3$.1f t/s · %4$d prompt</string>
+    <string name="llama_message_stats">%1$s · %2$d tokens · %3$.1f t/s · %4$d de entrada</string>
     <string name="llama_tools_title">Herramientas</string>
     <string name="llama_tools_enable">Activar herramientas</string>
     <string name="llama_tools_enable_desc">Permite que este chat use herramientas de la app que también estén activadas para el servidor seleccionado.</string>
@@ -2260,13 +2260,6 @@
     <string name="kv_cache_desc">Reduce memoria para contextos más grandes</string>
     <string name="kv_cache_reuse">Tokens de Caché Reutilizados</string>
     
-    <!-- File Server -->
-    <string name="file_server">Servidor de Archivos</string>
-    <string name="file_server_shared_folder">Carpeta Compartida</string>
-    <string name="file_server_start">Iniciar Servidor (Puerto 9111)</string>
-    <string name="file_server_stop">Detener Servidor</string>
-    <string name="file_server_download_zip">Descargar como ZIP</string>
-    
     <!-- QR Codes -->
     <string name="qr_connect">Conectar vía QR</string>
     <string name="qr_scan_files">Escanear para acceder a archivos</string>
@@ -2297,8 +2290,7 @@
     <string name="kiwix_active_downloads">%d descarga(s) activa(s)</string>
     
     <!-- Dashboard Additional -->
-    <string name="dashboard_file_server">Servidor de Archivos</string>
-    <string name="dashboard_shared_folder">Carpeta Compartida</string>
+    <string name="dashboard_file_server">Estación de archivos</string>
     <string name="hub_workflows">Flujos de trabajo</string>
     <string name="hub_workflows_desc">Encadena operaciones de IA</string>
     <string name="hub_benchmark">Benchmark</string>
@@ -2392,7 +2384,7 @@
     <string name="agent_workspace_preview_empty_local">Ejecuta primero un proyecto web local o Python web para mostrar su UI aqui.</string>
     <string name="agent_workspace_preview_empty_remote">No hay una URL de vista previa disponible para este proyecto remoto.</string>
     <string name="agent_workspace_logs_title">Logs</string>
-    <string name="agent_workspace_logs_empty">Aun no hay logs.</string>
+    <string name="agent_workspace_logs_empty">Aún no hay logs.</string>
     <string name="agent_request_local_run">La IA quiere ejecutar este proyecto sandbox local.</string>
     <string name="agent_request_local_force_stop">La IA quiere forzar la detencion de este proyecto sandbox local.</string>
     <string name="agent_request_proot_run">La IA quiere ejecutar este proyecto en su entorno Debian local.</string>
@@ -2406,7 +2398,7 @@
     <string name="agent_project_backend_local_desc">Usa archivos privados de la app y runners locales Python/WebView sin acceso a shell Termux.</string>
     <string name="agent_planning_mode">Modo de planificacion</string>
     <string name="agent_send_guidance">Enviar guia</string>
-    <string name="agent_status_needs_direction">Necesita direccion</string>
+    <string name="agent_status_needs_direction">Necesita dirección</string>
     <string name="agent_needs_direction_message">Pausado porque el agente podria estar en bucle: %1$s</string>
     <string name="agent_needs_direction_interrupted_message">El agente se ha pausado y necesita tu atención: %1$s</string>
     <string name="agent_loop_recovery_budget_reason">Demasiados intentos de recuperacion para la misma solicitud.</string>
@@ -4260,6 +4252,7 @@
     <string name="dist_worker_added_toast">Añadido: %1$s (%2$s:%3$s)</string>
     <string name="dist_worker_updated_toast">Trabajador actualizado</string>
     <string name="dist_worker_load">%d%% de carga</string>
+    <string name="dist_worker_load_line">Carga: %1$s</string>
     <string name="dist_auto">Auto</string>
     <string name="dist_load_distribution_title">📊 Distribución de Carga</string>
     <string name="dist_master_load_label">Maestro: %1$d%% (%2$dMB)</string>
@@ -4846,7 +4839,6 @@
     <string name="video_gen_error_already_running">Ya hay otra tarea de generación de video en curso.</string>
     <string name="video_gen_error_sd_binary_missing">El binario de video de Stable Diffusion no está disponible.</string>
     <string name="video_gen_error_ffmpeg_missing">FFmpeg no está disponible.</string>
-    <string name="video_gen_error_generation_failed">La generación de video falló con el código de salida %1$d.</string>
     <string name="video_gen_error_conversion_failed">La conversión a MP4 falló con el código de salida %1$d.</string>
     <string name="video_gen_error_media_processing_timeout">La generación de video se detuvo porque se agotó la cuota de Android para procesamiento multimedia en segundo plano. Mantén la app en primer plano o reduce fotogramas o pasos y vuelve a iniciar.</string>
     <string name="video_gen_warning_output_not_configured">No hay carpeta de salida configurada, así que el video queda solo en el almacenamiento interno de la app.</string>
@@ -7481,21 +7473,21 @@
     <string name="ai_servers_server_stopped">Servidor detenido.</string>
     <string name="ai_servers_users_title">Usuarios y permisos</string>
     <string name="ai_servers_users_desc">Los servidores publicos quedan abiertos para quien tenga la URL. El modo usuarios pide contrasena y comprueba permisos por servidor.</string>
-    <string name="ai_servers_add_user">Anadir usuario</string>
-    <string name="ai_servers_no_users">Aun no hay usuarios de servidor. Los servidores publicos pueden usarse por cualquiera con el enlace.</string>
+    <string name="ai_servers_add_user">Añadir usuario</string>
+    <string name="ai_servers_no_users">Aún no hay usuarios de servidor. Los servidores publicos pueden usarse por cualquiera con el enlace.</string>
     <string name="ai_servers_user_permissions_hint">Toca chips para permitir o bloquear cada servidor.</string>
     <string name="ai_servers_username">Usuario</string>
-    <string name="ai_servers_password">Contrasena</string>
+    <string name="ai_servers_password">Contraseña</string>
     <string name="ai_servers_password_hint">Usa al menos 6 caracteres.</string>
     <string name="ai_servers_reset_password">Restablecer contrasena</string>
     <string name="ai_servers_reset_password_for">Restablecer contrasena de %1$s</string>
     <string name="ai_servers_user_added">Usuario de servidor anadido.</string>
-    <string name="ai_servers_password_updated">Contrasena actualizada.</string>
+    <string name="ai_servers_password_updated">Contraseña actualizada.</string>
     <string name="ai_servers_port">Puerto</string>
     <string name="ai_servers_port_hint">Los valores por defecto estan por encima de 10000.</string>
     <string name="ai_servers_port_error">Usa un puerto unico entre 10000 y 65535.</string>
     <string name="ai_servers_lan_visible">Visible en LAN</string>
-    <string name="ai_servers_lan_visible_desc">Escucha en todas las interfaces y muestra QRs para direcciones de la red local.</string>
+    <string name="ai_servers_lan_visible_desc">Escucha en todas las interfaces y muestra QRs para direcciónes de la red local.</string>
     <string name="ai_servers_access_mode">Modo de acceso</string>
     <string name="ai_servers_access_public">Publico</string>
     <string name="ai_servers_access_users">Usuarios</string>
@@ -7512,7 +7504,7 @@
     <string name="ai_servers_logs_title">Logs (%1$d)</string>
     <string name="ai_servers_copy_logs">Copiar logs</string>
     <string name="ai_servers_clear_logs">Borrar logs</string>
-    <string name="ai_servers_no_logs">Aun no hay logs.</string>
+    <string name="ai_servers_no_logs">Aún no hay logs.</string>
     <string name="ai_servers_running">Activo</string>
     <string name="ai_servers_stopped">Detenido</string>
     <string name="ai_servers_error">Error</string>
@@ -7539,11 +7531,11 @@
     <string name="dashboard_sd_distributed_title">Generacion multimedia distribuida</string>
     <string name="dashboard_sd_distributed_desc">Divide trabajo de imagen, edicion, escalado y video de Stable Diffusion entre workers de una LAN de confianza.</string>
     <string name="sd_dist_title">Generacion multimedia distribuida</string>
-    <string name="sd_dist_subtitle">Ejecuta workers RPC de stable-diffusion.cpp, elige la colocacion del pipeline y aplica el plan a imagen y video.</string>
+    <string name="sd_dist_subtitle">Ejecuta workers RPC de stable-diffusion.cpp, elige la colocación del pipeline y aplica el plan a imagen y video.</string>
     <string name="sd_dist_hub_worker_title">Usar este dispositivo como worker multimedia</string>
     <string name="sd_dist_hub_worker_desc">Aporta hilos de CPU y memoria a otro dispositivo ADT que ejecute stable-diffusion.cpp.</string>
     <string name="sd_dist_hub_master_title">Coordinar una red multimedia</string>
-    <string name="sd_dist_hub_master_desc">Anade workers de confianza manualmente y prepara la colocacion backend para la siguiente generacion.</string>
+    <string name="sd_dist_hub_master_desc">Añade workers de confianza manualmente y prepara la colocación backend para la siguiente generacion.</string>
     <string name="sd_dist_hub_run_title">Ajustar runtime SD</string>
     <string name="sd_dist_hub_run_desc">Ajusta RPC, backend, VAE, adaptadores, cache y vista previa del comando.</string>
     <string name="sd_dist_open_worker">Abrir worker</string>
@@ -7563,7 +7555,7 @@
     <string name="sd_dist_gallery_videos">Videos</string>
     <string name="sd_dist_gallery_image">Imagen</string>
     <string name="sd_dist_gallery_video">Video</string>
-    <string name="sd_dist_gallery_empty">Aun no hay multimedia generada.</string>
+    <string name="sd_dist_gallery_empty">Aún no hay multimedia generada.</string>
     <string name="sd_dist_gallery_item_meta">%1$s - %2$s</string>
     <string name="sd_dist_gallery_open_with">Abrir multimedia generada</string>
     <string name="sd_dist_gallery_open_failed">No se pudo abrir el archivo: %1$s</string>
@@ -7603,14 +7595,14 @@
     <string name="sd_dist_start_worker">Iniciar worker</string>
     <string name="sd_dist_stop_worker">Detener worker</string>
     <string name="sd_dist_logs">Logs</string>
-    <string name="sd_dist_no_logs">Aun no hay logs.</string>
+    <string name="sd_dist_no_logs">Aún no hay logs.</string>
     <string name="sd_dist_manual_worker">Worker manual</string>
     <string name="sd_dist_worker_host">Host o IP del worker</string>
     <string name="sd_dist_threads_short">hilos</string>
     <string name="sd_dist_ram_mb_short">RAM MB</string>
-    <string name="sd_dist_add_worker">Anadir worker</string>
+    <string name="sd_dist_add_worker">Añadir worker</string>
     <string name="sd_dist_workers">Workers</string>
-    <string name="sd_dist_no_workers">Aun no hay workers. Anade una direccion LAN de confianza para empezar.</string>
+    <string name="sd_dist_no_workers">Aún no hay workers. Añade una dirección LAN de confianza para empezar.</string>
     <string name="sd_dist_remote_workers">Workers remotos</string>
     <string name="sd_dist_new_worker">Nuevo worker</string>
     <string name="sd_dist_delete_worker">Eliminar worker</string>
@@ -7620,25 +7612,25 @@
     <string name="sd_dist_view_network">Ver red</string>
     <string name="sd_dist_live_topology">Topologia en vivo</string>
     <string name="sd_dist_no_active_workers">No hay workers habilitados en el plan activo.</string>
-    <string name="sd_dist_current_plan">Plan de colocacion actual</string>
+    <string name="sd_dist_current_plan">Plan de colocación actual</string>
     <string name="sd_dist_enabled">Activado</string>
     <string name="sd_dist_disabled">Desactivado</string>
     <string name="sd_dist_enable_distributed">Activar SD distribuido</string>
-    <string name="sd_dist_enable_distributed_desc">Aplica flags RPC y de colocacion backend a comandos de imagen, edicion, escalado y video.</string>
+    <string name="sd_dist_enable_distributed_desc">Aplica flags RPC y de colocación backend a comandos de imagen, edicion, escalado y video.</string>
     <string name="sd_dist_rpc_servers">Servidores RPC</string>
-    <string name="sd_dist_placement_mode">Modo de colocacion</string>
+    <string name="sd_dist_placement_mode">Modo de colocación</string>
     <string name="sd_dist_placement_auto_fit">Auto-fit</string>
     <string name="sd_dist_placement_components">Componentes</string>
     <string name="sd_dist_placement_manual">Manual</string>
     <string name="sd_dist_placement_auto_ram_desc">ADT envia presupuestos de memoria por worker y deja que stable-diffusion.cpp ajuste el modelo automaticamente.</string>
     <string name="sd_dist_placement_auto_fit_desc">Deja que stable-diffusion.cpp coloque pesos automaticamente.</string>
-    <string name="sd_dist_placement_components_desc">Introduce colocacion explicita por componente mientras ADT crea la lista de servidores.</string>
+    <string name="sd_dist_placement_components_desc">Introduce colocación explicita por componente mientras ADT crea la lista de servidores.</string>
     <string name="sd_dist_placement_manual_desc">Usa solo los flags expertos sin procesar que escribas.</string>
     <string name="sd_dist_auto_fit">Auto-fit</string>
     <string name="sd_dist_auto_fit_desc">Deja que stable-diffusion.cpp coloque pesos y offload segun la memoria disponible.</string>
     <string name="sd_dist_auto_fit_help">Auto-fit anade --auto-fit. Activa el presupuesto de memoria avanzado de abajo solo si quieres pasar tus propios presupuestos --max-vram por dispositivo.</string>
     <string name="sd_dist_layer_split_max_vram_warning">La division explicita por capas, como diffusion=RPC0&amp;RPC1, no puede usar --max-vram para ese modulo dividido. Auto RAM usa --auto-fit con presupuestos --max-vram por worker; Componentes se queda con --backend explicito.</string>
-    <string name="sd_dist_manual_expert_flags_help">El modo Manual conserva la lista de servidores RPC de ADT pero ignora los campos estructurados de colocacion. Pon cualquier flag de colocacion raw de stable-diffusion.cpp en Flags expertos.</string>
+    <string name="sd_dist_manual_expert_flags_help">El modo Manual conserva la lista de servidores RPC de ADT pero ignora los campos estructurados de colocación. Pon cualquier flag de colocación raw de stable-diffusion.cpp en Flags expertos.</string>
     <string name="sd_dist_backend_spec">Colocacion backend</string>
     <string name="sd_dist_backend_spec_hint">Ejemplo: diffusion=RPC0&amp;RPC1,te=cpu,vae=RPC2</string>
     <string name="sd_dist_params_backend_spec">Backend de parametros</string>
@@ -7741,7 +7733,7 @@
     <string name="sd_dist_render_farm_console">Consola de granja de render</string>
     <string name="sd_dist_card_devices">Dispositivos y RAM</string>
     <string name="sd_dist_card_devices_desc">Nombra workers, introduce IP y puerto manualmente, y decide cuanta RAM y CPU aporta cada telefono.</string>
-    <string name="sd_dist_card_planner">Planificador de colocacion</string>
+    <string name="sd_dist_card_planner">Planificador de colocación</string>
     <string name="sd_dist_card_planner_desc">Distribuye modulos SD completos y divide difusion entre workers segun sus presupuestos de RAM.</string>
     <string name="sd_dist_card_generation_desc">Valores guardados para prompts, tamano, sampler, semillas, fuerza de edicion y tiempo de video.</string>
     <string name="sd_dist_card_runtime_desc">Interruptores de runtime para memoria, VAE, flash attention y presupuestos backend avanzados.</string>
@@ -7753,7 +7745,7 @@
     <string name="sd_dist_templates">Plantillas</string>
     <string name="sd_dist_templates_desc">Guarda presets de workflow con nombre y cambia entre ellos sin reconstruir toda la configuracion.</string>
     <string name="sd_dist_template_name">Nombre de plantilla</string>
-    <string name="sd_dist_no_templates">Aun no hay plantillas guardadas.</string>
+    <string name="sd_dist_no_templates">Aún no hay plantillas guardadas.</string>
     <string name="sd_dist_load_template">Cargar</string>
     <string name="sd_dist_delete_template">Eliminar plantilla</string>
     <string name="sd_dist_template_summary">%1$s - %2$s pasos - %3$s</string>
@@ -7789,7 +7781,7 @@
     <string name="sd_dist_progress_eta">ETA %1$s</string>
     <string name="sd_dist_progress_eta_calculating">calculando</string>
     <string name="sd_manual_flags_label">Flags manuales del comando</string>
-    <string name="sd_manual_flags_desc">Anade flags extra de stable-diffusion.cpp solo a esta ejecucion. Los ajustes estructurados de la tarjeta se mantienen separados.</string>
+    <string name="sd_manual_flags_desc">Añade flags extra de stable-diffusion.cpp solo a esta ejecucion. Los ajustes estructurados de la tarjeta se mantienen separados.</string>
     <string name="sd_manual_flags_hint">Ejemplo: --preview-interval 2 --metadata brief</string>
     <string name="sd_dist_image_mode">Workflow de imagen</string>
     <string name="sd_dist_video_mode">Workflow de video</string>

@@ -3,6 +3,7 @@ package com.example.llamadroid.service.delegation
 import com.example.llamadroid.data.model.NativeChatDelegateMessageEntity
 import com.example.llamadroid.data.model.NativeChatDelegateMessageRole
 import com.example.llamadroid.service.OllamaService.ChatMessage
+import com.example.llamadroid.service.ToolArgumentsJson
 import com.example.llamadroid.service.OllamaService.ToolCall
 import com.example.llamadroid.service.compaction.CompactionPlan
 import com.example.llamadroid.service.compaction.CompactionPolicy
@@ -62,8 +63,7 @@ object DelegateSubagentMessages {
     /** OpenAI-style `tool_calls` array. */
     fun toolCallsJson(calls: List<ToolCall>): String = JSONArray().also { array ->
         calls.forEach { call ->
-            val args = call.rawArgumentsJson?.takeIf { it.isNotBlank() }
-                ?: JSONObject(call.arguments as Map<*, *>).toString()
+            val args = ToolArgumentsJson.canonical(call.rawArgumentsJson, call.arguments)
             array.put(
                 JSONObject().put("id", call.id.orEmpty()).put("type", "function")
                     .put("function", JSONObject().put("name", call.name).put("arguments", args))

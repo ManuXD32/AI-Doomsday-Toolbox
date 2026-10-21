@@ -2,8 +2,24 @@ package com.example.llamadroid.ui.walkthrough
 
 import com.example.llamadroid.R
 
-/** Actual demonstration screenshots, with Android selecting the English or Spanish asset. */
-internal fun lessonPreviewResource(id: String): Int? = when (id) {
+/**
+ * Guides whose recipes show a different screenshot than the previewKey their steps declare. Keys are recipe
+ * ids (a step id is `<recipe id>.<step>`); values are preview keys of [lessonPreviewResource].
+ */
+internal val recipePreviewOverrides: Map<String, String> = mapOf(
+    "conversations.delegation_start" to "native_chat_delegation",
+    "r7.native_chat_delegation_watch" to "deepseek_delegation",
+    "r7.native_chat_delegation_correct" to "deepseek_delegation",
+    "r7.native_chat_delegation_files" to "deepseek_delegation",
+    "servers.files" to "file_station",
+    "servers.file_station_web" to "file_station"
+)
+
+/**
+ * Actual demonstration screenshots, with Android selecting the English or Spanish asset. [id] is a lesson id,
+ * a preview key or a feature-guide step id (recipe-level overrides apply to step ids).
+ */
+internal fun lessonPreviewResource(id: String): Int? = when (recipePreviewOverrides[id.substringBeforeLast('.', "")] ?: id) {
     "library" -> R.drawable.tour_preview_library
     "chat" -> R.drawable.tour_lesson_chat
     "agent" -> R.drawable.tour_lesson_agent
@@ -16,7 +32,7 @@ internal fun lessonPreviewResource(id: String): Int? = when (id) {
     "video_interpolation" -> R.drawable.tour_lesson_video_interpolation
     "subtitle_burn" -> R.drawable.tour_lesson_subtitle_burn
     "onnx_tts" -> R.drawable.tour_lesson_onnx_tts
-    "audio_workspace" -> R.drawable.tour_lesson_onnx_tts
+    "audio_workspace" -> R.drawable.tour_lesson_audio_workspace
     "live_translator" -> R.drawable.tour_lesson_live_translator
     "transcription" -> R.drawable.tour_lesson_transcription
     "video_summary" -> R.drawable.tour_lesson_video_summary
@@ -27,8 +43,7 @@ internal fun lessonPreviewResource(id: String): Int? = when (id) {
     "knowledge" -> R.drawable.tour_lesson_knowledge
     "offline_library" -> R.drawable.tour_lesson_offline_library
     "servers_hub" -> R.drawable.tour_lesson_servers_hub
-    // The old Servers Hub screenshot shows the web UI servers page.
-    "web_servers" -> R.drawable.tour_lesson_servers_hub
+    "web_servers" -> R.drawable.tour_lesson_web_servers
     "distributed_llm" -> R.drawable.tour_lesson_distributed_llm
     "distributed_media" -> R.drawable.tour_lesson_distributed_media
     "benchmark" -> R.drawable.tour_lesson_benchmark
@@ -62,5 +77,8 @@ internal fun lessonPreviewResource(id: String): Int? = when (id) {
     "conversations_server_selection" -> R.drawable.tour_lesson_conversations_server_selection
     "distributed_roles" -> R.drawable.tour_lesson_distributed_roles
     "fastsd_gallery" -> R.drawable.tour_lesson_fastsd_gallery
+    "deepseek_delegation" -> R.drawable.tour_lesson_deepseek_delegation
+    "native_chat_delegation" -> R.drawable.tour_lesson_native_chat_delegation
+    "file_station" -> R.drawable.tour_lesson_file_station
     else -> null
 }

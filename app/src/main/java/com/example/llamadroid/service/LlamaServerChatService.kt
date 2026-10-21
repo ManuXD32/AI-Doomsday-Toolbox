@@ -529,6 +529,9 @@ class LlamaServerChatService {
                 } catch (_: Exception) {
                     "HTTP ${conn.responseCode}"
                 }
+                if (errorBody.contains("Failed to parse tool call arguments")) {
+                    DebugLog.log("[LlamaServerChat] HTTP ${conn.responseCode}: server rejected invalid tool call arguments in history")
+                }
                 throw Exception("llama-server error: $errorBody")
             }
 
@@ -597,7 +600,8 @@ class LlamaServerChatService {
                             LlamaServerTerminalLineAction.STOP -> break
                             LlamaServerTerminalLineAction.PARSE_USAGE -> {
                                 val jsonStr = data.removePrefix("data: ").trim()
-                                runCatching { parseLlamaServerUsage(JSONObject(jsonStr)) }
+                                runCatching { JSONObject(jsonStr).also(::logLlamaKvReuse) }
+                                    .mapCatching { parseLlamaServerUsage(it) }
                                     .getOrNull()
                                     ?.let { usage = mergeLlamaServerUsage(usage, it) }
                                 break
@@ -615,6 +619,7 @@ class LlamaServerChatService {
                             generation.slotId = chunk.optInt("id_slot")
                         }
                         parseLlamaPromptProcessingProgress(chunk)?.let { onPromptProgress(it) }
+                        logLlamaKvReuse(chunk)
                         parseLlamaServerUsage(chunk)?.let { usage = mergeLlamaServerUsage(usage, it) }
                         val choices = chunk.optJSONArray("choices") ?: continue
                         if (choices.length() == 0) continue
@@ -1309,6 +1314,16 @@ internal data class LlamaServerStreamChannelCounts(
     val reasoningChannelChunks: Int = 0,
     val toolCallChannelChunks: Int = 0
 )
+
+/** One greppable "KV reuse" line per request: tokens reused from the slot cache vs. freshly processed. */
+private fun logLlamaKvReuse(chunk: JSONObject) {
+    val timings = chunk.optJSONObject("timings") ?: return
+    if (!timings.has("prompt_n")) return
+    DebugLog.log(
+        "[LlamaServerChat] KV reuse cache_n=${if (timings.has("cache_n")) timings.optInt("cache_n") else -1} " +
+            "prompt_n=${timings.optInt("prompt_n")}"
+    )
+}
 
 internal fun parseLlamaServerUsage(chunk: JSONObject): OllamaService.ChatUsage? {
     val usage = chunk.optJSONObject("usage")

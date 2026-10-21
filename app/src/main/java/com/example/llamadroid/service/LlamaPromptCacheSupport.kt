@@ -2,7 +2,6 @@ package com.example.llamadroid.service
 
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import org.json.JSONObject
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 
@@ -250,14 +249,8 @@ object LlamaSlotManager {
     }
 }
 
-internal fun canonicalToolArguments(toolCall: OllamaService.ToolCall): String {
-    toolCall.rawArgumentsJson?.trim()?.takeIf { it.isNotBlank() }?.let { raw ->
-        if (runCatching { JSONObject(raw) }.isSuccess) return raw
-    }
-    return JSONObject().apply {
-        toolCall.arguments.toSortedMap().forEach { (key, value) -> put(key, value) }
-    }.toString()
-}
+internal fun canonicalToolArguments(toolCall: OllamaService.ToolCall): String =
+    ToolArgumentsJson.canonical(toolCall.rawArgumentsJson, toolCall.arguments.toSortedMap())
 
 internal fun stableToolCallId(name: String, rawArgumentsJson: String): String {
     val hash = sha256Hex("$name\u0000$rawArgumentsJson")

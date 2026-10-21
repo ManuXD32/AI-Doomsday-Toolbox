@@ -386,6 +386,60 @@ class TamaDatabaseMigrationTest {
         migrated.query("SELECT COUNT(*) FROM tama_worlds").use { assertTrue(it.moveToFirst()); assertEquals(0, it.getInt(0)) }
     }
 
+    @Test
+    fun migrate44To45_dropsWorldKeepsArcadeReceipts() {
+        helper.createDatabase(TEST_DB, 44).apply {
+            val values = android.content.ContentValues()
+            query("PRAGMA table_info(tama_pets)").use { cursor ->
+                while (cursor.moveToNext()) {
+                    val name = cursor.getString(cursor.getColumnIndexOrThrow("name"))
+                    val type = cursor.getString(cursor.getColumnIndexOrThrow("type"))
+                    val required = cursor.getInt(cursor.getColumnIndexOrThrow("notnull")) != 0
+                    val defaultValue = cursor.getString(cursor.getColumnIndexOrThrow("dflt_value"))
+                    if (required && defaultValue == null) {
+                        if (type == "TEXT") values.put(name, "") else values.put(name, 0)
+                    }
+                }
+            }
+            values.put("id", "migration-pet")
+            values.put("name", "Pixel")
+            values.put("currentLocationId", "world")
+            values.put("hydration", 55f)
+            insert("tama_pets", android.database.sqlite.SQLiteDatabase.CONFLICT_ABORT, values)
+            execSQL("INSERT INTO tama_worlds (id,petId,seed,generatorVersion,width,height,createdAt,lastSimulatedAt,stateJson) VALUES ('world:migration-pet','migration-pet',1,1,8,8,1,1,'{}')")
+            execSQL("INSERT INTO tama_world_action_receipts (petId,id,worldId,kind,requestJson,status,createdAt,updatedAt) VALUES ('migration-pet','arcade-1','world:migration-pet','ARCADE_SESSION','{}','RUNNING',1,1)")
+            execSQL("INSERT INTO tama_world_action_receipts (petId,id,worldId,kind,requestJson,status,createdAt,updatedAt) VALUES ('migration-pet','park-1','world:migration-pet','PARK_QUEST_ACCEPT','{}','RUNNING',1,1)")
+            close()
+        }
+        val migrated = helper.runMigrationsAndValidate(TEST_DB, 45, true, TamaMigrations.MIGRATION_44_45)
+        listOf("tama_worlds", "tama_world_actors", "tama_world_chunks", "tama_world_structures",
+            "tama_world_objects", "tama_world_npcs", "tama_world_relationships", "tama_world_events",
+            "tama_world_episodes", "tama_world_policies").forEach { assertTableMissing(migrated, it) }
+        assertTableExists(migrated, "tama_world_action_receipts")
+        migrated.query("SELECT currentLocationId,hydration FROM tama_pets WHERE id='migration-pet'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("fixed_0_0", it.getString(0))
+            assertEquals(55f, it.getFloat(1), 0f)
+        }
+        migrated.query("SELECT id FROM tama_world_action_receipts ORDER BY id").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("arcade-1", it.getString(0))
+            assertTrue(!it.moveToNext())
+        }
+    }
+
+    private fun assertTableMissing(
+        db: androidx.sqlite.db.SupportSQLiteDatabase,
+        tableName: String
+    ) {
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+            arrayOf(tableName)
+        ).use { cursor ->
+            assertTrue("$tableName table should be dropped", !cursor.moveToFirst())
+        }
+    }
+
     private fun assertTableExists(
         db: androidx.sqlite.db.SupportSQLiteDatabase,
         tableName: String

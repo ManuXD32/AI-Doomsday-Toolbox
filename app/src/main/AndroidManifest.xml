@@ -238,10 +238,14 @@
             android:foregroundServiceType="dataSync" 
             android:exported="false" />
             
-        <service 
-            android:name=".service.FileServerService" 
-            android:foregroundServiceType="dataSync" 
-            android:exported="false" />
+        <service
+            android:name=".service.filestation.FileStationService"
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started local network file server serving user-selected folders to browsers on the LAN; runs until the user stops it from the notification or app" />
+        </service>
             
         <service 
             android:name=".service.ZimShareService" 

@@ -180,7 +180,7 @@ data class HarnessTaskDigest(
         when (type) {
             "turn/start" -> {
                 val turn = data?.int("turn")
-                next = next.copy(running = true, lastTurnFailed = false, lastFailure = "", modelRetries = 0,
+                next = next.copy(running = true, lastTurnFailed = false, lastFailure = "", modelRetries = 0, errors = emptyList(),
                     turnCount = if (turn != null) maxOf(next.turnCount, turn) else next.turnCount + 1)
             }
             "turn/end" -> {
@@ -271,7 +271,9 @@ data class HarnessTaskDigest(
         val errorsLine = take(errors.takeLast(2).takeIf { it.isNotEmpty() }
             ?.joinToString(" | ", "Errors: ") { clip(it, 200) })
         val retriesLine = take(modelRetries.takeIf { it > 0 }?.let {
-            "Retried: model request ${it}x this turn (not a failure unless the turn ends with an error)"
+            if (running) "Retried ${it}x, recovered so far (not a failure unless the turn ends with an error)"
+            else if (lastTurnFailed) "Retried ${it}x before the turn failed"
+            else "Retried ${it}x, recovered"
         })
         val assistantLine = take(lastAssistant.takeIf { it.isNotBlank() }
             ?.let { "Last assistant: " + it.replace('\n', ' ') }, 1250)

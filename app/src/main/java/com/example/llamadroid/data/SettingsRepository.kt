@@ -2920,21 +2920,6 @@ class SettingsRepository(
         _videoKvCacheTypeV.value = type
     }
     
-    // File Server settings
-    private val _fileServerFolderUri = MutableStateFlow(prefs.getString("file_server_folder_uri", null))
-    val fileServerFolderUri = _fileServerFolderUri.asStateFlow()
-    fun setFileServerFolderUri(uri: String?) {
-        prefs.edit().putString("file_server_folder_uri", uri).apply()
-        _fileServerFolderUri.value = uri
-    }
-    
-    private val _fileServerPort = MutableStateFlow(prefs.getInt("file_server_port", AIConstants.Ports.FILE_SERVER))
-    val fileServerPort = _fileServerPort.asStateFlow()
-    fun setFileServerPort(port: Int) {
-        prefs.edit().putInt("file_server_port", port).apply()
-        _fileServerPort.value = port
-    }
-
     // ========== Stable Diffusion Memory Settings ==========
 
     private val _sdMaxCpuRamEnabled = MutableStateFlow(prefs.getBoolean("sd_max_cpu_ram_enabled", false))

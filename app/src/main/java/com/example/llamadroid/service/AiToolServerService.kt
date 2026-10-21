@@ -4,7 +4,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.Color
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Binder
@@ -12,8 +11,6 @@ import android.os.IBinder
 import android.util.Base64
 import com.example.llamadroid.data.RemoteSummarySettingsSnapshot
 import com.example.llamadroid.data.SettingsRepository
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.qrcode.QRCodeWriter
 import com.example.llamadroid.data.db.AiServerArtifactEntity
 import com.example.llamadroid.data.db.AiServerConfigEntity
 import com.example.llamadroid.data.db.AiServerPermissionEntity
@@ -4902,7 +4899,7 @@ class AiToolServerService : Service() {
 
         private fun serveQr(rawData: String): Response {
             val data = URLDecoder.decode(rawData, Charsets.UTF_8.name()).ifBlank { "http://127.0.0.1:${config.port}" }
-            val bitmap = qrBitmap(data, 180)
+            val bitmap = QrCodeSupport.qrBitmap(data, 180)
             val output = ByteArrayOutputStream()
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
             val bytes = output.toByteArray()
@@ -5063,17 +5060,6 @@ class AiToolServerService : Service() {
 
     private fun timestamp(): String =
         SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
-
-    private fun qrBitmap(content: String, size: Int): Bitmap {
-        val bitMatrix = QRCodeWriter().encode(content, BarcodeFormat.QR_CODE, size, size)
-        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.RGB_565)
-        for (x in 0 until size) {
-            for (y in 0 until size) {
-                bitmap.setPixel(x, y, if (bitMatrix[x, y]) Color.BLACK else Color.WHITE)
-            }
-        }
-        return bitmap
-    }
 
     private fun sessionSecret(): String {
         val prefs = getSharedPreferences("ai_server_auth", Context.MODE_PRIVATE)

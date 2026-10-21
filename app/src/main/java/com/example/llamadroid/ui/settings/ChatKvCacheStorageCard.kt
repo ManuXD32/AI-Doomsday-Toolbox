@@ -17,10 +17,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.llamadroid.R
 import com.example.llamadroid.service.KvCacheNamespace
-import com.example.llamadroid.service.KvCompressProgress
-import com.example.llamadroid.service.KvCompressResult
-import com.example.llamadroid.service.KvUnpackSpeedStore
-import com.example.llamadroid.service.NativeChatKvCacheCoordinator
 import com.example.llamadroid.service.NativeChatKvCacheStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -38,20 +34,14 @@ fun ChatKvCacheStorageCard(
     val scope = rememberCoroutineScope()
     val store = remember { NativeChatKvCacheStore(context.applicationContext) }
     var totalBytes by remember { mutableLongStateOf(0L) }
-    var savedBytes by remember { mutableLongStateOf(0L) }
     var breakdown by remember { mutableStateOf<Map<KvCacheNamespace, Long>>(emptyMap()) }
     var confirmNamespace by remember { mutableStateOf<KvCacheNamespace?>(null) }
     var refreshTick by remember { mutableIntStateOf(0) }
     var confirm by remember { mutableStateOf(false) }
-    var compressProgress by remember { mutableStateOf<KvCompressProgress?>(null) }
-    var compressResult by remember { mutableStateOf<KvCompressResult?>(null) }
-    var unpackMbPerSecond by remember { mutableStateOf<Double?>(null) }
 
     LaunchedEffect(refreshTick) {
         withContext(Dispatchers.IO) {
-            unpackMbPerSecond = KvUnpackSpeedStore(context.applicationContext).measuredBytesPerMs()?.let { it / 1000.0 }
             totalBytes = store.totalBytes()
-            savedBytes = store.compressionSavedBytes()
             breakdown = store.breakdown()
         }
     }
@@ -88,77 +78,6 @@ fun ChatKvCacheStorageCard(
                 OutlinedButton(enabled = totalBytes > 0, onClick = { confirm = true }) {
                     Text(stringResource(deleteAllLabelRes), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                OutlinedButton(
-                    enabled = totalBytes > 0 && compressProgress == null,
-                    onClick = {
-                        compressResult = null
-                        compressProgress = KvCompressProgress(0, 0)
-                        scope.launch {
-                            val coordinator = NativeChatKvCacheCoordinator(context.applicationContext)
-                            compressResult = runCatching {
-                                coordinator.compressAllNow { compressProgress = it }
-                            }.getOrNull() ?: KvCompressResult(0, 0L)
-                            compressProgress = null
-                            refreshTick++
-                        }
-                    }
-                ) {
-                    Text(
-                        stringResource(R.string.native_chat_kv_cache_compress_now),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                val progress = compressProgress
-                val result = compressResult
-                val statusText = when {
-                    progress != null -> stringResource(
-                        R.string.native_chat_kv_cache_compressing, progress.done, progress.total
-                    )
-                    result != null && result.compressed > 0 -> stringResource(
-                        R.string.native_chat_kv_cache_compress_saved,
-                        Formatter.formatShortFileSize(context, result.savedBytes)
-                    )
-                    result != null -> stringResource(R.string.native_chat_kv_cache_compress_nothing)
-                    else -> null
-                }
-                if (statusText != null) {
-                    Text(
-                        statusText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
-            unpackMbPerSecond?.let { speed ->
-                Text(
-                    stringResource(R.string.native_chat_kv_cache_unpack_speed, speed.toInt().toString()),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            if (savedBytes > 0L) {
-                Text(
-                    stringResource(
-                        R.string.native_chat_kv_cache_saved_by_compression,
-                        Formatter.formatShortFileSize(context, savedBytes)
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
             }
             KvCacheNamespace.values().forEach { namespace ->
                 val bytes = breakdown[namespace] ?: 0L

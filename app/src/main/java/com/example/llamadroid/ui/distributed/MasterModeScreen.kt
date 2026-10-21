@@ -3718,7 +3718,7 @@ private fun SavedWorkerCard(
                 // Show proportion if set
                  val proportionText = savedWorker.assignedProportion?.let { stringResource(R.string.dist_worker_load, (it * 100).toInt()) } ?: stringResource(R.string.dist_auto)
                 Text(
-                    text = "Load: $proportionText",
+                    text = stringResource(R.string.dist_worker_load_line, proportionText),
                     style = MaterialTheme.typography.bodySmall,
                     color = if (savedWorker.isEnabled)
                         MaterialTheme.colorScheme.tertiary

@@ -73,7 +73,6 @@ import com.example.llamadroid.tama.db.TamaStudySessionEntity
 import com.example.llamadroid.tama.game.TamaAgentService
 import com.example.llamadroid.tama.game.TamaArtworkManager
 import com.example.llamadroid.tama.game.TamaDailyDreamManager
-import com.example.llamadroid.tama.game.FarmRepository
 import com.example.llamadroid.tama.game.TamaGameEngine
 import com.example.llamadroid.tama.game.TamaStudySessionSupport
 import com.example.llamadroid.tama.rpg.AdventureGateCatalog
@@ -88,18 +87,7 @@ import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.ui.components.rememberPressAndHoldRepeatState
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
-import com.example.llamadroid.tama.world.core.PresenceMode
-import com.example.llamadroid.tama.world.core.LegacyLocationAliases
-import com.example.llamadroid.tama.world.presentation.WorldActivityArrival
-import com.example.llamadroid.tama.world.presentation.activityArrivalOrNull
-import com.example.llamadroid.tama.world.presentation.WorldArrivalDestination
-import com.example.llamadroid.tama.world.presentation.TamaWorldRouteHost
-import com.example.llamadroid.tama.world.presentation.localizedBrainUiLabels
-import com.example.llamadroid.tama.world.presentation.localizedWorldUiLabels
-import com.example.llamadroid.tama.world.ui.WorldRelationshipUi
-import com.example.llamadroid.tama.world.ui.WorldHatchEffect
 import androidx.navigation.NavController
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -159,7 +147,6 @@ fun TamaScreen(
     settingsRepo: SettingsRepository,
     agentService: TamaAgentService,
     onChat: () -> Unit = {},
-    farmRepository: FarmRepository? = null,
     modifier: Modifier = Modifier
 ) {
     val pet by gameEngine.pet.collectAsState()
@@ -320,6 +307,7 @@ fun TamaScreen(
     var showMarketBoardDialog by remember { mutableStateOf(false) }
     var showQuestChecklistDialog by remember { mutableStateOf(false) }
     var questBoard by remember { mutableStateOf<TamaQuestBoard?>(null) }
+    var questRewardPresentation by remember(pet?.id) { mutableStateOf<TamaQuestCompletionPresentation?>(null) }
     var marketBoard by remember { mutableStateOf<TamaMarketBoard?>(null) }
     val requestAdventureGateEntry = {
         showAdventureGateWarningDialog = true
@@ -346,33 +334,9 @@ fun TamaScreen(
     }
 
     // View mode: keep the authored room as the normal Tama landing surface.
-    // The map toggle opens the bounded classic map; the optional world has its
-    // own route and must never become the persisted/default room.
+    // The map toggle opens the bounded classic map.
     var showMap by remember { mutableStateOf(false) }
     val currentLocation by gameEngine.currentLocation.collectAsState()
-    val worldController = remember(gameEngine) { gameEngine.world }
-    val simulationActive by worldController.adventureActive.collectAsState()
-    val worldState by worldController.state.collectAsState()
-    val currentDungeonStructureId = worldState?.actor
-        ?.takeIf { it.presence == PresenceMode.INTERIOR }
-        ?.structureId
-        ?.takeIf { it == LegacyLocationAliases.DUNGEON_A || it == LegacyLocationAliases.DUNGEON_B }
-    val farmTilesFeed = remember(pet?.id, farmRepository) {
-        val activePetId = pet?.id
-        if (activePetId != null && farmRepository != null) {
-            farmRepository.observeTiles(activePetId)
-        } else {
-            flowOf<List<FarmTile>>(emptyList())
-        }
-    }
-    val observedFarmTiles by farmTilesFeed.collectAsState(initial = emptyList())
-    var worldRouteOpen by remember(pet?.id) { mutableStateOf(false) }
-    var requestedWorldRoute by remember(pet?.id) { mutableStateOf("WORLD") }
-    var showingWorldSubroute by remember(pet?.id) { mutableStateOf(false) }
-    val isWorldPresence = pet != null && worldState?.actor?.presence == PresenceMode.WORLD
-    var wasWorldPresence by remember(pet?.id) { mutableStateOf(isWorldPresence) }
-    var simulationEntryInFlight by remember(pet?.id) { mutableStateOf(false) }
-    var simulationExitInFlight by remember(pet?.id) { mutableStateOf(false) }
     val isPrincipalHomeRoomVisible = !showMap &&
         pet != null &&
         currentLocation?.type == LocationType.HOME &&
@@ -380,51 +344,6 @@ fun TamaScreen(
     val configuration = LocalConfiguration.current
     val localeTag = remember(configuration) {
         configuration.locales.takeIf { !it.isEmpty }?.get(0)?.toLanguageTag().orEmpty()
-    }
-
-    fun openWorldActivity(arrival: WorldActivityArrival) {
-        // Close the inline world host before pushing the existing activity
-        // route. The core snapshot remains authoritative, so returning with
-        // Back shows the pet at the same durable interior instead of issuing
-        // another travel request.
-        requestedWorldRoute = "WORLD"
-        showingWorldSubroute = false
-        showMap = false
-        worldRouteOpen = false
-        when (arrival.destination) {
-            WorldArrivalDestination.DUNGEON -> {
-                navController.navigate(Screen.Dungeon.createRoute(arrival.destinationId))
-            }
-            WorldArrivalDestination.ADVENTURE_GATE -> {
-                navController.navigate(Screen.AdventureGate.route)
-            }
-        }
-    }
-
-    LaunchedEffect(
-        isWorldPresence,
-        worldState?.actor?.presence,
-        requestedWorldRoute,
-        simulationActive,
-        pet?.id
-    ) {
-        // Physical WORLD -> INTERIOR arrival is distinct from the process-local
-        // simulation session. Keep this handoff alive while the optional world
-        // is active, but never treat session exit as an activity arrival.
-        val arrivedFromWorld = requestedWorldRoute == "WORLD" && !showingWorldSubroute &&
-            wasWorldPresence &&
-            !isWorldPresence &&
-            simulationActive &&
-            worldState?.actor?.presence in setOf(PresenceMode.HOME, PresenceMode.INTERIOR)
-        if (arrivedFromWorld) {
-            // This parent owns disposal of the inline map. Dispatch the
-            // activity here so the child cannot disappear before its effect
-            // observes the final interior snapshot.
-            worldState?.activityArrivalOrNull()?.let(::openWorldActivity)
-            showMap = false
-            worldRouteOpen = false
-        }
-        wasWorldPresence = isWorldPresence
     }
 
     LaunchedEffect(isPrincipalHomeRoomVisible, pet?.id) {
@@ -489,55 +408,6 @@ fun TamaScreen(
                 currentAction = null
             }
             actionCooldown = false
-        }
-    }
-
-    fun enterSimulation() {
-        if (simulationEntryInFlight || simulationActive) return
-        simulationEntryInFlight = true
-        scope.launch {
-            val result = try {
-                gameEngine.enterSimulatedWorld()
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Exception) {
-                TamaGameEngine.ActionResult(
-                    success = false,
-                    message = resources.getString(R.string.error_generic)
-                )
-            }
-            showResultToast(result, force = true)
-            if (result.success) {
-                showMap = false
-                requestedWorldRoute = "WORLD"
-                worldRouteOpen = true
-            }
-            simulationEntryInFlight = false
-        }
-    }
-
-    fun exitSimulation() {
-        if (simulationExitInFlight) return
-        simulationExitInFlight = true
-        scope.launch {
-            val result = try {
-                gameEngine.exitSimulatedWorld()
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Exception) {
-                TamaGameEngine.ActionResult(
-                    success = false,
-                    message = resources.getString(R.string.error_generic)
-                )
-            }
-            showResultToast(result, force = true)
-            if (result.success) {
-                requestedWorldRoute = "WORLD"
-                showingWorldSubroute = false
-                worldRouteOpen = false
-                showMap = false
-            }
-            simulationExitInFlight = false
         }
     }
 
@@ -628,62 +498,7 @@ fun TamaScreen(
         }
     }
 
-    TamaParkReceiptHost(pet, gameEngine) { questBoard = null }
-
-
-    if ((worldRouteOpen || (simulationActive && isWorldPresence)) && pet != null) {
-        TamaWorldRouteHost(
-            world = worldController,
-            brainProvider = { gameEngine.brain },
-            database = TamaDatabase.getInstance(context),
-            petId = pet!!.id,
-            petName = pet!!.name,
-            petSpeciesId = pet!!.species,
-            petStage = pet!!.stage.name.lowercase(),
-            initialRoute = requestedWorldRoute,
-            farmTiles = observedFarmTiles,
-            worldLabels = localizedWorldUiLabels(context, pet!!.name),
-            brainLabels = localizedBrainUiLabels(context, pet!!.name),
-            relationshipByNpc = pet!!.relationships.mapValues { (_, friendship) ->
-                val score = friendship.coerceIn(0, 100)
-                WorldRelationshipUi(
-                    familiarity = score,
-                    friendship = score,
-                    trust = 0,
-                    recentInteraction = "",
-                    lastMetAt = "",
-                    helpCount = 0,
-                    sharedEvents = 0
-                )
-            },
-            // Journal and Brain can be opened without entering the optional
-            // simulation. While active, the route host owns the clearly
-            // labeled Return home action and delegates the actual exit to the
-            // root engine boundary.
-            exitShortcutLabelRes = null,
-            onNonWorldRouteChanged = { isNonWorldRoute ->
-                showingWorldSubroute = isNonWorldRoute
-                if (isNonWorldRoute) {
-                    worldRouteOpen = true
-                } else if (simulationActive) {
-                    requestedWorldRoute = "WORLD"
-                } else {
-                    requestedWorldRoute = "WORLD"
-                    worldRouteOpen = false
-                    showMap = false
-                }
-            },
-            onCloseWorld = {
-                requestedWorldRoute = "WORLD"
-                showMap = false
-                worldRouteOpen = false
-            },
-            onReturnHome = ::exitSimulation,
-            onOpenInventory = { showInventoryDialog = true },
-            onEnterWorld = ::enterSimulation,
-            modifier = modifier
-        )
-    } else BoxWithConstraints(modifier = modifier.fillMaxSize().background(TamaBackground)) {
+    BoxWithConstraints(modifier = modifier.fillMaxSize().background(TamaBackground)) {
         // Reserve the pet header before sizing the scene on short tablet windows.
         val roomMaxSize = minOf(560.dp, (maxHeight - 64.dp).coerceAtLeast(240.dp))
         Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -727,8 +542,6 @@ fun TamaScreen(
                     IconButton(
                         onClick = {
                             showMap = false
-                            requestedWorldRoute = "WORLD"
-                            worldRouteOpen = false
                             walkthroughTargets?.recordEvent("tama.room")
                         },
                         modifier = Modifier.size(48.dp).semantics {
@@ -741,8 +554,6 @@ fun TamaScreen(
                     IconButton(
                         onClick = {
                             showMap = true
-                            requestedWorldRoute = "WORLD"
-                            worldRouteOpen = simulationActive
                             walkthroughTargets?.recordEvent("tama.room")
                         },
                         modifier = Modifier.size(48.dp).semantics {
@@ -790,7 +601,6 @@ fun TamaScreen(
                         currentLocation = currentLocation ?: cityLocations.firstOrNull(),
                         discoveredLocationIds = currentPet.discoveredLocationIds,
                         onLocationClick = { location -> selectedLocation = location },
-                        onOpenSimulation = ::enterSimulation,
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
@@ -946,7 +756,7 @@ fun TamaScreen(
             },
             onBuy = { showShopDialog = true },
             onChat = onChat,
-            onDungeon = { navController.navigate(Screen.Dungeon.createRoute(currentDungeonStructureId)) },
+            onDungeon = { navController.navigate(Screen.Dungeon.createRoute()) },
             onAdventureGate = requestAdventureGateEntry,
             onNightArena = { navController.navigate(Screen.NightArena.route) },
             onInventory = { showInventoryDialog = true },
@@ -991,9 +801,8 @@ fun TamaScreen(
         )
     }
 
-    // Classic map location dialog. This remains a direct legacy action surface;
-    // the optional living world has its own route and session boundary.
-    if (!simulationActive && selectedLocation != null && pet != null) {
+    // Classic map location dialog.
+    if (selectedLocation != null && pet != null) {
         val location = selectedLocation!!
         val isDiscovered = pet!!.discoveredLocationIds.contains(location.id) ||
             location.type == LocationType.HOME
@@ -1083,16 +892,6 @@ fun TamaScreen(
             onGallery = {
                 showMenu = false
                 navController.navigate(Screen.TamaGallery.route)
-            },
-            onJournal = {
-                showMenu = false
-                requestedWorldRoute = "JOURNAL"
-                worldRouteOpen = true
-            },
-            onBrain = {
-                showMenu = false
-                requestedWorldRoute = "BRAIN"
-                worldRouteOpen = true
             },
             onStore = {
                 showMenu = false
@@ -1422,6 +1221,7 @@ fun TamaScreen(
                 scope.launch {
                     val result = gameEngine.finishParkQuest(questId, currentTime)
                     Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    questRewardPresentation = result.presentation
                     questBoard = gameEngine.getParkQuestBoard(currentTime)
                 }
             },
@@ -1433,6 +1233,12 @@ fun TamaScreen(
             },
             onDismiss = { showQuestBoardDialog = false }
         )
+    }
+
+    val rewardPet = pet
+    val rewardPresentation = questRewardPresentation
+    if (rewardPet != null && rewardPresentation != null) {
+        TamaQuestRewardDialog(rewardPet, rewardPresentation) { questRewardPresentation = null }
     }
 
     if (showMarketBoardDialog) {
@@ -5375,7 +5181,7 @@ fun TamaPetDisplay(
                 )
 
                 if (hatchEffectVisible) {
-                    WorldHatchEffect(
+                    TamaHatchEffect(
                         modifier = Modifier
                             .align(Alignment.Center)
                             .offset(x = petSceneOffsetX, y = (-8).dp)
@@ -6693,8 +6499,6 @@ fun TamaMenuDialog(
     onStatus: () -> Unit,
     onSettings: () -> Unit,
     onGallery: () -> Unit,
-    onJournal: () -> Unit = {},
-    onBrain: () -> Unit = {},
     onStore: () -> Unit,
     onExport: () -> Unit,
     onImport: () -> Unit,
@@ -6714,12 +6518,6 @@ fun TamaMenuDialog(
                 }
                 TextButton(onClick = onGallery, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.tama_menu_gallery))
-                }
-                TextButton(onClick = onJournal, modifier = Modifier.fillMaxWidth()) {
-                    Text(stringResource(R.string.tama_world_shortcut_journal))
-                }
-                TextButton(onClick = onBrain, modifier = Modifier.fillMaxWidth()) {
-                    Text(stringResource(R.string.tama_world_shortcut_brain))
                 }
                 TextButton(onClick = onStore, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.tama_btn_store))
