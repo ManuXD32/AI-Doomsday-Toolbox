@@ -2,6 +2,7 @@ package com.example.llamadroid.tama.game
 
 import android.content.Context
 import com.example.llamadroid.tama.data.*
+import android.util.Log
 import com.example.llamadroid.tama.db.*
 import com.example.llamadroid.tama.notifications.TamaNotificationScheduler
 import kotlinx.coroutines.flow.Flow
@@ -15,6 +16,7 @@ internal const val FARM_WELL_MAX_SPEED_LEVEL = 4
 internal const val FARM_COMPOSTER_MAX_LEVEL = 9
 internal const val FARM_COMPOSTER_PROCESS_MS = 8 * 60 * 60 * 1000L
 internal const val FARM_WELL_COST = 200
+internal const val FARM_COMPOSTER_COST = 800
 internal const val FARM_WELL_PRODUCTION_MS = 8 * 60 * 60 * 1000L
 
 internal fun wellCapacityForLevel(level: Int): Int = level.coerceIn(1, FARM_WELL_MAX_LEVEL)
@@ -53,12 +55,12 @@ class FarmRepository(
 
     fun observeTiles(petId: String): Flow<List<FarmTile>> {
         return farmDao.observeTiles(petId).map { entities ->
-            entities.map { entityToTile(it) }
+            entities.mapNotNull { entityToTile(it) }
         }
     }
 
     suspend fun getTiles(petId: String): List<FarmTile> {
-        return farmDao.getTiles(petId).map { entityToTile(it) }
+        return farmDao.getTiles(petId).mapNotNull { entityToTile(it) }
     }
 
     suspend fun getUnlockedFarmTileCount(petId: String): Int {
@@ -127,46 +129,16 @@ class FarmRepository(
         }
     }
 
-    suspend fun saveDroneUpdateBatch(
+    /** Persists a whole farm refresh (tiles, upgrades, livestock) in one Room transaction. */
+    suspend fun saveFarmUpdate(
         petId: String,
         tiles: List<FarmTile>,
-        plantingState: PlantingDroneState? = null,
-        harvesterState: HarvesterDroneState? = null,
+        upgrades: List<FarmUpgradeEntity>,
+        livestock: List<FarmLivestockEntity>,
         rescheduleNotifications: Boolean = true
     ) {
-        val tileEntities = tiles.map { tileToEntity(petId, it) }
-        val upgradeEntities = buildList {
-            if (plantingState != null) {
-                val existing = farmDao.getUpgrade(petId, FARM_PLANTING_DRONE_ID) ?: FarmUpgradeEntity(
-                    type = FARM_PLANTING_DRONE_ID,
-                    petId = petId,
-                    isPurchased = true
-                )
-                add(
-                    existing.copy(
-                        isPurchased = true,
-                        storedOutput = plantingState.fuel,
-                        extraDataJson = Json.encodeToString(plantingState)
-                    )
-                )
-            }
-            if (harvesterState != null) {
-                val existing = farmDao.getUpgrade(petId, FARM_HARVESTING_DRONE_ID) ?: FarmUpgradeEntity(
-                    type = FARM_HARVESTING_DRONE_ID,
-                    petId = petId,
-                    isPurchased = true
-                )
-                add(
-                    existing.copy(
-                        isPurchased = true,
-                        storedOutput = harvesterState.fuel,
-                        extraDataJson = Json.encodeToString(harvesterState)
-                    )
-                )
-            }
-        }
-        if (tileEntities.isEmpty() && upgradeEntities.isEmpty()) return
-        farmDao.saveTilesAndUpgrades(tileEntities, upgradeEntities)
+        if (tiles.isEmpty() && upgrades.isEmpty() && livestock.isEmpty()) return
+        farmDao.saveFarmUpdate(tiles.map { tileToEntity(petId, it) }, upgrades, livestock)
         if (rescheduleNotifications) {
             TamaNotificationScheduler.scheduleForPet(context.applicationContext, petId)
         }
@@ -181,9 +153,10 @@ class FarmRepository(
 
     suspend fun refreshFarmState(
         petId: String,
-        now: Long = System.currentTimeMillis()
+        now: Long = System.currentTimeMillis(),
+        cycleFrozen: Boolean = false
     ) {
-        FarmEngine(this).updateFarm(petId, now)
+        FarmEngine(this).updateFarm(petId, now, cycleFrozen)
     }
 
     suspend fun shiftCycleTimestamps(petId: String, durationMs: Long) {
@@ -196,8 +169,8 @@ class FarmRepository(
         farmDao.saveLivestock(shiftedLivestock)
     }
 
-    @Suppress("UNUSED_PARAMETER")
-    suspend fun buyUpgrade(petId: String, type: String, price: Int, rescheduleNotifications: Boolean = true) {
+    /** Marks an upgrade purchased and seeds its state. The caller charges the price. */
+    suspend fun buyUpgrade(petId: String, type: String, rescheduleNotifications: Boolean = true) {
         val existing = farmDao.getUpgrade(petId, type)
         val purchasedAt = System.currentTimeMillis()
         if (existing == null) {
@@ -242,11 +215,6 @@ class FarmRepository(
         if (rescheduleNotifications) {
             TamaNotificationScheduler.scheduleForPet(context.applicationContext, petId)
         }
-    }
-
-    @Suppress("UNUSED_PARAMETER")
-    suspend fun consumeWater(petId: String, rescheduleNotifications: Boolean = true): Boolean {
-        return false
     }
 
     suspend fun collectStoredOutput(
@@ -407,6 +375,33 @@ class FarmRepository(
         return 1
     }
 
+    /** Slot indexes of the well whose water is ready at [now] (stored, or its production cycle has elapsed). */
+    private fun readyWellSlotIndexes(well: FarmUpgradeEntity, now: Long): List<Int> {
+        val state = decodeWellState(well, now)
+        val interval = wellProductionIntervalForSpeedLevel(state.speedLevel)
+        return state.slots.indices.filter { index ->
+            val slot = state.slots[index]
+            slot.hasWater || (slot.cycleStartedAt != null && now >= slot.cycleStartedAt + interval)
+        }
+    }
+
+    /** Charges of well water the watering can can draw right now (0 without a purchased well). */
+    suspend fun wellWaterAvailable(petId: String, now: Long = System.currentTimeMillis()): Int {
+        val well = farmDao.getUpgrade(petId, "well")?.takeIf { it.isPurchased } ?: return 0
+        return readyWellSlotIndexes(well, now).size
+    }
+
+    /** Draws one charge of well water for the watering can (the can refills from the well). */
+    suspend fun consumeWellWater(
+        petId: String,
+        now: Long = System.currentTimeMillis(),
+        rescheduleNotifications: Boolean = false
+    ): Boolean {
+        val well = farmDao.getUpgrade(petId, "well")?.takeIf { it.isPurchased } ?: return false
+        val index = readyWellSlotIndexes(well, now).firstOrNull() ?: return false
+        return collectWellTileOutput(petId, index, now, rescheduleNotifications) > 0
+    }
+
     suspend fun collectComposterTileOutput(
         petId: String,
         slotIndex: Int,
@@ -513,39 +508,35 @@ class FarmRepository(
         return true
     }
 
-    fun decodeComposterSlots(composter: FarmUpgradeEntity?): List<ComposterSlot> {
+    fun decodeComposterSlots(
+        composter: FarmUpgradeEntity?,
+        now: Long = System.currentTimeMillis()
+    ): List<ComposterSlot> {
         if (composter == null) return List(composterSlotCapacityForLevel(1)) { ComposterSlot() }
         val capacity = composterSlotCapacityForLevel(composter.level)
-        return try {
-            val decoded = Json.decodeFromString<List<ComposterSlot>>(composter.extraDataJson ?: "[]")
-            normalizeComposterSlots(decoded, capacity)
-        } catch (_: Exception) {
+        val raw = composter.extraDataJson ?: "[]"
+        return runCatching {
+            normalizeComposterSlots(Json.decodeFromString<List<ComposterSlot>>(raw), capacity)
+        }.getOrElse {
             runCatching {
-                val legacy = Json.decodeFromString<List<Long?>>(composter.extraDataJson ?: "[]")
+                val legacy = Json.decodeFromString<List<Long?>>(raw)
                 normalizeComposterSlots(
                     legacy.map { startedAt ->
                         if (startedAt == null) {
                             ComposterSlot()
                         } else {
+                            val readyAt = startedAt + FARM_COMPOSTER_PROCESS_MS
                             ComposterSlot(
-                                state = if (System.currentTimeMillis() >= startedAt + FARM_COMPOSTER_PROCESS_MS) {
-                                    ComposterSlotState.READY
-                                } else {
-                                    ComposterSlotState.PROCESSING
-                                },
+                                state = if (now >= readyAt) ComposterSlotState.READY else ComposterSlotState.PROCESSING,
                                 startedAt = startedAt,
-                                readyAt = (startedAt + FARM_COMPOSTER_PROCESS_MS).takeIf {
-                                    System.currentTimeMillis() >= it
-                                },
+                                readyAt = readyAt.takeIf { now >= it },
                                 inputItemId = "rotten_crop"
                             )
                         }
                     },
                     capacity
                 )
-            }.getOrElse {
-                List(capacity) { ComposterSlot() }
-            }
+            }.getOrElse { List(capacity) { ComposterSlot() } }
         }
     }
 
@@ -585,6 +576,10 @@ class FarmRepository(
             Json.decodeFromString<List<FarmLivestockSlot>>(livestock.slotsJson)
         }.getOrDefault(emptyList()).let { normalizeLivestockSlots(livestockType, it) }
     }
+
+    fun decodeObstacleState(row: FarmUpgradeEntity?): FarmObstacleState =
+        row?.extraDataJson?.let { raw -> runCatching { Json.decodeFromString<FarmObstacleState>(raw) }.getOrNull() }
+            ?: FarmObstacleState()
 
     fun decodePlantingDroneState(
         upgrade: FarmUpgradeEntity?,
@@ -798,13 +793,17 @@ class FarmRepository(
         }
     }
 
-    private fun entityToTile(entity: FarmTileEntity): FarmTile {
-        return FarmTile(
-            id = entity.id,
-            status = TileStatus.valueOf(entity.status),
-            crop = entity.cropJson?.let { Json.decodeFromString<PlantedCrop>(it) },
-            lastWateredTime = entity.lastWateredTime
-        )
+    /** Skips (and logs) a corrupt row instead of crashing every farm read. */
+    private fun entityToTile(entity: FarmTileEntity): FarmTile? {
+        return runCatching {
+            FarmTile(
+                id = entity.id,
+                status = TileStatus.valueOf(entity.status),
+                crop = entity.cropJson?.let { Json.decodeFromString<PlantedCrop>(it) },
+                lastWateredTime = entity.lastWateredTime,
+                obstacle = FarmObstacle.fromName(entity.obstacle)
+            )
+        }.onFailure { Log.w("FarmRepository", "Skipping unreadable farm tile ${entity.id}", it) }.getOrNull()
     }
 
     private fun tileToEntity(petId: String, tile: FarmTile): FarmTileEntity {
@@ -813,7 +812,8 @@ class FarmRepository(
             petId = petId,
             status = tile.status.name,
             cropJson = tile.crop?.let { Json.encodeToString(it) },
-            lastWateredTime = tile.lastWateredTime
+            lastWateredTime = tile.lastWateredTime,
+            obstacle = tile.obstacle?.name
         )
     }
 }

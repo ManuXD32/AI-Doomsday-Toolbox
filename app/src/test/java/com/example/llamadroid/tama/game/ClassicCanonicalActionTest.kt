@@ -101,9 +101,11 @@ class ClassicCanonicalActionTest {
         engine.wakeUp()
         val awake = saved(pet.id)
         assertFalse(awake.isSleeping)
-        assertEquals(50f, awake.stats.energy, 0f)
+        // 40 + 10 nap bonus (woken under a minute) + a sliver of incremental sleep restoration.
+        assertEquals(50f, awake.stats.energy, 0.5f)
         engine.wakeUp()
-        assertEquals(50f, saved(pet.id).stats.energy, 0f)
+        // A second wake must not restore again.
+        assertEquals(awake.stats.energy, saved(pet.id).stats.energy, 0f)
     }
 
     @Test fun selectedWorkJobStartsImmediatelyAndFinishesWithOnePayment() = runBlocking {

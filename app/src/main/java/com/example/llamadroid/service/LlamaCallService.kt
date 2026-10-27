@@ -123,8 +123,9 @@ class LlamaCallService : Service() {
                 } else if (callJob?.isActive == true) {
                     publishError(getString(R.string.llama_call_error_already_active))
                 } else {
-                    startForegroundSession(chatId)
-                    startCallLoop(chatId, serverId, startId)
+                    if (startForegroundSession(chatId, startId)) {
+                        startCallLoop(chatId, serverId, startId)
+                    }
                 }
             }
             ACTION_HANG_UP -> hangUp()
@@ -142,16 +143,30 @@ class LlamaCallService : Service() {
         super.onDestroy()
     }
 
-    private fun startForegroundSession(chatId: Long) {
+    /** Starts the microphone foreground session; on denial shows a readable failure and stops. */
+    private fun startForegroundSession(chatId: Long, startId: Int): Boolean {
         val title = getString(R.string.llama_call_notification_title)
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.LLAMA_CALL,
             title
         )
+        val result = ForegroundStart.startRequiringMicrophone(
+            this,
+            taskId,
+            notification,
+            ForegroundServiceTypes.MICROPHONE or ForegroundServiceTypes.MEDIA_PLAYBACK
+        )
+        if (result is ForegroundStart.Result.Failed) {
+            val message = ForegroundStart.failureMessage(this, result.reason, title)
+            UnifiedNotificationManager.failTask(taskId, message)
+            publishError(message)
+            stopSelf(startId)
+            return false
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
         acquireLocks()
         publishState(chatId, LlamaCallPhase.LISTENING, getString(R.string.llama_call_state_listening))
+        return true
     }
 
     private fun startCallLoop(chatId: Long, serverId: Long, startId: Int) {

@@ -2,7 +2,6 @@ package com.example.llamadroid.tama.ui
 
 import android.content.Context
 import android.content.Intent
-import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -127,6 +126,7 @@ fun TamaGalleryScreen(
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
+    val notice = rememberTamaNotice()
     val scope = rememberCoroutineScope()
     val artworks by gameEngine.observeArtworks(pet.id).collectAsState(initial = emptyList())
     val galleryEntries = remember(artworks) { buildGalleryEntries(artworks) }
@@ -137,7 +137,7 @@ fun TamaGalleryScreen(
     fun shareArtwork(artwork: TamaArtworkEntity) {
         val imageFile = artwork.filePath?.let(::File)
         if (imageFile == null || !imageFile.exists()) {
-            Toast.makeText(context, resources.getString(R.string.tama_gallery_share_missing), Toast.LENGTH_SHORT).show()
+            notice.show(resources.getString(R.string.tama_gallery_share_missing), isError = true)
             return
         }
         runCatching {
@@ -153,11 +153,7 @@ fun TamaGalleryScreen(
             }
             context.startActivity(Intent.createChooser(shareIntent, resources.getString(R.string.action_share)))
         }.onFailure { error ->
-            Toast.makeText(
-                context,
-                resources.getString(R.string.tama_gallery_share_failed, error.message ?: ""),
-                Toast.LENGTH_SHORT
-            ).show()
+            notice.show(resources.getString(R.string.tama_gallery_share_failed, error.message ?: ""), isError = true)
         }
     }
 

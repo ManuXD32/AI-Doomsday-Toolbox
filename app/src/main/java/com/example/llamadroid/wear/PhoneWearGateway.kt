@@ -47,9 +47,12 @@ import com.example.llamadroid.service.NativeChatToolConfig
 import com.example.llamadroid.service.OllamaService
 import com.example.llamadroid.service.OrganizerAlarmScheduler
 import com.example.llamadroid.service.ServerState
+import com.example.llamadroid.service.ForegroundStart
 import com.example.llamadroid.service.isForegroundServiceStartNotAllowed
 import com.example.llamadroid.tama.data.ActivityType
 import com.example.llamadroid.tama.data.FarmTradeItemCatalog
+import com.example.llamadroid.tama.data.FARM_OBSTACLE_STATE_ID
+import com.example.llamadroid.tama.data.FARM_WEATHER_STATE_ID
 import com.example.llamadroid.tama.data.InventoryItem
 import com.example.llamadroid.tama.data.ItemType
 import com.example.llamadroid.tama.data.PetSpeciesLine
@@ -1346,6 +1349,15 @@ private class WearRequestRouter(
         val templateId = requireNotNull(request.templateId) { appContext.getString(R.string.wear_bridge_invalid_id) }
         val template = AppDatabase.getDatabase(appContext).liveTranslatorTemplateDao().getTemplateById(templateId)
             ?: throw IllegalArgumentException(appContext.getString(R.string.wear_bridge_invalid_id))
+        if (!ForegroundStart.isAppVisibleForMicrophone(appContext)) {
+            // Android blocks a microphone foreground service started from the background.
+            postTranslatorOpenPhoneNotification(templateId)
+            return errorBytes(
+                request.meta,
+                "app_not_visible",
+                appContext.getString(R.string.wear_translator_open_phone_message)
+            )
+        }
         pendingTranslatorTemplate = template.toWearTemplate()
         val loadingState = currentTranslatorState(
             template = pendingTranslatorTemplate,
@@ -1354,12 +1366,57 @@ private class WearRequestRouter(
             statusOverride = appContext.getString(R.string.wear_translator_loading_backend)
         )
         publisher.publishTranslatorState(loadingState)
-        appContext.startForegroundService(LiveTranslatorService.startIntent(appContext, templateId, request.sessionId))
+        try {
+            appContext.startForegroundService(LiveTranslatorService.startIntent(appContext, templateId, request.sessionId))
+        } catch (error: Exception) {
+            if (!isForegroundServiceStartNotAllowed(error) && error !is SecurityException) throw error
+            pendingTranslatorTemplate = null
+            publisher.publishTranslatorState(currentTranslatorState())
+            postTranslatorOpenPhoneNotification(templateId)
+            return errorBytes(
+                request.meta,
+                "app_not_visible",
+                appContext.getString(R.string.wear_translator_open_phone_message)
+            )
+        }
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             delay(500L)
             publisher.publishTranslatorState(currentTranslatorState())
         }
         return ok(request.meta, TranslatorStateSnapshot.serializer(), loadingState)
+    }
+
+    /** Tap-to-open notification so the user can start the translator with the app in front. */
+    private fun postTranslatorOpenPhoneNotification(templateId: Long) {
+        val manager = appContext.getSystemService(NotificationManager::class.java) ?: return
+        val channelId = "wear_translator_start"
+        manager.createNotificationChannel(
+            NotificationChannel(channelId, appContext.getString(R.string.wear_translator_start_channel), NotificationManager.IMPORTANCE_HIGH)
+        )
+        val intent = Intent(appContext, com.example.llamadroid.MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(com.example.llamadroid.MainActivity.EXTRA_OPEN_ROUTE, com.example.llamadroid.ui.navigation.Screen.LiveTranslator.route)
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            appContext,
+            0xAD7002 + templateId.toInt(),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(appContext, channelId)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(appContext.getString(R.string.wear_translator_start_title))
+            .setContentText(appContext.getString(R.string.wear_translator_start_message))
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .addAction(0, appContext.getString(R.string.wear_translator_start_action), pendingIntent)
+            .build()
+        try {
+            manager.notify(0xAD7002, notification)
+        } catch (_: SecurityException) {
+            // Notification permission revoked; the watch error message still explains what to do.
+        }
     }
 
     private suspend fun handleTranslatorStop(request: TranslatorCommandRequest): ByteArray {
@@ -1485,7 +1542,7 @@ private class WearRequestRouter(
 
     private suspend fun handleTamaFarm(request: TamaHubRequest): ByteArray {
         val pet = activeTamaPet(request.petId)
-        farmEngine.updateFarm(pet.id)
+        farmEngine.updateFarm(pet.id, cycleFrozen = pet.cycleFrozen)
         return ok(request.meta, TamaFarmSnapshot.serializer(), currentFarmSnapshot(pet.id))
     }
 
@@ -1693,6 +1750,7 @@ private class WearRequestRouter(
             TamaFarmTileSummary(
                 id = tile.id.toString(),
                 title = crop?.type?.replace('_', ' ')?.replaceFirstChar { it.titlecase(Locale.getDefault()) }
+                    ?: tile.obstacle?.name?.lowercase(Locale.getDefault())
                     ?: tile.status.name.lowercase(Locale.getDefault()),
                 status = when {
                     crop == null -> tile.status.name
@@ -1702,6 +1760,8 @@ private class WearRequestRouter(
                 },
                 progressPercent = crop?.stage?.let { (it * 33).coerceIn(0, 100) } ?: 0,
                 actionLabel = when {
+                    // Obstacles need the axe/pickaxe on the phone farm.
+                    tile.obstacle != null -> null
                     tile.status == TileStatus.SOIL -> appContext.getString(R.string.wear_tama_till)
                     tile.crop?.stage == 3 -> appContext.getString(R.string.wear_tama_harvest)
                     tile.status == TileStatus.FARMLAND -> appContext.getString(R.string.wear_tama_water)
@@ -1710,7 +1770,7 @@ private class WearRequestRouter(
                 }
             )
         }
-        val upgrades = farmRepository.getUpgrades(petId).map {
+        val upgrades = farmRepository.getUpgrades(petId).filter { it.type != FARM_OBSTACLE_STATE_ID && it.type != FARM_WEATHER_STATE_ID }.map {
             TamaModuleSummary(it.type, it.type.replace('_', ' ').replaceFirstChar { c -> c.titlecase(Locale.getDefault()) }, "L${it.level} ${it.storedOutput}")
         }
         val livestock = farmRepository.getLivestock(petId).map {

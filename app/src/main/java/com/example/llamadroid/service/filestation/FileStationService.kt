@@ -2,13 +2,13 @@ package com.example.llamadroid.service.filestation
 
 import android.app.Service
 import android.content.Intent
-import android.content.pm.ServiceInfo
-import android.os.Build
 import android.os.IBinder
 import com.example.llamadroid.BuildConfig
 import com.example.llamadroid.R
 import com.example.llamadroid.service.AiServerAuth
 import com.example.llamadroid.service.AiServerNetwork
+import com.example.llamadroid.service.ForegroundStart
+import com.example.llamadroid.service.ForegroundServiceTypes
 import com.example.llamadroid.service.ForegroundTimeoutSupport
 import com.example.llamadroid.service.UnifiedNotificationManager
 import com.example.llamadroid.service.filestation.api.ArchiveApi
@@ -66,7 +66,7 @@ class FileStationService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        ensureForeground()
+        if (!ensureForeground()) return START_NOT_STICKY
         if (server == null && startJob?.isActive != true) {
             startJob = scope.launch { startServer() }
         }
@@ -83,19 +83,29 @@ class FileStationService : Service() {
         super.onDestroy()
     }
 
-    private fun ensureForeground() {
-        if (foregroundStarted) return
+    private fun ensureForeground(): Boolean {
+        if (foregroundStarted) return true
         val title = getString(R.string.fs_notification_title)
         val (id, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.FILE_STATION, title,
         )
-        taskId = id
-        if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(id, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        } else {
-            startForeground(id, notification)
+        val result = ForegroundStart.start(
+            this,
+            id,
+            notification,
+            ForegroundServiceTypes.SPECIAL_USE
+        )
+        if (result is ForegroundStart.Result.Failed) {
+            val message = ForegroundStart.failureMessage(this, result.reason, title)
+            FileStationRuntime.setLastError(message)
+            FileStationRuntime.reset()
+            UnifiedNotificationManager.failTask(id, message)
+            stopSelf()
+            return false
         }
+        taskId = id
         foregroundStarted = true
+        return true
     }
 
     private suspend fun startServer() {

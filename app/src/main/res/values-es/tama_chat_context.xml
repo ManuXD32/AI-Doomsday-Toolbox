@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_chat_context_title">Contexto</string>
+    <string name="tama_chat_context_ring_desc">Uso del contexto del chat de la mascota, %1$d%%</string>
+    <string name="tama_chat_context_usage">Tokens de contexto: %1$d / %2$d (%3$d%%)</string>
+    <string name="tama_chat_context_explain">Compactar resume la conversación antigua en la memoria de la mascota y conserva un historial reciente más corto, así se libera espacio en la ventana del modelo.</string>
+    <string name="tama_chat_auto_compact_title">Compactar automáticamente</string>
+    <string name="tama_chat_auto_compact_desc">Compacta el chat de esta mascota solo cuando la ventana esté casi llena.</string>
+    <string name="tama_chat_compact_now">Compactar ahora</string>
+    <string name="tama_chat_compact_working">Compactando…</string>
+    <string name="tama_chat_compact_done">Chat compactado.</string>
+    <string name="tama_chat_vision_helper_title">Ayudante de visión</string>
+    <string name="tama_chat_vision_helper_note">Describe las imágenes para los servidores que no pueden verlas. Es el mismo ayudante del chat nativo.</string>
+    <string name="tama_chat_server_cant_see_title">Este servidor no puede ver imágenes</string>
+    <string name="tama_chat_server_cant_see_desc">El ayudante de visión describe las imágenes antes de enviarlas a este servidor personalizado.</string>
+    <string name="tama_chat_pet_cache_title">Caché de prompt de esta mascota</string>
+    <string name="tama_chat_pet_cache_delete">Borrar la caché de esta mascota</string>
+    <string name="tama_chat_pet_cache_delete_title">¿Borrar la caché de esta mascota?</string>
+    <string name="tama_chat_pet_cache_delete_message">El siguiente mensaje volverá a procesar todo el prompt. La conversación no se ve afectada.</string>
+</resources>

@@ -643,12 +643,13 @@ tasks.matching { it.name == "bundleRelease" }.configureEach {
 // Opt-in real-screen screenshot renderer (docs/screenshot-renderer.md). Normal unit-test runs skip
 // everything under screenshots/render; -Pscreenshots=true runs only those classes. Options are passed
 // as Gradle properties: -Padt.shots.profile=phone -Padt.shots.locale=en -Padt.shots.keys=a,b
-// -Padt.shots.out=/path -Padt.shots.repoRoot=/path
+// -Padt.shots.out=/path -Padt.shots.repoRoot=/path -Padt.shots.theme=light|dark -Padt.shots.style=soft|pixel
+// -Padt.shots.pixelVariant=candy_pop|pocket_lcd|arcade_night|sunset_cartridge
 val screenshotsRequested = providers.gradleProperty("screenshots").map { it == "true" }.orElse(false).get()
 tasks.withType<Test>().configureEach {
     if (screenshotsRequested) {
         include("**/screenshots/render/**")
-        listOf("profile", "locale", "keys", "out", "repoRoot").forEach { key ->
+        listOf("profile", "locale", "keys", "out", "repoRoot", "theme", "style", "pixelVariant").forEach { key ->
             providers.gradleProperty("adt.shots.$key").orNull?.let { systemProperty("adt.shots.$key", it) }
         }
         if (providers.gradleProperty("adt.shots.out").orNull == null) {

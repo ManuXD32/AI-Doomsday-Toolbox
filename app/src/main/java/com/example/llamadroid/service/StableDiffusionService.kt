@@ -3,7 +3,6 @@ package com.example.llamadroid.service
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -1228,8 +1227,15 @@ class StableDiffusionService : Service() {
             getString(R.string.imagegen_title),
             cancellationOwner = UnifiedNotificationManager.CancellationOwner.STABLE_DIFFUSION
         )
+        val started = ForegroundStart.start(this, taskId, notification, ForegroundServiceTypes.MEDIA_PROCESSING)
+        if (started is ForegroundStart.Result.Failed) {
+            val message = ForegroundStart.failureMessage(this, started.reason, getString(R.string.imagegen_title))
+            UnifiedNotificationManager.failTask(taskId, message)
+            recordServiceBreadcrumb("foreground_start_failed", started.reason.name)
+            // The caller's runCatching surfaces the message and runs the idle cleanup/stop path.
+            throw IllegalStateException(message)
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
         recordServiceBreadcrumb("foreground_started", "taskId=$taskId")
     }
 
@@ -1834,7 +1840,7 @@ class StableDiffusionService : Service() {
     override fun onTimeout(startId: Int, fgsType: Int) {
         if (!isMediaProcessingForegroundTimeout(
                 fgsType,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING
+                ForegroundServiceTypes.MEDIA_PROCESSING
             )
         ) {
             super.onTimeout(startId, fgsType)

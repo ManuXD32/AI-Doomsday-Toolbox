@@ -3,6 +3,7 @@ package com.example.llamadroid.tama.rpg
 import com.example.llamadroid.R
 import com.example.llamadroid.tama.data.TAMA_INTROSPECTION_HP_PER_STEP
 import com.example.llamadroid.tama.data.TAMA_INTROSPECTION_HP_STEP
+import kotlin.math.roundToInt
 
 object AdventureGateCatalog {
     const val WORLD_COUNT = 7
@@ -126,20 +127,20 @@ object AdventureGateCatalog {
         equipment("ag_weapon_starfall_fang", AdventureGateEquipmentSlot.WEAPON, R.string.adventure_gate_item_starfall_fang, 8800, 6, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(attack = 30, magic = 8, accuracy = 8), elementDamageElement = AdventureGateElement.LIGHT, elementDamageBonusPercent = 14)),
         equipment("ag_shield_eclipse_mirror", AdventureGateEquipmentSlot.SHIELD, R.string.adventure_gate_item_eclipse_mirror_shield, 9600, 6, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(defense = 34, evasion = 6), incomingReductionPercent = 10, reflectDamagePercent = 8), weaknesses = setOf(AdventureGateElement.ARCANE), resistances = setOf(AdventureGateElement.LIGHT, AdventureGateElement.SHADOW)),
         equipment("ag_ring_dreamlight_crown", AdventureGateEquipmentSlot.RING, R.string.adventure_gate_item_dreamlight_crown_ring, 8400, 6, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(maxHp = 55, maxMana = 35, magic = 12), manaRefundOnWeakHit = 3)),
-        bossRelic("ag_relic_bramble_crown", AdventureGateEquipmentSlot.SHIELD, R.string.adventure_gate_item_bramble_crown_relic, "sproutvale_gate", 7, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(defense = 11), reflectDamagePercent = 7), weaknesses = setOf(AdventureGateElement.FIRE), resistances = setOf(AdventureGateElement.NATURE, AdventureGateElement.STONE)),
-        bossRelic("ag_relic_moth_lantern", AdventureGateEquipmentSlot.RING, R.string.adventure_gate_item_moth_lantern_relic, "sproutvale_gate", 15, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(magic = 8), healingBonusPercent = 12)),
-        bossRelic("ag_relic_foreman_tongs", AdventureGateEquipmentSlot.WEAPON, R.string.adventure_gate_item_foreman_tongs_relic, "ember_toyworks", 7, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(attack = 16), elementDamageElement = AdventureGateElement.FIRE, elementDamageBonusPercent = 16)),
-        bossRelic("ag_relic_marionette_core", AdventureGateEquipmentSlot.RING, R.string.adventure_gate_item_marionette_core_relic, "ember_toyworks", 15, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(maxMana = 22), statusImmunityIds = setOf("burn"))),
-        bossRelic("ag_relic_tide_gauntlet", AdventureGateEquipmentSlot.WEAPON, R.string.adventure_gate_item_tide_gauntlet_relic, "bubbleglass_reef", 7, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(attack = 18), elementDamageElement = AdventureGateElement.WATER, elementDamageBonusPercent = 16)),
-        bossRelic("ag_relic_leviathan_scale", AdventureGateEquipmentSlot.SHIELD, R.string.adventure_gate_item_leviathan_scale_relic, "bubbleglass_reef", 15, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(defense = 24), incomingReductionPercent = 9), weaknesses = setOf(AdventureGateElement.STORM), resistances = setOf(AdventureGateElement.WATER, AdventureGateElement.ARCANE)),
-        bossRelic("ag_relic_roc_spring", AdventureGateEquipmentSlot.RING, R.string.adventure_gate_item_roc_spring_relic, "clockwork_cloudway", 7, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(speed = 7, evasion = 8), forceFirstTurn = true)),
-        bossRelic("ag_relic_chrono_key", AdventureGateEquipmentSlot.RING, R.string.adventure_gate_item_chrono_key_relic, "clockwork_cloudway", 15, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(maxMana = 30, speed = 5, accuracy = 6, evasion = 4), manaRefundOnWeakHit = 4)),
-        bossRelic("ag_relic_basilisk_clip", AdventureGateEquipmentSlot.WEAPON, R.string.adventure_gate_item_basilisk_clip_relic, "moonmoss_library", 7, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(magic = 22, accuracy = 10), elementDamageElement = AdventureGateElement.SHADOW, elementDamageBonusPercent = 16, statusChanceBonusPercent = 10)),
-        bossRelic("ag_relic_libram_seal", AdventureGateEquipmentSlot.SHIELD, R.string.adventure_gate_item_libram_seal_relic, "moonmoss_library", 15, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(defense = 28, maxMana = 24), statusImmunityIds = setOf("poison", "paralyze")), weaknesses = setOf(AdventureGateElement.LIGHT), resistances = setOf(AdventureGateElement.ARCANE, AdventureGateElement.SHADOW)),
-        bossRelic("ag_relic_nutcracker_star", AdventureGateEquipmentSlot.WEAPON, R.string.adventure_gate_item_nutcracker_star_relic, "frostfall_toybox", 7, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(attack = 28), elementDamageElement = AdventureGateElement.METAL, elementDamageBonusPercent = 18)),
-        bossRelic("ag_relic_aurora_ribbon", AdventureGateEquipmentSlot.RING, R.string.adventure_gate_item_aurora_ribbon_relic, "frostfall_toybox", 15, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(maxHp = 60, magic = 14), healingBonusPercent = 15, statusImmunityIds = setOf("freeze"))),
-        bossRelic("ag_relic_eclipse_prism", AdventureGateEquipmentSlot.SHIELD, R.string.adventure_gate_item_eclipse_prism_relic, "starfall_citadel", 7, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(defense = 38, evasion = 8), incomingReductionPercent = 12, reflectDamagePercent = 10), weaknesses = setOf(AdventureGateElement.ARCANE), resistances = setOf(AdventureGateElement.LIGHT, AdventureGateElement.SHADOW)),
-        bossRelic("ag_relic_regent_dream_key", AdventureGateEquipmentSlot.RING, R.string.adventure_gate_item_regent_dream_key_relic, "starfall_citadel", 15, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(maxHp = 80, maxMana = 50, magic = 18), reviveOncePercent = 25)),
+        bossRelic("ag_relic_bramble_crown", R.string.adventure_gate_item_bramble_crown_relic, "sproutvale_gate", 7, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(defense = 11), reflectDamagePercent = 7), weaknesses = setOf(AdventureGateElement.FIRE), resistances = setOf(AdventureGateElement.NATURE, AdventureGateElement.STONE)),
+        bossRelic("ag_relic_moth_lantern", R.string.adventure_gate_item_moth_lantern_relic, "sproutvale_gate", 15, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(magic = 8), healingBonusPercent = 12)),
+        bossRelic("ag_relic_foreman_tongs", R.string.adventure_gate_item_foreman_tongs_relic, "ember_toyworks", 7, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(attack = 16), elementDamageElement = AdventureGateElement.FIRE, elementDamageBonusPercent = 16)),
+        bossRelic("ag_relic_marionette_core", R.string.adventure_gate_item_marionette_core_relic, "ember_toyworks", 15, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(maxMana = 22), statusImmunityIds = setOf("burn"))),
+        bossRelic("ag_relic_tide_gauntlet", R.string.adventure_gate_item_tide_gauntlet_relic, "bubbleglass_reef", 7, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(attack = 18), elementDamageElement = AdventureGateElement.WATER, elementDamageBonusPercent = 16)),
+        bossRelic("ag_relic_leviathan_scale", R.string.adventure_gate_item_leviathan_scale_relic, "bubbleglass_reef", 15, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(defense = 24), incomingReductionPercent = 9), weaknesses = setOf(AdventureGateElement.STORM), resistances = setOf(AdventureGateElement.WATER, AdventureGateElement.ARCANE)),
+        bossRelic("ag_relic_roc_spring", R.string.adventure_gate_item_roc_spring_relic, "clockwork_cloudway", 7, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(speed = 7, evasion = 8), forceFirstTurn = true)),
+        bossRelic("ag_relic_chrono_key", R.string.adventure_gate_item_chrono_key_relic, "clockwork_cloudway", 15, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(maxMana = 30, speed = 5, accuracy = 6, evasion = 4), manaRefundOnWeakHit = 4)),
+        bossRelic("ag_relic_basilisk_clip", R.string.adventure_gate_item_basilisk_clip_relic, "moonmoss_library", 7, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(magic = 22, accuracy = 10), elementDamageElement = AdventureGateElement.SHADOW, elementDamageBonusPercent = 16, statusChanceBonusPercent = 10)),
+        bossRelic("ag_relic_libram_seal", R.string.adventure_gate_item_libram_seal_relic, "moonmoss_library", 15, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(defense = 28, maxMana = 24), statusImmunityIds = setOf("poison", "paralyze")), weaknesses = setOf(AdventureGateElement.LIGHT), resistances = setOf(AdventureGateElement.ARCANE, AdventureGateElement.SHADOW)),
+        bossRelic("ag_relic_nutcracker_star", R.string.adventure_gate_item_nutcracker_star_relic, "frostfall_toybox", 7, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(attack = 28), elementDamageElement = AdventureGateElement.METAL, elementDamageBonusPercent = 18)),
+        bossRelic("ag_relic_aurora_ribbon", R.string.adventure_gate_item_aurora_ribbon_relic, "frostfall_toybox", 15, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(maxHp = 60, magic = 14), healingBonusPercent = 15, statusImmunityIds = setOf("freeze"))),
+        bossRelic("ag_relic_eclipse_prism", R.string.adventure_gate_item_eclipse_prism_relic, "starfall_citadel", 7, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(defense = 38, evasion = 8), incomingReductionPercent = 12, reflectDamagePercent = 10), weaknesses = setOf(AdventureGateElement.ARCANE), resistances = setOf(AdventureGateElement.LIGHT, AdventureGateElement.SHADOW)),
+        bossRelic("ag_relic_regent_dream_key", R.string.adventure_gate_item_regent_dream_key_relic, "starfall_citadel", 15, AdventureGateEquipmentEffect(statBonus = AdventureGateStatBonus(maxHp = 80, maxMana = 50, magic = 18), reviveOncePercent = 25)),
         mysteryRelic()
     )
 
@@ -176,7 +177,7 @@ object AdventureGateCatalog {
         AdventureGateSkillDefinition("shadow_mist", R.string.adventure_gate_skill_shadow_mist, R.string.adventure_gate_skill_shadow_mist_desc, AdventureGateSkillKind.MAGIC, AdventureGateElement.SHADOW, 14, 125, accuracyPercent = 92, unlockLevel = 18, path = AdventureGateSkillTreePath.HEX, prerequisiteSkillIds = listOf("thorn_snare"), tier = 3, status = blindStatus(), statusChancePercent = 65)
     )
 
-    val monsters: List<AdventureGateMonsterDefinition> = listOf(
+    private val baseMonsters: List<AdventureGateMonsterDefinition> = listOf(
         monster("dewcap_slime", R.string.adventure_gate_monster_dewcap_slime, AdventureGateElement.WATER, null, setOf(AdventureGateElement.STORM, AdventureGateElement.NATURE), setOf(AdventureGateElement.WATER), 48, 0, 9, 8, 4, 7, 12),
         monster("sprig_paw", R.string.adventure_gate_monster_sprig_paw, AdventureGateElement.NATURE, null, setOf(AdventureGateElement.FIRE, AdventureGateElement.ICE), setOf(AdventureGateElement.NATURE), 56, 0, 11, 7, 5, 9, 14),
         monster("pebble_snail", R.string.adventure_gate_monster_pebble_snail, AdventureGateElement.STONE, null, setOf(AdventureGateElement.WATER, AdventureGateElement.NATURE), setOf(AdventureGateElement.STRIKE), 70, 0, 10, 6, 9, 4, 18),
@@ -214,6 +215,23 @@ object AdventureGateCatalog {
         monster("astra_null_regent", R.string.adventure_gate_monster_astra_null_regent, AdventureGateElement.ARCANE, AdventureGateElement.SHADOW, setOf(AdventureGateElement.ARCANE), setOf(AdventureGateElement.LIGHT, AdventureGateElement.SHADOW), 1400, 110, 112, 128, 85, 52, 1000, true)
     )
 
+    /** One elite variant per world, upgrading the world's third base monster (base id, name, trait). */
+    private val eliteSpecs = listOf(
+        Triple("pebble_snail", R.string.adventure_gate_monster_elite_pebble_snail, AdventureGateEliteTrait.THORNS),
+        Triple("smoke_sprite", R.string.adventure_gate_monster_elite_smoke_sprite, AdventureGateEliteTrait.HASTE),
+        Triple("pearl_wisp", R.string.adventure_gate_monster_elite_pearl_wisp, AdventureGateEliteTrait.REGEN),
+        Triple("magnet_mite", R.string.adventure_gate_monster_elite_magnet_mite, AdventureGateEliteTrait.HASTE),
+        Triple("shelf_golem", R.string.adventure_gate_monster_elite_shelf_golem, AdventureGateEliteTrait.SHIELD),
+        Triple("sugar_golem", R.string.adventure_gate_monster_elite_sugar_golem, AdventureGateEliteTrait.THORNS),
+        Triple("prism_sentinel", R.string.adventure_gate_monster_elite_prism_sentinel, AdventureGateEliteTrait.SHIELD)
+    )
+
+    /** Base monsters plus their elite variants (ids `elite_<base>`; they share the base sprite). */
+    val monsters: List<AdventureGateMonsterDefinition> =
+        baseMonsters + eliteSpecs.map { (baseId, nameRes, trait) ->
+            eliteVariant(baseMonsters.first { it.id == baseId }, nameRes, trait)
+        }
+
     val enemyActions: List<AdventureGateEnemyActionDefinition> = listOf(
         enemyAttack("enemy_strike_tap", R.string.adventure_gate_enemy_action_strike_tap, AdventureGateElement.STRIKE, 96),
         enemyAttack("enemy_slash_nip", R.string.adventure_gate_enemy_action_slash_nip, AdventureGateElement.SLASH, 102),
@@ -241,7 +259,26 @@ object AdventureGateCatalog {
         enemySpecial("boss_tin_march", R.string.adventure_gate_boss_special_tin_march, AdventureGateElement.METAL, 20, 142, status = brittleStatus(), secondaryStatus = freezeStatus(), cooldown = 3),
         enemySpecial("boss_polar_halo", R.string.adventure_gate_boss_special_polar_halo, AdventureGateElement.ICE, 24, 146, status = freezeStatus(), manaDamage = 10, cooldown = 4),
         enemySpecial("boss_twin_eclipse", R.string.adventure_gate_boss_special_twin_eclipse, AdventureGateElement.LIGHT, 22, 145, status = blindStatus(), secondaryStatus = weakenStatus(), cooldown = 3),
-        enemySpecial("boss_ending_lock", R.string.adventure_gate_boss_special_ending_lock, AdventureGateElement.ARCANE, 30, 162, status = weakenStatus(), secondaryStatus = slowStatus(stronger = true), cooldown = 4)
+        enemySpecial("boss_ending_lock", R.string.adventure_gate_boss_special_ending_lock, AdventureGateElement.ARCANE, 30, 162, status = weakenStatus(), secondaryStatus = slowStatus(stronger = true), cooldown = 4),
+        // Self-targeted moves the enemy AI can telegraph (heal when low, guard after a big hit).
+        AdventureGateEnemyActionDefinition(
+            id = AdventureGateEnemyAi.HEAL_ACTION_ID,
+            nameRes = R.string.adventure_gate_enemy_action_rest_up,
+            kind = AdventureGateSkillKind.HEAL,
+            element = AdventureGateElement.LIGHT,
+            power = 0,
+            accuracyPercent = 100,
+            cooldownTurns = 5
+        ),
+        AdventureGateEnemyActionDefinition(
+            id = AdventureGateEnemyAi.GUARD_ACTION_ID,
+            nameRes = R.string.adventure_gate_enemy_action_brace_up,
+            kind = AdventureGateSkillKind.GUARD,
+            element = AdventureGateElement.STRIKE,
+            power = 0,
+            accuracyPercent = 100,
+            cooldownTurns = 3
+        )
     )
 
     private val monsterById = monsters.associateBy { it.id }
@@ -281,6 +318,84 @@ object AdventureGateCatalog {
 
     fun enemyAction(id: String): AdventureGateEnemyActionDefinition =
         enemyActionById.getValue(id)
+
+    fun enemyActionOrNull(id: String): AdventureGateEnemyActionDefinition? =
+        enemyActionById[id]
+
+    const val ELITE_FIRST_PHASE = 10
+    const val ELITE_LAST_PHASE = 14
+    const val ELITE_CHANCE_PERCENT = 25
+    private const val ELITE_STAT_PERCENT = 135
+
+    private val eliteIdByBaseId: Map<String, String> by lazy {
+        monsters.filter { it.eliteOfId != null }.associate { it.eliteOfId.orEmpty() to it.id }
+    }
+
+    /** Id of the elite variant that upgrades [baseMonsterId], or null when it has none. */
+    fun eliteVariantIdFor(baseMonsterId: String): String? = eliteIdByBaseId[baseMonsterId]
+
+    private fun eliteVariant(
+        base: AdventureGateMonsterDefinition,
+        nameRes: Int,
+        trait: AdventureGateEliteTrait
+    ): AdventureGateMonsterDefinition {
+        fun up(value: Int) = (value * ELITE_STAT_PERCENT / 100f).roundToInt()
+        return base.copy(
+            id = "elite_${base.id}",
+            nameRes = nameRes,
+            stats = base.stats.copy(
+                maxHp = up(base.stats.maxHp),
+                maxMana = up(base.stats.maxMana),
+                attack = up(base.stats.attack),
+                magic = up(base.stats.magic),
+                defense = up(base.stats.defense)
+            ),
+            xpReward = up(base.xpReward),
+            eliteOfId = base.id,
+            eliteTrait = trait
+        )
+    }
+
+    /** Phase modifier for a campaign phase (at most one), keyed by world id then phase number. */
+    fun phaseModifier(worldId: String, phaseNumber: Int): AdventureGateBattleModifier? =
+        phaseModifiers[worldId]?.get(phaseNumber)
+
+    private val phaseModifiers: Map<String, Map<Int, AdventureGateBattleModifier>> = mapOf(
+        "sproutvale_gate" to mapOf(
+            4 to AdventureGateBattleModifier.FOG, 9 to AdventureGateBattleModifier.MOONLIGHT, 12 to AdventureGateBattleModifier.FOG
+        ),
+        "ember_toyworks" to mapOf(
+            5 to AdventureGateBattleModifier.HEATWAVE, 8 to AdventureGateBattleModifier.HEATWAVE,
+            10 to AdventureGateBattleModifier.HEATWAVE, 12 to AdventureGateBattleModifier.CLOCKWORK_TICK,
+            13 to AdventureGateBattleModifier.HEATWAVE
+        ),
+        "bubbleglass_reef" to mapOf(
+            4 to AdventureGateBattleModifier.TIDE, 6 to AdventureGateBattleModifier.TIDE,
+            8 to AdventureGateBattleModifier.FOG, 9 to AdventureGateBattleModifier.TIDE,
+            11 to AdventureGateBattleModifier.TIDE, 14 to AdventureGateBattleModifier.TIDE
+        ),
+        "clockwork_cloudway" to mapOf(
+            5 to AdventureGateBattleModifier.CLOCKWORK_TICK, 8 to AdventureGateBattleModifier.CLOCKWORK_TICK,
+            10 to AdventureGateBattleModifier.CLOCKWORK_TICK, 11 to AdventureGateBattleModifier.STARFALL,
+            13 to AdventureGateBattleModifier.CLOCKWORK_TICK, 15 to AdventureGateBattleModifier.CLOCKWORK_TICK
+        ),
+        "moonmoss_library" to mapOf(
+            4 to AdventureGateBattleModifier.MOONLIGHT, 6 to AdventureGateBattleModifier.MOONLIGHT,
+            9 to AdventureGateBattleModifier.MOONLIGHT, 10 to AdventureGateBattleModifier.FOG,
+            12 to AdventureGateBattleModifier.MOONLIGHT, 14 to AdventureGateBattleModifier.MOONLIGHT
+        ),
+        "frostfall_toybox" to mapOf(
+            5 to AdventureGateBattleModifier.FOG, 8 to AdventureGateBattleModifier.FOG,
+            11 to AdventureGateBattleModifier.FOG, 13 to AdventureGateBattleModifier.MOONLIGHT,
+            15 to AdventureGateBattleModifier.STARFALL
+        ),
+        "starfall_citadel" to mapOf(
+            4 to AdventureGateBattleModifier.STARFALL, 6 to AdventureGateBattleModifier.STARFALL,
+            9 to AdventureGateBattleModifier.STARFALL, 10 to AdventureGateBattleModifier.CLOCKWORK_TICK,
+            12 to AdventureGateBattleModifier.STARFALL, 14 to AdventureGateBattleModifier.STARFALL,
+            15 to AdventureGateBattleModifier.STARFALL
+        )
+    )
 
     fun supply(id: String): AdventureGateSupplyDefinition? =
         supplyById[id]
@@ -447,7 +562,8 @@ object AdventureGateCatalog {
                 isBoss = phase == 7 || phase == 15,
                 backgroundAssetPath = "tama/adventure_gate/worlds/$id/${backgroundAssetIdForPhase(phase)}.webp",
                 storyRes = storyResForPhase(id, phase),
-                bossRevealRes = bossRevealResForPhase(id, phase)
+                bossRevealRes = bossRevealResForPhase(id, phase),
+                modifier = phaseModifier(id, phase)
             )
         }
         return AdventureGateWorldDefinition(
@@ -898,10 +1014,9 @@ object AdventureGateCatalog {
         petResistances = resistances
     )
 
-    @Suppress("UNUSED_PARAMETER")
+    /** Boss relics always occupy the RELIC slot so they never replace shop gear. */
     private fun bossRelic(
         id: String,
-        slot: AdventureGateEquipmentSlot,
         nameRes: Int,
         worldId: String,
         phaseNumber: Int,

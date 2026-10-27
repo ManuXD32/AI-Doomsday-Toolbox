@@ -70,7 +70,7 @@ class FarmDroneDataTest {
         assertEquals("carrot", planted?.type)
         assertTrue(planted?.isFertilized == true)
         assertEquals(TileStatus.WET_FARMLAND, result.tiles.single().status)
-        assertEquals(10, result.plantingDrone.fuel)
+        assertEquals(20 - FARM_PLANTING_DRONE_FUEL_COST, result.plantingDrone.fuel)
         assertEquals(0, result.plantingDrone.water)
         assertEquals(0, result.plantingDrone.fertilizer)
         assertEquals(1, result.plantingDrone.hoe?.durability)
@@ -188,9 +188,12 @@ class FarmDroneDataTest {
         )
 
         assertNull(result.tiles.single().crop)
-        assertEquals(TileStatus.SOIL, result.tiles.single().status)
+        // Harvest leaves the plot tilled but dry; the yield uses the same rule as a manual harvest.
+        assertEquals(TileStatus.FARMLAND, result.tiles.single().status)
+        assertNull(result.tiles.single().lastWateredTime)
         assertEquals(0, result.harvesterDrone.fuel)
-        assertEquals(listOf(DroneStoredCrop("crop_wheat", 2)), result.harvesterDrone.storage)
+        val expected = farmHarvestYield(wheat.crop!!, farmHarvestOutcome(0L, 0, wheat.crop!!))
+        assertEquals(listOf(DroneStoredCrop("crop_wheat", expected)), result.harvesterDrone.storage)
     }
 
     @Test

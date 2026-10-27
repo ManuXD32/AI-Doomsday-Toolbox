@@ -4,9 +4,9 @@ import com.example.llamadroid.tama.data.*
 import com.example.llamadroid.tama.db.*
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.decodeFromString
-import org.json.JSONArray
-import org.json.JSONObject
+import com.example.llamadroid.tama.transfer.TamaTransferFreeze
+import java.time.Instant
+import java.time.ZoneId
 
 class FarmEngine(
     private val repository: FarmRepository
@@ -14,28 +14,97 @@ class FarmEngine(
     /**
      * Update all farm elements based on current time.
      * This handles "offline" progress.
+     *
+     * Nothing advances while the pet's cycle is frozen ([cycleFrozen], or the process-wide
+     * transfer freeze): [FarmRepository.shiftCycleTimestamps] moves every timestamp by the freeze
+     * length on unfreeze, so skipping here loses and gains no time.
+     *
+     * Tiles are advanced exactly once. When a drone is bought, the drone simulation owns tile
+     * growth (it replays [lastUpdate, now] interleaved with growth), so tiles must not be moved
+     * to `now` beforehand or the replay would start from an already-rotten future state.
+     * Everything is written in one Room transaction.
      */
-    suspend fun updateFarm(petId: String, now: Long = System.currentTimeMillis()) = TamaActionGate.run {
+    suspend fun updateFarm(
+        petId: String,
+        now: Long = System.currentTimeMillis(),
+        cycleFrozen: Boolean = false
+    ) = TamaActionGate.run {
+        if (cycleFrozen || TamaTransferFreeze.frozen) return@run
         val tiles = repository.ensureUnlockedFarmTiles(petId)
-        val updatedTiles = tiles.map { advanceFarmTileCrop(it, now) }
-        // Compare each updated tile with its original using zip, not by ID index
-        tiles.zip(updatedTiles).forEach { (original, updated) ->
-            if (updated != original) repository.saveTile(petId, updated, rescheduleNotifications = false)
-        }
-
-        val upgrades = repository.getUpgrades(petId)
-        upgrades.forEach { upgrade ->
+        val storedUpgrades = repository.getUpgrades(petId)
+        val changedUpgrades = LinkedHashMap<String, FarmUpgradeEntity>()
+        storedUpgrades.forEach { upgrade ->
             val updated = updateUpgrade(upgrade, now)
-            if (updated != upgrade) repository.saveUpgrade(updated, rescheduleNotifications = false)
+            if (updated != upgrade) changedUpgrades[upgrade.type] = updated
         }
 
-        updateDrones(petId, now)
-
-        val livestock = repository.getLivestock(petId)
-        livestock.forEach { structure ->
-            val updated = updateLivestock(structure, now)
-            if (updated != structure) repository.saveLivestock(updated, rescheduleNotifications = false)
+        val plantingUpgrade = storedUpgrades.firstOrNull { it.type == FARM_PLANTING_DRONE_ID }
+        val harvesterUpgrade = storedUpgrades.firstOrNull { it.type == FARM_HARVESTING_DRONE_ID }
+        // Rain: same per-pet seed as the weather chip. Without drones each shower is applied in time order to the
+        // stored tiles; with drones the replay owns tile history, so only the shower falling right now is applied
+        // to the simulated result (earlier showers inside the drone replay window are not back-dated).
+        val weatherRow = storedUpgrades.firstOrNull { it.type == FARM_WEATHER_STATE_ID }
+        val lastRainCheck = weatherRow?.lastProductionTime?.takeIf { it in 1..now } ?: now
+        val waterings = farmRainWaterings(
+            seed = farmWeatherSeed(petId),
+            tiles = tiles.map { it.toRainTile() },
+            lastCheckMs = lastRainCheck,
+            nowMs = now
+        )
+        val advancedTiles = if (plantingUpgrade?.isPurchased != true && harvesterUpgrade?.isPurchased != true) {
+            farmApplyRainWaterings(tiles, waterings).map { advanceFarmTileCrop(it, now) }
+        } else {
+            val plantingState = repository.decodePlantingDroneState(plantingUpgrade, now)
+            val harvesterState = repository.decodeHarvesterDroneState(harvesterUpgrade, now)
+            val result = simulateFarmDrones(tiles, plantingState, harvesterState, now)
+            if (plantingUpgrade?.isPurchased == true && result.plantingDrone != plantingState) {
+                changedUpgrades[FARM_PLANTING_DRONE_ID] = (changedUpgrades[FARM_PLANTING_DRONE_ID] ?: plantingUpgrade).copy(
+                    isPurchased = true,
+                    storedOutput = result.plantingDrone.fuel,
+                    extraDataJson = Json.encodeToString(result.plantingDrone)
+                )
+            }
+            if (harvesterUpgrade?.isPurchased == true && result.harvesterDrone != harvesterState) {
+                changedUpgrades[FARM_HARVESTING_DRONE_ID] = (changedUpgrades[FARM_HARVESTING_DRONE_ID] ?: harvesterUpgrade).copy(
+                    isPurchased = true,
+                    storedOutput = result.harvesterDrone.fuel,
+                    extraDataJson = Json.encodeToString(result.harvesterDrone)
+                )
+            }
+            farmApplyRainWaterings(result.tiles, waterings.filter { it.wateredAt >= now })
         }
+        if (weatherRow == null || waterings.isNotEmpty() || now - weatherRow.lastProductionTime >= FARM_WEATHER_CHECKPOINT_MS) {
+            changedUpgrades[FARM_WEATHER_STATE_ID] = (weatherRow ?: FarmUpgradeEntity(
+                type = FARM_WEATHER_STATE_ID, petId = petId, isPurchased = false, lastProductionTime = now
+            )).copy(lastProductionTime = now)
+        }
+        val obstacleRow = storedUpgrades.firstOrNull { it.type == FARM_OBSTACLE_STATE_ID }
+        val (updatedTiles, obstacleState) = FarmObstacles.plan(
+            state = repository.decodeObstacleState(obstacleRow),
+            tiles = advancedTiles.sortedBy { it.id },
+            today = Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate(),
+            petSeed = petId.hashCode().toLong()
+        )
+        val encodedObstacleState = Json.encodeToString(obstacleState)
+        if (obstacleRow == null || obstacleRow.extraDataJson != encodedObstacleState) {
+            changedUpgrades[FARM_OBSTACLE_STATE_ID] = (obstacleRow ?: FarmUpgradeEntity(
+                type = FARM_OBSTACLE_STATE_ID, petId = petId, isPurchased = false, lastProductionTime = now
+            )).copy(extraDataJson = encodedObstacleState)
+        }
+        val changedTiles = tiles.sortedBy { it.id }
+            .zip(updatedTiles.sortedBy { it.id })
+            .mapNotNull { (original, updated) -> updated.takeIf { it != original } }
+
+        val changedLivestock = repository.getLivestock(petId).mapNotNull { structure ->
+            updateLivestock(structure, now).takeIf { it != structure }
+        }
+        repository.saveFarmUpdate(
+            petId = petId,
+            tiles = changedTiles,
+            upgrades = changedUpgrades.values.toList(),
+            livestock = changedLivestock,
+            rescheduleNotifications = false
+        )
     }
 
     private fun updateUpgrade(upgrade: FarmUpgradeEntity, now: Long): FarmUpgradeEntity {
@@ -44,39 +113,6 @@ class FarmEngine(
             "composter" -> updateComposter(upgrade, now)
             else -> upgrade
         }
-    }
-
-    private suspend fun updateDrones(petId: String, now: Long) {
-        val plantingUpgrade = repository.getUpgrade(petId, FARM_PLANTING_DRONE_ID)
-        val harvesterUpgrade = repository.getUpgrade(petId, FARM_HARVESTING_DRONE_ID)
-        if (plantingUpgrade?.isPurchased != true && harvesterUpgrade?.isPurchased != true) return
-
-        val currentTiles = repository.ensureUnlockedFarmTiles(petId)
-        val plantingState = repository.decodePlantingDroneState(plantingUpgrade, now)
-        val harvesterState = repository.decodeHarvesterDroneState(harvesterUpgrade, now)
-        val result = simulateFarmDrones(
-            tiles = currentTiles,
-            plantingDrone = plantingState,
-            harvesterDrone = harvesterState,
-            now = now
-        )
-
-        val changedTiles = currentTiles.sortedBy { it.id }
-            .zip(result.tiles.sortedBy { it.id })
-            .mapNotNull { (original, updated) ->
-                updated.takeIf { original != it }
-            }
-        val updatedPlantingState = result.plantingDrone
-            .takeIf { plantingUpgrade?.isPurchased == true && it != plantingState }
-        val updatedHarvesterState = result.harvesterDrone
-            .takeIf { harvesterUpgrade?.isPurchased == true && it != harvesterState }
-        repository.saveDroneUpdateBatch(
-            petId = petId,
-            tiles = changedTiles,
-            plantingState = updatedPlantingState,
-            harvesterState = updatedHarvesterState,
-            rescheduleNotifications = false
-        )
     }
 
     private fun updateWell(well: FarmUpgradeEntity, now: Long): FarmUpgradeEntity {
@@ -112,31 +148,7 @@ class FarmEngine(
     private fun updateComposter(composter: FarmUpgradeEntity, now: Long): FarmUpgradeEntity {
         if (!composter.isPurchased) return composter
         
-        val capacity = composterSlotCapacityForLevel(composter.level)
-        val slots = try {
-            Json.decodeFromString<List<ComposterSlot>>(composter.extraDataJson ?: "[]")
-        } catch (_: Exception) {
-            runCatching {
-                Json.decodeFromString<List<Long?>>(composter.extraDataJson ?: "[]")
-                    .map { startedAt ->
-                        if (startedAt == null) {
-                            ComposterSlot()
-                        } else {
-                            ComposterSlot(
-                                state = if (now >= startedAt + FARM_COMPOSTER_PROCESS_MS) ComposterSlotState.READY else ComposterSlotState.PROCESSING,
-                                startedAt = startedAt,
-                                readyAt = (startedAt + FARM_COMPOSTER_PROCESS_MS).takeIf { now >= it },
-                                inputItemId = "rotten_crop"
-                            )
-                        }
-                    }
-            }.getOrElse {
-                List(capacity) { ComposterSlot() }
-            }
-        }.let { decoded ->
-            val trimmed = if (decoded.size >= capacity) decoded.take(capacity) else decoded
-            trimmed + List((capacity - trimmed.size).coerceAtLeast(0)) { ComposterSlot() }
-        }
+        val slots = repository.decodeComposterSlots(composter, now)
 
         val updatedSlots = slots.map { slot ->
             if (slot.state == ComposterSlotState.PROCESSING && slot.startedAt != null && now >= slot.startedAt + FARM_COMPOSTER_PROCESS_MS) {

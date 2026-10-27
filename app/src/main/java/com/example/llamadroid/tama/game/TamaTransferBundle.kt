@@ -30,7 +30,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 
-private const val TAMA_TRANSFER_VERSION = 22
+internal const val TAMA_TRANSFER_VERSION = 23
 
 @Serializable
 data class TamaTransferBundle(
@@ -61,6 +61,8 @@ data class TamaTransferBundle(
     val adventureGateWorldProgress: List<TamaTransferAdventureGateWorldProgress> = emptyList(),
     val adventureGateBattleState: TamaTransferAdventureGateBattleState? = null,
     val adventureGateNightArenaRun: TamaTransferAdventureGateNightArenaRun? = null,
+    /** Pet-scoped SharedPreferences state (v23+), keyed by [TamaPetPrefsExtra.key]; see TamaPetPrefsExtras. */
+    val extras: Map<String, kotlinx.serialization.json.JsonElement> = emptyMap(),
 )
 
 @Serializable
@@ -379,9 +381,11 @@ data class TamaTransferFarmTile(
     val petId: String,
     val status: String,
     val cropJson: String? = null,
-    val lastWateredTime: Long? = null
+    val lastWateredTime: Long? = null,
+    /** Obstacle name (DB 48+); absent in bundles from older builds, which import as clear plots. */
+    val obstacle: String? = null
 ) {
-    fun toEntity() = FarmTileEntity(id, petId, status, cropJson, lastWateredTime)
+    fun toEntity() = FarmTileEntity(id, petId, status, cropJson, lastWateredTime, obstacle)
 
     companion object {
         fun fromEntity(entity: FarmTileEntity) = TamaTransferFarmTile(
@@ -389,7 +393,8 @@ data class TamaTransferFarmTile(
             petId = entity.petId,
             status = entity.status,
             cropJson = entity.cropJson,
-            lastWateredTime = entity.lastWateredTime
+            lastWateredTime = entity.lastWateredTime,
+            obstacle = entity.obstacle
         )
     }
 }

@@ -1005,6 +1005,38 @@ object TamaMigrations {
         }
     }
 
+    // Migration from v45 to v46: durable single-row state for pet transfers between devices.
+    val MIGRATION_45_46: Migration = object : Migration(45, 46) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `tama_transfer_state` (`id` TEXT NOT NULL, `role` TEXT NOT NULL, " +
+                    "`status` TEXT NOT NULL, `transferId` TEXT, `petId` TEXT, `petName` TEXT, `peerName` TEXT, " +
+                    "`originDeviceId` TEXT, `archivePath` TEXT, `pausedPetId` TEXT, `pausedArchivePath` TEXT, " +
+                    "`updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))"
+            )
+        }
+    }
+
+    // Migration from v46 to v47: paired transfer peers (wrapped pairing key + known addresses).
+    val MIGRATION_46_47: Migration = object : Migration(46, 47) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `tama_transfer_peers` (`deviceId` TEXT NOT NULL, `displayName` TEXT NOT NULL, " +
+                    "`wrappedKey` BLOB NOT NULL, `keyIv` BLOB NOT NULL, `addressesJson` TEXT NOT NULL, " +
+                    "`lastSeenAt` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, PRIMARY KEY(`deviceId`))"
+            )
+        }
+    }
+
+    // Migration from v47 to v48: farm obstacles (stump, rock, weeds) on idle plots.
+    val MIGRATION_47_48: Migration = object : Migration(47, 48) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            if (!columnExists(db, "tama_farm_tiles", "obstacle")) {
+                db.execSQL("ALTER TABLE `tama_farm_tiles` ADD COLUMN `obstacle` TEXT")
+            }
+        }
+    }
+
     private fun adventureGateStudyManaBonusSql(): String =
         "COALESCE((SELECT CAST(educationLevel / 10 AS INTEGER) * 4 FROM tama_pets WHERE tama_pets.id = adventure_gate_profiles.petId), 0)"
     
@@ -1044,7 +1076,10 @@ object TamaMigrations {
         MIGRATION_41_42,
         MIGRATION_42_43,
         MIGRATION_43_44,
-        MIGRATION_44_45
+        MIGRATION_44_45,
+        MIGRATION_45_46,
+        MIGRATION_46_47,
+        MIGRATION_47_48
     )
     
     // ========== HELPER FUNCTIONS ==========

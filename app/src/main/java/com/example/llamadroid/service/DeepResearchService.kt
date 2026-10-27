@@ -48,7 +48,24 @@ class DeepResearchService : Service() {
             UnifiedNotificationManager.TaskType.KNOWLEDGE_BASE,
             getString(R.string.deep_research_notification_title)
         )
-        startForeground(taskId, notification)
+        val startResult = ForegroundStart.start(
+            this,
+            taskId,
+            notification,
+            ForegroundServiceTypes.DATA_SYNC
+        )
+        if (startResult is ForegroundStart.Result.Failed) {
+            UnifiedNotificationManager.failTask(
+                taskId,
+                ForegroundStart.failureMessage(
+                    this,
+                    startResult.reason,
+                    getString(R.string.deep_research_notification_title)
+                )
+            )
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         acquirePowerLocks()
         UnifiedNotificationManager.updateProgress(taskId, 0f, getString(R.string.deep_research_progress_starting))
 

@@ -39,7 +39,6 @@ import androidx.compose.ui.unit.dp
 import com.example.llamadroid.LlamaApplication
 import com.example.llamadroid.MainActivity
 import com.example.llamadroid.R
-import com.example.llamadroid.tama.data.CropDefinitions
 import com.example.llamadroid.tama.data.FARM_MAX_FARM_PAGES
 import com.example.llamadroid.tama.data.FarmTile
 import com.example.llamadroid.tama.data.PlantedCrop
@@ -115,7 +114,7 @@ class TamaFarmWidgetProvider : AppWidgetProvider() {
                 ?: return TamaFarmWidgetState(null, emptyList(), unlockedPageCount = 1)
             val repository = FarmRepository(database.farmDao(), context)
             if (!pet.cycleFrozen) {
-                FarmEngine(repository).updateFarm(pet.id)
+                FarmEngine(repository).updateFarm(pet.id, cycleFrozen = pet.cycleFrozen)
             }
             val farmlandUpgrade = repository.getUpgrade(pet.id, FARMLAND_UPGRADE_ID)
             val farmlandLevel = farmlandUpgrade?.takeIf { it.isPurchased }?.level ?: 0
@@ -331,7 +330,6 @@ private fun TamaFarmWidgetConfigScreen(
 
 private object TamaFarmWidgetRenderer {
     private const val SIZE = 512
-    private const val CROP_DECAY_AFTER_MATURE_MS = 15 * 60 * 60 * 1000L
 
     fun render(context: Context, tiles: List<FarmTile>, pageIndex: Int): Bitmap {
         val bitmap = Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888)
@@ -361,18 +359,17 @@ private object TamaFarmWidgetRenderer {
 
     private fun drawTile(context: Context, canvas: Canvas, paint: Paint, rect: RectF, tile: FarmTile?) {
         val crop = tile?.crop
-        drawAssetCover(context, canvas, "farm/Others/soil.png", rect, paint)
-        if (tile?.status == TileStatus.WET_FARMLAND) {
-            paint.style = Paint.Style.FILL
-            paint.color = Color.argb(58, 44, 19, 8)
-            canvas.drawRoundRect(rect, 10f, 10f, paint)
+        val soil = when {
+            crop != null && tile.status == TileStatus.WET_FARMLAND -> "soil_wet"
+            crop != null -> "soil_planted"
+            tile?.status == TileStatus.FARMLAND -> "soil_tilled"
+            tile?.status == TileStatus.WET_FARMLAND -> "soil_wet"
+            else -> "soil_dry"
         }
-        if (tile?.status != TileStatus.SOIL) {
-            drawFurrows(canvas, paint, rect, wet = tile?.status == TileStatus.WET_FARMLAND)
-        }
+        drawAssetCover(context, canvas, "farm/Others/$soil.png", rect, paint)
         paint.style = Paint.Style.STROKE
         paint.strokeWidth = 3f
-        paint.color = Color.argb(145, 255, 219, 110)
+        paint.color = Color.argb(210, 59, 36, 18)
         canvas.drawRoundRect(rect, 10f, 10f, paint)
         paint.style = Paint.Style.FILL
 
@@ -405,7 +402,7 @@ private object TamaFarmWidgetRenderer {
             }
         }
 
-        val label = cropLabel(context, crop)
+        val label = cropLabel(context, tile, crop)
         paint.color = Color.WHITE
         paint.textAlign = Paint.Align.CENTER
         paint.textSize = if (label.length > 6) 19f else 22f
@@ -417,28 +414,6 @@ private object TamaFarmWidgetRenderer {
         paint.color = oldColor
         canvas.drawText(label, rect.centerX(), rect.bottom - 11f, paint)
         paint.isFakeBoldText = false
-    }
-
-    private fun drawFurrows(canvas: Canvas, paint: Paint, rect: RectF, wet: Boolean) {
-        paint.style = Paint.Style.STROKE
-        paint.strokeWidth = rect.width() * 0.035f
-        val dark = if (wet) Color.argb(150, 73, 38, 22) else Color.argb(128, 108, 74, 47)
-        val light = if (wet) Color.argb(54, 214, 161, 108) else Color.argb(66, 230, 177, 115)
-        listOf(0.26f, 0.5f, 0.74f).forEach { fraction ->
-            val x = rect.left + rect.width() * fraction
-            paint.color = dark
-            canvas.drawLine(x, rect.top + 2f, x, rect.bottom - 2f, paint)
-            paint.color = light
-            canvas.drawLine(x + paint.strokeWidth * 0.48f, rect.top + 2f, x + paint.strokeWidth * 0.48f, rect.bottom - 2f, paint)
-        }
-        listOf(0.3f, 0.56f, 0.82f).forEach { fraction ->
-            val y = rect.top + rect.height() * fraction
-            paint.color = dark
-            canvas.drawLine(rect.left + 2f, y, rect.right - 2f, y, paint)
-            paint.color = light
-            canvas.drawLine(rect.left + 2f, y + paint.strokeWidth * 0.48f, rect.right - 2f, y + paint.strokeWidth * 0.48f, paint)
-        }
-        paint.style = Paint.Style.FILL
     }
 
     private fun drawAssetCover(context: Context, canvas: Canvas, path: String, rect: RectF, paint: Paint) {
@@ -472,30 +447,15 @@ private object TamaFarmWidgetRenderer {
         else -> "stage_final"
     }
 
-    private fun cropLabel(context: Context, crop: PlantedCrop): String = when {
+    private fun cropLabel(context: Context, tile: FarmTile, crop: PlantedCrop): String = when {
         crop.isDecayed -> context.getString(R.string.widget_tama_farm_decayed)
         crop.stage >= 3 -> context.getString(R.string.widget_tama_farm_ready)
-        else -> formatRemaining(remainingMs(crop))
+        else -> formatRemaining(remainingMs(tile))
     }
 
-    private fun remainingMs(crop: PlantedCrop, now: Long = System.currentTimeMillis()): Long {
-        val definition = CropDefinitions.CROPS[crop.type] ?: return 0L
-        val elapsed = now - crop.lastStageUpdateTime
-        return definition.stageTimes.mapIndexedNotNull { stageIndex, baseTime ->
-            if (stageIndex < crop.stage || stageIndex >= 3) {
-                null
-            } else {
-                val adjusted = if (crop.isFertilized) baseTime / 2 else baseTime
-                if (stageIndex == crop.stage) maxOf(0L, adjusted - elapsed) else adjusted
-            }
-        }.sum().let { remaining ->
-            if (crop.stage >= 3) {
-                (crop.lastStageUpdateTime + CROP_DECAY_AFTER_MATURE_MS - now).coerceAtLeast(0L)
-            } else {
-                remaining
-            }
-        }
-    }
+    /** Time until harvest, moisture-aware (a dry plot grows at half speed). */
+    private fun remainingMs(tile: FarmTile, now: Long = System.currentTimeMillis()): Long =
+        ((com.example.llamadroid.tama.data.farmCropReadyAt(tile) ?: now) - now).coerceAtLeast(0L)
 
     private fun formatRemaining(ms: Long): String {
         val minutes = (ms / 60_000L).coerceAtLeast(1L)

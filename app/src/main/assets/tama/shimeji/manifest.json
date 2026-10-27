@@ -1,0 +1,2172 @@
+{
+  "schemaVersion": 1,
+  "scope": "tama-shimeji",
+  "frameWidth": 256,
+  "frameHeight": 256,
+  "actorColumns": 4,
+  "species": [
+    "dragon",
+    "kitsune",
+    "unicorn"
+  ],
+  "stageOrder": [
+    "egg",
+    "baby",
+    "child",
+    "teen",
+    "adult",
+    "senior"
+  ],
+  "facing": "right",
+  "mirrorForLeft": true,
+  "footAnchor": {
+    "x": 128,
+    "y": 224
+  },
+  "sheetPathPattern": "tama/shimeji/sheets/{species}/{stage}.png",
+  "reusedHomeActions": [
+    "IDLE",
+    "WALK",
+    "RUN",
+    "EAT",
+    "SLEEP",
+    "HAPPY",
+    "TALK",
+    "SIT"
+  ],
+  "actions": {
+    "JUMP": {
+      "frameCount": 3,
+      "frameMs": 120,
+      "loop": false
+    },
+    "FALL": {
+      "frameCount": 2,
+      "frameMs": 140,
+      "loop": true
+    },
+    "LAND": {
+      "frameCount": 2,
+      "frameMs": 120,
+      "loop": false
+    },
+    "DRAG": {
+      "frameCount": 3,
+      "frameMs": 160,
+      "loop": true
+    },
+    "CLIMB": {
+      "frameCount": 4,
+      "frameMs": 140,
+      "loop": true
+    },
+    "SIT_EDGE": {
+      "frameCount": 2,
+      "frameMs": 400,
+      "loop": true
+    },
+    "REACT": {
+      "frameCount": 3,
+      "frameMs": 130,
+      "loop": false
+    },
+    "BATH": {
+      "frameCount": 4,
+      "frameMs": 140,
+      "loop": true
+    }
+  },
+  "eggActions": {
+    "WOBBLE": {
+      "frameCount": 3,
+      "frameMs": 160,
+      "loop": true
+    },
+    "BOUNCE": {
+      "frameCount": 2,
+      "frameMs": 150,
+      "loop": true
+    },
+    "FALL": {
+      "frameCount": 1,
+      "frameMs": 200,
+      "loop": true
+    },
+    "LAND": {
+      "frameCount": 2,
+      "frameMs": 120,
+      "loop": false
+    },
+    "DRAG": {
+      "frameCount": 2,
+      "frameMs": 160,
+      "loop": true
+    }
+  },
+  "assets": [
+    {
+      "id": "shimeji_dragon_egg",
+      "species": "dragon",
+      "stage": "egg",
+      "path": "tama/shimeji/sheets/dragon/egg.png",
+      "frameWidth": 256,
+      "frameHeight": 256,
+      "columns": 4,
+      "rows": 5,
+      "sheetWidth": 1024,
+      "sheetHeight": 1280,
+      "frameCount": 10,
+      "facing": "right",
+      "footAnchor": {
+        "x": 128,
+        "y": 224
+      },
+      "clips": [
+        {
+          "action": "WOBBLE",
+          "frames": [
+            0,
+            1,
+            2
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "BOUNCE",
+          "frames": [
+            4,
+            5
+          ],
+          "frameMs": 150,
+          "loop": true
+        },
+        {
+          "action": "FALL",
+          "frames": [
+            8
+          ],
+          "frameMs": 200,
+          "loop": true
+        },
+        {
+          "action": "LAND",
+          "frames": [
+            12,
+            13
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "DRAG",
+          "frames": [
+            16,
+            17
+          ],
+          "frameMs": 160,
+          "loop": true
+        }
+      ],
+      "contentSha256": "25742fa3005f9f02a00f5317d5f9ac44cfd84c0fe7bb4139bde43f3cf93bdf70",
+      "generationMode": "codex-imagegen",
+      "productionReady": true
+    },
+    {
+      "id": "shimeji_dragon_baby",
+      "species": "dragon",
+      "stage": "baby",
+      "path": "tama/shimeji/sheets/dragon/baby.png",
+      "frameWidth": 256,
+      "frameHeight": 256,
+      "columns": 4,
+      "rows": 10,
+      "sheetWidth": 1024,
+      "sheetHeight": 2560,
+      "frameCount": 31,
+      "facing": "right",
+      "footAnchor": {
+        "x": 128,
+        "y": 224
+      },
+      "clips": [
+        {
+          "action": "JUMP",
+          "frames": [
+            0,
+            1,
+            2
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "FALL",
+          "frames": [
+            4,
+            5
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "LAND",
+          "frames": [
+            8,
+            9
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "DRAG",
+          "frames": [
+            12,
+            13,
+            14
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "CLIMB",
+          "frames": [
+            16,
+            17,
+            18,
+            19
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "SIT_EDGE",
+          "frames": [
+            20,
+            21
+          ],
+          "frameMs": 400,
+          "loop": true
+        },
+        {
+          "action": "REACT",
+          "frames": [
+            24,
+            25,
+            26
+          ],
+          "frameMs": 130,
+          "loop": false
+        },
+        {
+          "action": "BATH",
+          "frames": [
+            28,
+            29,
+            30,
+            31
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "WALK",
+          "frames": [
+            32,
+            33,
+            34,
+            35
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "RUN",
+          "frames": [
+            36,
+            37,
+            38,
+            39
+          ],
+          "frameMs": 105,
+          "loop": true
+        }
+      ],
+      "contentSha256": "e298a4f276b51068fdd9756a571fd0ac53ccdbcf78ec03555f9afebbf1cadf60",
+      "generationMode": "codex-imagegen",
+      "productionReady": true
+    },
+    {
+      "id": "shimeji_dragon_child",
+      "species": "dragon",
+      "stage": "child",
+      "path": "tama/shimeji/sheets/dragon/child.png",
+      "frameWidth": 256,
+      "frameHeight": 256,
+      "columns": 4,
+      "rows": 10,
+      "sheetWidth": 1024,
+      "sheetHeight": 2560,
+      "frameCount": 31,
+      "facing": "right",
+      "footAnchor": {
+        "x": 128,
+        "y": 224
+      },
+      "clips": [
+        {
+          "action": "JUMP",
+          "frames": [
+            0,
+            1,
+            2
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "FALL",
+          "frames": [
+            4,
+            5
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "LAND",
+          "frames": [
+            8,
+            9
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "DRAG",
+          "frames": [
+            12,
+            13,
+            14
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "CLIMB",
+          "frames": [
+            16,
+            17,
+            18,
+            19
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "SIT_EDGE",
+          "frames": [
+            20,
+            21
+          ],
+          "frameMs": 400,
+          "loop": true
+        },
+        {
+          "action": "REACT",
+          "frames": [
+            24,
+            25,
+            26
+          ],
+          "frameMs": 130,
+          "loop": false
+        },
+        {
+          "action": "BATH",
+          "frames": [
+            28,
+            29,
+            30,
+            31
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "WALK",
+          "frames": [
+            32,
+            33,
+            34,
+            35
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "RUN",
+          "frames": [
+            36,
+            37,
+            38,
+            39
+          ],
+          "frameMs": 105,
+          "loop": true
+        }
+      ],
+      "contentSha256": "dd67d3fa887a7cf6a055a94afdb7cda1557f36985f74b3d74024d1a3ba72298b",
+      "generationMode": "codex-imagegen",
+      "productionReady": true
+    },
+    {
+      "id": "shimeji_dragon_teen",
+      "species": "dragon",
+      "stage": "teen",
+      "path": "tama/shimeji/sheets/dragon/teen.png",
+      "frameWidth": 256,
+      "frameHeight": 256,
+      "columns": 4,
+      "rows": 10,
+      "sheetWidth": 1024,
+      "sheetHeight": 2560,
+      "frameCount": 31,
+      "facing": "right",
+      "footAnchor": {
+        "x": 128,
+        "y": 224
+      },
+      "clips": [
+        {
+          "action": "JUMP",
+          "frames": [
+            0,
+            1,
+            2
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "FALL",
+          "frames": [
+            4,
+            5
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "LAND",
+          "frames": [
+            8,
+            9
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "DRAG",
+          "frames": [
+            12,
+            13,
+            14
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "CLIMB",
+          "frames": [
+            16,
+            17,
+            18,
+            19
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "SIT_EDGE",
+          "frames": [
+            20,
+            21
+          ],
+          "frameMs": 400,
+          "loop": true
+        },
+        {
+          "action": "REACT",
+          "frames": [
+            24,
+            25,
+            26
+          ],
+          "frameMs": 130,
+          "loop": false
+        },
+        {
+          "action": "BATH",
+          "frames": [
+            28,
+            29,
+            30,
+            31
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "WALK",
+          "frames": [
+            32,
+            33,
+            34,
+            35
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "RUN",
+          "frames": [
+            36,
+            37,
+            38,
+            39
+          ],
+          "frameMs": 105,
+          "loop": true
+        }
+      ],
+      "contentSha256": "45cefce5d11cd29ab363f90063f89bfa2dc577ea4bcfb87b51462751bf85ebdb",
+      "generationMode": "codex-imagegen",
+      "productionReady": true
+    },
+    {
+      "id": "shimeji_dragon_adult",
+      "species": "dragon",
+      "stage": "adult",
+      "path": "tama/shimeji/sheets/dragon/adult.png",
+      "frameWidth": 256,
+      "frameHeight": 256,
+      "columns": 4,
+      "rows": 10,
+      "sheetWidth": 1024,
+      "sheetHeight": 2560,
+      "frameCount": 31,
+      "facing": "right",
+      "footAnchor": {
+        "x": 128,
+        "y": 224
+      },
+      "clips": [
+        {
+          "action": "JUMP",
+          "frames": [
+            0,
+            1,
+            2
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "FALL",
+          "frames": [
+            4,
+            5
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "LAND",
+          "frames": [
+            8,
+            9
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "DRAG",
+          "frames": [
+            12,
+            13,
+            14
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "CLIMB",
+          "frames": [
+            16,
+            17,
+            18,
+            19
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "SIT_EDGE",
+          "frames": [
+            20,
+            21
+          ],
+          "frameMs": 400,
+          "loop": true
+        },
+        {
+          "action": "REACT",
+          "frames": [
+            24,
+            25,
+            26
+          ],
+          "frameMs": 130,
+          "loop": false
+        },
+        {
+          "action": "BATH",
+          "frames": [
+            28,
+            29,
+            30,
+            31
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "WALK",
+          "frames": [
+            32,
+            33,
+            34,
+            35
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "RUN",
+          "frames": [
+            36,
+            37,
+            38,
+            39
+          ],
+          "frameMs": 105,
+          "loop": true
+        }
+      ],
+      "contentSha256": "b6039935356751ca50e3d85141c248e1f4fdc3259c6505e4e7f2d6eb95f9cf49",
+      "generationMode": "codex-imagegen",
+      "productionReady": true
+    },
+    {
+      "id": "shimeji_dragon_senior",
+      "species": "dragon",
+      "stage": "senior",
+      "path": "tama/shimeji/sheets/dragon/senior.png",
+      "frameWidth": 256,
+      "frameHeight": 256,
+      "columns": 4,
+      "rows": 10,
+      "sheetWidth": 1024,
+      "sheetHeight": 2560,
+      "frameCount": 31,
+      "facing": "right",
+      "footAnchor": {
+        "x": 128,
+        "y": 224
+      },
+      "clips": [
+        {
+          "action": "JUMP",
+          "frames": [
+            0,
+            1,
+            2
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "FALL",
+          "frames": [
+            4,
+            5
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "LAND",
+          "frames": [
+            8,
+            9
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "DRAG",
+          "frames": [
+            12,
+            13,
+            14
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "CLIMB",
+          "frames": [
+            16,
+            17,
+            18,
+            19
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "SIT_EDGE",
+          "frames": [
+            20,
+            21
+          ],
+          "frameMs": 400,
+          "loop": true
+        },
+        {
+          "action": "REACT",
+          "frames": [
+            24,
+            25,
+            26
+          ],
+          "frameMs": 130,
+          "loop": false
+        },
+        {
+          "action": "BATH",
+          "frames": [
+            28,
+            29,
+            30,
+            31
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "WALK",
+          "frames": [
+            32,
+            33,
+            34,
+            35
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "RUN",
+          "frames": [
+            36,
+            37,
+            38,
+            39
+          ],
+          "frameMs": 105,
+          "loop": true
+        }
+      ],
+      "contentSha256": "613f5d7e8aafa1041f4e608559c3ed58a004218647770387b212d99574855ac2",
+      "generationMode": "codex-imagegen",
+      "productionReady": true
+    },
+    {
+      "id": "shimeji_kitsune_egg",
+      "species": "kitsune",
+      "stage": "egg",
+      "path": "tama/shimeji/sheets/kitsune/egg.png",
+      "frameWidth": 256,
+      "frameHeight": 256,
+      "columns": 4,
+      "rows": 5,
+      "sheetWidth": 1024,
+      "sheetHeight": 1280,
+      "frameCount": 10,
+      "facing": "right",
+      "footAnchor": {
+        "x": 128,
+        "y": 224
+      },
+      "clips": [
+        {
+          "action": "WOBBLE",
+          "frames": [
+            0,
+            1,
+            2
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "BOUNCE",
+          "frames": [
+            4,
+            5
+          ],
+          "frameMs": 150,
+          "loop": true
+        },
+        {
+          "action": "FALL",
+          "frames": [
+            8
+          ],
+          "frameMs": 200,
+          "loop": true
+        },
+        {
+          "action": "LAND",
+          "frames": [
+            12,
+            13
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "DRAG",
+          "frames": [
+            16,
+            17
+          ],
+          "frameMs": 160,
+          "loop": true
+        }
+      ],
+      "contentSha256": "3529281462c533dd09c54907712772c4733584c5ca6e209d8f56a1fa104b3d21",
+      "generationMode": "codex-imagegen",
+      "productionReady": true
+    },
+    {
+      "id": "shimeji_kitsune_baby",
+      "species": "kitsune",
+      "stage": "baby",
+      "path": "tama/shimeji/sheets/kitsune/baby.png",
+      "frameWidth": 256,
+      "frameHeight": 256,
+      "columns": 4,
+      "rows": 10,
+      "sheetWidth": 1024,
+      "sheetHeight": 2560,
+      "frameCount": 31,
+      "facing": "right",
+      "footAnchor": {
+        "x": 128,
+        "y": 224
+      },
+      "clips": [
+        {
+          "action": "JUMP",
+          "frames": [
+            0,
+            1,
+            2
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "FALL",
+          "frames": [
+            4,
+            5
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "LAND",
+          "frames": [
+            8,
+            9
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "DRAG",
+          "frames": [
+            12,
+            13,
+            14
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "CLIMB",
+          "frames": [
+            16,
+            17,
+            18,
+            19
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "SIT_EDGE",
+          "frames": [
+            20,
+            21
+          ],
+          "frameMs": 400,
+          "loop": true
+        },
+        {
+          "action": "REACT",
+          "frames": [
+            24,
+            25,
+            26
+          ],
+          "frameMs": 130,
+          "loop": false
+        },
+        {
+          "action": "BATH",
+          "frames": [
+            28,
+            29,
+            30,
+            31
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "WALK",
+          "frames": [
+            32,
+            33,
+            34,
+            35
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "RUN",
+          "frames": [
+            36,
+            37,
+            38,
+            39
+          ],
+          "frameMs": 105,
+          "loop": true
+        }
+      ],
+      "contentSha256": "bfc89aa14bad3788c358f4675dff9b32b423b1505aede0ee3dfbf7661a849125",
+      "generationMode": "codex-imagegen",
+      "productionReady": true
+    },
+    {
+      "id": "shimeji_kitsune_child",
+      "species": "kitsune",
+      "stage": "child",
+      "path": "tama/shimeji/sheets/kitsune/child.png",
+      "frameWidth": 256,
+      "frameHeight": 256,
+      "columns": 4,
+      "rows": 10,
+      "sheetWidth": 1024,
+      "sheetHeight": 2560,
+      "frameCount": 31,
+      "facing": "right",
+      "footAnchor": {
+        "x": 128,
+        "y": 224
+      },
+      "clips": [
+        {
+          "action": "JUMP",
+          "frames": [
+            0,
+            1,
+            2
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "FALL",
+          "frames": [
+            4,
+            5
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "LAND",
+          "frames": [
+            8,
+            9
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "DRAG",
+          "frames": [
+            12,
+            13,
+            14
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "CLIMB",
+          "frames": [
+            16,
+            17,
+            18,
+            19
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "SIT_EDGE",
+          "frames": [
+            20,
+            21
+          ],
+          "frameMs": 400,
+          "loop": true
+        },
+        {
+          "action": "REACT",
+          "frames": [
+            24,
+            25,
+            26
+          ],
+          "frameMs": 130,
+          "loop": false
+        },
+        {
+          "action": "BATH",
+          "frames": [
+            28,
+            29,
+            30,
+            31
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "WALK",
+          "frames": [
+            32,
+            33,
+            34,
+            35
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "RUN",
+          "frames": [
+            36,
+            37,
+            38,
+            39
+          ],
+          "frameMs": 105,
+          "loop": true
+        }
+      ],
+      "contentSha256": "e75f7ae2a7ae9b680b7fe2ab06313cad8eb45ed13a0966ed820399ad05900db6",
+      "generationMode": "codex-imagegen",
+      "productionReady": true
+    },
+    {
+      "id": "shimeji_kitsune_teen",
+      "species": "kitsune",
+      "stage": "teen",
+      "path": "tama/shimeji/sheets/kitsune/teen.png",
+      "frameWidth": 256,
+      "frameHeight": 256,
+      "columns": 4,
+      "rows": 10,
+      "sheetWidth": 1024,
+      "sheetHeight": 2560,
+      "frameCount": 31,
+      "facing": "right",
+      "footAnchor": {
+        "x": 128,
+        "y": 224
+      },
+      "clips": [
+        {
+          "action": "JUMP",
+          "frames": [
+            0,
+            1,
+            2
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "FALL",
+          "frames": [
+            4,
+            5
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "LAND",
+          "frames": [
+            8,
+            9
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "DRAG",
+          "frames": [
+            12,
+            13,
+            14
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "CLIMB",
+          "frames": [
+            16,
+            17,
+            18,
+            19
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "SIT_EDGE",
+          "frames": [
+            20,
+            21
+          ],
+          "frameMs": 400,
+          "loop": true
+        },
+        {
+          "action": "REACT",
+          "frames": [
+            24,
+            25,
+            26
+          ],
+          "frameMs": 130,
+          "loop": false
+        },
+        {
+          "action": "BATH",
+          "frames": [
+            28,
+            29,
+            30,
+            31
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "WALK",
+          "frames": [
+            32,
+            33,
+            34,
+            35
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "RUN",
+          "frames": [
+            36,
+            37,
+            38,
+            39
+          ],
+          "frameMs": 105,
+          "loop": true
+        }
+      ],
+      "contentSha256": "f57c07156064138b6540862b365af87778a39244da8cf25c6ac84f11f9522886",
+      "generationMode": "codex-imagegen",
+      "productionReady": true
+    },
+    {
+      "id": "shimeji_kitsune_adult",
+      "species": "kitsune",
+      "stage": "adult",
+      "path": "tama/shimeji/sheets/kitsune/adult.png",
+      "frameWidth": 256,
+      "frameHeight": 256,
+      "columns": 4,
+      "rows": 10,
+      "sheetWidth": 1024,
+      "sheetHeight": 2560,
+      "frameCount": 31,
+      "facing": "right",
+      "footAnchor": {
+        "x": 128,
+        "y": 224
+      },
+      "clips": [
+        {
+          "action": "JUMP",
+          "frames": [
+            0,
+            1,
+            2
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "FALL",
+          "frames": [
+            4,
+            5
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "LAND",
+          "frames": [
+            8,
+            9
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "DRAG",
+          "frames": [
+            12,
+            13,
+            14
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "CLIMB",
+          "frames": [
+            16,
+            17,
+            18,
+            19
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "SIT_EDGE",
+          "frames": [
+            20,
+            21
+          ],
+          "frameMs": 400,
+          "loop": true
+        },
+        {
+          "action": "REACT",
+          "frames": [
+            24,
+            25,
+            26
+          ],
+          "frameMs": 130,
+          "loop": false
+        },
+        {
+          "action": "BATH",
+          "frames": [
+            28,
+            29,
+            30,
+            31
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "WALK",
+          "frames": [
+            32,
+            33,
+            34,
+            35
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "RUN",
+          "frames": [
+            36,
+            37,
+            38,
+            39
+          ],
+          "frameMs": 105,
+          "loop": true
+        }
+      ],
+      "contentSha256": "b8a70d7224402c15b288996e7debdd11b6edc20fb7af91430b8b2c4566b97324",
+      "generationMode": "codex-imagegen",
+      "productionReady": true
+    },
+    {
+      "id": "shimeji_kitsune_senior",
+      "species": "kitsune",
+      "stage": "senior",
+      "path": "tama/shimeji/sheets/kitsune/senior.png",
+      "frameWidth": 256,
+      "frameHeight": 256,
+      "columns": 4,
+      "rows": 10,
+      "sheetWidth": 1024,
+      "sheetHeight": 2560,
+      "frameCount": 31,
+      "facing": "right",
+      "footAnchor": {
+        "x": 128,
+        "y": 224
+      },
+      "clips": [
+        {
+          "action": "JUMP",
+          "frames": [
+            0,
+            1,
+            2
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "FALL",
+          "frames": [
+            4,
+            5
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "LAND",
+          "frames": [
+            8,
+            9
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "DRAG",
+          "frames": [
+            12,
+            13,
+            14
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "CLIMB",
+          "frames": [
+            16,
+            17,
+            18,
+            19
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "SIT_EDGE",
+          "frames": [
+            20,
+            21
+          ],
+          "frameMs": 400,
+          "loop": true
+        },
+        {
+          "action": "REACT",
+          "frames": [
+            24,
+            25,
+            26
+          ],
+          "frameMs": 130,
+          "loop": false
+        },
+        {
+          "action": "BATH",
+          "frames": [
+            28,
+            29,
+            30,
+            31
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "WALK",
+          "frames": [
+            32,
+            33,
+            34,
+            35
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "RUN",
+          "frames": [
+            36,
+            37,
+            38,
+            39
+          ],
+          "frameMs": 105,
+          "loop": true
+        }
+      ],
+      "contentSha256": "0ecc7286588042f243da4d14e8c74125ec9d77489b398062f56a166c8190d8cc",
+      "generationMode": "codex-imagegen",
+      "productionReady": true
+    },
+    {
+      "id": "shimeji_unicorn_egg",
+      "species": "unicorn",
+      "stage": "egg",
+      "path": "tama/shimeji/sheets/unicorn/egg.png",
+      "frameWidth": 256,
+      "frameHeight": 256,
+      "columns": 4,
+      "rows": 5,
+      "sheetWidth": 1024,
+      "sheetHeight": 1280,
+      "frameCount": 10,
+      "facing": "right",
+      "footAnchor": {
+        "x": 128,
+        "y": 224
+      },
+      "clips": [
+        {
+          "action": "WOBBLE",
+          "frames": [
+            0,
+            1,
+            2
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "BOUNCE",
+          "frames": [
+            4,
+            5
+          ],
+          "frameMs": 150,
+          "loop": true
+        },
+        {
+          "action": "FALL",
+          "frames": [
+            8
+          ],
+          "frameMs": 200,
+          "loop": true
+        },
+        {
+          "action": "LAND",
+          "frames": [
+            12,
+            13
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "DRAG",
+          "frames": [
+            16,
+            17
+          ],
+          "frameMs": 160,
+          "loop": true
+        }
+      ],
+      "contentSha256": "2eff85c34be164d4be7c18e0d37cf96812ae71eec76df13c0fc7955516863c69",
+      "generationMode": "codex-imagegen",
+      "productionReady": true
+    },
+    {
+      "id": "shimeji_unicorn_baby",
+      "species": "unicorn",
+      "stage": "baby",
+      "path": "tama/shimeji/sheets/unicorn/baby.png",
+      "frameWidth": 256,
+      "frameHeight": 256,
+      "columns": 4,
+      "rows": 10,
+      "sheetWidth": 1024,
+      "sheetHeight": 2560,
+      "frameCount": 31,
+      "facing": "right",
+      "footAnchor": {
+        "x": 128,
+        "y": 224
+      },
+      "clips": [
+        {
+          "action": "JUMP",
+          "frames": [
+            0,
+            1,
+            2
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "FALL",
+          "frames": [
+            4,
+            5
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "LAND",
+          "frames": [
+            8,
+            9
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "DRAG",
+          "frames": [
+            12,
+            13,
+            14
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "CLIMB",
+          "frames": [
+            16,
+            17,
+            18,
+            19
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "SIT_EDGE",
+          "frames": [
+            20,
+            21
+          ],
+          "frameMs": 400,
+          "loop": true
+        },
+        {
+          "action": "REACT",
+          "frames": [
+            24,
+            25,
+            26
+          ],
+          "frameMs": 130,
+          "loop": false
+        },
+        {
+          "action": "BATH",
+          "frames": [
+            28,
+            29,
+            30,
+            31
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "WALK",
+          "frames": [
+            32,
+            33,
+            34,
+            35
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "RUN",
+          "frames": [
+            36,
+            37,
+            38,
+            39
+          ],
+          "frameMs": 105,
+          "loop": true
+        }
+      ],
+      "contentSha256": "9682ab66c179b43bf6282f53825149fcf75ee295bf05d2aa410f4d209697982d",
+      "generationMode": "codex-imagegen",
+      "productionReady": true
+    },
+    {
+      "id": "shimeji_unicorn_child",
+      "species": "unicorn",
+      "stage": "child",
+      "path": "tama/shimeji/sheets/unicorn/child.png",
+      "frameWidth": 256,
+      "frameHeight": 256,
+      "columns": 4,
+      "rows": 10,
+      "sheetWidth": 1024,
+      "sheetHeight": 2560,
+      "frameCount": 31,
+      "facing": "right",
+      "footAnchor": {
+        "x": 128,
+        "y": 224
+      },
+      "clips": [
+        {
+          "action": "JUMP",
+          "frames": [
+            0,
+            1,
+            2
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "FALL",
+          "frames": [
+            4,
+            5
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "LAND",
+          "frames": [
+            8,
+            9
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "DRAG",
+          "frames": [
+            12,
+            13,
+            14
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "CLIMB",
+          "frames": [
+            16,
+            17,
+            18,
+            19
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "SIT_EDGE",
+          "frames": [
+            20,
+            21
+          ],
+          "frameMs": 400,
+          "loop": true
+        },
+        {
+          "action": "REACT",
+          "frames": [
+            24,
+            25,
+            26
+          ],
+          "frameMs": 130,
+          "loop": false
+        },
+        {
+          "action": "BATH",
+          "frames": [
+            28,
+            29,
+            30,
+            31
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "WALK",
+          "frames": [
+            32,
+            33,
+            34,
+            35
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "RUN",
+          "frames": [
+            36,
+            37,
+            38,
+            39
+          ],
+          "frameMs": 105,
+          "loop": true
+        }
+      ],
+      "contentSha256": "58fb5fa8e94cf46ce0d3e0e6bcbc167ce4e239852dc6fd05fe64fe946beae96d",
+      "generationMode": "codex-imagegen",
+      "productionReady": true
+    },
+    {
+      "id": "shimeji_unicorn_teen",
+      "species": "unicorn",
+      "stage": "teen",
+      "path": "tama/shimeji/sheets/unicorn/teen.png",
+      "frameWidth": 256,
+      "frameHeight": 256,
+      "columns": 4,
+      "rows": 10,
+      "sheetWidth": 1024,
+      "sheetHeight": 2560,
+      "frameCount": 31,
+      "facing": "right",
+      "footAnchor": {
+        "x": 128,
+        "y": 224
+      },
+      "clips": [
+        {
+          "action": "JUMP",
+          "frames": [
+            0,
+            1,
+            2
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "FALL",
+          "frames": [
+            4,
+            5
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "LAND",
+          "frames": [
+            8,
+            9
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "DRAG",
+          "frames": [
+            12,
+            13,
+            14
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "CLIMB",
+          "frames": [
+            16,
+            17,
+            18,
+            19
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "SIT_EDGE",
+          "frames": [
+            20,
+            21
+          ],
+          "frameMs": 400,
+          "loop": true
+        },
+        {
+          "action": "REACT",
+          "frames": [
+            24,
+            25,
+            26
+          ],
+          "frameMs": 130,
+          "loop": false
+        },
+        {
+          "action": "BATH",
+          "frames": [
+            28,
+            29,
+            30,
+            31
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "WALK",
+          "frames": [
+            32,
+            33,
+            34,
+            35
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "RUN",
+          "frames": [
+            36,
+            37,
+            38,
+            39
+          ],
+          "frameMs": 105,
+          "loop": true
+        }
+      ],
+      "contentSha256": "d95138cbab0af37b3c087f5e6e4acd6d3d70570359655cfb8d8db97cc49aa0df",
+      "generationMode": "codex-imagegen",
+      "productionReady": true
+    },
+    {
+      "id": "shimeji_unicorn_adult",
+      "species": "unicorn",
+      "stage": "adult",
+      "path": "tama/shimeji/sheets/unicorn/adult.png",
+      "frameWidth": 256,
+      "frameHeight": 256,
+      "columns": 4,
+      "rows": 10,
+      "sheetWidth": 1024,
+      "sheetHeight": 2560,
+      "frameCount": 31,
+      "facing": "right",
+      "footAnchor": {
+        "x": 128,
+        "y": 224
+      },
+      "clips": [
+        {
+          "action": "JUMP",
+          "frames": [
+            0,
+            1,
+            2
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "FALL",
+          "frames": [
+            4,
+            5
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "LAND",
+          "frames": [
+            8,
+            9
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "DRAG",
+          "frames": [
+            12,
+            13,
+            14
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "CLIMB",
+          "frames": [
+            16,
+            17,
+            18,
+            19
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "SIT_EDGE",
+          "frames": [
+            20,
+            21
+          ],
+          "frameMs": 400,
+          "loop": true
+        },
+        {
+          "action": "REACT",
+          "frames": [
+            24,
+            25,
+            26
+          ],
+          "frameMs": 130,
+          "loop": false
+        },
+        {
+          "action": "BATH",
+          "frames": [
+            28,
+            29,
+            30,
+            31
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "WALK",
+          "frames": [
+            32,
+            33,
+            34,
+            35
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "RUN",
+          "frames": [
+            36,
+            37,
+            38,
+            39
+          ],
+          "frameMs": 105,
+          "loop": true
+        }
+      ],
+      "contentSha256": "8d50fc7d3988476ec2fe20d96e425898ca4f87e0e810e0fb553fce079ef4a040",
+      "generationMode": "codex-imagegen",
+      "productionReady": true
+    },
+    {
+      "id": "shimeji_unicorn_senior",
+      "species": "unicorn",
+      "stage": "senior",
+      "path": "tama/shimeji/sheets/unicorn/senior.png",
+      "frameWidth": 256,
+      "frameHeight": 256,
+      "columns": 4,
+      "rows": 10,
+      "sheetWidth": 1024,
+      "sheetHeight": 2560,
+      "frameCount": 31,
+      "facing": "right",
+      "footAnchor": {
+        "x": 128,
+        "y": 224
+      },
+      "clips": [
+        {
+          "action": "JUMP",
+          "frames": [
+            0,
+            1,
+            2
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "FALL",
+          "frames": [
+            4,
+            5
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "LAND",
+          "frames": [
+            8,
+            9
+          ],
+          "frameMs": 120,
+          "loop": false
+        },
+        {
+          "action": "DRAG",
+          "frames": [
+            12,
+            13,
+            14
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "CLIMB",
+          "frames": [
+            16,
+            17,
+            18,
+            19
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "SIT_EDGE",
+          "frames": [
+            20,
+            21
+          ],
+          "frameMs": 400,
+          "loop": true
+        },
+        {
+          "action": "REACT",
+          "frames": [
+            24,
+            25,
+            26
+          ],
+          "frameMs": 130,
+          "loop": false
+        },
+        {
+          "action": "BATH",
+          "frames": [
+            28,
+            29,
+            30,
+            31
+          ],
+          "frameMs": 140,
+          "loop": true
+        },
+        {
+          "action": "WALK",
+          "frames": [
+            32,
+            33,
+            34,
+            35
+          ],
+          "frameMs": 160,
+          "loop": true
+        },
+        {
+          "action": "RUN",
+          "frames": [
+            36,
+            37,
+            38,
+            39
+          ],
+          "frameMs": 105,
+          "loop": true
+        }
+      ],
+      "contentSha256": "b08685cd5ce348cf817e0c9c898ca8692aa28ad86556297a803986f2c66a7310",
+      "generationMode": "codex-imagegen",
+      "productionReady": true
+    }
+  ]
+}

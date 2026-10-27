@@ -176,8 +176,7 @@ class OnnxImageGenerationService : Service() {
                         OnnxImageGenerationState.Error(getString(R.string.onnx_image_gen_error_already_running))
                     )
                 } else {
-                    ensureForeground(config.modelName)
-                    startGeneration(config)
+                    if (ensureForeground(config.modelName)) startGeneration(config)
                 }
             }
             ACTION_CANCEL_GENERATION -> if (intent.matchesNotificationTask(notificationTaskId)) cancelGeneration()
@@ -195,14 +194,23 @@ class OnnxImageGenerationService : Service() {
         notificationTaskId?.let { UnifiedNotificationManager.dismissTask(it) }
     }
 
-    private fun ensureForeground(title: String) {
+    private fun ensureForeground(title: String): Boolean {
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.IMAGE_GEN,
             title,
             cancellationOwner = UnifiedNotificationManager.CancellationOwner.ONNX_IMAGE
         )
+        val started = ForegroundStart.start(this, taskId, notification, ForegroundServiceTypes.MEDIA_PROCESSING)
+        if (started is ForegroundStart.Result.Failed) {
+            UnifiedNotificationManager.failTask(taskId, ForegroundStart.failureMessage(this, started.reason, title))
+            OnnxImageGenerationStateStore.imageGen.updateState(
+                OnnxImageGenerationState.Error(ForegroundStart.failureMessage(this, started.reason, title))
+            )
+            stopSelf()
+            return false
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
+        return true
     }
 
     private fun startGeneration(config: OnnxImageGenConfig) {

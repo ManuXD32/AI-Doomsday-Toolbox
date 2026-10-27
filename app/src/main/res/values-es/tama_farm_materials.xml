@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_farm_action_clear_all">Despejar (%1$d)</string>
+    <plurals name="tama_farm_batch_cleared">
+        <item quantity="one">%1$d obstáculo despejado</item>
+        <item quantity="many">%1$d obstáculos despejados</item>
+        <item quantity="other">%1$d obstáculos despejados</item>
+    </plurals>
+    <string name="tama_farm_obstacle_stump">Tocón</string>
+    <string name="tama_farm_obstacle_rock">Roca</string>
+    <string name="tama_farm_obstacle_weeds">Malas hierbas</string>
+    <string name="tama_farm_material_wood">Madera</string>
+    <string name="tama_farm_material_stone">Piedra</string>
+    <string name="tama_farm_material_have_need">%1$d/%2$d</string>
+    <string name="tama_farm_material_cost_need_desc">%1$s necesaria: %2$d</string>
+    <string name="tama_farm_material_cost_have_desc">%1$s: tienes %2$d, necesitas %3$d</string>
+    <string name="tama_farm_materials_missing_note">Faltan materiales</string>
+    <string name="tama_farm_store_wood_desc">Material de construcción para mejoras y animales.</string>
+    <string name="tama_farm_store_stone_desc">Material de construcción para mejoras y animales.</string>
+</resources>

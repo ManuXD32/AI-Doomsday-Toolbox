@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -61,7 +62,12 @@ data class ShotSpec(
      * Texts of controls to paint over with the background colour in the captured image (the control's
      * bounds are filled with the colour sampled at the right edge of its row). Store shots only.
      */
-    val blankTexts: List<String> = emptyList()
+    val blankTexts: List<String> = emptyList(),
+    /**
+     * When set, this content is composed in the shot box instead of `LlamaApp` (dialog/popup bodies
+     * rendered inline, see `DialogShotHost`); [route] is then only a label for the manifest.
+     */
+    val content: (@Composable () -> Unit)? = null
 )
 
 class ShotResult(
@@ -109,11 +115,16 @@ class ShotHarness(private val rule: ComposeTestRule, private val environment: Fa
                                 .size(with(density) { spec.profile.widthPx.toDp() }, with(density) { spec.profile.heightPx.toDp() })
                                 .testTag(ROOT_TAG)
                         ) {
-                            LlamaApp(
-                                pendingNavigationRoute = ExternalRouteResolution.Navigate(spec.route),
-                                allowDailySupportPrompt = false,
-                                allowAutomaticWalkthrough = false
-                            )
+                            val inline = spec.content
+                            if (inline != null) {
+                                inline()
+                            } else {
+                                LlamaApp(
+                                    pendingNavigationRoute = ExternalRouteResolution.Navigate(spec.route),
+                                    allowDailySupportPrompt = false,
+                                    allowAutomaticWalkthrough = false
+                                )
+                            }
                         }
                     }
                 }

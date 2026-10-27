@@ -816,9 +816,20 @@ class AdventureGateCombatEngineTest {
         val resistsFire = AdventureGateProfile(petId = "pet", currentHp = 120, equippedShieldId = "ag_shield_brass_button")
 
         fun damageTaken(profile: AdventureGateProfile): Int {
-            val battle = AdventureGateCombatEngine.startBattle(profile, phase, seed = 10L)
-                .copy(turn = AdventureGateTurn.ENEMY, pet = AdventureGateCombatEngine.startBattle(profile, phase, seed = 10L).pet.copy(hp = 120))
-            val result = AdventureGateCombatEngine.resolveEnemyTurn(profile, battle)
+            val started = AdventureGateCombatEngine.startBattle(profile, phase, seed = 10L)
+            val battle = started.copy(
+                pet = started.pet.copy(hp = 120),
+                // Pin the telegraphed intent to a fire attack so the weighted enemy AI cannot pick another element.
+                enemies = started.enemies.take(1).map {
+                    it.copy(
+                        hp = 9_999,
+                        maxHp = 9_999,
+                        mana = 99,
+                        intent = AdventureGateEnemyIntent("enemy_fire_spark", AdventureGateIntentKind.ATTACK, 100)
+                    )
+                }
+            )
+            val result = AdventureGateCombatEngine.performSkill(profile, battle, "guard", battle.enemies.first().instanceId)
             return 120 - result.snapshot.pet.hp
         }
 
@@ -837,12 +848,11 @@ class AdventureGateCombatEngineTest {
         val phase = AdventureGateCatalog.world("sproutvale_gate").phases.first()
         val battle = AdventureGateCombatEngine.startBattle(profile, phase, seed = 11L)
             .copy(
-                turn = AdventureGateTurn.ENEMY,
                 pet = AdventureGateCombatEngine.startBattle(profile, phase, seed = 11L).pet.copy(hp = 10),
-                enemies = AdventureGateCombatEngine.startBattle(profile, phase, seed = 11L).enemies.map { it.copy(attack = 999, magic = 1) }
+                enemies = AdventureGateCombatEngine.startBattle(profile, phase, seed = 11L).enemies.map { it.copy(attack = 999, magic = 1, hp = 9_999, maxHp = 9_999) }
             )
 
-        val result = AdventureGateCombatEngine.resolveEnemyTurn(profile, battle)
+        val result = AdventureGateCombatEngine.performSkill(profile, battle, "guard", battle.enemies.first().instanceId)
 
         assertTrue(result.snapshot.pet.hp > 0)
         assertTrue(!result.snapshot.isCompleted)

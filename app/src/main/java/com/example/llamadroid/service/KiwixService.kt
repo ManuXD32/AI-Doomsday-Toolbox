@@ -65,8 +65,21 @@ class KiwixService : Service() {
             UnifiedNotificationManager.TaskType.FILE_SERVER,
             "Kiwix Server"
         )
+        val startResult = ForegroundStart.start(
+            this,
+            taskId,
+            notification,
+            ForegroundServiceTypes.DATA_SYNC
+        )
+        if (startResult is ForegroundStart.Result.Failed) {
+            UnifiedNotificationManager.failTask(
+                taskId,
+                ForegroundStart.failureMessage(this, startResult.reason, "Kiwix Server")
+            )
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
         
         return START_NOT_STICKY
     }

@@ -28,8 +28,9 @@
     <string name="general_prompt_caches_title">Cachés de prompts en disco</string>
     <string name="general_prompt_caches_erase_all">Borrar todo</string>
     <string name="general_prompt_caches_erase_title">¿Borrar todas las cachés de prompts en disco?</string>
-    <string name="general_prompt_caches_erase_message">Los chats, los subagentes DeepSeek y los agentes del harness volverán a procesar sus prompts la próxima vez. Las conversaciones no se ven afectadas.</string>
+    <string name="general_prompt_caches_erase_message">Los chats, los subagentes DeepSeek, los agentes del harness y los chats de mascotas volverán a procesar sus prompts la próxima vez. Las conversaciones no se ven afectadas.</string>
     <string name="native_chat_kv_cache_namespace_base">Cachés base</string>
+    <string name="native_chat_kv_cache_namespace_pet">Chats de mascota</string>
     <string name="kv_prepare_caches_button">Preparar cachés</string>
     <string name="kv_prepare_caches_title">Preparar cachés</string>
     <string name="kv_prepare_caches_intro">Una caché base guarda el prompt de sistema (instrucciones de herramientas) y las definiciones de herramientas ya procesados, para que los chats nuevos solo procesen su primer mensaje. La caché propia de un chat nunca la sobrescribe; solo se reconstruye si falta o si cambian el modelo, el contexto, las herramientas o la plantilla.</string>

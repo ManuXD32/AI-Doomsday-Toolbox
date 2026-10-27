@@ -59,7 +59,7 @@ class TamaNotificationReceiver : BroadcastReceiver() {
         }
         val farmRepository = FarmRepository(database.farmDao(), context)
         val farmEngine = FarmEngine(farmRepository)
-        farmEngine.updateFarm(pet.id)
+        farmEngine.updateFarm(pet.id, cycleFrozen = pet.cycleFrozen)
 
         when (kind) {
             TamaNotificationScheduler.AlertKind.PET_NEED -> {

@@ -1,5 +1,6 @@
 package com.example.llamadroid.tama.ui
 
+import com.example.llamadroid.tama.adventure.AdventurePrompts
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -334,6 +335,7 @@ fun AdventureSettingsDialog(
         PromptEditorDialog(
             title = stringResource(R.string.adventure_edit_system_prompt),
             prompt = adventureSystemPrompt,
+            defaultPrompt = SettingsRepository.FALLBACK_ADVENTURE_SYSTEM_PROMPT,
             onSave = {
                 settingsRepository.setAdventureSystemPrompt(it)
                 showSystemPromptEditor = false
@@ -346,6 +348,7 @@ fun AdventureSettingsDialog(
         PromptEditorDialog(
             title = stringResource(R.string.adventure_edit_summarizer_prompt),
             prompt = adventureSummarizerPrompt,
+            defaultPrompt = SettingsRepository.FALLBACK_ADVENTURE_SUMMARIZER_PROMPT,
             onSave = {
                 settingsRepository.setAdventureSummarizerPrompt(it)
                 showSummarizerPromptEditor = false
@@ -417,14 +420,13 @@ private fun AdventureLanguageSelector(
     onExpandChange: (Boolean) -> Unit,
     onLanguageSelected: (String) -> Unit
 ) {
-    val languages = listOf(
-        "English", "Spanish", "French", "German", "Italian",
-        "Portuguese", "Russian", "Chinese", "Japanese", "Korean"
-    )
+    val languages = AdventurePrompts.LANGUAGE_OPTIONS
+    val autoLabel = stringResource(R.string.adventure_language_auto)
+    fun label(language: String) = if (language == AdventurePrompts.AUTO_LANGUAGE) autoLabel else language
     Text(stringResource(R.string.adventure_language_title), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
     Box {
         OutlinedTextField(
-            value = selectedLanguage,
+            value = label(selectedLanguage),
             onValueChange = {},
             modifier = Modifier.fillMaxWidth(),
             readOnly = true,
@@ -441,7 +443,7 @@ private fun AdventureLanguageSelector(
         DropdownMenu(expanded = expanded, onDismissRequest = { onExpandChange(false) }) {
             languages.forEach { language ->
                 DropdownMenuItem(
-                    text = { Text(language, fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
+                    text = { Text(label(language), fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
                     modifier = Modifier.heightIn(min = 48.dp),
                     onClick = { onLanguageSelected(language) }
                 )
@@ -571,21 +573,33 @@ fun PromptEditorDialog(
     title: String,
     prompt: String,
     onSave: (String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    defaultPrompt: String? = null
 ) {
     var editedPrompt by remember(prompt) { mutableStateOf(prompt) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title, fontFamily = FontFamily.Monospace) },
         text = {
-            OutlinedTextField(
-                value = editedPrompt,
-                onValueChange = { editedPrompt = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 200.dp, max = 420.dp),
-                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-            )
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                OutlinedTextField(
+                    value = editedPrompt,
+                    onValueChange = { editedPrompt = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 200.dp, max = 420.dp),
+                    textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                )
+                if (defaultPrompt != null) {
+                    TextButton(
+                        onClick = { editedPrompt = defaultPrompt },
+                        enabled = editedPrompt != defaultPrompt,
+                        modifier = Modifier.heightIn(min = 48.dp)
+                    ) {
+                        Text(stringResource(R.string.adventure_reset_prompt_default), maxLines = 2)
+                    }
+                }
+            }
         },
         confirmButton = {
             TextButton(onClick = { onSave(editedPrompt) }, modifier = Modifier.heightIn(min = 48.dp)) {

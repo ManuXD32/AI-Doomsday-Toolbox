@@ -163,5 +163,6 @@ private fun namespaceLabelRes(namespace: KvCacheNamespace): Int = when (namespac
     KvCacheNamespace.CHAT -> R.string.native_chat_delegation_storage_chats
     KvCacheNamespace.DELEGATE -> R.string.native_chat_delegation_storage_subagents
     KvCacheNamespace.HARNESS -> R.string.native_chat_delegation_storage_harness
+    KvCacheNamespace.PET -> R.string.native_chat_kv_cache_namespace_pet
     KvCacheNamespace.BASE -> R.string.native_chat_kv_cache_namespace_base
 }

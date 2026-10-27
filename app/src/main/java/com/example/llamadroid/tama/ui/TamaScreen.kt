@@ -8,7 +8,6 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
@@ -81,6 +80,12 @@ import com.example.llamadroid.tama.rpg.AdventureGateRepository
 import com.example.llamadroid.tama.rpg.AdventureGateSupplyDefinition
 import com.example.llamadroid.tama.rpg.AdventureGateSupplyKind
 import com.example.llamadroid.tama.rpg.NightArenaGenerator
+import com.example.llamadroid.tama.transfer.PetTransferUiState
+import com.example.llamadroid.tama.ui.transfer.TamaGuestBanner
+import com.example.llamadroid.tama.ui.transfer.TamaTransferHolder
+import com.example.llamadroid.tama.ui.transfer.TamaTransferRoot
+import com.example.llamadroid.tama.ui.transfer.petTransferIsAway
+import com.example.llamadroid.tama.ui.transfer.petTransferTakesOver
 import com.example.llamadroid.ui.components.DraftIntTextField
 import com.example.llamadroid.ui.components.pressAndHoldRepeat
 import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
@@ -135,7 +140,7 @@ val TamaDark = Color(0xFF2C2C2C)         // Dark for pixels
 val TamaLight = Color(0xFFE8E8D0)        // Light for highlights
 val TamaAccent = Color(0xFF5A5A5A)       // Mid-gray
 val TamaMutedText = Color(0xFF434339)    // Darker secondary text on light surfaces
-val TamaHelperText = Color(0xFFB8B8B0)   // Lighter helper text for dark dialog surfaces
+val TamaHelperText = TamaMutedText       // Helper text on the cream popup body (8.0:1 on E8E8D0)
 
 /**
  * Main Tama Tab screen.
@@ -176,6 +181,14 @@ fun TamaScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val resources = LocalResources.current
+    val notice = rememberTamaNotice()
+    val transferHandle = remember(context) { TamaTransferHolder.get(context) }
+    val transferState by transferHandle.coordinator.state.collectAsState()
+    LaunchedEffect(transferHandle, gameEngine) {
+        transferHandle.coordinator.petChanged.collect { count -> if (count > 0) gameEngine.loadPet() }
+    }
+    var showTransfer by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(transferHandle) { transferHandle.recoverOnceAsync() }
     var queuedPaintingArtworkId by rememberSaveable { mutableStateOf<String?>(null) }
     var artworkAwaitingRevealId by rememberSaveable { mutableStateOf<String?>(null) }
     var dreamAlbumAwaitingRevealId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -204,18 +217,18 @@ fun TamaScreen(
                 try {
                     val outputStream = context.contentResolver.openOutputStream(uri)
                     if (outputStream == null) {
-                        Toast.makeText(context, resources.getString(R.string.tama_export_failed, resources.getString(R.string.error_generic)), Toast.LENGTH_SHORT).show()
+                        notice.show(resources.getString(R.string.tama_export_failed, resources.getString(R.string.error_generic)), isError = true)
                     } else {
                         outputStream.use { stream ->
                             if (gameEngine.exportToBackupZip(stream)) {
-                                Toast.makeText(context, resources.getString(R.string.tama_export_success), Toast.LENGTH_SHORT).show()
+                                notice.show(resources.getString(R.string.tama_export_success), isError = false)
                             } else {
-                                Toast.makeText(context, resources.getString(R.string.tama_export_failed, resources.getString(R.string.error_generic)), Toast.LENGTH_SHORT).show()
+                                notice.show(resources.getString(R.string.tama_export_failed, resources.getString(R.string.error_generic)), isError = true)
                             }
                         }
                     }
                 } catch (e: Exception) {
-                    Toast.makeText(context, resources.getString(R.string.tama_export_failed, e.message ?: ""), Toast.LENGTH_SHORT).show()
+                    notice.show(resources.getString(R.string.tama_export_failed, e.message ?: ""), isError = true)
                 }
             }
         }
@@ -230,20 +243,20 @@ fun TamaScreen(
                 scope.launch {
                     val inputStream = context.contentResolver.openInputStream(uri)
                     if (inputStream == null) {
-                        Toast.makeText(context, resources.getString(R.string.tama_import_failed, resources.getString(R.string.error_generic)), Toast.LENGTH_SHORT).show()
+                        notice.show(resources.getString(R.string.tama_import_failed, resources.getString(R.string.error_generic)), isError = true)
                     } else {
                         inputStream.use { stream ->
                             val success = gameEngine.importFromBackup(stream)
                             if (success) {
-                                Toast.makeText(context, resources.getString(R.string.tama_import_success), Toast.LENGTH_SHORT).show()
+                                notice.show(resources.getString(R.string.tama_import_success), isError = false)
                             } else {
-                                Toast.makeText(context, resources.getString(R.string.tama_import_invalid), Toast.LENGTH_SHORT).show()
+                                notice.show(resources.getString(R.string.tama_import_invalid), isError = true)
                             }
                         }
                     }
                 }
             } catch (e: Exception) {
-                Toast.makeText(context, resources.getString(R.string.tama_import_failed, e.message ?: ""), Toast.LENGTH_SHORT).show()
+                notice.show(resources.getString(R.string.tama_import_failed, e.message ?: ""), isError = true)
             }
         }
     }
@@ -301,7 +314,6 @@ fun TamaScreen(
     var showTrainingDialog by remember { mutableStateOf(false) }
     var showAlchemistDialog by remember { mutableStateOf(false) }
     var showHospitalDialog by remember { mutableStateOf(false) }
-    var showAdventureGateWarningDialog by remember { mutableStateOf(false) }
     var showStudyDialog by remember { mutableStateOf(false) }
     var showQuestBoardDialog by remember { mutableStateOf(false) }
     var showMarketBoardDialog by remember { mutableStateOf(false) }
@@ -310,7 +322,7 @@ fun TamaScreen(
     var questRewardPresentation by remember(pet?.id) { mutableStateOf<TamaQuestCompletionPresentation?>(null) }
     var marketBoard by remember { mutableStateOf<TamaMarketBoard?>(null) }
     val requestAdventureGateEntry = {
-        showAdventureGateWarningDialog = true
+        navController.navigate(Screen.AdventureGate.route)
     }
     var sleepyFairyReminder by remember { mutableStateOf<TamaSleepyFairyReminder?>(null) }
     var wasInPrincipalHomeRoom by remember { mutableStateOf(false) }
@@ -373,7 +385,7 @@ fun TamaScreen(
 
     // Fixed city and location state (no city generation).
     val cityLocations = remember(localeTag) { classicMapLocations(context) }
-    // Helper to perform action with cooldown and Toast feedback
+    // Helper to perform action with cooldown and notice feedback
     fun actionDisplayDuration(actionName: String?): Long = when (actionName?.lowercase()) {
         "eating" -> 2200L
         "sleeping" -> 1800L
@@ -383,15 +395,15 @@ fun TamaScreen(
         else -> 1500L
     }
 
-    fun shouldShowResultToast(result: TamaGameEngine.ActionResult): Boolean {
+    fun shouldShowResultNotice(result: TamaGameEngine.ActionResult): Boolean {
         if (!result.success) return true
         return result.action in setOf("harvesting", "buying", "selling", "transforming", "sleeping")
     }
 
-    suspend fun showResultToast(result: TamaGameEngine.ActionResult, force: Boolean = false) {
-        if (force || shouldShowResultToast(result)) {
+    suspend fun showResultNotice(result: TamaGameEngine.ActionResult, force: Boolean = false) {
+        if (force || shouldShowResultNotice(result)) {
             withContext(Dispatchers.Main.immediate) {
-                Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                notice.show(result.message, isError = !result.success)
             }
         }
     }
@@ -401,7 +413,7 @@ fun TamaScreen(
         actionCooldown = true
         scope.launch {
             val result = action()
-            showResultToast(result)
+            showResultNotice(result)
             if (result.success) {
                 currentAction = result.action
                 kotlinx.coroutines.delay(actionDisplayDuration(result.action))
@@ -420,11 +432,7 @@ fun TamaScreen(
                 artworkAwaitingRevealId = null
             }
             TamaArtworkStatus.FAILED.name -> {
-                Toast.makeText(
-                    context,
-                    artwork.errorMessage ?: resources.getString(R.string.error_generic),
-                    Toast.LENGTH_SHORT
-                ).show()
+                notice.show(artwork.errorMessage ?: resources.getString(R.string.error_generic), isError = true)
                 artworkAwaitingRevealId = null
             }
         }
@@ -436,11 +444,7 @@ fun TamaScreen(
         return TamaArtworkManager.queuePainting(context, currentPet, settingsRepo)
             .onSuccess { queuedPaintingArtworkId = it.id }
             .onFailure { error ->
-                Toast.makeText(
-                    context,
-                    error.message ?: resources.getString(R.string.error_generic),
-                    Toast.LENGTH_SHORT
-                ).show()
+                notice.show(error.message ?: resources.getString(R.string.error_generic), isError = true)
             }
             .getOrNull()
             ?.id
@@ -454,12 +458,11 @@ fun TamaScreen(
         if (albumArtworks.isEmpty()) return@LaunchedEffect
         when {
             albumArtworks.any { it.status == TamaArtworkStatus.FAILED.name } -> {
-                Toast.makeText(
-                    context,
+                notice.show(
                     albumArtworks.firstOrNull { it.status == TamaArtworkStatus.FAILED.name }?.errorMessage
                         ?: resources.getString(R.string.error_generic),
-                    Toast.LENGTH_SHORT
-                ).show()
+                    isError = true
+                )
                 gameEngine.clearPendingDreamAlbum(albumId)
                 dreamAlbumAwaitingRevealId = null
             }
@@ -491,20 +494,30 @@ fun TamaScreen(
     fun handleActivityStart(activity: ActivityType) {
         scope.launch {
             val result = gameEngine.startActivity(activity)
-            Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+            notice.show(result.message, isError = !result.success)
             if (result.success && activity == ActivityType.STUDYING) {
                 queuePaintingIfEnabled()
             }
         }
     }
 
-    BoxWithConstraints(modifier = modifier.fillMaxSize().background(TamaBackground)) {
+    if (petTransferTakesOver(transferState, showTransfer)) {
+        TamaTransferRoot(
+            handle = transferHandle,
+            pet = pet,
+            onClose = { showTransfer = false },
+            modifier = modifier
+        )
+    } else BoxWithConstraints(modifier = modifier.fillMaxSize().background(TamaBackground)) {
         // Reserve the pet header before sizing the scene on short tablet windows.
         val roomMaxSize = minOf(560.dp, (maxHeight - 64.dp).coerceAtLeast(240.dp))
         Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        (transferState as? PetTransferUiState.HostingGuest)?.let { guest ->
+            TamaGuestBanner(guest, onOpen = { showTransfer = true })
+        }
         if (pet == null && guidedVisit) {
             Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(stringResource(R.string.tour_tama_missing_body))
+                Text(stringResource(R.string.tour_tama_missing_body), color = TamaDark)
                 Button(onClick = { showNameDialog = true }) { Text(stringResource(R.string.tour_tama_setup)) }
             }
         }
@@ -678,14 +691,14 @@ fun TamaScreen(
                         if (dreamAlbumAwaitingRevealId == null && petId != null && sleepStartTime != null) {
                             artworkAwaitingRevealId = gameEngine.getLatestSleepDreamArtwork(petId, sleepStartTime)?.id
                         }
-                        Toast.makeText(context, resources.getString(R.string.tama_woke_up, pet?.name ?: ""), Toast.LENGTH_SHORT).show()
+                        notice.show(resources.getString(R.string.tama_woke_up, pet?.name ?: ""), isError = false)
                     }
                 } else {
                     if (actionCooldown) return@TamaControls
                     actionCooldown = true
                     scope.launch {
                         val result = gameEngine.goToBed()
-                        Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                        notice.show(result.message, isError = !result.success)
                         if (result.success) {
                             currentAction = result.action
                             kotlinx.coroutines.delay(actionDisplayDuration(result.action))
@@ -707,7 +720,7 @@ fun TamaScreen(
             onRelax = {
                 scope.launch {
                     val result = gameEngine.startActivity(ActivityType.RELAXING)
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    notice.show(result.message, isError = !result.success)
                 }
             },
             onQuestBoard = {
@@ -725,7 +738,7 @@ fun TamaScreen(
             onDebugDeepDream = {
                 scope.launch {
                     val result = gameEngine.triggerDeepDreamDebug()
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    notice.show(result.message, isError = !result.success)
                     if (result.success) {
                         currentAction = result.action
                         kotlinx.coroutines.delay(actionDisplayDuration(result.action))
@@ -751,7 +764,7 @@ fun TamaScreen(
                                 ?.id
                         }
                     }
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    notice.show(result.message, isError = !result.success)
                 }
             },
             onBuy = { showShopDialog = true },
@@ -771,7 +784,7 @@ fun TamaScreen(
                     } else {
                         gameEngine.freezeCycle()
                     }
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    notice.show(result.message, isError = !result.success)
                     actionCooldown = false
                 }
             },
@@ -790,9 +803,9 @@ fun TamaScreen(
                 scope.launch {
                     try {
                         gameEngine.createPet(name, speciesLine.id)
-                        Toast.makeText(context, resources.getString(R.string.tama_welcome_new, name), Toast.LENGTH_SHORT).show()
+                        notice.show(resources.getString(R.string.tama_welcome_new, name), isError = false)
                     } catch (e: Exception) {
-                        Toast.makeText(context, resources.getString(R.string.tama_hatch_failed, e.message ?: ""), Toast.LENGTH_LONG).show()
+                        notice.show(resources.getString(R.string.tama_hatch_failed, e.message ?: ""), isError = true)
                     }
                 }
                 showNameDialog = false
@@ -822,19 +835,18 @@ fun TamaScreen(
                     val result = gameEngine.travelTo(location)
                     if (result.success) {
                         if (!alreadyDiscovered) {
-                            Toast.makeText(
-                                context,
+                            notice.show(
                                 resources.getString(
                                     R.string.tama_discovered,
                                     location.name,
                                     location.description
                                 ),
-                                Toast.LENGTH_LONG
-                            ).show()
+                                isError = false
+                            )
                         }
                         showMap = false
                     } else {
-                        showResultToast(result, force = true)
+                        showResultNotice(result, force = true)
                     }
                 }
             },
@@ -907,6 +919,10 @@ fun TamaScreen(
                 showMenu = false
                 importLauncher.launch(arrayOf("application/zip", "application/json", "text/plain", "*/*"))
             },
+            onTransfer = {
+                showMenu = false
+                showTransfer = true
+            },
             onReset = {
                 showMenu = false
                 showResetDialog = true
@@ -934,7 +950,7 @@ fun TamaScreen(
             onConfirm = {
                 scope.launch {
                     gameEngine.resetPet()
-                    Toast.makeText(context, resources.getString(R.string.tama_deleted), Toast.LENGTH_SHORT).show()
+                    notice.show(resources.getString(R.string.tama_deleted), isError = false)
                 }
                 showSecondResetDialog = false
             },
@@ -954,7 +970,8 @@ fun TamaScreen(
         TamaSettingsDialog(
             navController = navController,
             settingsRepo = settingsRepo,
-            onDismiss = { showSettingsDialog = false }
+            onDismiss = { showSettingsDialog = false },
+            isAway = petTransferIsAway(transferState)
         )
     }
 
@@ -980,7 +997,7 @@ fun TamaScreen(
             onStartNormal = { selectedIds, newNames ->
                 scope.launch {
                     val result = gameEngine.startNormalStudySession(selectedIds, newNames)
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    notice.show(result.message, isError = !result.success)
                     if (result.success) {
                         showStudyDialog = false
                         queuePaintingIfEnabled()
@@ -990,7 +1007,7 @@ fun TamaScreen(
             onStartPomodoro = { selectedIds, newNames, settings ->
                 scope.launch {
                     val result = gameEngine.startPomodoroStudySession(selectedIds, newNames, settings)
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    notice.show(result.message, isError = !result.success)
                     if (result.success) {
                         showStudyDialog = false
                         queuePaintingIfEnabled()
@@ -1025,7 +1042,7 @@ fun TamaScreen(
             onBuy = { item, cost ->
                 scope.launch {
                     val result = gameEngine.buyItem(item, 1, cost)
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    notice.show(result.message, isError = !result.success)
                 }
             },
             onDismiss = { showShopDialog = false }
@@ -1038,7 +1055,7 @@ fun TamaScreen(
             onUseRoom = { roomId ->
                 scope.launch {
                     val result = gameEngine.setHomeRoom(roomId)
-                    showResultToast(result)
+                    showResultNotice(result)
                     if (result.success) {
                         showInventoryDialog = false
                     }
@@ -1048,7 +1065,7 @@ fun TamaScreen(
             onRemoveDecor = { slot ->
                 scope.launch {
                     val result = gameEngine.removeDecoration(slot)
-                    showResultToast(result)
+                    showResultNotice(result)
                 }
             },
             onDismiss = { showInventoryDialog = false }
@@ -1062,25 +1079,25 @@ fun TamaScreen(
             onAddItem = { itemId ->
                 scope.launch {
                     val result = gameEngine.addQuestChecklistItem(itemId)
-                    showResultToast(result)
+                    showResultNotice(result)
                 }
             },
             onUpdateItem = { itemId, quantity, checked ->
                 scope.launch {
                     val result = gameEngine.updateQuestChecklistItem(itemId, quantity, checked)
-                    showResultToast(result)
+                    showResultNotice(result)
                 }
             },
             onDeleteItem = { itemId ->
                 scope.launch {
                     val result = gameEngine.deleteQuestChecklistItem(itemId)
-                    showResultToast(result)
+                    showResultNotice(result)
                 }
             },
             onClearChecked = {
                 scope.launch {
                     val result = gameEngine.clearCheckedQuestChecklistItems()
-                    showResultToast(result)
+                    showResultNotice(result)
                 }
             },
             onDismiss = { showQuestChecklistDialog = false }
@@ -1094,7 +1111,7 @@ fun TamaScreen(
             onStartJob = { jobId ->
                 scope.launch {
                     val result = gameEngine.startWork(jobId)
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    notice.show(result.message, isError = !result.success)
                     if (result.success) {
                         showWorkDialog = false
                     }
@@ -1110,53 +1127,10 @@ fun TamaScreen(
             onStartTier = { tierId ->
                 scope.launch {
                     val result = gameEngine.startTraining(tierId)
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    notice.show(result.message, isError = !result.success)
                     if (result.success) {
                         showTrainingDialog = false
                     }
-                }
-            }
-        )
-    }
-
-    if (showAdventureGateWarningDialog) {
-        AlertDialog(
-            onDismissRequest = { showAdventureGateWarningDialog = false },
-            title = {
-                Text(
-                    stringResource(R.string.adventure_gate_placeholder_warning_title),
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold
-                )
-            },
-            text = {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 220.dp)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        stringResource(R.string.adventure_gate_placeholder_warning_body),
-                        fontFamily = FontFamily.Monospace,
-                        lineHeight = 18.sp
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showAdventureGateWarningDialog = false
-                        navController.navigate(Screen.AdventureGate.route)
-                    }
-                ) {
-                    Text(stringResource(R.string.adventure_gate_placeholder_warning_continue))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAdventureGateWarningDialog = false }) {
-                    Text(stringResource(R.string.action_cancel))
                 }
             }
         )
@@ -1173,7 +1147,7 @@ fun TamaScreen(
                         cost,
                         vendorId = LegacyLocationAliases.ALCHEMIST
                     )
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    notice.show(result.message, isError = !result.success)
                 }
             },
             onBrew = { ingredients -> gameEngine.brewAdventureGatePotion(ingredients) },
@@ -1192,7 +1166,7 @@ fun TamaScreen(
                         cost,
                         vendorId = LegacyLocationAliases.HOSPITAL
                     )
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    notice.show(result.message, isError = !result.success)
                 }
             },
             onDismiss = { showHospitalDialog = false }
@@ -1213,14 +1187,14 @@ fun TamaScreen(
             onAccept = { questId ->
                 scope.launch {
                     val result = gameEngine.acceptParkQuest(questId, currentTime)
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    notice.show(result.message, isError = !result.success)
                     questBoard = gameEngine.getParkQuestBoard(currentTime)
                 }
             },
             onFinish = { questId ->
                 scope.launch {
                     val result = gameEngine.finishParkQuest(questId, currentTime)
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    notice.show(result.message, isError = !result.success)
                     questRewardPresentation = result.presentation
                     questBoard = gameEngine.getParkQuestBoard(currentTime)
                 }
@@ -1228,7 +1202,7 @@ fun TamaScreen(
             onAddToChecklist = { questId ->
                 scope.launch {
                     val result = gameEngine.addQuestToChecklist(questId, currentTime)
-                    showResultToast(result)
+                    showResultNotice(result)
                 }
             },
             onDismiss = { showQuestBoardDialog = false }
@@ -1256,7 +1230,7 @@ fun TamaScreen(
                 onPlace = { slot ->
                     scope.launch {
                         val result = gameEngine.placeDecoration(decorId, slot)
-                        showResultToast(result)
+                        showResultNotice(result)
                         if (result.success) {
                             pendingDecorationId = null
                         }
@@ -1276,43 +1250,43 @@ fun TamaScreen(
             onDismissRegular = {
                 scope.launch {
                     val result = gameEngine.dismissParkEncounter()
-                    showResultToast(result)
+                    showResultNotice(result)
                 }
             },
             onAcceptRecycler = {
                 scope.launch {
                     val result = gameEngine.acceptRecyclerEncounter()
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    notice.show(result.message, isError = !result.success)
                 }
             },
             onDeclineRecycler = {
                 scope.launch {
                     val result = gameEngine.declineRecyclerEncounter()
-                    showResultToast(result)
+                    showResultNotice(result)
                 }
             },
             onFinishRecycler = {
                 scope.launch {
                     val result = gameEngine.finishRecyclerEncounter()
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    notice.show(result.message, isError = !result.success)
                 }
             },
             onAcceptSeller = {
                 scope.launch {
                     val result = gameEngine.acceptSellerEncounter()
-                    showResultToast(result)
+                    showResultNotice(result)
                 }
             },
             onDeclineSeller = {
                 scope.launch {
                     val result = gameEngine.declineSellerEncounter()
-                    showResultToast(result)
+                    showResultNotice(result)
                 }
             },
             onFinishSeller = {
                 scope.launch {
                     val result = gameEngine.finishSellerEncounter()
-                    showResultToast(result)
+                    showResultNotice(result)
                 }
             },
             onSellCrop = { item, quantity ->
@@ -1694,6 +1668,7 @@ private fun ParkSellerCropRow(
     onSell: suspend (InventoryItem, Int) -> TamaGameEngine.ActionResult
 ) {
     val context = LocalContext.current
+    val notice = rememberTamaNotice()
     val scope = rememberCoroutineScope()
     var quantity by remember(item.id) { mutableIntStateOf(1) }
     val decrementRepeatState = rememberPressAndHoldRepeatState()
@@ -1849,7 +1824,7 @@ private fun ParkSellerCropRow(
                 onClick = {
                     scope.launch {
                         val result = onSell(item, quantity)
-                        Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                        notice.show(result.message, isError = !result.success)
                         if (result.success) {
                             quantity = 1
                         }
@@ -2783,7 +2758,7 @@ private fun ShopFoodList(
                 stringResource(R.string.tama_shop_price_coins, cost),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 12.sp,
-                color = if (canAfford) TamaAccent else Color.Red,
+                color = if (canAfford) TamaAccent else TamaErrorText,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -2870,7 +2845,7 @@ private fun AlchemistDialog(
                     Button(
                         onClick = { selectedTab = index },
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (selectedTab == index) TamaDark else TamaLight
+                            containerColor = if (selectedTab == index) TamaDark else TamaBackground
                         ),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
                     ) {
@@ -3037,7 +3012,7 @@ private fun AlchemistPotionRow(
             modifier = Modifier.align(Alignment.End),
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Bold,
-            color = if (canAfford) TamaDark else Color.Red,
+            color = if (canAfford) TamaDark else TamaErrorText,
             fontSize = 11.sp,
             maxLines = 1
         )
@@ -3348,7 +3323,7 @@ private fun PotionMerchantDialog(
                             Text(
                                 stringResource(R.string.tama_shop_price_coins, potion.price),
                                 fontFamily = FontFamily.Monospace,
-                                color = if (enabled) TamaDark else Color.Red,
+                                color = if (enabled) TamaDark else TamaErrorText,
                                 fontSize = 12.sp,
                                 textAlign = TextAlign.End,
                                 maxLines = 2,
@@ -3430,139 +3405,12 @@ private fun List<InventoryItem>.quantityByName(): Map<String, Int> {
     return groupingBy { it.name }.fold(0) { acc, item -> acc + item.quantity }
 }
 
-private fun List<InventoryItem>.quantityById(): Map<String, Int> {
-    return groupingBy { it.id }.fold(0) { acc, item -> acc + item.quantity }
-}
-
 private fun List<InventoryItem>.totalQuantity(): Int {
     return sumOf { it.quantity }
 }
 
 @Composable
-fun TamaPopupDialog(
-    title: String,
-    backgroundAsset: String,
-    onDismissRequest: () -> Unit,
-    modifier: Modifier = Modifier,
-    compact: Boolean = false,
-    showFooter: Boolean = true,
-    bodyContent: @Composable ColumnScope.() -> Unit,
-    footerContent: @Composable RowScope.() -> Unit
-) {
-    Dialog(
-        onDismissRequest = onDismissRequest,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        BoxWithConstraints {
-            val dialogMaxHeight = if (compact) maxHeight * 0.72f else maxHeight * 0.9f
-            val compactBodyMaxHeight = maxHeight * 0.46f
-            Card(
-                modifier = modifier
-                    .widthIn(max = 560.dp)
-                    .fillMaxWidth(0.96f)
-                    .heightIn(max = dialogMaxHeight),
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.Transparent),
-                border = BorderStroke(1.dp, TamaDark.copy(alpha = 0.55f))
-            ) {
-                Box(modifier = Modifier.fillMaxWidth()) {
-                    AsyncImage(
-                        model = "file:///android_asset/$backgroundAsset",
-                        contentDescription = null,
-                        modifier = Modifier.matchParentSize(),
-                        contentScale = ContentScale.Crop,
-                        filterQuality = FilterQuality.None
-                    )
-                    Box(
-                        modifier = Modifier
-                            .matchParentSize()
-                            .background(Color(0xFF111111).copy(alpha = 0.76f))
-                    )
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(18.dp),
-                            color = TamaDark.copy(alpha = 0.78f),
-                            border = BorderStroke(1.dp, TamaLight.copy(alpha = 0.14f))
-                        ) {
-                            Text(
-                                title,
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 18.sp,
-                                color = TamaLight,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .then(
-                                    if (compact) {
-                                        Modifier.heightIn(max = compactBodyMaxHeight)
-                                    } else {
-                                        Modifier.weight(1f, fill = false)
-                                    }
-                                ),
-                            shape = RoundedCornerShape(18.dp),
-                            color = TamaLight.copy(alpha = 0.985f),
-                            contentColor = TamaDark,
-                            border = BorderStroke(1.dp, TamaDark.copy(alpha = 0.18f))
-                        ) {
-                            CompositionLocalProvider(
-                                LocalContentColor provides TamaDark,
-                                LocalTextStyle provides LocalTextStyle.current.copy(color = TamaDark)
-                            ) {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .verticalScroll(rememberScrollState())
-                                        .padding(14.dp),
-                                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    bodyContent()
-                                }
-                            }
-                        }
-                        if (showFooter) {
-                            Surface(
-                                shape = RoundedCornerShape(18.dp),
-                                color = TamaDark.copy(alpha = 0.55f),
-                                contentColor = TamaLight,
-                                border = BorderStroke(1.dp, TamaLight.copy(alpha = 0.12f))
-                            ) {
-                                CompositionLocalProvider(
-                                    LocalContentColor provides TamaLight,
-                                    LocalTextStyle provides LocalTextStyle.current.copy(color = TamaLight)
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .heightIn(min = 48.dp)
-                                            .padding(horizontal = 6.dp, vertical = 4.dp),
-                                        horizontalArrangement = Arrangement.End,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        footerContent()
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun StudySetupDialog(
+internal fun StudySetupDialog(
     labels: List<TamaStudyLabelEntity>,
     sessions: List<TamaStudySessionEntity>,
     onStartNormal: (Set<String>, List<String>) -> Unit,
@@ -3801,8 +3649,8 @@ private fun StudyModeCard(
             Text(
                 description,
                 fontFamily = FontFamily.Monospace,
-                fontSize = 10.sp,
-                lineHeight = 13.sp,
+                fontSize = 11.sp,
+                lineHeight = 14.sp,
                 color = TamaMutedText,
                 maxLines = 4,
                 overflow = TextOverflow.Ellipsis
@@ -4169,7 +4017,7 @@ private fun RoomShopRow(
                 price.toString(),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 12.sp,
-                color = if (canBuy) TamaAccent else Color.Red
+                color = if (canBuy) TamaAccent else TamaErrorText
             )
             TextButton(
                 onClick = onBuy,
@@ -4230,7 +4078,7 @@ private fun DecorShopRow(
                     stringResource(R.string.tama_shop_price_coins, decor.price),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 12.sp,
-                    color = if (canBuy) TamaAccent else Color.Red
+                    color = if (canBuy) TamaAccent else TamaErrorText
                 )
             }
         }
@@ -4609,17 +4457,16 @@ fun FeedingDialog(
     onUseAdventureGateSupply: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
-    // Free foods always available
-    val freeFoods = TamaFoodCatalog.freeFoods.map { it.toUiFood() }
-
-    // Foods from inventory
-    val allShopFoods = TamaFoodCatalog.shopFoods.map { it.toUiFood() }
-
-    // Count items in inventory
-    val inventoryCount = pet.inventory.quantityById()
-    val ownedFoods = allShopFoods.filter { food ->
-        inventoryCount.containsKey(food.id)
+    // One shared list (free foods first, merged owned stacks incl. crops and world foods).
+    val feedContext = LocalContext.current
+    val foodRows = remember(pet.inventory) {
+        foodOptions(pet).map { option ->
+            FoodItem(option.id, option.emoji, option.label(feedContext), option.hungerGain, option.happinessGain, null) to option.quantity
+        }
     }
+    val freeFoods = foodRows.filter { it.second == null }.map { it.first }
+    val ownedFoods = foodRows.filter { it.second != null }.map { it.first }
+    val inventoryCount = foodRows.mapNotNull { (food, qty) -> qty?.let { food.id to it } }.toMap()
     val ownedPotions = remember(pet.inventory) {
         pet.inventory
             .filter { it.type == ItemType.POTION }
@@ -4874,7 +4721,7 @@ fun FoodItemRow(food: FoodItem, count: Int?, onClick: () -> Unit) {
                 Text(
                     "+${food.hungerGain} +${food.happinessGain}",
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 10.sp,
+                    fontSize = 11.sp,
                     color = TamaMutedText
                 )
             }
@@ -4882,8 +4729,9 @@ fun FoodItemRow(food: FoodItem, count: Int?, onClick: () -> Unit) {
         Text(
             if (count != null) "x$count" else "∞",
             fontFamily = FontFamily.Monospace,
-            fontSize = 12.sp,
-            color = TamaDark
+            fontSize = if (count != null) 12.sp else 16.sp,
+            fontWeight = FontWeight.Bold,
+            color = TamaMutedText
         )
     }
 }
@@ -6065,297 +5913,6 @@ private fun DecorPlacementDialog(
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun TamaSettingsDialog(
-    navController: NavController,
-    settingsRepo: SettingsRepository,
-    onDismiss: () -> Unit
-) {
-    val context = LocalContext.current
-    val appContext = context.applicationContext
-    val normalDreamingEnabled by settingsRepo.tamaNormalDreamingEnabled.collectAsState()
-    val deepDreamingEnabled by settingsRepo.tamaDeepDreamingEnabled.collectAsState()
-    val deepDreamRetryCount by settingsRepo.tamaDeepDreamRetryCount.collectAsState()
-    val deepDreamDesiredLanguage by settingsRepo.tamaDeepDreamDesiredLanguage.collectAsState()
-    val schoolPaintingEnabled by settingsRepo.tamaSchoolPaintingEnabled.collectAsState()
-    val selectedModelFilename by settingsRepo.tamaPicGenModelFilename.collectAsState()
-    val selectedResolution by settingsRepo.tamaPicGenResolution.collectAsState()
-    val backend by settingsRepo.tamaBackend.collectAsState()
-    val tamaOllamaUrl by settingsRepo.tamaOllamaUrl.collectAsState()
-    val tamaSummarizerModel by settingsRepo.tamaSummarizerModel.collectAsState()
-    val tamaLlamaServerUrl by settingsRepo.tamaLlamaServerUrl.collectAsState()
-    val tamaLlamaSwapUrl by settingsRepo.tamaLlamaSwapUrl.collectAsState()
-    val serverModelLabel by settingsRepo.tamaLlamaServerModelLabel.collectAsState()
-    val serverContextLabel by settingsRepo.tamaLlamaServerContextLabel.collectAsState()
-    val serverContextTokens by settingsRepo.tamaLlamaServerContextTokens.collectAsState()
-    val tamaLiteRtModelId by settingsRepo.tamaLiteRtModelId.collectAsState()
-    val tamaLiteRtBackend by settingsRepo.tamaLiteRtBackend.collectAsState()
-    val tamaLiteRtMtpEnabled by settingsRepo.tamaLiteRtMtpEnabled.collectAsState()
-    val tamaThinkingEnabled by settingsRepo.tamaThinkingEnabled.collectAsState()
-    val installedModelsFlow = remember(appContext) {
-        runCatching {
-            AppDatabase.getDatabase(appContext)
-                .modelDao()
-                .getModelsByType(ModelType.ONNX_IMAGE_GEN)
-        }.getOrElse {
-            flowOf(emptyList())
-        }
-    }
-    val installedModels by installedModelsFlow.collectAsState(initial = emptyList())
-
-    val txt2ImgModels = remember(installedModels) { installedModels.filter { it.isOnnxTxt2ImgBundle() } }
-    val defaultInstalled = remember(txt2ImgModels) { txt2ImgModels.any { it.isTamaDefaultPicGenModel() } }
-    val selectedModel = remember(txt2ImgModels, selectedModelFilename) {
-        selectedModelFilename?.let { filename -> txt2ImgModels.firstOrNull { it.filename == filename } }
-            ?: txt2ImgModels.firstOrNull { it.isTamaDefaultPicGenModel() }
-    }
-    var showModelMenu by remember { mutableStateOf(false) }
-    var showResolutionMenu by remember { mutableStateOf(false) }
-
-    fun persistMetadata(metadata: RemoteSummaryMetadata) {
-        if (SettingsRepository.isLlamaServerBackend(metadata.backend)) {
-            settingsRepo.setTamaLlamaServerModelLabel(metadata.serverModelLabel)
-            settingsRepo.setTamaLlamaServerContextTokens(metadata.serverContextTokens)
-            settingsRepo.setTamaLlamaServerContextLabel(metadata.serverContextLabel)
-        }
-        if (SettingsRepository.requiresSelectedRemoteModel(metadata.backend) && !metadata.selectedModel.isNullOrBlank()) {
-            settingsRepo.setTamaSummarizerModel(metadata.selectedModel)
-        }
-    }
-
-    TamaPopupDialog(
-        title = stringResource(R.string.tama_settings_title),
-        backgroundAsset = "tama/backgrounds/popup_generic.png",
-        onDismissRequest = onDismiss,
-        bodyContent = {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                TamaToggleSetting(
-                    title = stringResource(R.string.tama_settings_normal_dreaming_title),
-                    description = stringResource(R.string.tama_settings_normal_dreaming_desc),
-                    checked = normalDreamingEnabled,
-                    onCheckedChange = settingsRepo::setTamaNormalDreamingEnabled
-                )
-                TamaToggleSetting(
-                    title = stringResource(R.string.tama_settings_deep_dreaming_title),
-                    description = stringResource(R.string.tama_settings_deep_dreaming_desc),
-                    checked = deepDreamingEnabled,
-                    onCheckedChange = settingsRepo::setTamaDeepDreamingEnabled
-                )
-                OutlinedTextField(
-                    value = deepDreamDesiredLanguage,
-                    onValueChange = settingsRepo::setTamaDeepDreamDesiredLanguage,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.tama_settings_deep_dream_language_title)) },
-                    supportingText = {
-                        Text(
-                            stringResource(R.string.tama_settings_deep_dream_language_desc),
-                            color = TamaHelperText
-                        )
-                    }
-                )
-                DraftIntTextField(
-                    value = deepDreamRetryCount,
-                    onValueChange = settingsRepo::setTamaDeepDreamRetryCount,
-                    valueRange = 1..Int.MAX_VALUE,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.tama_settings_deep_dream_retry_title)) },
-                    supportingText = {
-                        Text(
-                            stringResource(R.string.tama_settings_deep_dream_retry_desc),
-                            color = TamaHelperText
-                        )
-                    }
-                )
-                TamaToggleSetting(
-                    title = stringResource(R.string.tama_settings_school_painting_title),
-                    description = stringResource(R.string.tama_settings_school_painting_desc),
-                    checked = schoolPaintingEnabled,
-                    onCheckedChange = settingsRepo::setTamaSchoolPaintingEnabled
-                )
-                HorizontalDivider()
-                RemoteSummaryBackendEditor(
-                    title = stringResource(R.string.tama_settings_ai_section),
-                    backend = backend,
-                    onBackendChange = settingsRepo::setTamaBackend,
-                    ollamaUrl = tamaOllamaUrl,
-                    onOllamaUrlChange = settingsRepo::setTamaOllamaUrl,
-                    llamaServerUrl = tamaLlamaServerUrl,
-                    onLlamaServerUrlChange = settingsRepo::setTamaLlamaServerUrl,
-                    llamaSwapUrl = tamaLlamaSwapUrl,
-                    onLlamaSwapUrlChange = settingsRepo::setTamaLlamaSwapUrl,
-                    ollamaModel = tamaSummarizerModel,
-                    onOllamaModelSelected = settingsRepo::setTamaSummarizerModel,
-                    llamaSwapModel = tamaSummarizerModel,
-                    onLlamaSwapModelSelected = settingsRepo::setTamaSummarizerModel,
-                    llamaServerModelLabel = serverModelLabel,
-                    llamaServerContextLabel = serverContextLabel,
-                    llamaServerContextTokens = serverContextTokens,
-                    requestedContextForWarning = null,
-                    liteRtModelId = tamaLiteRtModelId.takeIf { it > 0L },
-                    onLiteRtModelSelected = settingsRepo::setTamaLiteRtModelId,
-                    liteRtBackend = tamaLiteRtBackend,
-                    onLiteRtBackendChange = settingsRepo::setTamaLiteRtBackend,
-                    liteRtMtpEnabled = tamaLiteRtMtpEnabled,
-                    onLiteRtMtpEnabledChange = settingsRepo::setTamaLiteRtMtpEnabled,
-                    liteRtThinkingEnabled = tamaThinkingEnabled,
-                    onLiteRtThinkingEnabledChange = settingsRepo::setTamaThinkingEnabled,
-                    fetchMetadata = {
-                        RemoteSummaryClientFactory.fromConfig(
-                            RemoteSummaryBackendConfig(
-                                context = context,
-                                backend = backend,
-                                baseUrl = when (SettingsRepository.normalizeOllamaOrLlamaBackend(backend)) {
-                                    SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> tamaLlamaServerUrl.trim()
-                                    SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> tamaLlamaSwapUrl.trim()
-                                    else -> tamaOllamaUrl.trim()
-                                },
-                                model = when (SettingsRepository.normalizeOllamaOrLlamaBackend(backend)) {
-                                    SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> serverModelLabel?.trim()?.ifBlank { null }
-                                    else -> tamaSummarizerModel.trim().ifBlank { null }
-                                },
-                                liteRtModelId = tamaLiteRtModelId.takeIf { it > 0L },
-                                liteRtBackend = tamaLiteRtBackend,
-                                liteRtMtpEnabled = tamaLiteRtMtpEnabled,
-                                timeoutMinutes = 1
-                            )
-                        ).fetchMetadata()
-                    },
-                    onMetadataLoaded = ::persistMetadata
-                )
-                HorizontalDivider()
-                Text(
-                    stringResource(R.string.tama_settings_pic_gen_section),
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    stringResource(R.string.tama_settings_pic_gen_hint),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    color = TamaHelperText
-                )
-                if (!defaultInstalled) {
-                    Text(
-                        stringResource(R.string.tama_pic_gen_install_default_model),
-                        color = Color(0xFFB3261E),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp
-                    )
-                }
-                if (txt2ImgModels.isEmpty()) {
-                    FilledTonalButton(onClick = { navController.navigate(Screen.OnnxModels.route) }) {
-                        Text(stringResource(R.string.tama_settings_open_onnx_models))
-                    }
-                } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            stringResource(R.string.tama_settings_pic_model_title),
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        ExposedDropdownMenuBox(
-                            expanded = showModelMenu,
-                            onExpandedChange = { showModelMenu = !showModelMenu }
-                        ) {
-                            OutlinedTextField(
-                                value = selectedModel?.let { tamaModelLabel(it) }.orEmpty(),
-                                onValueChange = {},
-                                modifier = Modifier
-                                    .menuAnchor()
-                                    .fillMaxWidth(),
-                                readOnly = true,
-                                label = { Text(stringResource(R.string.tama_settings_pic_model_title)) },
-                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showModelMenu) }
-                            )
-                            ExposedDropdownMenu(
-                                expanded = showModelMenu,
-                                onDismissRequest = { showModelMenu = false }
-                            ) {
-                                txt2ImgModels.forEach { model ->
-                                    DropdownMenuItem(
-                                        text = { Text(tamaModelLabel(model)) },
-                                        onClick = {
-                                            settingsRepo.setTamaPicGenModelFilename(model.filename)
-                                            showModelMenu = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            stringResource(R.string.tama_settings_pic_resolution_title),
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        ExposedDropdownMenuBox(
-                            expanded = showResolutionMenu,
-                            onExpandedChange = { showResolutionMenu = !showResolutionMenu }
-                        ) {
-                            OutlinedTextField(
-                                value = "${selectedResolution}x${selectedResolution}",
-                                onValueChange = {},
-                                modifier = Modifier
-                                    .menuAnchor()
-                                    .fillMaxWidth(),
-                                readOnly = true,
-                                label = { Text(stringResource(R.string.tama_settings_pic_resolution_title)) },
-                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showResolutionMenu) }
-                            )
-                            ExposedDropdownMenu(
-                                expanded = showResolutionMenu,
-                                onDismissRequest = { showResolutionMenu = false }
-                            ) {
-                                TamaPicGenDefaults.RESOLUTION_PRESETS.forEach { preset ->
-                                    DropdownMenuItem(
-                                        text = { Text("${preset}x${preset}") },
-                                        onClick = {
-                                            settingsRepo.setTamaPicGenResolution(preset)
-                                            showResolutionMenu = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    FilledTonalButton(onClick = { navController.navigate(Screen.OnnxModels.route) }) {
-                        Text(stringResource(R.string.tama_settings_open_onnx_models))
-                    }
-                }
-            }
-        },
-        footerContent = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_close))
-            }
-        }
-    )
-}
-
-@Composable
-private fun TamaToggleSetting(
-    title: String,
-    description: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold)
-            Text(description, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = TamaHelperText)
-        }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
-    }
-}
-
 @Composable
 fun TamaEventLog(events: List<TamaEvent>) {
     Column(
@@ -6502,7 +6059,8 @@ fun TamaMenuDialog(
     onStore: () -> Unit,
     onExport: () -> Unit,
     onImport: () -> Unit,
-    onReset: () -> Unit
+    onReset: () -> Unit,
+    onTransfer: (() -> Unit)? = null
 ) {
     TamaPopupDialog(
         title = stringResource(R.string.tama_menu_title),
@@ -6528,8 +6086,13 @@ fun TamaMenuDialog(
                 TextButton(onClick = onImport, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.tama_menu_import))
                 }
+                if (onTransfer != null) {
+                    TextButton(onClick = onTransfer, modifier = Modifier.fillMaxWidth()) {
+                        Text(stringResource(R.string.tama_transfer_menu))
+                    }
+                }
                 Spacer(modifier = Modifier.height(16.dp))
-                TextButton(onClick = onReset, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.textButtonColors(contentColor = Color.Red)) {
+                TextButton(onClick = onReset, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.textButtonColors(contentColor = TamaErrorText)) {
                     Text(stringResource(R.string.tama_menu_reset))
                 }
             }
@@ -6614,7 +6177,7 @@ fun PetStatusDialog(
                     Spacer(modifier = Modifier.width(8.dp))
                     Column {
                         if (pet.isEffectivelyMad()) {
-                            Text(stringResource(R.string.tama_status_grumpy), color = Color.Red, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Text(stringResource(R.string.tama_status_grumpy), color = TamaErrorText, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         }
                         Text("$speciesName • ${pet.stage.displayName} • $ageText", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TamaMutedText)
                     }
@@ -6831,7 +6394,7 @@ private fun statusLabel(status: String): String {
 }
 
 @Composable
-private fun tamaModelLabel(model: com.example.llamadroid.data.db.ModelEntity): String {
+internal fun tamaModelLabel(model: com.example.llamadroid.data.db.ModelEntity): String {
     val entry = resolveOnnxCatalogEntry(model)
     return if (entry != null) {
         val providerLabel = when (entry.provider) {
@@ -6867,9 +6430,12 @@ fun ResetConfirmationDialog(
             Spacer(modifier = Modifier.width(8.dp))
             Button(
                 onClick = onConfirm,
-                colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                )
             ) {
-                Text(stringResource(R.string.tama_confirm_delete_action), color = Color.White)
+                Text(stringResource(R.string.tama_confirm_delete_action))
             }
         }
     )

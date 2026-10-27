@@ -93,6 +93,9 @@ import com.example.llamadroid.ui.navigation.ImageGenUpscaleCompatibilityRedirect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import com.example.llamadroid.tama.ui.LocalTamaNotice
+import com.example.llamadroid.tama.ui.TamaNoticeHost
+import com.example.llamadroid.tama.ui.TamaNoticeState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
@@ -569,11 +572,14 @@ fun LlamaApp(
             if (tourTargets.modalOwners.isEmpty()) WalkthroughCoach(tour, tourTargets, currentRoute, onOpen = openTourRoute)
         }
     ) { innerPadding ->
+        val tamaNotice = remember { TamaNoticeState() }
         CompositionLocalProvider(
             LocalServerProfileEditorOpener provides { cardId, modelPath ->
                 navController.navigate(serverProfileEditorRoute(cardId, modelPath))
-            }
+            },
+            LocalTamaNotice provides tamaNotice
         ) {
+        Box(Modifier.fillMaxSize()) {
         NavHost(
             navController = navController, 
             startDestination = Screen.Dashboard.route,
@@ -894,7 +900,9 @@ fun LlamaApp(
                     pet = currentPet,
                     gameEngine = tamaGameEngine,
                     farmRepository = farmRepository,
-                    onBack = { navController.popBackStack() }
+                    onBack = { navController.popBackStack() },
+                    onOpenBarn = { navController.navigate(Screen.Barn.route) },
+                    onOpenCoop = { navController.navigate(Screen.Coop.route) }
                 )
             }
 
@@ -1010,6 +1018,7 @@ fun LlamaApp(
                     onBuyLivestock = { type ->
                         com.example.llamadroid.tama.game.WorldFarmMaintenance.request(context, tamaGameEngine, "buy_livestock", mapOf("type" to type.id))
                     },
+                    loadMarketBoard = { tamaGameEngine.getParkMarketBoard() },
                     onBack = { navController.popBackStack() }
                 )
                 }
@@ -1135,6 +1144,8 @@ fun LlamaApp(
                 )
             }
         }
+        TamaNoticeHost(tamaNotice, Modifier.padding(innerPadding))
+        }  // notice overlay Box
         }  // CompositionLocalProvider
     }
     }

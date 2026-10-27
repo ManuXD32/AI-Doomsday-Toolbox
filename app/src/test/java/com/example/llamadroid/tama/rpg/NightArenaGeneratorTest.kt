@@ -11,30 +11,43 @@ class NightArenaGeneratorTest {
     private val zone = ZoneId.of("Europe/Madrid")
 
     @Test
-    fun `night key rolls over at 9 pm local time`() {
+    fun `night key rolls over when the arena opens at 8 pm local time`() {
         assertEquals(
             "2026-05-13",
-            NightArenaGenerator.nightKeyFor(millis("2026-05-14T20:59:00"), zone)
+            NightArenaGenerator.nightKeyFor(millis("2026-05-14T19:59:00"), zone)
         )
         assertEquals(
             "2026-05-14",
-            NightArenaGenerator.nightKeyFor(millis("2026-05-14T21:00:00"), zone)
+            NightArenaGenerator.nightKeyFor(millis("2026-05-14T20:00:00"), zone)
         )
         assertEquals(
             "2026-05-14",
-            NightArenaGenerator.nightKeyFor(millis("2026-05-15T00:30:00"), zone)
+            NightArenaGenerator.nightKeyFor(millis("2026-05-15T08:59:00"), zone)
         )
     }
 
     @Test
-    fun `next reset uses the next 9 pm boundary`() {
+    fun `every open moment of one night shares a single key`() {
+        val keys = listOf(
+            "2026-05-14T20:00:00", "2026-05-14T20:30:00", "2026-05-14T21:00:00",
+            "2026-05-15T00:30:00", "2026-05-15T08:59:00"
+        ).map { NightArenaGenerator.nightKeyFor(millis(it), zone) }.toSet()
+        assertEquals(setOf("2026-05-14"), keys)
+        assertNotEquals(
+            keys.single(),
+            NightArenaGenerator.nightKeyFor(millis("2026-05-15T20:00:00"), zone)
+        )
+    }
+
+    @Test
+    fun `next reset uses the next 8 pm boundary which is also the opening time`() {
         assertEquals(
-            millis("2026-05-14T21:00:00"),
-            NightArenaGenerator.nextResetAtMillis(millis("2026-05-14T20:59:00"), zone)
+            millis("2026-05-14T20:00:00"),
+            NightArenaGenerator.nextResetAtMillis(millis("2026-05-14T19:59:00"), zone)
         )
         assertEquals(
-            millis("2026-05-15T21:00:00"),
-            NightArenaGenerator.nextResetAtMillis(millis("2026-05-14T21:00:00"), zone)
+            millis("2026-05-15T20:00:00"),
+            NightArenaGenerator.nextResetAtMillis(millis("2026-05-14T20:00:00"), zone)
         )
     }
 

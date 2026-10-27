@@ -75,17 +75,17 @@ class TamaAgentServiceTest {
             mood = Mood.HAPPY,
             personality = Personality.CHEERFUL
         )
-        val prompt = buildTamaSystemPrompt(
-            basePrompt = "You are a lovable pet.",
-            pet = pet,
-            speciesLine = PetSpeciesLine.DRAGON,
-            memory = TamaStructuredMemory(
+        val memory = TamaStructuredMemory(
                 shortTermSummary = "Nori played today.",
                 longTermSummary = "Nori likes naps.",
                 retrievalNotes = listOf(
                     TamaRetrievalNote("Nori keeps a toy nearby.", listOf("toy", "play"))
                 )
-            ),
+            )
+        val stable = buildTamaStableSystemPrompt("You are a lovable pet.", pet, PetSpeciesLine.DRAGON, memory)
+        val volatile = buildTamaVolatileContext(
+            pet = pet,
+            memory = memory,
             recentEvents = listOf(
                 TamaEventEntity(
                     id = "event-1",
@@ -102,11 +102,12 @@ class TamaAgentServiceTest {
             currentTime = "09:15"
         )
 
-        assertTrue(prompt.contains("Species Line: Dragon"))
-        assertTrue(prompt.contains("cute little dragon"))
-        assertTrue(prompt.contains("Personality: CHEERFUL: Always optimistic and friendly"))
-        assertTrue(prompt.contains("Current Local Time Right Now: 09:15"))
-        assertTrue(prompt.contains("Default to 1-3 short sentences"))
+        assertTrue(stable.contains("Species Line: Dragon"))
+        assertTrue(stable.contains("cute little dragon"))
+        assertTrue(stable.contains("Personality: CHEERFUL: Always optimistic and friendly"))
+        assertTrue(volatile.contains("Current Local Time Right Now: 09:15"))
+        assertTrue(volatile.contains("Nori keeps a toy nearby."))
+        assertTrue(stable.contains("Default to 1-3 short sentences"))
     }
 
     @Test
@@ -177,10 +178,8 @@ class TamaAgentServiceTest {
             activityStartTime = 0L
         )
 
-        val prompt = buildTamaSystemPrompt(
-            basePrompt = "You are a lovable pet.",
+        val prompt = buildTamaVolatileContext(
             pet = pet,
-            speciesLine = PetSpeciesLine.DRAGON,
             memory = TamaStructuredMemory("", "", emptyList()),
             recentEvents = emptyList(),
             retrievalHints = emptySet(),

@@ -193,6 +193,7 @@ class DistributedMasterLlamaService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val controller = ProcessController()
     private var taskId: Int? = null
+    private var foregroundFailureMessage = ""
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -206,7 +207,11 @@ class DistributedMasterLlamaService : Service() {
                     stopSelf(startId)
                     return START_NOT_STICKY
                 }
-                ensureForeground()
+                if (!ensureForeground()) {
+                    publishState("error:$foregroundFailureMessage")
+                    stopSelf(startId)
+                    return START_NOT_STICKY
+                }
                 scope.launch { runLaunch(launch, startId) }
             }
         }
@@ -257,14 +262,26 @@ class DistributedMasterLlamaService : Service() {
         stopSelf()
     }
 
-    private fun ensureForeground() {
-        if (taskId != null) return
+    private fun ensureForeground(): Boolean {
+        if (taskId != null) return true
         val (id, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.LLAMA_SERVER,
             getString(R.string.dist_master_mode)
         )
+        val startResult = ForegroundStart.start(
+            this,
+            id,
+            notification,
+            ForegroundServiceTypes.DATA_SYNC
+        )
+        if (startResult is ForegroundStart.Result.Failed) {
+            foregroundFailureMessage =
+                ForegroundStart.failureMessage(this, startResult.reason, getString(R.string.dist_master_mode))
+            UnifiedNotificationManager.failTask(id, foregroundFailureMessage)
+            return false
+        }
         taskId = id
-        startForeground(id, notification)
+        return true
     }
 
     private fun publishState(value: String) = publish(DistributedMasterRuntimeState.KIND_STATE, value)

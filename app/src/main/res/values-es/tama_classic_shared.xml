@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="tama_action_unavailable">Esa acción no está disponible ahora.</string>
+    <string name="tama_action_crop_not_food">Los cultivos crudos como el trigo, el arroz, la calabaza y las flores no son comida. Véndelos o úsalos para otra cosa.</string>
     <string name="tama_action_already_awake">%1$s ya está despierto.</string>
     <string name="tama_action_use_one_item">Usa un objeto cada vez.</string>
     <string name="tama_hatch_effect_description">Animación de eclosión de la mascota</string>

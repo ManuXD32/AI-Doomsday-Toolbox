@@ -12,7 +12,11 @@ import java.net.InetAddress
 /**
  * Helper for Network Service Discovery (NSD) to find and register llama.cpp RPC workers.
  */
-class NsdHelper(context: Context) {
+class NsdHelper(
+    context: Context,
+    private val serviceType: String = SERVICE_TYPE,
+    private val serviceNamePrefix: String = SERVICE_NAME_PREFIX
+) {
 
     companion object {
         private const val TAG = "NsdHelper"
@@ -45,8 +49,8 @@ class NsdHelper(context: Context) {
         val serviceInfo = NsdServiceInfo().apply {
             // Service name must be unique. NSD will append a number if it conflicts.
             // We use a prefix + random ID or device name to minimize conflicts initially.
-            this.serviceName = "$SERVICE_NAME_PREFIX-${deviceName.filter { it.isLetterOrDigit() }}"
-            this.serviceType = SERVICE_TYPE
+            this.serviceName = "$serviceNamePrefix-${deviceName.filter { it.isLetterOrDigit() }}"
+            this.serviceType = this@NsdHelper.serviceType
             this.port = port
         }
 
@@ -145,7 +149,8 @@ class NsdHelper(context: Context) {
             override fun onServiceFound(service: NsdServiceInfo) {
                 DebugLog.log("[$TAG] Service found: ${service.serviceName} typeVal=${service.serviceType}")
                 // Relaxed check: serviceType might differ slightly (e.g. leading dot)
-                if (service.serviceType.contains("llama-rpc") && service.serviceType.contains("_tcp")) {
+                if (service.serviceType.contains(serviceType.trim('.').substringBefore('.').removePrefix("_")) &&
+                    service.serviceType.contains("_tcp")) {
                     if (service.serviceName == serviceName) {
                         DebugLog.log("[$TAG] Found self, skipping")
                     } else {
@@ -188,7 +193,7 @@ class NsdHelper(context: Context) {
         }
 
         try {
-            nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
+            nsdManager.discoverServices(serviceType, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
         } catch (e: Exception) {
             DebugLog.log("[$TAG] Exception starting discovery: ${e.message}")
         }

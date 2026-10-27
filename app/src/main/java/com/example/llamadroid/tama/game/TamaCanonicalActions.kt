@@ -8,7 +8,9 @@ import com.example.llamadroid.tama.data.GrowthStage
 import com.example.llamadroid.tama.data.ActivityType
 import com.example.llamadroid.tama.data.TamaWorkCatalog
 import com.example.llamadroid.tama.data.TamaTrainingCatalog
-import com.example.llamadroid.tama.data.TamaFoodCatalog
+import com.example.llamadroid.tama.data.TamaFoodOptions
+import com.example.llamadroid.tama.data.TamaCropEdibility
+import com.example.llamadroid.tama.data.FarmTradeItemCatalog
 import com.example.llamadroid.tama.data.TamaCommerceCatalog
 import com.example.llamadroid.tama.data.canWork
 import com.example.llamadroid.tama.data.canStudy
@@ -27,7 +29,7 @@ internal object TamaCanonicalActions {
                         arguments: Map<String, String> = emptyMap()): TamaGameEngine.ActionResult {
         val pet = engine.pet.value ?: return TamaGameEngine.ActionResult(false, context.getString(R.string.tama_error_no_pet))
         fun rejected(resource: Int, vararg values: Any) = TamaGameEngine.ActionResult(false, context.getString(resource, *values))
-        if (pet.cycleFrozen && action != "usePotion") return rejected(R.string.tama_cycle_frozen_busy)
+        if ((pet.cycleFrozen || engine.transferFrozen) && action != "usePotion") return rejected(R.string.tama_cycle_frozen_busy)
         if (pet.isSleeping && action != "wakeUp") return rejected(R.string.tama_sleeping_busy, pet.name)
         if (pet.stage == GrowthStage.EGG && action in setOf("feed", "feedWithFood", "clean", "play")) {
             return rejected(when (action) {
@@ -41,6 +43,7 @@ internal object TamaCanonicalActions {
             "goToBed" -> {
                 if (pet.stage == GrowthStage.EGG) return rejected(R.string.tama_action_egg_cannot_sleep)
                 if (pet.stats.energy >= 100) return rejected(R.string.tama_action_not_tired, pet.name)
+                if (pet.currentActivity != ActivityType.NONE) return rejected(R.string.tama_action_already_busy, pet.name)
             }
             "feed" -> if (pet.stats.hunger >= 100) return rejected(R.string.tama_action_food_full, pet.name)
             "clean" -> if (pet.poopCount == 0 && pet.stats.hygiene >= 100) return rejected(R.string.tama_action_already_clean, pet.name)
@@ -73,13 +76,13 @@ internal object TamaCanonicalActions {
         when (action) {
             "feedWithFood" -> {
                 val foodId = arguments.getValue("foodId")
-                val food = TamaFoodCatalog.byId(foodId) ?: return rejected(R.string.tama_action_unavailable)
+                if (TamaCropEdibility.isInedibleCrop(foodId)) return rejected(R.string.tama_action_crop_not_food)
+                val food = TamaFoodOptions.definition(foodId) ?: return rejected(R.string.tama_action_unavailable)
                 if (arguments["hungerGain"]?.toIntOrNull() != food.hungerGain ||
                     arguments["happinessGain"]?.toIntOrNull() != food.happinessGain) {
                     return rejected(R.string.tama_action_unavailable)
                 }
-                val free = foodId in setOf("lettuce", "candy")
-                if (!free && pet.inventory.none { it.id == foodId && it.quantity > 0 && it.type == ItemType.FOOD }) {
+                if (TamaFoodOptions.resolve(pet, foodId) == null) {
                     return TamaGameEngine.ActionResult(false, context.getString(R.string.tama_action_no_item_food, foodId))
                 }
             }
@@ -99,8 +102,14 @@ internal object TamaCanonicalActions {
             "sellItem" -> {
                 val quantity = arguments["quantity"]?.toIntOrNull() ?: 0
                 val price = arguments["price"]?.toLongOrNull() ?: 0L
-                if (quantity <= 0 || price <= 0 || price != TamaCommerceCatalog.sellPrice(item(arguments).id)?.toLong() ||
-                    price > (Long.MAX_VALUE - pet.money) / quantity) return rejected(R.string.tama_action_unavailable)
+                // Farm goods sell at the weekly market price (same rule as the Park seller), so the caller's
+                // price is only a sanity value there; anything else must match the fixed catalog price.
+                val itemId = item(arguments).id
+                val priceOk = if (FarmTradeItemCatalog.isTradeItem(itemId)) price > 0
+                    else price == TamaCommerceCatalog.sellPrice(itemId)?.toLong()
+                if (quantity <= 0 || !priceOk || price > (Long.MAX_VALUE - pet.money) / quantity) {
+                    return rejected(R.string.tama_action_unavailable)
+                }
             }
             "sellToParkSeller" -> require(arguments.getValue("quantity").toInt() > 0)
             "goToBed", "wakeUp", "stopActivity", "startWork", "startTraining", "startNormalStudySession",
@@ -160,8 +169,13 @@ internal object TamaCanonicalActions {
         }
         "sellItem" -> {
             require(arguments.getValue("quantity").toInt() > 0 && arguments.getValue("price").toLong() > 0)
-            require(TamaCommerceCatalog.sellPrice(item(arguments).id)?.toLong() == arguments.getValue("price").toLong()) { "invalid_sale_price" }
-            engine.sellItemLocked(item(arguments), arguments.getValue("quantity").toInt(), arguments.getValue("price").toLong())
+            if (FarmTradeItemCatalog.isTradeItem(item(arguments).id)) {
+                // One implementation: the weekly market quote (floor 50% of base) records the sale too.
+                engine.sellToParkSellerLocked(item(arguments), arguments.getValue("quantity").toInt())
+            } else {
+                require(TamaCommerceCatalog.sellPrice(item(arguments).id)?.toLong() == arguments.getValue("price").toLong()) { "invalid_sale_price" }
+                engine.sellItemLocked(item(arguments), arguments.getValue("quantity").toInt(), arguments.getValue("price").toLong())
+            }
         }
         "sellToParkSeller" -> {
             require(arguments.getValue("quantity").toInt() > 0)

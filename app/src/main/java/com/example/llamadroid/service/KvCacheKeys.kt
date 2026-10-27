@@ -7,6 +7,8 @@ enum class KvCacheNamespace(val stemPrefix: String) {
     CHAT("chat-"),
     DELEGATE("delegate-"),
     HARNESS("harness-"),
+    /** One Tama pet's chat; the id is hashed in the file name. */
+    PET("pet-"),
     /** Preprocessed system prompt + tools prefix shared by new chats / harness threads. */
     BASE("base-")
 }
@@ -39,6 +41,12 @@ sealed class KvCacheKey {
             get() = "${harnessRuntimeStemPrefix(runtimeId)}${sha256Hex(sessionId).take(16)}"
     }
 
+    /** The Tama pet chat of [petId] (`pet-<sha16>`). */
+    data class Pet(val petId: String) : KvCacheKey() {
+        override val namespace: KvCacheNamespace get() = KvCacheNamespace.PET
+        override val fileStem: String get() = "pet-${sha256Hex(petId).take(16)}"
+    }
+
     /**
      * A preprocessed prefix (system prompt + tool definitions) that new owners restore before their
      * first request. [scope] is `chat` or `harness`; [prefixHash] covers the exact prefix text and
@@ -60,6 +68,7 @@ sealed class KvCacheKey {
             CHAT_STEM.matches(stem) -> KvCacheNamespace.CHAT
             DELEGATE_STEM.matches(stem) -> KvCacheNamespace.DELEGATE
             HARNESS_STEM.matches(stem) -> KvCacheNamespace.HARNESS
+            PET_STEM.matches(stem) -> KvCacheNamespace.PET
             BASE_STEM.matches(stem) -> KvCacheNamespace.BASE
             else -> null
         }
@@ -67,6 +76,7 @@ sealed class KvCacheKey {
         private val CHAT_STEM = Regex("chat-n?\\d+")
         private val DELEGATE_STEM = Regex("delegate-\\d+")
         private val HARNESS_STEM = Regex("harness-[0-9a-f]{8}-[0-9a-f]{16}")
+        private val PET_STEM = Regex("pet-[0-9a-f]{16}")
         private val BASE_STEM = Regex("base-[a-z]{1,8}-[0-9a-f]{16}")
 
         private fun sha256Hex(value: String): String =

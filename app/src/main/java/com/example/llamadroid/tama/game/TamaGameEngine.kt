@@ -7,6 +7,8 @@ import com.example.llamadroid.service.UnifiedNotificationManager
 import com.example.llamadroid.tama.data.*
 import com.example.llamadroid.tama.db.*
 import com.example.llamadroid.tama.rpg.AdventureGateCatalog
+import com.example.llamadroid.tama.shimeji.ShimejiPresenceSink
+import com.example.llamadroid.tama.transfer.TamaTransferFreeze
 import com.example.llamadroid.tama.rpg.AdventureGateCombatEngine
 import com.example.llamadroid.tama.rpg.AdventureGateProfile
 import com.example.llamadroid.tama.notifications.TamaNotificationScheduler
@@ -67,7 +69,7 @@ class TamaGameEngine(
     private val settingsRepo: SettingsRepository,
     private val petDatabase: TamaDatabase = TamaDatabase.getInstance(context),
     private val observeAndTick: Boolean = true
-) {
+) : ShimejiPresenceSink {
     private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val _pet = MutableStateFlow<TamaPet?>(null)
     val pet: StateFlow<TamaPet?> = _pet.asStateFlow()
@@ -80,6 +82,11 @@ class TamaGameEngine(
 
     // Time tracking for real-time updates
     private var lastUpdateTime = 0L
+
+    /** Set by pet transfer while the pet is away or a hand-off is pending: no decay, no actions. */
+    var transferFrozen: Boolean
+        get() = TamaTransferFreeze.frozen
+        set(value) = TamaTransferFreeze.set(value)
     private var hasLoggedReturnThisSession = false  // Prevent OWNER_RETURNED spam
     private var eventSyncJob: Job? = null
     private var observedEventsPetId: String? = null
@@ -242,6 +249,7 @@ class TamaGameEngine(
             dao.deleteArtworksForPet(pet.id)
             TamaNotificationScheduler.cancelPetAlarms(context.applicationContext, pet.id)
             File(context.filesDir, "tama_gallery/${pet.id}").deleteRecursively()
+            deleteTamaPetKvCache(context.applicationContext, pet.id)
             _pet.value = null
             _events.value = emptyList()
         }
@@ -253,6 +261,7 @@ class TamaGameEngine(
     suspend fun loadPet(): TamaPet? = mutate { loadPetLocked() }
 
     private suspend fun loadPetLocked(): TamaPet? {
+        TamaTransferFreeze.sync(petDatabase.transferStateDao())
         val entity = dao.getActivePet() ?: return null
         val pet = loadNormalizedPet(entity)
         pruneExtraPetsKeeping(pet.id)
@@ -304,12 +313,13 @@ class TamaGameEngine(
     suspend fun updateForTimePassed() = mutate { updateForTimePassedLocked() }
 
     private suspend fun updateForTimePassedLocked() {
+        TamaTransferFreeze.sync(petDatabase.transferStateDao())
         val pet = _pet.value ?: return
         val now = System.currentTimeMillis()
         if (lastUpdateTime > 0L && now - lastUpdateTime < 4_500L) {
             return
         }
-        if (pet.cycleFrozen) {
+        if (pet.cycleFrozen || transferFrozen) {
             lastUpdateTime = now
             return
         }
@@ -338,9 +348,32 @@ class TamaGameEngine(
         // 1. Check for stage progression using the per-stage timer while preserving total lifetime.
         val growthAdvance = advanceGrowthStage(updatedPet, now)
         updatedPet = growthAdvance.pet
-        val sleepFreezesStats = updatedPet.isSleeping && isSleepStatFreezeWindow(now)
+        // Sleep is real rest at any hour (supersedes the old 22:00-08:00 freeze): no normal decay,
+        // continuous energy restoration, gentle hunger/hydration drift, auto-wake.
+        val sleepFreezesStats = updatedPet.isSleeping
+        var sleepAutoWakeAt: Long? = null
         if (sleepFreezesStats) {
-            updatedPet = updatedPet.copy(lastDecayTime = now)
+            val sleepStart = updatedPet.sleepStartTime ?: now
+            val step = TamaSleepRules.step(
+                sleepStartMs = sleepStart,
+                fromMs = intervalStart,
+                toMs = now,
+                energy = updatedPet.stats.energy,
+                isBaby = updatedPet.stage == GrowthStage.BABY
+            )
+            val awakeDecayPerHour = STAT_DECAY_PER_HOUR.toFloat() *
+                (if (updatedPet.stage == GrowthStage.BABY) 5f else 1f)
+            val drift = TamaSleepRules.drift(step.minutes, awakeDecayPerHour)
+            updatedPet = updatedPet.copy(
+                stats = updatedPet.stats.copy(
+                    energy = (updatedPet.stats.energy + step.energyGain).coerceIn(0f, 100f),
+                    health = (updatedPet.stats.health + step.healthGain).coerceIn(0f, 100f),
+                    hunger = (updatedPet.stats.hunger - drift).coerceIn(0f, 100f),
+                    hydration = (updatedPet.stats.hydration - drift).coerceIn(0f, 100f)
+                ),
+                lastDecayTime = maxOf(step.endMs, intervalStart)
+            )
+            if (step.autoWake) sleepAutoWakeAt = step.endMs
         } else if (secondsPassed < 5L) {
             if (updatedPet != pet) {
                 savePet(updatedPet)
@@ -427,6 +460,7 @@ class TamaGameEngine(
         savePet(updatedPet)
         logEvolutionEvents(updatedPet, growthAdvance.evolvedStages, growthAdvance.initialStage)
         lastUpdateTime = now
+        sleepAutoWakeAt?.let { wakeUpLocked(it) }
     }
 
     suspend fun freezeCycle(): ActionResult = mutate { freezeCycleLocked() }
@@ -783,7 +817,8 @@ class TamaGameEngine(
             "sushi" -> context.getString(R.string.tama_food_sushi)
             "donut" -> context.getString(R.string.tama_food_donut)
             "salad" -> context.getString(R.string.tama_food_salad)
-            else -> foodId.replace('_', ' ').replaceFirstChar { it.titlecase(Locale.getDefault()) }
+            else -> TamaFoodOptions.definition(foodId)?.label(context)
+                ?: foodId.replace('_', ' ').replaceFirstChar { it.titlecase(Locale.getDefault()) }
         }
     }
 
@@ -837,13 +872,14 @@ class TamaGameEngine(
         // Lettuce specific override: user requested value 5
         val finalHungerGain = if (foodId.equals("lettuce", ignoreCase = true)) 5 else hungerGain
 
-        // Check if free food or from inventory
-        val freeFoods = setOf("lettuce", "candy")
-        val isFreeFood = freeFoods.contains(foodId.lowercase())
+        // Free foods consume nothing; other foods consume one unit from a matching stack (aliases merge).
+        val option = TamaFoodOptions.definition(foodId)
+        val isFreeFood = option?.kind == TamaFoodKind.FREE || foodId.lowercase() in setOf("lettuce", "candy")
+        val stackIds = option?.stackIds ?: setOf(foodId.lowercase(Locale.ROOT))
 
         var newInventory = pet.inventory.toMutableList()
         if (!isFreeFood) {
-            val matchingItem = newInventory.find { it.id.equals(foodId, ignoreCase = true) && it.quantity > 0 }
+            val matchingItem = newInventory.find { it.id.trim().lowercase(Locale.ROOT) in stackIds && it.quantity > 0 }
             if (matchingItem == null) {
                 return ActionResult(false, context.getString(R.string.tama_action_no_item_food, foodDisplayName(foodId)))
             }
@@ -1338,6 +1374,17 @@ class TamaGameEngine(
         return ActionResult(true, context.getString(R.string.tama_action_had_fun, pet.name), "playing")
     }
 
+    /** Shimeji overlay presence reward: small happiness credit, ignored while the pet is away. */
+    override suspend fun applyShimejiPresence(delta: Int): Unit = mutate {
+        val pet = _pet.value ?: return@mutate
+        if (transferFrozen || delta == 0) return@mutate
+        val updatedPet = pet.copy(
+            stats = pet.stats.copy(happiness = (pet.stats.happiness + delta).coerceIn(0f, 100f))
+        )
+        _pet.value = updatedPet
+        savePet(updatedPet)
+    }
+
     /**
      * Put pet to bed - they stay asleep until woken up.
      */
@@ -1348,6 +1395,7 @@ class TamaGameEngine(
         if (pet.isSleeping) return ActionResult(false, context.getString(R.string.tama_action_already_asleep, pet.name))
         if (pet.stage == GrowthStage.EGG) return ActionResult(false, context.getString(R.string.tama_action_egg_cannot_sleep))
         if (pet.stats.energy >= 100) return ActionResult(false, context.getString(R.string.tama_action_not_tired, pet.name))
+        if (pet.currentActivity != ActivityType.NONE) return ActionResult(false, context.getString(R.string.tama_action_already_busy, pet.name))
         val now = System.currentTimeMillis()
         val bedtimeTrackedPet = if (pet.stage != GrowthStage.BABY && pet.stage != GrowthStage.EGG) {
             val tracking = applyOvernightAwakeTracking(pet, pet.lastDecayTime, now)
@@ -1366,6 +1414,7 @@ class TamaGameEngine(
         val updatedPet = advancePoopState(bedtimeTrackedPet, now).copy(
             isSleeping = true,
             sleepStartTime = now,
+            lastDecayTime = now,
             mood = Mood.SLEEPING
         )
         _pet.value = updatedPet
@@ -1383,28 +1432,46 @@ class TamaGameEngine(
      */
     suspend fun wakeUp(): ActionResult = mutate { TamaCanonicalActions.request(context, this, "wakeUp") }
 
-    internal suspend fun wakeUpLocked() {
+    internal suspend fun wakeUpLocked(wakeAt: Long = System.currentTimeMillis()) {
         val initialPet = _pet.value ?: return
-        val now = System.currentTimeMillis()
+        val now = wakeAt
         val latestPet = dao.getPet(initialPet.id)?.let(PetMapper::toDomain) ?: initialPet
-        val currentPet = maybeQueueDailyDream(latestPet, now)
-        if (!currentPet.isSleeping) return  // Not sleeping
+        val dreamPet = maybeQueueDailyDream(latestPet, now)
+        if (!dreamPet.isSleeping) return  // Not sleeping
 
-        val sleepStart = currentPet.sleepStartTime ?: now
-        val minutesSlept = ((now - sleepStart) / (1000 * 60)).toInt()
+        val sleepStart = dreamPet.sleepStartTime ?: now
+        val minutesSlept = ((now - sleepStart) / (1000 * 60)).toInt().coerceAtLeast(0)
         val sleepDurationMs = (now - sleepStart).coerceAtLeast(0L)
 
-        val energyGain = (minutesSlept * 10f).coerceIn(10f, 100f)
-        val newStats = currentPet.stats.copy(
-            energy = (currentPet.stats.energy + energyGain).coerceAtMost(100f),
-            health = (currentPet.stats.health + minutesSlept.toFloat()).coerceAtMost(100f)  // Sleep heals
+        // Restoration is applied incrementally by updateForTimePassedLocked; settle any remainder
+        // up to the wake moment here (no lump sum, so nothing is counted twice).
+        val settle = TamaSleepRules.step(
+            sleepStartMs = sleepStart,
+            fromMs = dreamPet.lastDecayTime,
+            toMs = now,
+            energy = dreamPet.stats.energy,
+            isBaby = dreamPet.stage == GrowthStage.BABY
         )
+        val napBonus = if (sleepDurationMs < TamaSleepRules.MIN_NAP_THRESHOLD_MS) TamaSleepRules.MIN_NAP_BONUS else 0f
+        val energyBefore = dreamPet.stats.energy
+        val settledEnergy = (energyBefore + settle.energyGain + napBonus).coerceAtMost(100f)
+        val currentPet = dreamPet.copy(
+            stats = dreamPet.stats.copy(
+                energy = settledEnergy,
+                health = (dreamPet.stats.health + settle.healthGain).coerceAtMost(100f)
+            )
+        )
+        val energyGain = (minutesSlept * TamaSleepRules.energyPerMinute(dreamPet.stage == GrowthStage.BABY))
+            .coerceIn(0f, 100f)
+            .coerceAtLeast(settledEnergy - energyBefore)
+        val newStats = currentPet.stats
 
         recoverAdventureGateProfile(currentPet.id)
         val updatedPet = currentPet.copy(
             isSleeping = false,
             sleepStartTime = null,
             isMad = false,
+            lastDecayTime = maxOf(currentPet.lastDecayTime, now),
             nextPoopAt = currentPet.nextPoopAt?.plus(sleepDurationMs),
             poopCreatedAt = currentPet.poopCreatedAt?.plus(sleepDurationMs),
             lastPoopMiscareAt = currentPet.lastPoopMiscareAt?.plus(sleepDurationMs),
@@ -2987,12 +3054,29 @@ class TamaGameEngine(
         return true
     }
 
+    /**
+     * Small pet reward for helping on the farm ([PetFarmWork] owns the amounts and the daily cap). Returns false
+     * when the pet cannot take part (no pet, egg, asleep).
+     */
+    suspend fun awardFarmWorkBonus(happiness: Float, bond: Float, exercise: Float): Boolean = mutate {
+        val pet = _pet.value ?: return@mutate false
+        if (pet.stage == GrowthStage.EGG || pet.isSleeping) return@mutate false
+        val updatedPet = pet.copy(
+            stats = pet.stats.copy(happiness = (pet.stats.happiness + happiness).coerceIn(0f, 100f)),
+            ownerBondLevel = (pet.ownerBondLevel + bond).coerceIn(0f, 100f),
+            exerciseLevel = pet.exerciseLevel + exercise
+        )
+        _pet.value = updatedPet
+        savePet(updatedPet)
+        true
+    }
+
     suspend fun consumeFarmToolDurability(familyId: String, amount: Int): Int = mutate { consumeFarmToolDurabilityLocked(familyId, amount) }
 
     private suspend fun consumeFarmToolDurabilityLocked(familyId: String, amount: Int): Int {
         val pet = _pet.value ?: return 0
         val safeFamilyId = farmToolFamilyId(familyId) ?: familyId
-        if (safeFamilyId != "hoe" && safeFamilyId != "watering_can") return 0
+        if (safeFamilyId !in FARM_CONSUMABLE_TOOL_FAMILIES) return 0
         val currentDurability = farmToolTotalDurability(pet.inventory, safeFamilyId)
         val consumed = minOf(amount.coerceAtLeast(0), currentDurability)
         if (consumed <= 0) return 0
@@ -3331,12 +3415,17 @@ class TamaGameEngine(
             adventureGateProfile = adventureGateProfile?.let(TamaTransferAdventureGateProfile::fromEntity),
             adventureGateWorldProgress = adventureGateWorldProgress.map(TamaTransferAdventureGateWorldProgress::fromEntity),
             adventureGateBattleState = adventureGateBattleState?.let(TamaTransferAdventureGateBattleState::fromEntity),
-            adventureGateNightArenaRun = adventureGateNightArenaRun?.let(TamaTransferAdventureGateNightArenaRun::fromEntity)
+            adventureGateNightArenaRun = adventureGateNightArenaRun?.let(TamaTransferAdventureGateNightArenaRun::fromEntity),
+            extras = TamaPetPrefsExtras.exportAll(TamaPetPrefsExtras.providers(context), pet.id)
         )
         return TamaBackupPackage(bundle = bundle, artworks = artworks)
     }
 
-    private suspend fun importFromBackupZip(inputStream: InputStream): Boolean {
+    private suspend fun importFromBackupZip(
+        inputStream: InputStream,
+        applySettings: Boolean = true,
+        dryRun: Boolean = false
+    ): Boolean {
         val staging = TamaTransferImportStaging(
             File(context.cacheDir, "tama-transfer-${UUID.randomUUID()}")
         )
@@ -3408,6 +3497,10 @@ class TamaGameEngine(
                     adventureStageFiles[stage.id] = target
                 }
             }
+            if (dryRun) {
+                validateTamaTransferOwnership(importedBundle, importedPetId)
+                return true
+            }
             restoreTransferBundle(
                 bundle = importedBundle,
                 artworkFiles = artworkFiles,
@@ -3416,7 +3509,8 @@ class TamaGameEngine(
                 adventureWorldFiles = adventureWorldFiles,
                 adventureStageFiles = adventureStageFiles,
                 freezePetAge = true,
-                mediaStaging = staging
+                mediaStaging = staging,
+                applySettings = applySettings
             )
             true
         } catch (e: Exception) {
@@ -3434,7 +3528,8 @@ class TamaGameEngine(
         adventureWorldFiles: Map<String, File>,
         adventureStageFiles: Map<String, File>,
         freezePetAge: Boolean,
-        mediaStaging: TamaTransferImportStaging? = null
+        mediaStaging: TamaTransferImportStaging? = null,
+        applySettings: Boolean = true
     ) {
         val now = System.currentTimeMillis()
         val importedPet = if (freezePetAge) {
@@ -3559,7 +3654,8 @@ class TamaGameEngine(
                 deleteTransferMedia(snapshot, preserveAdventureSessionIds = importedSessionIds)
             }
         }
-        bundle.settings?.let(::applyTransferSettings)
+        if (applySettings) bundle.settings?.let(::applyTransferSettings)
+        TamaPetPrefsExtras.importAll(TamaPetPrefsExtras.providers(context), bundle.extras, importedPet.id)
 
         _pet.value = null
         _events.value = emptyList()
@@ -3870,9 +3966,31 @@ class TamaGameEngine(
     /**
      * Import pet data from either a legacy JSON export or the newer ZIP backup.
      */
-    suspend fun importFromBackup(inputStream: InputStream): Boolean = mutate { importFromBackupLocked(inputStream) }
+    suspend fun importFromBackup(inputStream: InputStream, applySettings: Boolean = true): Boolean =
+        mutate { importFromBackupLocked(inputStream, applySettings) }
 
-    private suspend fun importFromBackupLocked(inputStream: InputStream): Boolean {
+    /** Dry-run parse of a backup ZIP (manifest, CRCs, ownership); nothing is committed. */
+    suspend fun validateBackupZip(file: File): Boolean = mutate {
+        withContext(Dispatchers.IO) {
+            try {
+                file.inputStream().use { importFromBackupZip(it, applySettings = false, dryRun = true) }
+            } catch (e: Exception) {
+                false
+            }
+        }
+    }
+
+    /** Remove one pet and its scoped data/media (pet transfer abandon/cleanup). */
+    suspend fun deletePetForTransfer(petId: String) = mutate {
+        clearPetScopedTransferData(petId)
+        if (_pet.value?.id == petId) {
+            _pet.value = null
+            _events.value = emptyList()
+        }
+        Unit
+    }
+
+    private suspend fun importFromBackupLocked(inputStream: InputStream, applySettings: Boolean = true): Boolean {
         return withContext(Dispatchers.IO) {
             try {
                 val buffered = if (inputStream is BufferedInputStream) inputStream else BufferedInputStream(inputStream)
@@ -3882,7 +4000,7 @@ class TamaGameEngine(
                 buffered.reset()
                 val isZip = read >= 2 && signature[0] == 'P'.code.toByte() && signature[1] == 'K'.code.toByte()
                 if (isZip) {
-                    importFromBackupZip(buffered)
+                    importFromBackupZip(buffered, applySettings)
                 } else {
                     val jsonString = buffered.bufferedReader().use { it.readText() }
                     importFromJson(jsonString)
@@ -4136,14 +4254,9 @@ class TamaGameEngine(
         return context.getString(template, npcName, rewardCoins)
     }
 
-    private fun harvestYieldForCrop(crop: PlantedCrop, randomValue: Float = Random.nextFloat()): Int {
-        if (!crop.isFertilized || crop.isDecayed) return 1
-        return when {
-            randomValue < 0.15f -> 3
-            randomValue < 0.45f -> 2
-            else -> 1
-        }
-    }
+    /** One shared rule for manual and drone harvests (yieldModifier plus the fertilizer bonus). */
+    private fun harvestYieldForCrop(crop: PlantedCrop, randomValue: Float = Random.nextFloat()): Int =
+        farmHarvestYield(crop, randomValue)
 
     private fun questToEntity(quest: TamaQuest): TamaQuestEntity {
         return TamaQuestEntity(

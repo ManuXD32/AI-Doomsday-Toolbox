@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_farm_err_locked_plot">Esa parcela aún está bloqueada.</string>
+    <string name="tama_farm_err_tool">Tu herramienta falta o está rota.</string>
+    <string name="tama_farm_err_plot_state">La parcela no está lista para esa acción.</string>
+    <string name="tama_farm_err_seed">No tienes semillas para plantar.</string>
+    <string name="tama_farm_err_water">No tienes agua. Recoge un poco del pozo.</string>
+    <string name="tama_farm_err_crop_not_ready">Este cultivo aún no está listo para cosechar.</string>
+    <string name="tama_farm_err_no_crop">Aquí no hay ningún cultivo.</string>
+    <string name="tama_farm_err_fertilizer">No tienes fertilizante.</string>
+    <string name="tama_farm_err_fertilizer_not_needed">Este cultivo no necesita fertilizante.</string>
+    <string name="tama_farm_err_item">No tienes ese objeto.</string>
+    <string name="tama_farm_err_already_owned">Ya tienes eso.</string>
+    <string name="tama_farm_err_not_ready">Todavía no hay nada listo para recoger.</string>
+    <string name="tama_farm_err_animal_not_hungry">Ese animal aún no tiene hambre.</string>
+    <string name="tama_farm_err_feed">No tienes pienso para animales.</string>
+    <string name="tama_farm_err_livestock_full">No hay espacio para otro animal.</string>
+    <string name="tama_farm_err_upgrade_required">Compra esa mejora primero.</string>
+    <string name="tama_farm_err_storage_empty">El almacén del dron está vacío.</string>
+    <string name="tama_farm_err_axe">Necesitas un hacha. Compra una en la tienda.</string>
+    <string name="tama_farm_err_pickaxe">Necesitas un pico. Compra uno en la tienda.</string>
+    <string name="tama_farm_err_obstacle">Despeja primero el obstáculo de esta parcela.</string>
+    <string name="tama_farm_err_materials">Faltan materiales. Madera necesaria: %1$d. Piedra necesaria: %2$d.</string>
+    <string name="tama_farm_obstacle_cleared_stump">Tocón despejado. Madera +%1$d</string>
+    <string name="tama_farm_obstacle_cleared_rock">Roca rota. Piedra +%1$d</string>
+    <string name="tama_farm_obstacle_cleared_weeds">Malas hierbas arrancadas.</string>
+</resources>

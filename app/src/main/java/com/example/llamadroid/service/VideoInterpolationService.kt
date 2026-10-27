@@ -60,7 +60,7 @@ class VideoInterpolationService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForegroundWithNotification()
+        if (!startForegroundWithNotification()) return START_NOT_STICKY
         when (intent?.action) {
             ACTION_START_INTERPOLATION -> {
                 val config = intent.toInterpolationConfig()
@@ -781,15 +781,23 @@ class VideoInterpolationService : Service() {
         }
     }
 
-    private fun startForegroundWithNotification() {
-        if (notificationTaskId != null) return
+    private fun startForegroundWithNotification(): Boolean {
+        if (notificationTaskId != null) return true
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.VIDEO_INTERPOLATION,
             getString(R.string.interpolation_notification_title)
         )
+        val started = ForegroundStart.start(this, taskId, notification, ForegroundServiceTypes.DATA_SYNC)
+        if (started is ForegroundStart.Result.Failed) {
+            val message = ForegroundStart.failureMessage(this, started.reason, getString(R.string.interpolation_notification_title))
+            UnifiedNotificationManager.failTask(taskId, message)
+            _state.value = VideoInterpolationState.Error(message)
+            stopSelf()
+            return false
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
         WakeLockManager.acquire(applicationContext, "VideoInterpolationService")
+        return true
     }
 
     private fun setupFFmpegLibrarySymlinks() {

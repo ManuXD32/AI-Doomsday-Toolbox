@@ -3,7 +3,7 @@ package com.example.llamadroid.tama.game
 import android.content.Context
 import com.example.llamadroid.R
 import com.example.llamadroid.tama.data.ItemType
-import com.example.llamadroid.tama.data.TamaFoodCatalog
+import com.example.llamadroid.tama.data.TamaFoodOptions
 import com.example.llamadroid.tama.data.TamaPotionCatalog
 import com.example.llamadroid.tama.rpg.AdventureGateCatalog
 
@@ -16,9 +16,9 @@ internal object TamaInventoryUse {
         val item = engine.pet.value?.inventory?.firstOrNull { it.id == itemId && it.quantity > 0 }
             ?: return unavailable()
         return when {
-            item.type == ItemType.FOOD && TamaFoodCatalog.byId(itemId) != null -> {
-                val food = requireNotNull(TamaFoodCatalog.byId(itemId))
-                engine.feedWithFood(itemId, food.hungerGain, food.happinessGain)
+            item.type in setOf(ItemType.FOOD, ItemType.CROP) && TamaFoodOptions.definition(itemId) != null -> {
+                val food = requireNotNull(TamaFoodOptions.definition(itemId))
+                engine.feedWithFood(food.id, food.hungerGain, food.happinessGain)
             }
             item.type == ItemType.POTION && TamaPotionCatalog.byId(itemId) != null -> engine.usePotion(itemId)
             item.type in setOf(ItemType.POTION, ItemType.TREASURE) && AdventureGateCatalog.supply(itemId) != null ->

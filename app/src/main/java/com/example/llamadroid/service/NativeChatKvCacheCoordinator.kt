@@ -311,14 +311,27 @@ class NativeChatKvCacheCoordinator(context: Context) {
      */
     fun scheduleSave(server: LlamaServerEntity, chat: LlamaChatEntity, slotId: Int) {
         if (eligibility(server, chat) != KvCacheEligibility.ELIGIBLE) return
-        val baseUrl = server.baseUrl()
-        val key = KvCacheKey.Chat(chat.id)
+        scheduleSave(server.baseUrl(), KvCacheKey.Chat(chat.id), slotId)
+    }
+
+    /**
+     * Same as the chat overload for any persistent [key] (for example [KvCacheKey.Pet]). The
+     * caller must already have decided that the owner persists on a loopback llama-server; the
+     * save is skipped when the endpoint is known not to support slot actions.
+     */
+    fun scheduleSave(baseUrl: String, key: KvCacheKey, slotId: Int) {
+        if (slotActionsSupport[normalize(baseUrl)] == false) return
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             runCatching { saveIfHolder(baseUrl, slotId, key, requireDirty = false) }.onFailure {
                 if (it is kotlinx.coroutines.CancellationException) throw it
-                DebugLog.log("NativeChatKvCache: save failed chat=${chat.id} ${it.javaClass.simpleName}")
+                DebugLog.log("NativeChatKvCache: save failed ${key.namespace} ${it.javaClass.simpleName}")
             }
         }
+    }
+
+    /** Deletes the saved slot file and sidecar of [key] (reset, clear, abandon, transfer-out). */
+    suspend fun deleteCache(key: KvCacheKey) {
+        withContext(Dispatchers.IO) { keyMutex(key).withLock { store.delete(key) } }
     }
 
     /**
@@ -330,8 +343,15 @@ class NativeChatKvCacheCoordinator(context: Context) {
         server: LlamaServerEntity,
         chat: LlamaChatEntity,
         onStatus: (String) -> Unit = {}
+    ): Boolean = ensureSlotSaveSupport(server, chat.persistKvCache, onStatus)
+
+    /** Server-row variant of [ensureSlotSaveSupport] for owners without a chat row (Tama pets). */
+    suspend fun ensureSlotSaveSupport(
+        server: LlamaServerEntity,
+        persist: Boolean,
+        onStatus: (String) -> Unit = {}
     ): Boolean {
-        if (!chat.persistKvCache || !server.isLlamaServerEngine() || !isNativeChatLoopbackHost(server.host)) {
+        if (!persist || !server.isLlamaServerEngine() || !isNativeChatLoopbackHost(server.host)) {
             return false
         }
         val firstUrl = server.baseUrl()
@@ -824,7 +844,7 @@ class NativeChatKvCacheCoordinator(context: Context) {
             store.enforceBudget(
                 DEFAULT_BUDGET_BYTES,
                 protectedStems,
-                setOf(KvCacheNamespace.CHAT, KvCacheNamespace.DELEGATE)
+                setOf(KvCacheNamespace.CHAT, KvCacheNamespace.DELEGATE, KvCacheNamespace.PET)
             )
         }
     }

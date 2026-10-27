@@ -28,8 +28,9 @@
     <string name="general_prompt_caches_title">Prompt disk caches</string>
     <string name="general_prompt_caches_erase_all">Erase all</string>
     <string name="general_prompt_caches_erase_title">Erase all prompt disk caches?</string>
-    <string name="general_prompt_caches_erase_message">Chats, DeepSeek subagents and harness agents will reprocess their prompts next time. Conversations are not affected.</string>
+    <string name="general_prompt_caches_erase_message">Chats, DeepSeek subagents, harness agents and pet chats will reprocess their prompts next time. Conversations are not affected.</string>
     <string name="native_chat_kv_cache_namespace_base">Base caches</string>
+    <string name="native_chat_kv_cache_namespace_pet">Pet chats</string>
     <string name="kv_prepare_caches_button">Prepare caches</string>
     <string name="kv_prepare_caches_title">Prepare caches</string>
     <string name="kv_prepare_caches_intro">A base cache holds the preprocessed system prompt (tool instructions) and tool definitions, so new chats only process their own first message. A chat\'s own cache never overwrites it; it is rebuilt only when missing or when the model, context, tools or template change.</string>

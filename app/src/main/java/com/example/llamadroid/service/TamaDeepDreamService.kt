@@ -320,30 +320,30 @@ class TamaDeepDreamService : Service() {
             UnifiedNotificationManager.TaskType.LLAMA_SERVER,
             title
         )
-        return try {
-            notificationTaskId = taskId
-            keepTaskNotificationOnExit = false
-            startForeground(taskId, notification)
-            recordBreadcrumb("foreground_started", petId = petId, details = "taskId=$taskId")
-            true
-        } catch (error: RuntimeException) {
-            val event = if (isForegroundServiceStartNotAllowed(error)) {
+        notificationTaskId = taskId
+        keepTaskNotificationOnExit = false
+        val started = ForegroundStart.start(this, taskId, notification, ForegroundServiceTypes.DATA_SYNC)
+        if (started is ForegroundStart.Result.Failed) {
+            val event = if (started.reason == ForegroundStart.Reason.BACKGROUND_NOT_ALLOWED) {
                 "foreground_start_denied"
-            } else if (error.javaClass.name.contains("RemoteServiceException")) {
-                "foreground_start_failed_remote"
             } else {
                 "foreground_start_failed"
             }
             recordBreadcrumb(
                 event,
                 petId = petId,
-                details = "${error.javaClass.simpleName}:${error.message}"
+                details = "${started.cause?.javaClass?.simpleName}:${started.cause?.message}"
             )
-            UnifiedNotificationManager.failTask(taskId, error.message ?: getString(R.string.error_generic))
+            UnifiedNotificationManager.failTask(
+                taskId,
+                ForegroundStart.failureMessage(this, started.reason, title)
+            )
             keepTaskNotificationOnExit = true
             notificationTaskId = null
-            false
+            return false
         }
+        recordBreadcrumb("foreground_started", petId = petId, details = "taskId=$taskId")
+        return true
     }
 
     private fun cleanupForeground(startId: Int) {

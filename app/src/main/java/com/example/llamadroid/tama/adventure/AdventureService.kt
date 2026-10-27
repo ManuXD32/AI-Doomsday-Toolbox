@@ -1,6 +1,7 @@
 package com.example.llamadroid.tama.adventure
 
 import android.content.Context
+import androidx.room.withTransaction
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
@@ -18,13 +19,18 @@ import com.example.llamadroid.service.RemoteSummaryRequest
 import com.example.llamadroid.tama.db.AdventureSessionEntity
 import com.example.llamadroid.tama.db.AdventureStageEntity
 import com.example.llamadroid.tama.db.DungeonProgressEntity
+import com.example.llamadroid.tama.data.TamaDialogTextCatalog
 import com.example.llamadroid.tama.db.TamaDatabase
+import com.example.llamadroid.tama.game.TamaActionGate
+import com.example.llamadroid.tama.rpg.AdventureGateCatalog
+import com.example.llamadroid.tama.rpg.AdventureGateRepository
 import com.example.llamadroid.util.DebugLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.util.Locale
 import java.util.UUID
 
 class AdventureService(
@@ -41,6 +47,8 @@ class AdventureService(
         ignoreUnknownKeys = true
         prettyPrint = true
     }
+    private val gateRepository by lazy { AdventureGateRepository(database) }
+    private val chronicleStore by lazy { AdventureChronicleStore(context) }
 
     suspend fun initializeOrContinue(
         petId: String,
@@ -56,52 +64,44 @@ class AdventureService(
             }
 
             onProgress(0.1f, context.getString(R.string.adventure_status_building_world))
-            var schematic = generateSchematic(dungeonType)
-                ?: return@withContext Result.failure(Exception(context.getString(R.string.adventure_error_schematic)))
-
+            val language = storyLanguage()
+            val hero = loadHero(petId)
             val sessionId = UUID.randomUUID().toString()
+            val visit = if (dungeonType.isRandom) pickChaosVisit(petId, sessionId) else null
+            val planned = generateSchematic(dungeonType, hero, language, visit)
+                ?: return@withContext Result.failure(Exception(context.getString(R.string.adventure_error_schematic)))
+            val schematic = if (visit == null) planned else planned.copy(chaosWorldId = visit.first, cameoMonsterIds = visit.second)
 
-            if (settingsRepository.adventureWorldImageEnabled.value) {
-                onProgress(0.32f, context.getString(R.string.adventure_status_writing_image_prompts))
-                schematic = tryGenerateWorldImage(
-                    sessionId = sessionId,
-                    dungeonType = dungeonType,
-                    schematic = schematic,
-                    onProgress = onProgress
-                )
-            }
-
-            val session = AdventureSession(
+            var session = AdventureSession(
                 id = sessionId,
                 petId = petId,
                 dungeonType = dungeonType,
                 schematic = schematic
             )
 
-            onProgress(0.72f, context.getString(R.string.adventure_status_writing_opening_scene))
-            val openingStage = generateStage(session, null)
+            onProgress(0.45f, context.getString(R.string.adventure_status_writing_opening_scene))
+            val opening = generateStage(session, null, hero, language)
                 ?: return@withContext Result.failure(Exception(context.getString(R.string.adventure_error_opening_scene)))
-            val openingStageWithImage = if (settingsRepository.adventureStageImagesEnabled.value) {
-                onProgress(0.80f, context.getString(R.string.adventure_status_writing_stage_image_prompts, openingStage.stageNumber))
-                tryGenerateStageImage(
-                    session = session,
-                    stage = openingStage,
-                    dungeonType = dungeonType,
-                    onProgress = onProgress
-                )
-            } else {
-                openingStage
-            }
+            // The opening hope is the starting hope; only items and flags are taken from the first scene.
+            session = session.addStage(opening.stage)
+                .withRunState(session.runState.applying(opening.state?.copy(hope = null)))
+            // Save the text first so the player can read it while the optional images render.
+            saveSession(session)
 
-            val sessionWithStage = session.addStage(openingStageWithImage)
-            saveSession(sessionWithStage)
-            Result.success(sessionWithStage)
+            session = addImages(session, includeWorld = true, onProgress = onProgress)
+            Result.success(session)
         } catch (e: Exception) {
             DebugLog.log("[Adventure] initializeOrContinue failed: ${e.message}")
             Result.failure(e)
         }
     }
 
+    /**
+     * Applies the player's choice and writes the next scene.
+     * The choice is saved before any generation so a failed backend call never loses it;
+     * calling again with a blank [playerChoice] retries the saved choice.
+     * The scene text is saved before optional images are generated.
+     */
     suspend fun submitChoice(
         petId: String,
         dungeonType: DungeonType,
@@ -115,45 +115,65 @@ class AdventureService(
                 ?: return@withContext Result.failure(Exception(context.getString(R.string.adventure_error_no_active_session)))
 
             val stages = database.tamaDao().getAdventureStages(sessionEntity.id)
-            var session = entityToSession(sessionEntity, stages).updateLastStageWithResponse(playerChoice)
-
-            onProgress(0.36f, context.getString(R.string.adventure_status_summarizing_scene))
-            val summary = summarizeStage(session.stages.last())
-            if (!summary.isNullOrBlank()) {
-                val updatedStages = session.stages.toMutableList()
-                updatedStages[updatedStages.lastIndex] = updatedStages.last().copy(summary = summary)
-                session = session.copy(
-                    stages = updatedStages,
-                    cumulativeSummary = listOf(session.cumulativeSummary, summary)
-                        .filter(String::isNotBlank)
-                        .joinToString("\n")
-                )
+            var session = entityToSession(sessionEntity, stages)
+            if (session.isCompleted) return@withContext Result.success(session)
+            if (session.stages.isEmpty()) {
+                return@withContext Result.failure(Exception(context.getString(R.string.adventure_error_no_active_session)))
             }
 
+            val pendingChoice = session.stages.last().userResponse?.takeIf(String::isNotBlank)
+            val choice = playerChoice.trim().ifBlank { pendingChoice }
+                ?: return@withContext Result.failure(Exception(context.getString(R.string.adventure_error_no_active_session)))
+
+            // Persist the choice first so it survives a failed generation.
+            session = session.updateLastStageWithResponse(choice)
+            saveSession(session)
+
+            if (session.stages.last().summary.isNullOrBlank()) {
+                onProgress(0.36f, context.getString(R.string.adventure_status_summarizing_scene))
+                val summary = summarizeStage(session.stages.last())
+                if (!summary.isNullOrBlank()) {
+                    val updatedStages = session.stages.toMutableList()
+                    updatedStages[updatedStages.lastIndex] = updatedStages.last().copy(summary = summary)
+                    session = session.copy(
+                        stages = updatedStages,
+                        cumulativeSummary = AdventureTextUtils.appendCappedSummary(session.cumulativeSummary, summary)
+                    )
+                    saveSession(session)
+                }
+            }
+
+            val language = storyLanguage()
+            val hero = loadHero(petId)
             if (session.currentStage >= session.schematic.totalStages) {
-                session = session.markCompleted()
-                updateDungeonProgress(petId, dungeonType)
-                saveSession(session)
-                return@withContext Result.success(session)
+                // Legacy runs that reached the last stage before completion was automatic.
+                val outcome = AdventureRewards.outcomeFor(session.runState.hope, reachedFinalScene = true)
+                return@withContext Result.success(completeRun(session, hero, language, outcome))
             }
 
             onProgress(0.72f, context.getString(R.string.adventure_status_writing_next_scene, session.currentStage + 1))
-            val nextStage = generateStage(session, playerChoice)
-                ?: return@withContext Result.failure(Exception(context.getString(R.string.adventure_error_next_scene)))
-            val nextStageWithImage = if (settingsRepository.adventureStageImagesEnabled.value) {
-                onProgress(0.80f, context.getString(R.string.adventure_status_writing_stage_image_prompts, nextStage.stageNumber))
-                tryGenerateStageImage(
-                    session = session,
-                    stage = nextStage,
-                    dungeonType = dungeonType,
-                    onProgress = onProgress
-                )
-            } else {
-                nextStage
-            }
+            val isEpilogue = session.currentStage + 1 >= session.schematic.totalStages
+            val next = generateStage(
+                session, choice, hero, language,
+                if (isEpilogue) AdventurePrompts.SceneKind.EPILOGUE else AdventurePrompts.SceneKind.NORMAL
+            ) ?: return@withContext Result.failure(Exception(context.getString(R.string.adventure_error_next_scene)))
 
-            session = session.addStage(nextStageWithImage)
+            // The epilogue never changes hope: the ending was earned by reaching it.
+            val newState = session.runState.applying(if (isEpilogue) next.state?.copy(hope = null) else next.state)
+            session = session.addStage(next.stage).withRunState(newState)
             saveSession(session)
+
+            when {
+                isEpilogue -> {
+                    val outcome = AdventureRewards.outcomeFor(newState.hope, reachedFinalScene = true)
+                    session = completeRun(session, hero, language, outcome)
+                }
+                newState.isDepleted -> {
+                    session = writeCarriedBackEnding(session, choice, hero, language)
+                    session = completeRun(session, hero, language, AdventureOutcome.CARRIED_BACK)
+                }
+            }
+            session = addImages(session, includeWorld = false, onProgress = onProgress)
             Result.success(session)
         } catch (e: Exception) {
             DebugLog.log("[Adventure] submitChoice failed: ${e.message}")
@@ -161,35 +181,233 @@ class AdventureService(
         }
     }
 
+    /** Hope reached 0: add one gentle "carried back" scene (never a death) and shorten the run to end there. */
+    private suspend fun writeCarriedBackEnding(
+        session: AdventureSession,
+        choice: String,
+        hero: AdventureHero,
+        language: String
+    ): AdventureSession {
+        val generated = generateStage(session, choice, hero, language, AdventurePrompts.SceneKind.CARRIED_BACK)
+        val stageNumber = session.currentStage + 1
+        val stage = generated?.stage ?: AdventureStage(
+            stageNumber = stageNumber,
+            storyContent = AdventurePrompts.fallbackCarriedBackScene(language, hero)
+        )
+        val ended = session.addStage(stage).let {
+            it.copy(schematic = it.schematic.copy(totalStages = stageNumber))
+        }
+        saveSession(ended)
+        return ended
+    }
+
+    /**
+     * Ends the run: writes the Dream Chronicle page, pays the pet (coins, XP, bond) once and stores the
+     * typed [ChronicleGrant] list on the session for the Gate/journal hooks to grant later.
+     */
+    private suspend fun completeRun(
+        session: AdventureSession,
+        hero: AdventureHero,
+        language: String,
+        outcome: AdventureOutcome
+    ): AdventureSession {
+        val state = session.runState
+        val dungeonType = session.dungeonType
+        val code = AdventurePrompts.loreCode(language)
+        val lore = AdventureLore.loreFor(code)
+        val dungeonTitle = lore.dungeon(dungeonType)?.title ?: dungeonType.displayName
+        val fallback = AdventurePrompts.fallbackChronicle(language, hero, dungeonTitle, outcome)
+        val lastScene = session.stages.lastOrNull()?.let { AdventureSceneParser.parse(it.storyContent).text.take(300) }.orEmpty()
+        val storySoFar = AdventureTextUtils.appendCappedSummary(session.cumulativeSummary, lastScene.ifBlank { "-" }, 1200)
+        val response = generateText(
+            userPrompt = AdventurePrompts.chroniclePrompt(language, hero, dungeonTitle, outcome, state, storySoFar),
+            useSummarizer = false,
+            maxTokens = 260,
+            temperature = 0.7f
+        )
+        val (title, summary) = response?.let { AdventurePrompts.parseChronicle(it, fallback.first, fallback.second) } ?: fallback
+
+        val reward = AdventureRewards.compute(session.schematic.difficulty, state.hope, outcome, dungeonType)
+        val applied = applyPetRewards(session.petId, reward)
+        val grants = reward.grants.mapIndexed { index, grant ->
+            if (index == 0) grant.copy(detail = lore.dungeon(dungeonType)?.chronicleReward) else grant
+        }
+        val page = DreamChroniclePage(
+            title = title,
+            summary = summary,
+            outcome = outcome,
+            finalHope = state.hope,
+            difficulty = session.schematic.difficulty,
+            coins = reward.coins,
+            xp = reward.xp,
+            bond = reward.bond,
+            grants = grants,
+            rewardsApplied = applied
+        )
+        val completed = session
+            .copy(schematic = session.schematic.copy(chronicle = page))
+            .markCompleted()
+        saveSession(completed)
+        // A carried-back run writes a page but does not unlock the next dungeon.
+        if (outcome == AdventureOutcome.VICTORY) updateDungeonProgress(session.petId, dungeonType)
+        return applyChronicleGrants(completed)
+    }
+
+    /** Retry hook for the results card: grants a finished run's Chronicle rewards if that never succeeded. */
+    suspend fun grantPendingChronicle(sessionId: String): AdventureSession? = withContext(Dispatchers.IO) {
+        val entity = database.tamaDao().getAdventureSession(sessionId) ?: return@withContext null
+        val session = entityToSession(entity, database.tamaDao().getAdventureStages(sessionId))
+        if (!session.isCompleted) session else applyChronicleGrants(session)
+    }
+
+    /**
+     * Grants the Chronicle rewards of a finished run exactly once: resolves them (Gate supply, Nexum fragment,
+     * lantern spark, coin fallback), then commits the supplies/coins, the log entry and `grantsApplied` together
+     * under the Tama action gate and one DB transaction. A repeated call finds `grantsApplied` and does nothing.
+     */
+    private suspend fun applyChronicleGrants(session: AdventureSession): AdventureSession {
+        val page = session.schematic.chronicle ?: return session
+        if (page.grantsApplied) return session
+        val dao = database.tamaDao()
+        return runCatching {
+            val rows = gateRepository.getProgress(session.petId)
+            val held = chronicleStore.load(session.petId).entries
+                .filter { it.sessionId != session.id }
+                .flatMap { entry -> entry.grants.mapNotNull(AdventureChronicleLink::fragmentIdOf) }
+                .toSet()
+            val resolved = AdventureChronicleLink.resolveGrants(page.grants, session.id, rows, held)
+            val updatedPage = page.copy(grants = resolved, grantsApplied = true)
+            val updated = session.copy(schematic = session.schematic.copy(chronicle = updatedPage))
+            val granted = gateRepository.applyChronicleGrant(
+                petId = session.petId,
+                supplyIds = resolved.mapNotNull(AdventureChronicleLink::supplyIdOf),
+                bonusCoins = resolved.sumOf(AdventureChronicleLink::fallbackCoinsOf)
+            ) {
+                val entity = dao.getAdventureSession(session.id) ?: return@applyChronicleGrant false
+                val stored = runCatching { json.decodeFromString<StorySchematic>(entity.schematicJson) }.getOrNull()
+                if (stored?.chronicle?.grantsApplied == true) return@applyChronicleGrant false
+                dao.saveAdventureSession(entity.copy(schematicJson = json.encodeToString(updated.schematic)))
+                chronicleStore.upsert(
+                    session.petId,
+                    ChronicleLogEntry(
+                        sessionId = session.id,
+                        dungeon = session.dungeonType.name,
+                        title = page.title,
+                        finishedAt = System.currentTimeMillis(),
+                        outcome = page.outcome,
+                        coins = page.coins,
+                        xp = page.xp,
+                        bond = page.bond,
+                        grants = resolved
+                    )
+                )
+                true
+            }
+            if (granted) updated else session
+        }.getOrElse {
+            DebugLog.log("[Adventure] Chronicle grant failed: ${it.message}")
+            session
+        }
+    }
+
+    /** Coins, XP (introspection level) and bond, committed under the Tama action gate. */
+    private suspend fun applyPetRewards(petId: String, reward: AdventureRewards.Computation): Boolean {
+        if (reward.coins <= 0 && reward.xp <= 0 && reward.bond <= 0) return true
+        return runCatching {
+            TamaActionGate.run {
+                database.withTransaction {
+                    val dao = database.tamaDao()
+                    val pet = dao.getPet(petId) ?: return@withTransaction false
+                    dao.savePet(
+                        pet.copy(
+                            money = pet.money + reward.coins,
+                            introspectionLevel = pet.introspectionLevel + reward.xp,
+                            ownerBondLevel = (pet.ownerBondLevel + reward.bond).coerceAtMost(100f)
+                        )
+                    )
+                    true
+                }
+            }
+        }.getOrElse {
+            DebugLog.log("[Adventure] Reward grant failed: ${it.message}")
+            false
+        }
+    }
+
+    /** Generates the optional world/stage images after the scene text is already saved. */
+    private suspend fun addImages(
+        session: AdventureSession,
+        includeWorld: Boolean,
+        onProgress: (Float, String) -> Unit
+    ): AdventureSession {
+        var current = session
+        if (includeWorld && settingsRepository.adventureWorldImageEnabled.value) {
+            onProgress(0.76f, context.getString(R.string.adventure_status_writing_image_prompts))
+            val withWorld = tryGenerateWorldImage(current.id, current.dungeonType, current.schematic, onProgress)
+            if (withWorld != current.schematic) {
+                current = current.copy(schematic = withWorld)
+                saveSession(current)
+            }
+        }
+        val stage = current.stages.lastOrNull()
+        if (stage != null && settingsRepository.adventureStageImagesEnabled.value) {
+            onProgress(0.84f, context.getString(R.string.adventure_status_writing_stage_image_prompts, stage.stageNumber))
+            val withImage = tryGenerateStageImage(current, stage, current.dungeonType, onProgress)
+            if (withImage != stage) {
+                current = current.copy(stages = current.stages.dropLast(1) + withImage)
+                saveSession(current)
+            }
+        }
+        return current
+    }
+
     suspend fun resetAdventure(petId: String, dungeonType: DungeonType) = withContext(Dispatchers.IO) {
         val existingSession = database.tamaDao().getLatestAdventureSessionForDungeon(petId, dungeonType.name)
         if (existingSession != null) {
             database.tamaDao().deleteAdventureStages(existingSession.id)
             database.tamaDao().deleteAdventureSession(existingSession.id)
+            deleteSessionImages(existingSession.id)
         }
     }
 
-    private suspend fun generateSchematic(dungeonType: DungeonType): StorySchematic? {
-        val prompt = """
-            You are a story planner for a retro handheld monster-pet adventure.
+    private fun deleteSessionImages(sessionId: String) {
+        val root = File(context.filesDir, "adventure_worlds")
+        runCatching {
+            File(root, "$sessionId.png").delete()
+            File(root, sessionId).deleteRecursively()
+        }.onFailure { DebugLog.log("[Adventure] Failed to delete session images: ${it.message}") }
+    }
 
-            DUNGEON THEME:
-            ${dungeonType.stylePrompt.trim()}
+    /** Chaos Realm: an unlocked Gate world (seeded by the session id) and its cameo monster ids, or null. */
+    private suspend fun pickChaosVisit(petId: String, sessionId: String): Pair<String, List<String>>? {
+        val rows = runCatching { gateRepository.getProgress(petId) }.getOrNull().orEmpty()
+        val worldId = AdventureChronicleLink.pickChaosWorld(sessionId, AdventureChronicleLink.unlockedWorldIds(rows)) ?: return null
+        return worldId to AdventureChronicleLink.cameoMonsterIds(worldId, sessionId)
+    }
 
-            Create a brief structural outline with these exact fields:
-            TOTAL_STAGES: number between 8 and 20
-            STORY_THREAD: one paragraph with the main plot arc
-            KEY_EVENTS: 4-5 bullet points
-            POSSIBLE_ENDINGS: 2-3 bullet points
-            TONE: one short phrase
-            DIFFICULTY: easy, medium, or hard
+    /** Lore, landmarks, inhabitants and localized cameo names of the Gate world a Chaos run visits. */
+    private fun gateVisitBlock(worldId: String?, cameoIds: List<String>, language: String): String? {
+        if (worldId == null) return null
+        val world = AdventureLore.loreFor(AdventurePrompts.loreCode(language)).world(worldId) ?: return null
+        val names = cameoIds.mapNotNull { id ->
+            runCatching {
+                TamaDialogTextCatalog.localizedResource(context, AdventureGateCatalog.monster(id).nameRes)
+            }.getOrNull()
+        }
+        return AdventureChronicleLink.chaosBlock(world, names)
+    }
 
-            Keep it concise and practical.
-            Write everything in ${settingsRepository.adventureLanguage.value}.
-        """.trimIndent()
-
+    private suspend fun generateSchematic(
+        dungeonType: DungeonType,
+        hero: AdventureHero,
+        language: String,
+        visit: Pair<String, List<String>>? = null
+    ): StorySchematic? {
         val response = generateText(
-            userPrompt = prompt,
+            userPrompt = AdventurePrompts.plannerPrompt(
+                language, dungeonType, hero,
+                gateVisit = gateVisitBlock(visit?.first, visit?.second.orEmpty(), language)
+            ),
             useSummarizer = false,
             maxTokens = 700,
             temperature = 0.7f
@@ -197,14 +415,21 @@ class AdventureService(
         return parseSchematic(response)
     }
 
-    private suspend fun generateStage(session: AdventureSession, playerChoice: String?): AdventureStage? {
-        val systemPrompt = settingsRepository.adventureSystemPrompt.value
+    private class GeneratedScene(val stage: AdventureStage, val state: SceneStateUpdate?)
+
+    private suspend fun generateStage(
+        session: AdventureSession,
+        playerChoice: String?,
+        hero: AdventureHero,
+        language: String,
+        kind: AdventurePrompts.SceneKind = AdventurePrompts.SceneKind.NORMAL
+    ): GeneratedScene? {
+        val systemPrompt = systemPromptFor(language, session.dungeonType)
         val stageNumber = session.currentStage + 1
-        val totalStages = session.schematic.totalStages
-        val progressPercent = (stageNumber * 100) / totalStages
-        val previousMoments = session.stages.takeLast(3).joinToString("\n\n") { stage ->
+        val totalStages = maxOf(session.schematic.totalStages, stageNumber)
+        val sceneBlocks = session.stages.takeLast(3).map { stage ->
             buildString {
-                appendLine("Scene ${stage.stageNumber}: ${stage.storyContent.trim()}")
+                appendLine("Scene ${stage.stageNumber}: ${AdventureSceneParser.parse(stage.storyContent).text}")
                 stage.userResponse?.takeIf(String::isNotBlank)?.let {
                     appendLine("Player response: $it")
                 }
@@ -214,75 +439,80 @@ class AdventureService(
             }.trim()
         }
 
+        val header = AdventurePrompts.sceneHeader(
+            language = language,
+            dungeon = session.dungeonType,
+            schematic = session.schematic,
+            hero = hero,
+            state = session.runState,
+            dungeonLabel = dungeonTitle(session.dungeonType, language),
+            gateVisit = gateVisitBlock(session.schematic.chaosWorldId, session.schematic.cameoMonsterIds, language)
+        )
+        val choiceBlock = if (!playerChoice.isNullOrBlank()) {
+            "LATEST PLAYER CHOICE:\n${playerChoice.trim()}\n\n"
+        } else {
+            ""
+        }
+        val footer = AdventurePrompts.sceneFooter(language, stageNumber, totalStages, kind)
+
+        val maxOutputTokens = 1100
+        val budget = AdventureTextUtils.historyBudgetChars(
+            contextTokens = backendContextSize(),
+            maxOutputTokens = maxOutputTokens,
+            fixedChars = systemPrompt.length + header.length + choiceBlock.length + footer.length + 64
+        )
+        val (fittedSummary, fittedScenes) = AdventureTextUtils.fitHistory(
+            summary = session.cumulativeSummary,
+            scenes = sceneBlocks,
+            budgetChars = budget
+        )
+
         val userPrompt = buildString {
-            appendLine("SETTING: ${dungeonTypeLabel(session.dungeonType)}")
-            appendLine("THEME: ${session.dungeonType.stylePrompt.trim()}")
-            appendLine("LANGUAGE: ${settingsRepository.adventureLanguage.value}")
-            appendLine()
-            appendLine("HIDDEN STORY GUIDE:")
-            appendLine("Main arc: ${session.schematic.storyThread}")
-            appendLine("Key events: ${session.schematic.keyEvents.joinToString(", ")}")
-            appendLine("Possible endings: ${session.schematic.possibleEndings.joinToString(", ")}")
-            appendLine("Tone: ${session.schematic.tone}")
-            appendLine("Difficulty: ${session.schematic.difficulty}")
-            appendLine()
-            if (session.cumulativeSummary.isNotBlank()) {
+            append(header)
+            if (fittedSummary.isNotBlank()) {
                 appendLine("STORY SO FAR:")
-                appendLine(session.cumulativeSummary.trim())
+                appendLine(fittedSummary.trim())
                 appendLine()
             }
-            if (previousMoments.isNotBlank()) {
+            if (fittedScenes.isNotEmpty()) {
                 appendLine("RECENT SCENES:")
-                appendLine(previousMoments)
+                appendLine(fittedScenes.joinToString("\n\n"))
                 appendLine()
             }
-            if (!playerChoice.isNullOrBlank()) {
-                appendLine("LATEST PLAYER CHOICE:")
-                appendLine(playerChoice.trim())
-                appendLine()
-            }
-            append("Write scene $stageNumber of $totalStages. ")
-            when {
-                progressPercent < 20 -> append("This is the opening stretch, so establish the danger and curiosity.")
-                progressPercent < 50 -> append("Build momentum and reveal a meaningful new twist.")
-                progressPercent < 80 -> append("Escalate the stakes and make the consequences sharper.")
-                progressPercent < 95 -> append("Prepare the climax and narrow the possible outcomes.")
-                else -> append("This is the final scene, so deliver the resolution.")
-            }
-            appendLine()
-            appendLine()
-            appendLine("Rules:")
-            appendLine("- Stay fully in-world and immersive.")
-            appendLine("- Do not mention hidden planning notes, schemas, or stage counts.")
-            appendLine("- End with exactly 2 to 4 clear choices for the player.")
-            appendLine("- Keep this scene distinct from the recent scenes.")
-            appendLine("- Return only the story scene text.")
+            append(choiceBlock)
+            append(footer)
         }
 
         val response = generateText(
             systemPrompt = systemPrompt,
             userPrompt = userPrompt,
             useSummarizer = false,
-            maxTokens = 1100,
+            maxTokens = maxOutputTokens,
             temperature = 0.85f
         ) ?: return null
 
-        return AdventureStage(
-            stageNumber = stageNumber,
-            storyContent = response,
-            userResponse = null,
-            summary = null
+        val parsed = AdventureSceneParser.parse(response)
+        if (parsed.text.isBlank()) return null
+        return GeneratedScene(
+            stage = AdventureStage(
+                stageNumber = stageNumber,
+                // The raw reply is stored; the UI and later prompts re-parse it (scene, choices, state).
+                storyContent = response,
+                userResponse = null,
+                summary = null
+            ),
+            state = parsed.state
         )
     }
 
     private suspend fun summarizeStage(stage: AdventureStage): String? {
         val prompt = """
-            ${settingsRepository.adventureSummarizerPrompt.value}
+            ${settingsRepository.adventureSummarizerPrompt.value.ifBlank { SettingsRepository.FALLBACK_ADVENTURE_SUMMARIZER_PROMPT }}
 
-            Language: ${settingsRepository.adventureLanguage.value}
+            Language: ${storyLanguage()}
 
             Scene text:
-            ${stage.storyContent.trim()}
+            ${AdventureSceneParser.parse(stage.storyContent).text}
 
             Player response:
             ${stage.userResponse ?: "N/A"}
@@ -297,6 +527,43 @@ class AdventureService(
         )
     }
 
+    /** The story language: explicit settings choices win; Auto follows the app language (EN/ES). */
+    private fun storyLanguage(): String =
+        AdventurePrompts.resolveLanguage(settingsRepository.adventureLanguage.value, appLanguageCode())
+
+    private fun appLanguageCode(): String {
+        val selected = context.getSharedPreferences("llamadroid_settings", Context.MODE_PRIVATE)
+            .getString("selected_language", "system") ?: "system"
+        return if (selected == "system") Locale.getDefault().language else selected
+    }
+
+    /** A custom (non-default) system prompt overrides the generated lore prompt; blank or legacy = default. */
+    private fun systemPromptFor(language: String, dungeonType: DungeonType): String {
+        val stored = settingsRepository.adventureSystemPrompt.value
+        return if (AdventurePrompts.isDefaultSystemPrompt(stored, SettingsRepository.FALLBACK_ADVENTURE_SYSTEM_PROMPT)) {
+            AdventurePrompts.systemPrompt(language, dungeonType)
+        } else {
+            stored
+        }
+    }
+
+    private suspend fun loadHero(petId: String): AdventureHero {
+        val dao = database.tamaDao()
+        val pet = dao.getPet(petId)
+        val gate = runCatching { dao.getAdventureGateProfile(petId) }.getOrNull()
+        return pet?.let { AdventurePrompts.heroFrom(it, gate) } ?: AdventureHero(
+            name = "the pet",
+            species = "pet",
+            stage = "child",
+            personality = "curious",
+            personalityNote = "",
+            mood = "neutral"
+        )
+    }
+
+    private fun dungeonTitle(type: DungeonType, language: String): String =
+        AdventureLore.loreFor(AdventurePrompts.loreCode(language)).dungeon(type)?.title ?: dungeonTypeLabel(type)
+
     private suspend fun tryGenerateWorldImage(
         sessionId: String,
         dungeonType: DungeonType,
@@ -304,29 +571,17 @@ class AdventureService(
         onProgress: (Float, String) -> Unit
     ): StorySchematic {
         if (!hasAdventureImageHeapHeadroom("world")) {
-            onProgress(0.48f, context.getString(R.string.adventure_status_image_skipped_low_memory))
+            onProgress(0.78f, context.getString(R.string.adventure_status_image_skipped_low_memory))
             return schematic
         }
         val model = resolveAdventureImageModel() ?: return schematic
 
-        val positivePrompt = generateText(
-            systemPrompt = adventureImagePositivePromptSystem(),
-            userPrompt = adventureImagePositivePromptUser(dungeonType, schematic),
-            useSummarizer = false,
-            maxTokens = 320,
-            temperature = 0.55f
-        )?.ifBlank { null } ?: fallbackWorldImagePrompt(dungeonType, schematic)
-
-        val negativePrompt = generateText(
-            systemPrompt = adventureImageNegativePromptSystem(),
-            userPrompt = adventureImageNegativePromptUser(dungeonType, schematic),
-            useSummarizer = false,
-            maxTokens = 120,
-            temperature = 0.3f
-        )?.ifBlank { null } ?: "text, ui, watermark, realistic photo, blurry, cluttered foreground, extra people"
+        // Deterministic prompts: fixed style prefix + the dungeon's world prompt, static negative prompt.
+        val positivePrompt = AdventurePrompts.imagePrompt(dungeonType, null)
+        val negativePrompt = AdventurePrompts.IMAGE_NEGATIVE_PROMPT
 
         return runCatching {
-            onProgress(0.48f, context.getString(R.string.adventure_status_generating_world_image))
+            onProgress(0.8f, context.getString(R.string.adventure_status_generating_world_image))
             val resolution = settingsRepository.adventureOnnxResolution.value.coerceAtLeast(256)
             val outputFile = File(File(context.filesDir, "adventure_worlds").apply { mkdirs() }, "$sessionId.png")
             OnnxTxt2ImgPipeline().generate(
@@ -340,7 +595,7 @@ class AdventureService(
                     height = resolution,
                     steps = settingsRepository.adventureOnnxSteps.value.coerceAtLeast(1),
                     cfgScale = settingsRepository.adventureOnnxCfg.value,
-                    seed = -1L,
+                    seed = AdventureTextUtils.sessionSeed(sessionId),
                     requestedWidth = resolution,
                     requestedHeight = resolution,
                     backend = OnnxRuntimeBackend.CPU,
@@ -371,32 +626,21 @@ class AdventureService(
             return stage
         }
         val model = resolveAdventureImageModel() ?: return stage
-        val positivePrompt = generateText(
-            systemPrompt = adventureImagePositivePromptSystem(),
-            userPrompt = adventureStageImagePositivePromptUser(
-                session = session,
-                stage = stage,
-                dungeonType = dungeonType
-            ),
-            useSummarizer = false,
-            maxTokens = 340,
-            temperature = 0.55f
-        )?.ifBlank { null } ?: fallbackStageImagePrompt(session, stage, dungeonType)
-
-        val negativePrompt = generateText(
-            systemPrompt = adventureImageNegativePromptSystem(),
-            userPrompt = adventureStageImageNegativePromptUser(
-                session = session,
-                stage = stage,
-                dungeonType = dungeonType
-            ),
+        val sceneText = AdventureSceneParser.parse(stage.storyContent).text
+        // One short call turns the (possibly Spanish) scene into an English visual detail; the style
+        // prefix and the dungeon world prompt are fixed, and the negative prompt is static.
+        val detail = generateText(
+            systemPrompt = adventureImageDetailSystem(),
+            userPrompt = sceneText.take(900),
             useSummarizer = false,
             maxTokens = 120,
-            temperature = 0.3f
-        )?.ifBlank { null } ?: "text, ui, watermark, realistic photo, blurry, cluttered foreground, extra people"
+            temperature = 0.5f
+        )?.lineSequence()?.map { it.trim() }?.firstOrNull { it.isNotEmpty() }
+        val positivePrompt = AdventurePrompts.imagePrompt(dungeonType, detail)
+        val negativePrompt = AdventurePrompts.IMAGE_NEGATIVE_PROMPT
 
         return runCatching {
-            onProgress(0.86f, context.getString(R.string.adventure_status_generating_stage_image, stage.stageNumber))
+            onProgress(0.88f, context.getString(R.string.adventure_status_generating_stage_image, stage.stageNumber))
             val resolution = settingsRepository.adventureOnnxResolution.value.coerceAtLeast(256)
             val stageDir = File(File(context.filesDir, "adventure_worlds").apply { mkdirs() }, session.id).apply { mkdirs() }
             val outputFile = File(stageDir, "stage_${stage.stageNumber}.png")
@@ -411,7 +655,7 @@ class AdventureService(
                     height = resolution,
                     steps = settingsRepository.adventureOnnxSteps.value.coerceAtLeast(1),
                     cfgScale = settingsRepository.adventureOnnxCfg.value,
-                    seed = -1L,
+                    seed = AdventureTextUtils.sessionSeed(session.id),
                     requestedWidth = resolution,
                     requestedHeight = resolution,
                     backend = OnnxRuntimeBackend.CPU,
@@ -460,108 +704,11 @@ class AdventureService(
                 } ?: models.firstOrNull()
             }
 
-    private fun adventureImagePositivePromptSystem(): String = """
-        You write one English positive prompt for local image generation.
-        Return only the prompt text, no JSON, no markdown, no label.
-        The prompt must clearly request:
-        - retro handheld game background illustration
-        - charming 1990s Tamagotchi-style scene
-        - flat colorful 2d art
-        - bold outlines
-        - cute toy-like shapes
-        - simple readable composition
-        - clear open center space when appropriate
-        - no text, no UI, no foreground clutter
-
-        Follow this example style closely:
-        retro handheld game background illustration, charming 1990s Tamagotchi-style room interior scene, flat colorful 2d art, large TV on the left, rounded sofa on the right, dining table in the center, shelf at the back, wall clock, rug on the floor, warm cozy mood, cute toy-like shapes, bold outlines, simple readable composition, clear open center space for pet tiles, no text, no UI, no people, no foreground objects
+    private fun adventureImageDetailSystem(): String = """
+        You describe one story scene as a short English visual detail for a background image.
+        Return a single line of at most 30 words: the location, the key objects and the mood.
+        No style words, no character names, no quotes, no labels.
     """.trimIndent()
-
-    private fun adventureImagePositivePromptUser(dungeonType: DungeonType, schematic: StorySchematic): String = """
-        Create one background prompt for the opening world image of this text adventure.
-        Dungeon: ${dungeonTypeLabel(dungeonType)}
-        Theme: ${dungeonType.stylePrompt.trim()}
-        Story thread: ${schematic.storyThread}
-        Key events: ${schematic.keyEvents.joinToString(", ")}
-        Tone: ${schematic.tone}
-        Difficulty: ${schematic.difficulty}
-
-        Make it feel like an explorable retro adventure location.
-        Return only the English positive prompt.
-    """.trimIndent()
-
-    private fun adventureStageImagePositivePromptUser(
-        session: AdventureSession,
-        stage: AdventureStage,
-        dungeonType: DungeonType
-    ): String = """
-        Create one background prompt for an in-story scene image.
-        Dungeon: ${dungeonTypeLabel(dungeonType)}
-        Theme: ${dungeonType.stylePrompt.trim()}
-        Story thread: ${session.schematic.storyThread}
-        Stage ${stage.stageNumber} story: ${stage.storyContent.trim()}
-        Player response: ${stage.userResponse ?: "N/A"}
-        Previous summary: ${session.cumulativeSummary.ifBlank { "N/A" }}
-
-        Make the scene feel like part of the same retro handheld adventure world.
-        Return only the English positive prompt.
-    """.trimIndent()
-
-    private fun adventureImageNegativePromptSystem(): String = """
-        Write one short English negative prompt for local image generation.
-        Return only a concise comma-separated exclusion list.
-        No JSON, no labels, no explanation.
-    """.trimIndent()
-
-    private fun adventureImageNegativePromptUser(dungeonType: DungeonType, schematic: StorySchematic): String = """
-        Write a negative prompt for an image of ${dungeonTypeLabel(dungeonType)}.
-        Tone: ${schematic.tone}
-        Keep it short and useful.
-    """.trimIndent()
-
-    private fun adventureStageImageNegativePromptUser(
-        session: AdventureSession,
-        stage: AdventureStage,
-        dungeonType: DungeonType
-    ): String = """
-        Write a negative prompt for stage ${stage.stageNumber} of ${dungeonTypeLabel(dungeonType)}.
-        Story text: ${stage.storyContent.trim()}
-        Previous summary: ${session.cumulativeSummary.ifBlank { "N/A" }}
-        Keep it short and useful.
-    """.trimIndent()
-
-    private fun fallbackWorldImagePrompt(dungeonType: DungeonType, schematic: StorySchematic): String {
-        return buildString {
-            append("retro handheld game background illustration, charming 1990s Tamagotchi-style dungeon scene, ")
-            append("flat colorful 2d art, bold outlines, cute toy-like shapes, simple readable composition, ")
-            append("clear open center space for pet tiles, ")
-            append(dungeonType.displayName.lowercase())
-            append(" adventure setting, ")
-            append(schematic.tone.lowercase())
-            append(" mood, ")
-            append("no text, no UI, no people, no foreground objects")
-        }
-    }
-
-    private fun fallbackStageImagePrompt(
-        session: AdventureSession,
-        stage: AdventureStage,
-        dungeonType: DungeonType
-    ): String {
-        return buildString {
-            append("retro handheld game background illustration, charming 1990s Tamagotchi-style scene, ")
-            append("flat colorful 2d art, bold outlines, cute toy-like shapes, simple readable composition, ")
-            append("clear open center space for pet tiles, ")
-            append(dungeonType.displayName.lowercase())
-            append(" adventure moment, stage ")
-            append(stage.stageNumber)
-            append(", ")
-            append(stage.storyContent.take(180).lowercase())
-            append(", ")
-            append(session.schematic.tone.lowercase())
-            append(" mood, no text, no UI, no foreground clutter")
-        }
-    }
 
     private suspend fun generateText(
         userPrompt: String,
@@ -626,87 +773,26 @@ class AdventureService(
         }
     }
 
-    private fun cleanAdventureText(output: String): String {
-        val cleaned = PDFSummaryLogic.cleanLlamaOutput(output)
-            .replace(Regex("^```(?:json|text)?\\s*", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("\\s*```$"), "")
-            .trim()
-
-        val extracted = listOf("content", "story", "prompt", "summary", "text").firstNotNullOfOrNull { key ->
-            Regex("\"$key\"\\s*:\\s*\"(.*?)\"", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-                .find(cleaned)
-                ?.groupValues
-                ?.getOrNull(1)
-        }?.replace("\\n", "\n")
-            ?.replace("\\\"", "\"")
-            ?.trim()
-
-        return (extracted ?: cleaned)
-            .removePrefix("\"")
-            .removeSuffix("\"")
-            .trim()
-    }
+    private fun cleanAdventureText(output: String): String =
+        AdventureTextUtils.cleanOutput(PDFSummaryLogic.cleanLlamaOutput(output))
 
     private suspend fun updateDungeonProgress(petId: String, dungeonType: DungeonType) {
+        // The Chaos Realm (unlockOrder 0) is always open and never unlocks another dungeon.
+        if (dungeonType.unlockOrder <= 0) return
         val progress = database.tamaDao().getDungeonProgress(petId)
-        if (progress == null) {
+        val completed = progress?.completedDungeonCount ?: 0
+        if (dungeonType.unlockOrder > completed) {
             database.tamaDao().saveDungeonProgress(
                 DungeonProgressEntity(
                     petId = petId,
-                    completedDungeonCount = 1,
+                    completedDungeonCount = dungeonType.unlockOrder,
                     lastCompletedDungeonType = dungeonType.name
                 )
-            )
-        } else if (dungeonType.unlockOrder > progress.completedDungeonCount) {
-            database.tamaDao().updateDungeonProgress(
-                petId,
-                progress.completedDungeonCount + 1,
-                dungeonType.name
             )
         }
     }
 
-    private fun parseSchematic(response: String): StorySchematic {
-        val totalStages = listOf(
-            Regex("TOTAL_STAGES:\\s*(\\d+)", RegexOption.IGNORE_CASE),
-            Regex("total.?stages.?:?\\s*(\\d+)", RegexOption.IGNORE_CASE),
-            Regex("(\\d+)\\s*stages", RegexOption.IGNORE_CASE)
-        ).firstNotNullOfOrNull { regex ->
-            regex.find(response)?.groupValues?.get(1)?.toIntOrNull()
-        } ?: 10
-
-        val storyThread = Regex(
-            "STORY_THREAD:\\s*(.+?)(?=KEY_EVENTS|POSSIBLE_ENDINGS|TONE|DIFFICULTY|$)",
-            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
-        ).find(response)?.groupValues?.get(1)?.trim() ?: response.take(300)
-
-        val keyEvents = Regex(
-            "KEY_EVENTS:\\s*(.+?)(?=POSSIBLE_ENDINGS|TONE|DIFFICULTY|$)",
-            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
-        ).find(response)?.groupValues?.get(1)?.trim()?.split(Regex("[\\n•\\-\\d.]+"))
-            ?.map { it.trim() }?.filter { it.isNotBlank() && it.length > 3 } ?: listOf("Adventure begins")
-
-        val possibleEndings = Regex(
-            "POSSIBLE_ENDINGS:\\s*(.+?)(?=TONE|DIFFICULTY|$)",
-            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
-        ).find(response)?.groupValues?.get(1)?.trim()?.split(Regex("[\\n•\\-\\d.]+"))
-            ?.map { it.trim() }?.filter { it.isNotBlank() && it.length > 3 } ?: listOf("Victory", "Defeat")
-
-        val tone = Regex("TONE:\\s*(.+?)(?=DIFFICULTY|$)", RegexOption.IGNORE_CASE)
-            .find(response)?.groupValues?.get(1)?.trim()?.take(50) ?: "Dark Fantasy"
-
-        val difficulty = Regex("DIFFICULTY:\\s*(easy|medium|hard)", RegexOption.IGNORE_CASE)
-            .find(response)?.groupValues?.get(1)?.lowercase() ?: "medium"
-
-        return StorySchematic(
-            totalStages = totalStages.coerceIn(5, 30),
-            storyThread = storyThread,
-            keyEvents = keyEvents.take(5),
-            possibleEndings = possibleEndings.take(3),
-            tone = tone,
-            difficulty = difficulty
-        )
-    }
+    private fun parseSchematic(response: String): StorySchematic = AdventureTextUtils.parseSchematic(response)
 
     private suspend fun saveSession(session: AdventureSession) {
         val entity = AdventureSessionEntity(

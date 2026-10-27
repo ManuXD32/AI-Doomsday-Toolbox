@@ -40,7 +40,7 @@ object NativeChatContextWindow {
     /** Last probed per-slot context for [baseUrl], without network I/O. */
     fun cached(baseUrl: String): Int? = probed[baseUrl.trimEnd('/')]?.tokens
 
-    private suspend fun probe(baseUrl: String): Int? {
+    internal suspend fun probe(baseUrl: String): Int? {
         val key = baseUrl.trimEnd('/')
         probed[key]?.takeIf { System.currentTimeMillis() - it.at < CACHE_MS }?.let { return it.tokens }
         val tokens = withContext(Dispatchers.IO) {

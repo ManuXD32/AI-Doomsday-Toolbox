@@ -62,8 +62,13 @@ class ZimShareService : Service() {
             UnifiedNotificationManager.TaskType.ZIM_SHARE,
             "ZIM File Sharing"
         )
+        val started = ForegroundStart.start(this, taskId, notification, ForegroundServiceTypes.DATA_SYNC)
+        if (started is ForegroundStart.Result.Failed) {
+            UnifiedNotificationManager.failTask(taskId, ForegroundStart.failureMessage(this, started.reason, "ZIM File Sharing"))
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
         return START_STICKY
     }
     

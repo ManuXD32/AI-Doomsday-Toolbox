@@ -17,8 +17,14 @@ import kotlinx.coroutines.runBlocking
 /** A healthy, happy adult pet in a decorated home room, written straight into the real Tama database. */
 object TamaFixtures {
     fun seedHealthyPet(app: Application, name: String = "Ember", species: PetSpeciesLine = PetSpeciesLine.DRAGON) {
+        val pet = demoPet(name, species)
+        runBlocking { TamaDatabase.getInstance(app).tamaDao().savePet(PetMapper.toEntity(pet)) }
+    }
+
+    /** The pet [seedHealthyPet] writes, for composables that take a [TamaPet] directly. */
+    fun demoPet(name: String = "Ember", species: PetSpeciesLine = PetSpeciesLine.DRAGON): TamaPet {
         val now = System.currentTimeMillis()
-        val pet = TamaPet(
+        return TamaPet(
             id = "demo-tama-pet",
             name = name,
             species = species.id,
@@ -38,7 +44,6 @@ object TamaFixtures {
             rightDecorationId = TamaDecorCatalog.MOON_LANTERN_ID,
             money = 1_240
         )
-        runBlocking { TamaDatabase.getInstance(app).tamaDao().savePet(PetMapper.toEntity(pet)) }
     }
 
     fun reset() {

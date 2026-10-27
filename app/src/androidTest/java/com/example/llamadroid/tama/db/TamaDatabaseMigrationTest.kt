@@ -428,6 +428,55 @@ class TamaDatabaseMigrationTest {
         }
     }
 
+    @Test
+    fun migrate45To46_addsTransferStateTable() {
+        helper.createDatabase(TEST_DB, 45).close()
+        val migrated = helper.runMigrationsAndValidate(TEST_DB, 46, true, TamaMigrations.MIGRATION_45_46)
+        assertTableExists(migrated, "tama_transfer_state")
+        migrated.execSQL(
+            "INSERT INTO tama_transfer_state (id,role,status,updatedAt) VALUES ('current','SENDER','OUTBOUND_PENDING',1)"
+        )
+        migrated.query("SELECT status,petId FROM tama_transfer_state WHERE id='current'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("OUTBOUND_PENDING", it.getString(0))
+            assertTrue(it.isNull(1))
+        }
+    }
+
+    @Test
+    fun migrate46To47_addsTransferPeersTable() {
+        helper.createDatabase(TEST_DB, 46).close()
+        val migrated = helper.runMigrationsAndValidate(TEST_DB, 47, true, TamaMigrations.MIGRATION_46_47)
+        assertTableExists(migrated, "tama_transfer_peers")
+        migrated.execSQL(
+            "INSERT INTO tama_transfer_peers (deviceId,displayName,wrappedKey,keyIv,addressesJson,lastSeenAt,createdAt) " +
+                "VALUES ('dev-1','Phone',x'0102',x'0304','[]',1,1)"
+        )
+        migrated.query("SELECT displayName,addressesJson FROM tama_transfer_peers WHERE deviceId='dev-1'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("Phone", it.getString(0))
+            assertEquals("[]", it.getString(1))
+        }
+    }
+
+    @Test
+    fun migrate47To48_addsFarmTileObstacleColumn() {
+        helper.createDatabase(TEST_DB, 47).apply {
+            execSQL("INSERT INTO tama_farm_tiles (id,petId,status,cropJson,lastWateredTime) VALUES (3,'pet-1','SOIL',NULL,NULL)")
+            close()
+        }
+        val migrated = helper.runMigrationsAndValidate(TEST_DB, 48, true, TamaMigrations.MIGRATION_47_48)
+        migrated.query("SELECT obstacle FROM tama_farm_tiles WHERE id=3").use {
+            assertTrue(it.moveToFirst())
+            assertTrue(it.isNull(0))
+        }
+        migrated.execSQL("UPDATE tama_farm_tiles SET obstacle='STUMP' WHERE id=3")
+        migrated.query("SELECT obstacle FROM tama_farm_tiles WHERE id=3").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("STUMP", it.getString(0))
+        }
+    }
+
     private fun assertTableMissing(
         db: androidx.sqlite.db.SupportSQLiteDatabase,
         tableName: String

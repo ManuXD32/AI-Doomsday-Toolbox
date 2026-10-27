@@ -87,7 +87,7 @@ class TamaArtworkGenerationService : Service() {
             }
 
         val firstArtwork = tamaDao.getNextQueuedArtwork() ?: return
-        startForegroundOnce(titleForArtwork(firstArtwork))
+        if (!startForegroundOnce(titleForArtwork(firstArtwork))) return
 
         var artwork: TamaArtworkEntity? = firstArtwork
         while (artwork != null) {
@@ -217,14 +217,21 @@ class TamaArtworkGenerationService : Service() {
         backgroundAgent.summarize(pet)
     }
 
-    private fun startForegroundOnce(title: String) {
-        if (notificationTaskId != null) return
+    private fun startForegroundOnce(title: String): Boolean {
+        if (notificationTaskId != null) return true
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
             TaskType.IMAGE_GEN,
             title
         )
+        val started = ForegroundStart.start(this, taskId, notification, ForegroundServiceTypes.MEDIA_PROCESSING)
+        if (started is ForegroundStart.Result.Failed) {
+            // Queued artwork stays queued; it is retried the next time the service starts.
+            UnifiedNotificationManager.failTask(taskId, ForegroundStart.failureMessage(this, started.reason, title))
+            stopSelf()
+            return false
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
+        return true
     }
 
     private fun updateForeground(status: String) {

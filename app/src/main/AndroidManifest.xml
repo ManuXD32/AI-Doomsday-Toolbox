@@ -10,6 +10,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -120,6 +121,33 @@
             android:theme="@style/Theme.LlamaDroid"
             android:turnScreenOn="true" />
 
+        <activity
+            android:name=".tama.shimeji.ShimejiChatActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity="com.example.llamadroid.shimejichat"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.LlamaDroid.ShimejiChat" />
+
+        <service
+            android:name=".tama.transfer.PetLinkService"
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="paired_pet_link" />
+        </service>
+
+        <service
+            android:name=".tama.shimeji.ShimejiOverlayService"
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="desktop_pet_overlay" />
+        </service>
+
         <service 
             android:name=".service.LlamaService" 
             android:process=":llama_runtime"
@@ -154,22 +182,22 @@
             
         <service
             android:name=".service.StableDiffusionService"
-            android:foregroundServiceType="mediaProcessing"
+            android:foregroundServiceType="mediaProcessing|dataSync"
             android:exported="false" />
 
         <service
             android:name=".service.OnnxImageGenerationService"
-            android:foregroundServiceType="mediaProcessing"
+            android:foregroundServiceType="mediaProcessing|dataSync"
             android:exported="false" />
 
         <service
             android:name=".service.OnnxTtsGenerationService"
-            android:foregroundServiceType="mediaProcessing"
+            android:foregroundServiceType="mediaProcessing|dataSync"
             android:exported="false" />
 
         <service
             android:name=".audio.AudioGenerationService"
-            android:foregroundServiceType="mediaProcessing"
+            android:foregroundServiceType="mediaProcessing|dataSync"
             android:exported="false" />
 
         <service
@@ -189,13 +217,13 @@
 
         <service
             android:name=".service.OnnxBackgroundRemovalService"
-            android:foregroundServiceType="mediaProcessing"
+            android:foregroundServiceType="mediaProcessing|dataSync"
             android:process=":onnx_bgr"
             android:exported="false" />
 
         <service
             android:name=".service.TamaArtworkGenerationService"
-            android:foregroundServiceType="mediaProcessing"
+            android:foregroundServiceType="mediaProcessing|dataSync"
             android:exported="false" />
 
         <service
@@ -205,12 +233,12 @@
 
         <service
             android:name=".service.VideoGenerationService"
-            android:foregroundServiceType="mediaProcessing"
+            android:foregroundServiceType="mediaProcessing|dataSync"
             android:exported="false" />
 
         <service
             android:name=".service.GenerationQueueService"
-            android:foregroundServiceType="mediaProcessing"
+            android:foregroundServiceType="mediaProcessing|dataSync"
             android:exported="false" />
 
         <service

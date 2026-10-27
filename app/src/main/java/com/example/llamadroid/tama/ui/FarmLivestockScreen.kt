@@ -1,6 +1,5 @@
 package com.example.llamadroid.tama.ui
 
-import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -37,6 +36,15 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -50,6 +58,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
@@ -63,6 +72,8 @@ import coil.compose.AsyncImage
 import com.example.llamadroid.R
 import com.example.llamadroid.tama.data.FarmLivestockSlot
 import com.example.llamadroid.tama.data.FarmLivestockType
+import com.example.llamadroid.tama.data.FarmMaterialCost
+import com.example.llamadroid.tama.data.FarmMaterialCosts
 import com.example.llamadroid.tama.data.FarmTradeItemCatalog
 import com.example.llamadroid.tama.data.InventoryItem
 import com.example.llamadroid.tama.data.ItemType
@@ -126,8 +137,13 @@ private fun FarmLivestockScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val notice = rememberTamaNotice()
     val configuration = LocalConfiguration.current
     val scope = rememberCoroutineScope()
+    val reducedMotion = remember { farmReducedMotion(context) }
+    val animalClock = rememberFarmAnimalClock(enabled = !reducedMotion)
+    var collectHops by remember(type.id) { mutableIntStateOf(0) }
+    val feedHops = remember(type.id) { mutableStateMapOf<Int, Int>() }
     val walkthroughTargets = LocalWalkthroughTargets.current
     var feedModeEnabled by rememberSaveable(type.id) { mutableStateOf(false) }
     var now by remember(type.id) { mutableLongStateOf(System.currentTimeMillis()) }
@@ -148,10 +164,10 @@ private fun FarmLivestockScreen(
         }
     }
 
-    LaunchedEffect(pet.id, type.id) {
+    LaunchedEffect(pet.id, type.id, pet.cycleFrozen) {
         while (true) {
             now = System.currentTimeMillis()
-            farmRepository.refreshFarmState(pet.id)
+            farmRepository.refreshFarmState(pet.id, cycleFrozen = pet.cycleFrozen)
             delay(30_000L)
         }
     }
@@ -206,7 +222,8 @@ private fun FarmLivestockScreen(
                 model = "file:///android_asset/${type.backgroundAssetPath}",
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
+                contentScale = ContentScale.Crop,
+                filterQuality = FilterQuality.None
             )
             Box(
                 modifier = Modifier
@@ -214,8 +231,16 @@ private fun FarmLivestockScreen(
                     .background(Color.Black.copy(alpha = 0.04f))
             )
 
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            // Adaptive columns: 2 on phones (1 for very large font scale), 3 on small tablets, 4 on large ones.
+            val columnCount = when {
+                maxWidth >= 840.dp -> 4
+                maxWidth >= 600.dp -> 3
+                configuration.fontScale >= 1.3f -> 1
+                else -> 2
+            }
             LazyVerticalGrid(
-                columns = GridCells.Fixed(if (configuration.fontScale >= 1.3f) 1 else 2),
+                columns = GridCells.Fixed(columnCount),
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 8.dp, bottom = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -276,17 +301,18 @@ private fun FarmLivestockScreen(
                                 onClick = {
                                     scope.launch {
                                         val result = WorldFarmMaintenance.request(context, gameEngine, "collect_livestock", mapOf("type" to type.id))
-                                        Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                                        if (result.success) collectHops++
+                                        notice.show(result.message, isError = !result.success)
                                 }
                                 },
                                 enabled = stored > 0,
                                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                                 shape = RoundedCornerShape(12.dp),
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFF8D6E63),
-                                    contentColor = Color.White,
-                                    disabledContainerColor = Color(0xFFBCAAA4),
-                                    disabledContentColor = Color.White.copy(alpha = 0.75f)
+                                    containerColor = LivestockCollectContainer,
+                                    contentColor = LivestockCollectContent,
+                                    disabledContainerColor = LivestockCollectDisabledContainer,
+                                    disabledContentColor = LivestockCollectDisabledContent
                                 ),
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
                             ) {
@@ -303,7 +329,7 @@ private fun FarmLivestockScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Surface(
-                                color = if (feedModeEnabled) Color(0xFF42A5F5) else Color(0xFFE8DFC0),
+                                color = if (feedModeEnabled) LivestockFeedOnContainer else Color(0xFFE8DFC0),
                                 shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier
                                     .heightIn(min = 48.dp)
@@ -322,11 +348,12 @@ private fun FarmLivestockScreen(
                                         model = "file:///android_asset/$LIVESTOCK_FEED_ASSET_PATH",
                                         contentDescription = null,
                                         modifier = Modifier.size(22.dp),
-                                        contentScale = ContentScale.Fit
+                                        contentScale = ContentScale.Fit,
+                                        filterQuality = FilterQuality.None
                                     )
                                     Text(
                                         text = wheatCount.toString(),
-                                        color = if (feedModeEnabled) Color.White else TamaDark,
+                                        color = if (feedModeEnabled) LivestockFeedOnContent else TamaDark,
                                         fontWeight = FontWeight.Bold,
                                         fontFamily = FontFamily.Monospace
                                     )
@@ -352,34 +379,67 @@ private fun FarmLivestockScreen(
 
                 }
                     items(slots.indices.toList()) { index ->
+                        val slotMaterials = FarmMaterialCosts.livestock(type)
+                        val stock = FarmMaterialStock.of(pet.inventory)
                         val slot = slots[index]
                         val isHungry = livestockNeedsFeed(slot, now)
                         LivestockSlotCard(
                             type = type,
                             slot = slot,
                             isHungry = isHungry,
+                            canBuy = pet.money >= type.buyPrice && slotMaterials.isCoveredBy(stock),
+                            materialCost = slotMaterials,
+                            stock = stock,
+                            seed = index + (if (type == FarmLivestockType.BARN) 0 else 50),
+                            clock = animalClock,
+                            reducedMotion = reducedMotion,
+                            hopToken = collectHops + (feedHops[index] ?: 0),
+                            onBuy = {
+                                scope.launch {
+                                    val result = WorldFarmMaintenance.request(context, gameEngine, "buy_livestock", mapOf("type" to type.id))
+                                    notice.show(result.message, isError = !result.success)
+                                }
+                            },
                             onClick = {
                                 if (!feedModeEnabled || !slot.occupied) return@LivestockSlotCard
                                 scope.launch {
                                     val result = WorldFarmMaintenance.request(context, gameEngine, "feed_livestock",
                                         mapOf("type" to type.id, "slot" to index.toString()))
-                                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                                    if (result.success) feedHops[index] = (feedHops[index] ?: 0) + 1
+                                    notice.show(result.message, isError = !result.success)
                                 }
                             }
                         )
                     }
+            }
             }
         }
     }
 }
 
 @Composable
-private fun LivestockSlotCard(
+internal fun LivestockSlotCard(
     type: FarmLivestockType,
     slot: FarmLivestockSlot,
     isHungry: Boolean,
-    onClick: () -> Unit
+    canBuy: Boolean,
+    materialCost: FarmMaterialCost = FarmMaterialCost.NONE,
+    stock: FarmMaterialStock? = null,
+    seed: Int,
+    clock: State<Float>,
+    reducedMotion: Boolean,
+    onBuy: () -> Unit,
+    onClick: () -> Unit,
+    hopToken: Int = 0
 ) {
+    var seenHopToken by remember { mutableIntStateOf(hopToken) }
+    val hopStart = remember { mutableFloatStateOf(-1f) }
+    LaunchedEffect(hopToken) {
+        if (hopToken != seenHopToken) {
+            seenHopToken = hopToken
+            if (!reducedMotion) hopStart.floatValue = clock.value
+        }
+    }
     val cardHeight = if (type == FarmLivestockType.BARN) 188.dp else 132.dp
     val animalSize = if (type == FarmLivestockType.BARN) 144.dp else 72.dp
     Card(
@@ -397,7 +457,8 @@ private fun LivestockSlotCard(
                 model = "file:///android_asset/${type.slotAssetPath}",
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
+                contentScale = ContentScale.Crop,
+                filterQuality = FilterQuality.None
             )
             Box(
                 modifier = Modifier
@@ -410,8 +471,17 @@ private fun LivestockSlotCard(
                     contentDescription = null,
                     modifier = Modifier
                         .align(Alignment.Center)
-                        .size(animalSize),
-                    contentScale = ContentScale.Fit
+                        .size(animalSize)
+                        .graphicsLayer {
+                            if (reducedMotion) return@graphicsLayer
+                            val idle = livestockIdlePose(clock.value, seed, hopStart.floatValue, density)
+                            transformOrigin = TransformOrigin(0.5f, 1f)
+                            translationY = idle.translationY
+                            scaleX = idle.scaleX
+                            scaleY = idle.scaleY
+                        },
+                    contentScale = ContentScale.Fit,
+                    filterQuality = FilterQuality.None
                 )
                 AsyncImage(
                     model = "file:///android_asset/${type.productAssetPath}",
@@ -420,7 +490,8 @@ private fun LivestockSlotCard(
                         .align(Alignment.BottomStart)
                         .padding(8.dp)
                         .size(22.dp),
-                    contentScale = ContentScale.Fit
+                    contentScale = ContentScale.Fit,
+                    filterQuality = FilterQuality.None
                 )
                 if (isHungry) {
                     Surface(
@@ -468,15 +539,43 @@ private fun LivestockSlotCard(
                     )
                 }
             } else {
-                Text(
-                    stringResource(R.string.tama_farm_livestock_empty_slot),
-                    modifier = Modifier.align(Alignment.Center),
-                    color = TamaDark,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 13.sp,
-                    maxLines = 1
-                )
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(horizontal = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        stringResource(R.string.tama_farm_livestock_empty_slot),
+                        color = TamaDark,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Button(
+                        onClick = onBuy,
+                        enabled = canBuy,
+                        modifier = Modifier.heightIn(min = 48.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = FarmPopupButtonEnabled,
+                            contentColor = FarmPopupButtonOnEnabled,
+                            disabledContainerColor = FarmPopupButtonDisabled,
+                            disabledContentColor = FarmPopupButtonOnDisabled
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            stringResource(R.string.tama_farm_livestock_buy_slot, type.buyPrice),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    FarmMaterialCostRow(materialCost, stock, compact = true, showMissingNote = false)
+                }
             }
         }
     }
@@ -496,4 +595,37 @@ private fun livestockSlotStatus(type: FarmLivestockType, slot: FarmLivestockSlot
     val hours = totalSeconds / 3600L
     val minutes = (totalSeconds % 3600L) / 60L
     return String.format(Locale.getDefault(), "%02dh %02dm", hours, minutes)
+}
+
+/** Transform of one slot animal: [translationY] in px (negative is up). */
+internal data class LivestockIdlePose(val translationY: Float, val scaleX: Float, val scaleY: Float)
+
+private const val LIVESTOCK_BREATH_SECONDS = 2.4f
+private const val LIVESTOCK_HOP_SECONDS = 0.35f
+private const val LIVESTOCK_HOP_AIR_FRACTION = 0.8f
+
+/**
+ * Pure idle pose at clock time [t] seconds: slow breathing (scaleY 1.00 to 1.025, scaleX 1.00 to 0.99) and a
+ * 1.5 dp bob, de-synced by [seed], plus a one-shot hop (about 10 dp up, small squash on landing) that started
+ * at [hopStart] seconds (negative means none).
+ */
+internal fun livestockIdlePose(t: Float, seed: Int, hopStart: Float, density: Float): LivestockIdlePose {
+    val phase = (t + seed * 0.7f) / LIVESTOCK_BREATH_SECONDS * (2f * PI.toFloat())
+    val breath = 0.5f - 0.5f * cos(phase)
+    var y = -1.5f * density * sin(phase)
+    var sx = 1f - 0.01f * breath
+    var sy = 1f + 0.025f * breath
+    if (hopStart >= 0f) {
+        val p = (t - hopStart) / LIVESTOCK_HOP_SECONDS
+        if (p in 0f..1f) {
+            if (p < LIVESTOCK_HOP_AIR_FRACTION) {
+                y -= 10f * density * sin(PI.toFloat() * p / LIVESTOCK_HOP_AIR_FRACTION)
+            } else {
+                val squash = sin(PI.toFloat() * (p - LIVESTOCK_HOP_AIR_FRACTION) / (1f - LIVESTOCK_HOP_AIR_FRACTION))
+                sy *= 1f - 0.08f * squash
+                sx *= 1f + 0.06f * squash
+            }
+        }
+    }
+    return LivestockIdlePose(y, sx, sy)
 }

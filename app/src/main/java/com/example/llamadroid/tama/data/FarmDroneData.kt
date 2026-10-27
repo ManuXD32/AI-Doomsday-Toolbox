@@ -10,8 +10,11 @@ const val FARM_FUEL_BUCKET_ID = "fuel_bucket"
 const val FARM_DRONE_BUY_PRICE = 10_000
 const val FARM_DRONE_FUEL_CAPACITY = 500
 const val FARM_DRONE_MAX_FUEL_UPGRADE_LEVEL = 2
-const val FARM_PLANTING_DRONE_FUEL_COST = 10
-const val FARM_HARVESTING_DRONE_FUEL_COST = 5
+// Fuel is one coin per unit (see FarmShopCatalog); a plant + harvest cycle costs 6 fuel plus 1 water, which
+// stays profitable on the cheapest crop at full plots (see docs/tama-maintainer-reference.md, farm economy).
+const val FARM_PLANTING_DRONE_FUEL_COST = 4
+const val FARM_HARVESTING_DRONE_FUEL_COST = 2
+const val FARM_PLANTING_DRONE_WATER_FUEL_COST = 2
 const val FARM_PLANTING_DRONE_EMPTY_WAIT_MS = 5L * 60L * 1000L
 const val FARM_DRONE_OFFLINE_PLAN_MS = 48L * 60L * 60L * 1000L
 const val FARM_TOOL_DURABILITY_CAP = 500
@@ -149,7 +152,7 @@ fun simulateFarmDrones(
     while (tick <= simulationEnd) {
         simulatedTiles = simulatedTiles.map { advanceFarmTileCrop(it, tick) }
         if (harvester.enabled && tick >= harvester.lastUpdatedAt) {
-            val harvested = runHarvesterDroneTick(simulatedTiles, harvester)
+            val harvested = runHarvesterDroneTick(simulatedTiles, harvester, tick)
             simulatedTiles = harvested.tiles
             harvester = harvested.harvester
             if (harvested.harvestedTileIds.isNotEmpty()) {
@@ -173,31 +176,36 @@ fun simulateFarmDrones(
     )
 }
 
+/**
+ * Advances a tile to [now]: crop growth (slowed to [FARM_DRY_GROWTH_PERCENT] percent while the plot is
+ * dry), rot, and the wet to dry status flip. Idempotent for a fixed [now]; see FarmMoisture.kt for the model.
+ */
 fun advanceFarmTileCrop(tile: FarmTile, now: Long): FarmTile {
-    val crop = tile.crop ?: return tile
-    if (crop.isDecayed) return tile
-    val definition = CropDefinitions.CROPS[crop.type] ?: return tile
+    val current = farmNormalizeMoisture(tile, now)
+    val crop = current.crop ?: return current
+    if (crop.isDecayed) return current
+    val definition = CropDefinitions.CROPS[crop.type] ?: return current
+    val virtualNow = farmVirtualTime(now, farmCropDryFrom(current, crop))
     var currentStage = crop.stage
     var lastUpdate = crop.lastStageUpdateTime
     var changed = false
     var decayed = false
 
     while (currentStage < 3) {
-        val baseTime = definition.stageTimes[currentStage]
-        val timeToNext = if (crop.isFertilized) baseTime / 2 else baseTime
-        if (now < lastUpdate + timeToNext) break
+        val timeToNext = farmStageDurationMs(definition, crop.isFertilized, currentStage)
+        if (virtualNow < lastUpdate + timeToNext) break
         lastUpdate += timeToNext
         currentStage++
         changed = true
     }
 
-    if (currentStage == 3 && now >= lastUpdate + 15L * 60L * 60L * 1000L) {
+    if (currentStage == 3 && virtualNow >= lastUpdate + FARM_ROT_AFTER_RIPE_MS) {
         decayed = true
         changed = true
     }
 
     return if (changed) {
-        tile.copy(
+        current.copy(
             crop = crop.copy(
                 stage = currentStage,
                 lastStageUpdateTime = lastUpdate,
@@ -205,7 +213,7 @@ fun advanceFarmTileCrop(tile: FarmTile, now: Long): FarmTile {
             )
         )
     } else {
-        tile
+        current
     }
 }
 
@@ -217,7 +225,8 @@ private data class HarvesterTickResult(
 
 private fun runHarvesterDroneTick(
     tiles: List<FarmTile>,
-    harvester: HarvesterDroneState
+    harvester: HarvesterDroneState,
+    tick: Long
 ): HarvesterTickResult {
     var current = harvester.copy(statusKey = null)
     val updatedTiles = tiles.toMutableList()
@@ -231,15 +240,17 @@ private fun runHarvesterDroneTick(
         val tile = updatedTiles[index]
         val crop = tile.crop ?: continue
         if (crop.stage < 3) continue
+        // A crop whose last stage change lies after this tick was stored in a later state than the replay.
+        if (crop.lastStageUpdateTime > tick) continue
         if (!harvesterAllowsCrop(current, crop.type)) continue
 
         val inventoryId = if (crop.isDecayed) "rotten_crop" else "crop_${crop.type}"
-        val quantity = if (crop.isDecayed) 1 else if (crop.isFertilized) 2 else 1
+        val quantity = if (crop.isDecayed) 1 else farmHarvestYield(crop, farmHarvestOutcome(0L, tile.id, crop))
         current = current.copy(
             fuel = current.fuel - FARM_HARVESTING_DRONE_FUEL_COST,
             storage = addDroneStoredCrop(current.storage, inventoryId, quantity)
         )
-        updatedTiles[index] = tile.copy(status = TileStatus.SOIL, crop = null, lastWateredTime = null)
+        updatedTiles[index] = tile.copy(status = TileStatus.FARMLAND, crop = null, lastWateredTime = null)
         harvestedIds += tile.id
     }
 
@@ -268,54 +279,81 @@ private fun runPlantingDroneTick(
         }
     }
 
+    // Pass 1: re-water growing crops whose plot dried out (the drone's own water stock, can durability, a little fuel).
     for (index in farmDroneTileWorkOrder(updatedTiles)) {
         val tile = updatedTiles[index]
-        if (tile.crop != null) continue
+        val crop = tile.crop ?: continue
+        if (!crop.moistureTracked || crop.isDecayed || crop.stage >= 3 || tile.isWet(now)) continue
+        val can = current.wateringCan
+        if (can == null || can.durability <= 0 || current.water <= 0 ||
+            current.fuel < FARM_PLANTING_DRONE_WATER_FUEL_COST) break
+        val usedCan = can.copy(durability = can.durability - 1)
+        current = current.copy(
+            fuel = current.fuel - FARM_PLANTING_DRONE_WATER_FUEL_COST,
+            water = current.water - 1,
+            wateringCan = usedCan.takeIf { it.durability > 0 },
+            enabled = usedCan.durability > 0,
+            statusKey = if (usedCan.durability <= 0) "watering_can_broken" else null
+        )
+        updatedTiles[index] = farmWaterTile(tile, now)
+        if (!current.enabled) break
+    }
+
+    if (!current.enabled) return PlantingTickResult(updatedTiles, current.copy(emptySinceByTile = emptySince))
+
+    for (index in farmDroneTileWorkOrder(updatedTiles)) {
+        val tile = updatedTiles[index]
+        if (tile.crop != null || tile.isBlockedByObstacle()) continue // drones never work obstacle plots
         val emptySinceAt = emptySince[tile.id] ?: now
         if (now < emptySinceAt + FARM_PLANTING_DRONE_EMPTY_WAIT_MS) continue
 
         val seed = current.seeds.firstOrNull { it.quantity > 0 && CropDefinitions.CROPS.containsKey(it.cropId) }
         val hoe = current.hoe
         val wateringCan = current.wateringCan
+        val needsHoe = tile.status == TileStatus.SOIL
+        val needsWater = !tile.isWet(now)
         val stopKey = when {
             current.fuel < FARM_PLANTING_DRONE_FUEL_COST -> "fuel_empty"
-            hoe == null || hoe.durability <= 0 -> "hoe_missing"
-            wateringCan == null || wateringCan.durability <= 0 -> "watering_can_missing"
-            current.water <= 0 -> "water_empty"
+            needsHoe && (hoe == null || hoe.durability <= 0) -> "hoe_missing"
+            needsWater && (wateringCan == null || wateringCan.durability <= 0) -> "watering_can_missing"
+            needsWater && current.water <= 0 -> "water_empty"
             seed == null -> "seeds_empty"
             else -> null
         }
-        if (stopKey != null || seed == null || hoe == null || wateringCan == null) {
+        if (stopKey != null || seed == null) {
             current = current.copy(enabled = false, statusKey = stopKey)
             break
         }
 
-        val updatedHoe = hoe.copy(durability = hoe.durability - 1)
-        val updatedWateringCan = wateringCan.copy(durability = wateringCan.durability - 1)
+        val updatedHoe = if (needsHoe) hoe?.let { it.copy(durability = it.durability - 1) } else hoe
+        val updatedWateringCan = if (needsWater) wateringCan?.let { it.copy(durability = it.durability - 1) } else wateringCan
         val usesFertilizer = current.fertilizer > 0
+        val hoeBroken = needsHoe && updatedHoe != null && updatedHoe.durability <= 0
+        val canBroken = needsWater && updatedWateringCan != null && updatedWateringCan.durability <= 0
         current = current.copy(
             fuel = current.fuel - FARM_PLANTING_DRONE_FUEL_COST,
-            water = current.water - 1,
+            water = if (needsWater) current.water - 1 else current.water,
             fertilizer = if (usesFertilizer) current.fertilizer - 1 else current.fertilizer,
-            hoe = updatedHoe.takeIf { it.durability > 0 },
-            wateringCan = updatedWateringCan.takeIf { it.durability > 0 },
+            hoe = if (needsHoe) updatedHoe?.takeIf { it.durability > 0 } else hoe,
+            wateringCan = if (needsWater) updatedWateringCan?.takeIf { it.durability > 0 } else wateringCan,
             seeds = consumeDroneSeed(current.seeds, seed.cropId),
-            enabled = updatedHoe.durability > 0 && updatedWateringCan.durability > 0,
+            enabled = !hoeBroken && !canBroken,
             statusKey = when {
-                updatedHoe.durability <= 0 -> "hoe_broken"
-                updatedWateringCan.durability <= 0 -> "watering_can_broken"
+                hoeBroken -> "hoe_broken"
+                canBroken -> "watering_can_broken"
                 else -> null
             }
         )
-        updatedTiles[index] = tile.copy(
-            status = TileStatus.WET_FARMLAND,
+        val prepared = if (needsWater) farmWaterTile(tile, now) else tile
+        updatedTiles[index] = prepared.copy(
+            status = if (prepared.status == TileStatus.SOIL) TileStatus.FARMLAND else prepared.status,
             crop = PlantedCrop(
                 type = seed.cropId,
                 plantedTime = now,
                 lastStageUpdateTime = now,
-                isFertilized = usesFertilizer
-            ),
-            lastWateredTime = now
+                isFertilized = usesFertilizer,
+                moistureTracked = true
+            )
         )
         emptySince.remove(tile.id)
         if (!current.enabled) break

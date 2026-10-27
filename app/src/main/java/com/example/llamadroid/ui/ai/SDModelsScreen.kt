@@ -966,7 +966,9 @@ private fun InstalledSDModelsTab(
                             pendingInspectionError = null
                             if (inspectionSelectionType == selectedImportType) {
                                 detectedSelectionType(inspection.detectedRole)?.let { detectedType ->
-                                    selectedImportType = detectedType
+                                    if (shouldApplyDetectedSelection(selectedImportType, detectedType, inspection.confidence)) {
+                                        selectedImportType = detectedType
+                                    }
                                 }
                             }
                             inspection.detectedFamily?.let { detectedFamily ->
@@ -2608,7 +2610,7 @@ private fun inferSelectionType(repoId: String, filename: String): SDModelSelecti
         SDModelSelectionType.PHOTOMAKER
     filename.contains("taesd") || filename.contains("tae") || repoId.contains("taesd") ->
         SDModelSelectionType.TAE
-    filename.contains("clip_g") || filename.contains("clip-g") || repoId.contains("clip-g") ->
+    isClipGName(filename) || isClipGName(repoId) ->
         SDModelSelectionType.CLIP_G
     // Start the bounded inspection with the generic standalone role for
     // architecture names that are not FLUX. A full SD3 checkpoint is
@@ -2642,6 +2644,34 @@ private fun inferSelectionType(repoId: String, filename: String): SDModelSelecti
     filename.contains("lora") || repoId.contains("lora") ->
         SDModelSelectionType.LORA
     else -> SDModelSelectionType.CHECKPOINT
+}
+
+/** CLIP-G / OpenCLIP bigG spellings (case-insensitive); "bigger" and similar words do not match. */
+private val CLIP_G_NAME_PATTERN = Regex(
+    "clip[_\\- ]?g(?![a-z])|open[_\\- ]?clip|big[_\\- ]g(?![a-z])|bigg(?![a-z])",
+    RegexOption.IGNORE_CASE
+)
+
+private fun isClipGName(value: String): Boolean = CLIP_G_NAME_PATTERN.containsMatchIn(value)
+
+/**
+ * A header-derived type may replace the filename guess, but low-confidence
+ * evidence (for example generic `text_model.*` tensors that default to CLIP-L)
+ * must never flip one text-encoder choice into the other.
+ */
+internal fun shouldApplyDetectedSelection(
+    current: SDModelSelectionType,
+    detected: SDModelSelectionType,
+    confidence: SdInspectionConfidence
+): Boolean {
+    if (current == detected) return true
+    val isClip = { type: SDModelSelectionType ->
+        type == SDModelSelectionType.CLIP_L || type == SDModelSelectionType.CLIP_G
+    }
+    if (isClip(current) && isClip(detected)) {
+        return confidence == SdInspectionConfidence.HIGH || confidence == SdInspectionConfidence.MEDIUM
+    }
+    return true
 }
 
 private fun isVideoGenHint(value: String): Boolean {

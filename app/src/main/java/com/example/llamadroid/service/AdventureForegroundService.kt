@@ -31,6 +31,14 @@ data class AdventureGenerationState(
     val isBuildingWorld: Boolean
 )
 
+/** Last failed generation for a pet/dungeon, shown by the UI with a Retry action. */
+data class AdventureGenerationFailure(
+    val petId: String,
+    val dungeonTypeName: String,
+    val message: String,
+    val wasWorldBuild: Boolean
+)
+
 class AdventureForegroundService : Service() {
 
     companion object {
@@ -53,35 +61,57 @@ class AdventureForegroundService : Service() {
         private val _generationState = MutableStateFlow<AdventureGenerationState?>(null)
         val generationState: StateFlow<AdventureGenerationState?> = _generationState.asStateFlow()
 
-        fun startWorldBuild(context: Context, petId: String, dungeonTypeName: String) {
+        private val _generationFailure = MutableStateFlow<AdventureGenerationFailure?>(null)
+        val generationFailure: StateFlow<AdventureGenerationFailure?> = _generationFailure.asStateFlow()
+
+        /** Returns false when a generation is already running (nothing is started). */
+        fun startWorldBuild(context: Context, petId: String, dungeonTypeName: String): Boolean {
+            if (!reserveRun(petId, dungeonTypeName, context.getString(R.string.adventure_status_building_world), true)) return false
             val intent = Intent(context, AdventureForegroundService::class.java).apply {
                 action = ACTION_BUILD_WORLD
                 putExtra(EXTRA_PET_ID, petId)
                 putExtra(EXTRA_DUNGEON_TYPE, dungeonTypeName)
             }
-            try {
-                ContextCompat.startForegroundService(context, intent)
-            } catch (e: Exception) {
-                DebugLog.log("[$TAG] Failed to start world build service: ${e.message}")
-            }
+            return startOrRelease(context, intent, "world build")
         }
 
+        /**
+         * Returns false when a generation is already running so the UI can keep the player's text.
+         * A blank [playerChoice] retries the choice already saved on the last stage.
+         */
         fun submitChoice(
             context: Context,
             petId: String,
             dungeonTypeName: String,
             playerChoice: String
-        ) {
+        ): Boolean {
+            if (!reserveRun(petId, dungeonTypeName, context.getString(R.string.adventure_status_processing_choice), false)) return false
             val intent = Intent(context, AdventureForegroundService::class.java).apply {
                 action = ACTION_SUBMIT_CHOICE
                 putExtra(EXTRA_PET_ID, petId)
                 putExtra(EXTRA_DUNGEON_TYPE, dungeonTypeName)
                 putExtra(EXTRA_PLAYER_CHOICE, playerChoice)
             }
-            try {
+            return startOrRelease(context, intent, "choice")
+        }
+
+        /** Publishes a placeholder state synchronously so a second tap cannot slip in before the service starts. */
+        @Synchronized
+        private fun reserveRun(petId: String, dungeonTypeName: String, status: String, isBuildingWorld: Boolean): Boolean {
+            if (isRunning || _generationState.value != null) return false
+            _generationFailure.value = null
+            _generationState.value = AdventureGenerationState(petId, dungeonTypeName, status, 0.02f, isBuildingWorld)
+            return true
+        }
+
+        private fun startOrRelease(context: Context, intent: Intent, label: String): Boolean {
+            return try {
                 ContextCompat.startForegroundService(context, intent)
+                true
             } catch (e: Exception) {
-                DebugLog.log("[$TAG] Failed to start choice service: ${e.message}")
+                DebugLog.log("[$TAG] Failed to start $label service: ${e.message}")
+                _generationState.value = null
+                false
             }
         }
 
@@ -120,11 +150,14 @@ class AdventureForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_BUILD_WORLD -> {
-                if (processingJob?.isActive == true) return START_STICKY
                 val petId = intent.getStringExtra(EXTRA_PET_ID)
                 val dungeonTypeName = intent.getStringExtra(EXTRA_DUNGEON_TYPE)
+                // Always satisfy the startForegroundService() contract before anything else.
+                startForegroundMode(getString(R.string.adventure_status_building_world))
+                if (processingJob?.isActive == true) return START_NOT_STICKY
                 if (petId.isNullOrBlank() || dungeonTypeName.isNullOrBlank()) {
-                    stopSelf(startId)
+                    publishState(null)
+                    stopForegroundMode()
                     return START_NOT_STICKY
                 }
                 processingJob = serviceScope.launch {
@@ -133,12 +166,14 @@ class AdventureForegroundService : Service() {
             }
 
             ACTION_SUBMIT_CHOICE -> {
-                if (processingJob?.isActive == true) return START_STICKY
                 val petId = intent.getStringExtra(EXTRA_PET_ID)
                 val dungeonTypeName = intent.getStringExtra(EXTRA_DUNGEON_TYPE)
                 val playerChoice = intent.getStringExtra(EXTRA_PLAYER_CHOICE)
-                if (petId.isNullOrBlank() || dungeonTypeName.isNullOrBlank() || playerChoice.isNullOrBlank()) {
-                    stopSelf(startId)
+                startForegroundMode(getString(R.string.adventure_status_processing_choice))
+                if (processingJob?.isActive == true) return START_NOT_STICKY
+                if (petId.isNullOrBlank() || dungeonTypeName.isNullOrBlank() || playerChoice == null) {
+                    publishState(null)
+                    stopForegroundMode()
                     return START_NOT_STICKY
                 }
                 processingJob = serviceScope.launch {
@@ -158,13 +193,18 @@ class AdventureForegroundService : Service() {
                 diagnosticMode = null
                 stopForegroundMode()
             }
+
+            else -> {
+                // Null intent (process restart) or unknown action: nothing to resume, no stale idle service.
+                if (processingJob?.isActive != true) stopSelf(startId)
+            }
         }
-        return START_STICKY
+        // Generations are user-initiated and re-runnable; never restart an idle service.
+        return START_NOT_STICKY
     }
 
     private suspend fun runWorldBuild(petId: String, dungeonTypeName: String) {
         val dungeonType = runCatching { DungeonType.valueOf(dungeonTypeName) }.getOrDefault(DungeonType.CHAOS_REALM)
-        startForegroundMode(getString(R.string.adventure_status_building_world))
         publishState(
             AdventureGenerationState(
                 petId = petId,
@@ -223,13 +263,13 @@ class AdventureForegroundService : Service() {
                 )
             }
             finishDiagnosticSession("failed", message)
+            _generationFailure.value = AdventureGenerationFailure(petId, dungeonTypeName, message, wasWorldBuild = true)
         }
         finishRun()
     }
 
     private suspend fun runChoiceGeneration(petId: String, dungeonTypeName: String, playerChoice: String) {
         val dungeonType = runCatching { DungeonType.valueOf(dungeonTypeName) }.getOrDefault(DungeonType.CHAOS_REALM)
-        startForegroundMode(getString(R.string.adventure_status_processing_choice))
         publishState(
             AdventureGenerationState(
                 petId = petId,
@@ -289,6 +329,7 @@ class AdventureForegroundService : Service() {
                 )
             }
             finishDiagnosticSession("failed", message)
+            _generationFailure.value = AdventureGenerationFailure(petId, dungeonTypeName, message, wasWorldBuild = false)
         }
         finishRun()
     }
@@ -306,10 +347,26 @@ class AdventureForegroundService : Service() {
         )
         notificationTaskId = taskId
         try {
-            startForeground(taskId, notification)
+            val startResult = ForegroundStart.start(
+                this,
+                taskId,
+                notification,
+                ForegroundServiceTypes.DATA_SYNC
+            )
+            if (startResult is ForegroundStart.Result.Failed) {
+                val message = ForegroundStart.failureMessage(
+                    this,
+                    startResult.reason,
+                    getString(R.string.adventure_service_title)
+                )
+                runCatching { UnifiedNotificationManager.failTask(taskId, message) }
+                throw IllegalStateException(message, startResult.cause)
+            }
         } catch (e: Exception) {
             DebugLog.log("[$TAG] Failed to start foreground: ${e.message}")
             isRunning = false
+            // Keep the failure notice visible instead of overwriting it with progress updates.
+            notificationTaskId = null
         }
         updateNotificationStatus(initialStatus, 0f)
     }

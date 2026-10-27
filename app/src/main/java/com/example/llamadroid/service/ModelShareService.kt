@@ -62,8 +62,21 @@ class ModelShareService : Service() {
             UnifiedNotificationManager.TaskType.MODEL_SHARE,
             "Model Sharing"
         )
+        val startResult = ForegroundStart.start(
+            this,
+            taskId,
+            notification,
+            ForegroundServiceTypes.DATA_SYNC
+        )
+        if (startResult is ForegroundStart.Result.Failed) {
+            UnifiedNotificationManager.failTask(
+                taskId,
+                ForegroundStart.failureMessage(this, startResult.reason, "Model Sharing")
+            )
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
         return START_STICKY
     }
     

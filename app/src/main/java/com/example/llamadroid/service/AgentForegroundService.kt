@@ -676,7 +676,17 @@ class AgentForegroundService : Service() {
         notificationTaskId = taskId
         
         try {
-            startForeground(taskId, notification)
+            val startResult = ForegroundStart.start(
+                this,
+                taskId,
+                notification,
+                ForegroundServiceTypes.SPECIAL_USE
+            )
+            if (startResult is ForegroundStart.Result.Failed) {
+                val message = ForegroundStart.failureMessage(this, startResult.reason, "AI Agent")
+                runCatching { UnifiedNotificationManager.failTask(taskId, message) }
+                throw IllegalStateException(message, startResult.cause)
+            }
             if (immediateForegroundActive && taskId != IMMEDIATE_FOREGROUND_ID) {
                 runCatching {
                     (getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager)
@@ -710,7 +720,15 @@ class AgentForegroundService : Service() {
         if (immediateForegroundActive || notificationTaskId != null) return
         try {
             val notification = UnifiedNotificationManager.createBasicForegroundNotification(status)
-            startForeground(IMMEDIATE_FOREGROUND_ID, notification)
+            val startResult = ForegroundStart.start(
+                this,
+                IMMEDIATE_FOREGROUND_ID,
+                notification,
+                ForegroundServiceTypes.SPECIAL_USE
+            )
+            if (startResult is ForegroundStart.Result.Failed) {
+                throw IllegalStateException("foreground denied: ${startResult.reason}", startResult.cause)
+            }
             immediateForegroundActive = true
             recordBreadcrumb(
                 event = "foreground_immediate_started",

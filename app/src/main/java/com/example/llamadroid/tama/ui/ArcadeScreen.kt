@@ -1,6 +1,5 @@
 package com.example.llamadroid.tama.ui
 
-import android.widget.Toast
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -183,6 +182,7 @@ fun ArcadeScreen(
     var tickToken by rememberSaveable { mutableStateOf(0L) }
     val walkthroughTargets = LocalWalkthroughTargets.current
     val context = LocalContext.current
+    val notice = rememberTamaNotice()
 
     fun restoreTerminalArcadeResult(terminal: ArcadeSessionTerminal) {
         val request = terminal.request
@@ -317,11 +317,7 @@ fun ArcadeScreen(
             if (acknowledged) {
                 after()
             } else {
-                Toast.makeText(
-                    context,
-                    context.getString(R.string.tama_arcade_session_ack_failed),
-                    Toast.LENGTH_SHORT
-                ).show()
+                notice.show(context.getString(R.string.tama_arcade_session_ack_failed), isError = true)
             }
             sessionCancelling = false
         }
@@ -350,11 +346,7 @@ fun ArcadeScreen(
                 afterCancel(request)
                 return@launch
             } else {
-                Toast.makeText(
-                    context,
-                    context.getString(R.string.tama_arcade_session_cancel_failed),
-                    Toast.LENGTH_SHORT
-                ).show()
+                notice.show(context.getString(R.string.tama_arcade_session_cancel_failed), isError = true)
             }
             sessionCancelling = false
         }
@@ -1370,47 +1362,50 @@ private fun ArcadeResultDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(title), fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) },
         text = {
-            Column(
-                modifier = Modifier
-                    .heightIn(max = 320.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text(
-                    stringResource(
-                        R.string.tama_arcade_result_summary,
-                        summary.catches,
-                        summary.misses,
-                        summary.totalObjects
-                    ),
-                    fontFamily = FontFamily.Monospace
-                )
-                Text(
-                    stringResource(R.string.tama_arcade_result_score, summary.score),
-                    fontFamily = FontFamily.Monospace
-                )
-                Text(
-                    stringResource(R.string.tama_arcade_result_reward, summary.coins),
-                    fontFamily = FontFamily.Monospace
-                )
-                Text(
-                    stringResource(R.string.tama_arcade_result_happiness, summary.happiness),
-                    fontFamily = FontFamily.Monospace
-                )
-                Text(
-                    stringResource(arcadeReceiptStatusRes(summary.receiptStatus)),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    color = TamaMutedText
-                )
-                if (summary.receiptStatus == ArcadeReceiptStatus.SUCCEEDED && summary.coins > 0) {
+            Box {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     Text(
-                        stringResource(R.string.tama_arcade_result_rewarded),
+                        stringResource(
+                            R.string.tama_arcade_result_summary,
+                            summary.catches,
+                            summary.misses,
+                            summary.totalObjects
+                        ),
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        stringResource(R.string.tama_arcade_result_score, summary.score),
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        stringResource(R.string.tama_arcade_result_reward, summary.coins),
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        stringResource(R.string.tama_arcade_result_happiness, summary.happiness),
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        stringResource(arcadeReceiptStatusRes(summary.receiptStatus)),
                         fontFamily = FontFamily.Monospace,
                         fontSize = 12.sp,
                         color = TamaMutedText
                     )
+                    if (summary.receiptStatus == ArcadeReceiptStatus.SUCCEEDED && summary.coins > 0) {
+                        Text(
+                            stringResource(R.string.tama_arcade_result_rewarded),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            color = TamaMutedText
+                        )
+                    }
                 }
+                TamaDialogNoticeHost()
             }
         },
         confirmButton = {

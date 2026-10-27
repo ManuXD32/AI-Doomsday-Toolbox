@@ -151,7 +151,8 @@ class AdventureGateCatalogTest {
                 "${monster.id} must be weak to at least one player attack or magic element",
                 monster.weaknesses.any { it in playerElements }
             )
-            assertTrue(monster.assetBasePath.endsWith(monster.id))
+            // Elite variants intentionally reuse their base monster sprite.
+            assertTrue(monster.assetBasePath.endsWith(monster.eliteOfId ?: monster.id))
         }
     }
 

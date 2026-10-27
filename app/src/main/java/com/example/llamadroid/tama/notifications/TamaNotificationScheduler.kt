@@ -16,7 +16,6 @@ import com.example.llamadroid.tama.data.FarmLivestockType
 import com.example.llamadroid.tama.data.FarmTile
 import com.example.llamadroid.tama.data.GrowthStage
 import com.example.llamadroid.tama.data.PetStats
-import com.example.llamadroid.tama.data.PlantedCrop
 import com.example.llamadroid.tama.data.TamaPet
 import com.example.llamadroid.tama.data.TamaStudyMode
 import com.example.llamadroid.tama.data.TamaStudyStatus
@@ -104,7 +103,7 @@ object TamaNotificationScheduler {
         }
         val farmRepository = FarmRepository(database.farmDao(), appContext)
         val farmEngine = FarmEngine(farmRepository)
-        farmEngine.updateFarm(pet.id)
+        farmEngine.updateFarm(pet.id, cycleFrozen = pet.cycleFrozen)
         val tiles = farmRepository.getTiles(pet.id)
         val livestock = farmRepository.getLivestock(pet.id)
         val activeStudySession = database.tamaDao().getActiveStudySession(pet.id)
@@ -559,30 +558,24 @@ object TamaNotificationScheduler {
 
     internal fun earliestCropReadyTime(tiles: List<FarmTile>, now: Long = System.currentTimeMillis()): Long? {
         return tiles.mapNotNull { tile ->
-            val crop = tile.crop ?: return@mapNotNull null
-            cropReadyTime(crop, now)
+            tile.crop ?: return@mapNotNull null
+            cropReadyTime(tile)
         }.minOrNull()
     }
 
     internal fun readyCropCount(tiles: List<FarmTile>, now: Long = System.currentTimeMillis()): Int {
         return tiles.count { tile ->
             val crop = tile.crop ?: return@count false
-            !crop.isDecayed && cropReadyTime(crop, now)?.let { now >= it } == true
+            !crop.isDecayed && cropReadyTime(tile)?.let { now >= it } == true
         }
     }
 
-    private fun cropReadyTime(crop: PlantedCrop, now: Long): Long? {
+    /** Real instant the plot's crop is harvestable; moisture-aware via [farmCropReadyAt] (dry plots grow slower). */
+    private fun cropReadyTime(tile: FarmTile): Long? {
+        val crop = tile.crop ?: return null
         if (crop.isDecayed) return null
-        if (crop.stage >= 3) return if (now >= crop.lastStageUpdateTime) crop.lastStageUpdateTime else crop.lastStageUpdateTime
-        val info = com.example.llamadroid.tama.data.CropDefinitions.CROPS[crop.type] ?: return null
-        var stage = crop.stage
-        var lastUpdate = crop.lastStageUpdateTime
-        while (stage < 3) {
-            val stageDuration = info.stageTimes[stage].let { if (crop.isFertilized) it / 2 else it }
-            lastUpdate += stageDuration
-            stage++
-        }
-        return lastUpdate
+        if (crop.stage >= 3) return crop.lastStageUpdateTime
+        return com.example.llamadroid.tama.data.farmCropReadyAt(tile)
     }
 
     private fun alarmManager(context: Context): AlarmManager {

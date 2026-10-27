@@ -265,8 +265,19 @@ class LlamaService : Service() {
             UnifiedNotificationManager.TaskType.LLAMA_SERVER,
             "LLM Server"
         )
+        val startResult = ForegroundStart.start(
+            this,
+            taskId,
+            notification,
+            ForegroundServiceTypes.SPECIAL_USE
+        )
+        if (startResult is ForegroundStart.Result.Failed) {
+            val message = ForegroundStart.failureMessage(this, startResult.reason, "LLM Server")
+            UnifiedNotificationManager.failTask(taskId, message)
+            // The callers' existing catch path reports the start failure and cleans up.
+            throw IllegalStateException(message, startResult.cause)
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
     }
 
     private fun effectiveBinaryForPath(binaryPath: String): EffectiveLlamaBinary {

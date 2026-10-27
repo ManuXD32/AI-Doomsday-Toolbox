@@ -9,7 +9,9 @@ data class FarmTileEntity(
     val petId: String,
     val status: String, // TileStatus enum name
     val cropJson: String?, // PlantedCrop serialized
-    val lastWateredTime: Long?
+    val lastWateredTime: Long?,
+    /** [com.example.llamadroid.tama.data.FarmObstacle] name blocking this plot, or null (DB 48+). */
+    val obstacle: String? = null
 )
 
 @Entity(tableName = "tama_farm_upgrades")
@@ -88,6 +90,18 @@ interface FarmDao {
         if (upgrades.isNotEmpty()) {
             saveUpgrades(upgrades)
         }
+    }
+
+    /** One Room transaction for a whole farm refresh (tiles, upgrades and livestock). */
+    @Transaction
+    suspend fun saveFarmUpdate(
+        tiles: List<FarmTileEntity>,
+        upgrades: List<FarmUpgradeEntity>,
+        livestock: List<FarmLivestockEntity>
+    ) {
+        if (tiles.isNotEmpty()) saveTiles(tiles)
+        if (upgrades.isNotEmpty()) saveUpgrades(upgrades)
+        if (livestock.isNotEmpty()) saveLivestock(livestock)
     }
 
     @Query("DELETE FROM tama_farm_tiles WHERE petId = :petId")

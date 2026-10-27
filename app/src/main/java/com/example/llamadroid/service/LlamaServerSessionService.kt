@@ -60,7 +60,10 @@ class LlamaServerSessionService : Service() {
                 ) {
                     DebugLog.log("LlamaServerSessionService[$sessionId]: rejected start while OCR lease is active")
                 } else {
-                    ensureForeground()
+                    if (!ensureForeground()) {
+                        stopSelf(startId)
+                        return START_NOT_STICKY
+                    }
                     val portOverride = intent.takeIf { it.hasExtra(EXTRA_PORT) }
                         ?.getIntExtra(EXTRA_PORT, profile.serverPort)
                     scope.launch {
@@ -124,14 +127,27 @@ class LlamaServerSessionService : Service() {
         super.onDestroy()
     }
 
-    private fun ensureForeground() {
-        if (notificationTaskId != null) return
+    private fun ensureForeground(): Boolean {
+        if (notificationTaskId != null) return true
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.LLAMA_SERVER,
             getString(R.string.llama_cards_title)
         )
+        val startResult = ForegroundStart.start(
+            this,
+            taskId,
+            notification,
+            ForegroundServiceTypes.DATA_SYNC
+        )
+        if (startResult is ForegroundStart.Result.Failed) {
+            UnifiedNotificationManager.failTask(
+                taskId,
+                ForegroundStart.failureMessage(this, startResult.reason, getString(R.string.llama_cards_title))
+            )
+            return false
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
+        return true
     }
 
     /**

@@ -103,6 +103,9 @@ class LlamaApplication : Application() {
                 )
             runRemovedLlmTrainingCleanupOnce()
             runCatching { com.example.llamadroid.tama.game.TamaWorldRemovalCleanup.runOnce(this@LlamaApplication) }
+            // Resume an active paired visit (listener + link service) after a reboot or app kill.
+            runCatching { com.example.llamadroid.tama.ui.transfer.TamaTransferHolder.get(this@LlamaApplication).recoverOnceAsync() }
+                .onFailure { DebugLog.log("[TAMA_TRANSFER] cold-start recovery failed: ${it.message}") }
             runCatching { com.example.llamadroid.data.repository.QuickSetupServerWatcher.ensureStarted(this@LlamaApplication) }
             pruneLegacyPortableModelRows()
             normalizeLegacyQuadtrixLoraRows()

@@ -36,15 +36,19 @@ import com.example.llamadroid.data.db.RestoreCoordinator
         AdventureGateBattleStateEntity::class,
         AdventureGateNightArenaRunEntity::class,
         TamaArtworkEntity::class,
-        TamaActionReceiptEntity::class
+        TamaActionReceiptEntity::class,
+        TamaTransferStateEntity::class,
+        TamaTransferPeerEntity::class
     ],
-    version = 45,
+    version = 48,
     exportSchema = true
 )
 abstract class TamaDatabase : RoomDatabase() {
     abstract fun tamaDao(): TamaDao
     abstract fun farmDao(): FarmDao
     abstract fun actionReceiptDao(): TamaActionReceiptDao
+    abstract fun transferStateDao(): TamaTransferStateDao
+    abstract fun transferPeerDao(): TamaTransferPeerDao
     
     companion object {
         @Volatile

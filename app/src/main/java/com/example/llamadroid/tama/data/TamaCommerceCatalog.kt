@@ -52,7 +52,7 @@ object TamaCommerceCatalog {
             return Offer(InventoryItem(id, title, ItemType.TOOL,
                 durability = FARM_TOOL_REPAIR_AMOUNT, maxDurability = FARM_TOOL_DURABILITY_CAP), toolPrice, vendorId)
         }
-        if (id in setOf("water", "fertilizer", FARM_FUEL_BUCKET_ID)) {
+        if (id in setOf("water", "fertilizer", FARM_FUEL_BUCKET_ID, FARM_WOOD_ID, FARM_STONE_ID)) {
             val title = if (id == FARM_FUEL_BUCKET_ID) context.getString(R.string.tama_item_fuel_bucket)
                 else WorldResourceCatalog.displayName(id, context.resources.configuration.locales[0]) ?: id
             return Offer(InventoryItem(id, title, ItemType.MATERIAL), FarmShopCatalog.materialBuyPrice(id), vendorId)
@@ -60,5 +60,7 @@ object TamaCommerceCatalog {
         return null
     }
 
-    fun sellPrice(id: String): Int? = FarmTradeItemCatalog.definitionForInventoryId(id)?.sellPrice?.coerceAtLeast(5)
+    /** Fixed sell price: wood/stone use their own (lower than buy) price, farm goods floor at 5. */
+    fun sellPrice(id: String): Int? = FarmMaterialPrices.sellPrice(id)
+        ?: FarmTradeItemCatalog.definitionForInventoryId(id)?.sellPrice?.coerceAtLeast(5)
 }

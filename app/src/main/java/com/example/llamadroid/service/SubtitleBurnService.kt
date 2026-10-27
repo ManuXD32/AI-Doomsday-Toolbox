@@ -91,7 +91,7 @@ class SubtitleBurnService : Service() {
     }
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForegroundWithNotification()
+        if (!startForegroundWithNotification()) return START_NOT_STICKY
         return START_NOT_STICKY
     }
     
@@ -108,13 +108,21 @@ class SubtitleBurnService : Service() {
         super.onDestroy()
     }
     
-    private fun startForegroundWithNotification() {
+    private fun startForegroundWithNotification(): Boolean {
         val (id, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.VIDEO_UPSCALE,
             localizedString(R.string.subtitle_burn_title)
         )
+        val started = ForegroundStart.start(this, id, notification, ForegroundServiceTypes.DATA_SYNC)
+        if (started is ForegroundStart.Result.Failed) {
+            val message = ForegroundStart.failureMessage(this, started.reason, localizedString(R.string.subtitle_burn_title))
+            UnifiedNotificationManager.failTask(id, message)
+            _state.value = SubtitleBurnState.Error(message)
+            stopSelf()
+            return false
+        }
         taskId = id
-        startForeground(id, notification)
+        return true
     }
     
     private fun updateNotification(text: String, progress: Float = 0f) {

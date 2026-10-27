@@ -52,8 +52,21 @@ class MediaTranslationForegroundService : Service() {
             UnifiedNotificationManager.TaskType.TRANSCRIPTION,
             title
         )
+        val startResult = ForegroundStart.start(
+            this,
+            id,
+            notification,
+            ForegroundServiceTypes.DATA_SYNC
+        )
+        if (startResult is ForegroundStart.Result.Failed) {
+            UnifiedNotificationManager.failTask(
+                id,
+                ForegroundStart.failureMessage(this, startResult.reason, title)
+            )
+            stopSelf()
+            return
+        }
         taskId = id
-        startForeground(id, notification)
         WakeLockManager.acquire(applicationContext, "MediaTranslationForegroundService")
         WakeLockManager.acquireWifiLock(applicationContext, "MediaTranslationForegroundService")
         GenerationDiagnosticsStore.recordBreadcrumb(

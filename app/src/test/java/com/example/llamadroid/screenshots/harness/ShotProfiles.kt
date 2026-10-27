@@ -1,5 +1,7 @@
 package com.example.llamadroid.screenshots.harness
 
+import com.example.llamadroid.data.PixelThemeVariant
+
 /** Device profile for a screenshot run: Robolectric qualifiers plus the exact output pixel box. */
 data class ShotProfile(
     val key: String,
@@ -10,7 +12,8 @@ data class ShotProfile(
     /** Long side in px for the scaled guide copy (phone 1280, tablets 1280). */
     val guideLongSide: Int
 ) {
-    fun qualifiersFor(locale: ShotLocale): String = "${locale.tag}-$qualifiers"
+    fun qualifiersFor(locale: ShotLocale): String =
+        "${locale.tag}-${if (ShotRunOptions.dark) qualifiers.replace("notnight", "night") else qualifiers}"
 
     companion object {
         /** 411.4 dp at 420 dpi: the qualifier rounds up, so the app is wrapped in an exact px box. */
@@ -43,6 +46,28 @@ object ShotRunOptions {
         ?.let { ShotLocale.byTag(it) }
     val keyFilter: Set<String>? get() = System.getProperty("adt.shots.keys")?.takeIf { it.isNotBlank() }
         ?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet()
+    /** `-Padt.shots.theme=light|dark` (default light). Dark also switches the night qualifier. */
+    val dark: Boolean get() = when (val value = System.getProperty("adt.shots.theme")?.trim()?.lowercase()) {
+        null, "", "light" -> false
+        "dark" -> true
+        else -> error("Unknown adt.shots.theme '$value'; use light or dark")
+    }
+    /** `-Padt.shots.style=soft|pixel` (default soft). */
+    val pixelStyle: Boolean get() = when (val value = System.getProperty("adt.shots.style")?.trim()?.lowercase()) {
+        null, "", "soft" -> false
+        "pixel" -> true
+        else -> error("Unknown adt.shots.style '$value'; use soft or pixel")
+    }
+    /** `-Padt.shots.pixelVariant=candy_pop|pocket_lcd|arcade_night|sunset_cartridge` (enum name or storage value). */
+    val pixelVariant: PixelThemeVariant get() {
+        val value = System.getProperty("adt.shots.pixelVariant")?.trim()?.lowercase().orEmpty()
+        if (value.isEmpty()) return PixelThemeVariant.CANDY_POP
+        return PixelThemeVariant.entries.firstOrNull { it.storageValue == value || it.name.lowercase() == value }
+            ?: error("Unknown adt.shots.pixelVariant '$value'; use ${PixelThemeVariant.entries.map { it.storageValue }}")
+    }
+    /** Output sub-folder name for theme + style, for example `dark-pixel-arcade_night` or `light-soft`. */
+    val themeStyleLabel: String get() =
+        (if (dark) "dark" else "light") + "-" + (if (pixelStyle) "pixel-${pixelVariant.storageValue}" else "soft")
     val outDir: String get() = System.getProperty("adt.shots.out")?.takeIf { it.isNotBlank() } ?: "build/screenshots"
     val repoRoot: String get() = System.getProperty("adt.shots.repoRoot")?.takeIf { it.isNotBlank() } ?: "."
 

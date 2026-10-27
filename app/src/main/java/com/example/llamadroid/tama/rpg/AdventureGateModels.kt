@@ -259,7 +259,10 @@ data class AdventureGateMonsterDefinition(
     val assetBasePath: String,
     val attackActionIds: List<String> = emptyList(),
     val magicActionIds: List<String> = emptyList(),
-    val specialActionId: String? = null
+    val specialActionId: String? = null,
+    /** Set on elite variants: id of the base monster they upgrade (shares its sprite) and their extra trait. */
+    val eliteOfId: String? = null,
+    val eliteTrait: AdventureGateEliteTrait? = null
 )
 
 @Serializable
@@ -269,14 +272,18 @@ data class AdventureGatePhaseDefinition(
     val waveMonsterIds: List<List<String>>,
     val isBoss: Boolean,
     val backgroundAssetPath: String,
+    @Serializable(with = AdventureGateStoryResKeySerializer::class)
     val storyRes: Int,
+    @Serializable(with = AdventureGateNullableResKeySerializer::class)
     val bossRevealRes: Int? = null,
     val enemyLevelOverride: Int? = null,
     val xpRewardOverride: Int? = null,
     val coinRewardOverride: Int? = null,
     val potionRewardChanceOverride: Int? = null,
     val sourceDepth: Int? = null,
-    val nightArenaLevelId: String? = null
+    val nightArenaLevelId: String? = null,
+    /** Phase modifier (catalog) or the night's omen (Night Arena); null on old saves. */
+    val modifier: AdventureGateBattleModifier? = null
 )
 
 data class AdventureGateWorldDefinition(
@@ -300,7 +307,9 @@ data class NightArenaLevel(
     val potionRewardChancePercent: Int,
     val seed: Long,
     val nodeX: Float,
-    val nodeY: Float
+    val nodeY: Float,
+    /** The night's omen; null on runs created before omens existed. */
+    val omen: AdventureGateBattleModifier? = null
 ) {
     val id: String get() = levelIndex.toString()
 }
@@ -365,9 +374,18 @@ data class AdventureGateCombatantState(
     val isMinion: Boolean = false,
     val guarding: Boolean = false,
     val enraged: Boolean = false,
-    val statuses: List<AdventureGateStatusEffect> = emptyList()
+    val statuses: List<AdventureGateStatusEffect> = emptyList(),
+    /** Elite traits (empty for normal monsters, the pet and old saves). */
+    val traits: List<AdventureGateEliteTrait> = emptyList(),
+    /** Telegraphed next action, shown to the player; null when none is planned. */
+    val intent: AdventureGateEnemyIntent? = null,
+    /** Remaining absorb shield (elite SHIELD trait); damage drains it before HP. */
+    val shieldHp: Int = 0,
+    /** Damage taken since the previous plan; drives "guard after a big hit". */
+    val lastHitTaken: Int = 0
 ) {
     val isAlive: Boolean get() = hp > 0
+    val isElite: Boolean get() = traits.isNotEmpty()
 }
 
 @Serializable
@@ -383,6 +401,8 @@ data class AdventureGateBattleSnapshot(
     val log: List<AdventureGateBattleLogEntry>,
     val isCompleted: Boolean = false,
     val isVictory: Boolean = false,
+    /** True once coins/items/XP side effects were paid; old saves default to false and are treated as paid when already persisted finished. */
+    val rewardsGranted: Boolean = false,
     val xpAwarded: Int = 0,
     val potionsUsed: Int = 0,
     val guardUses: Int = 0,
@@ -392,6 +412,8 @@ data class AdventureGateBattleSnapshot(
     val actionSequence: Int = 0,
     val rngSeed: Long = System.currentTimeMillis(),
     val phaseOverride: AdventureGatePhaseDefinition? = null,
+    /** Active phase modifier / omen for this battle; null on old saves. */
+    val modifier: AdventureGateBattleModifier? = null,
     val updatedAt: Long = System.currentTimeMillis()
 )
 
@@ -404,8 +426,11 @@ data class AdventureGateBattleLogEntry(
     val itemId: String? = null,
     val equipmentId: String? = null,
     val statusId: String? = null,
+    @Serializable(with = AdventureGateNullableResKeySerializer::class)
     val actorNameRes: Int? = null,
+    @Serializable(with = AdventureGateNullableResKeySerializer::class)
     val targetNameRes: Int? = null,
+    @Serializable(with = AdventureGateNullableResKeySerializer::class)
     val skillNameRes: Int? = null,
     val amount: Int = 0,
     val element: AdventureGateElement? = null,
@@ -440,7 +465,15 @@ enum class AdventureGateLogMessage {
     EQUIPMENT_DROPPED,
     EQUIPMENT_TRIGGERED,
     STATUS_DAMAGE,
-    STATUS_SKIP
+    STATUS_SKIP,
+    THORNS_REFLECTED,
+    ENEMY_HEALED,
+    ENEMY_GUARDED,
+    /** Boss enrage line; `skillId` holds the boss monster id. */
+    BOSS_ENRAGED,
+    CRITICAL_HIT,
+    MODIFIER_TICK,
+    YAWNED
 }
 
 @Serializable
@@ -462,6 +495,20 @@ data class AdventureGateActionResult(
     val leveledUp: Boolean = false,
     val unlockedSkillIds: List<String> = emptyList(),
     val events: List<AdventureGateBattleEvent> = emptyList()
+)
+
+/** Why [AdventureGateRepository.startBattleResult] refused to open a Gate battle. */
+enum class AdventureGateStartError {
+    NO_HP,
+    UNKNOWN_WORLD,
+    WORLD_LOCKED,
+    PHASE_LOCKED,
+    BATTLE_ACTIVE
+}
+
+data class AdventureGateStartResult(
+    val snapshot: AdventureGateBattleSnapshot? = null,
+    val error: AdventureGateStartError? = null
 )
 
 enum class AdventureGateSkillPurchaseError {

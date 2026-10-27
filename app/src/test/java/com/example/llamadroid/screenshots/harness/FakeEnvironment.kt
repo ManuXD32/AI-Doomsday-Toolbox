@@ -41,6 +41,7 @@ import java.lang.reflect.Modifier
  * gates, the application singleton, fake host services and a dead network. Call [install] before
  * launching the activity and [uninstall] from `@After`.
  */
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class FakeEnvironment {
     private var previousApplication: LlamaApplication? = null
     private var installed = false
@@ -60,8 +61,9 @@ class FakeEnvironment {
         // Static theme flows survive across tests inside one sandbox: set every value every time.
         SettingsRepository(app).apply {
             setHasCompletedWelcome(true)
-            setThemeMode(AppThemeMode.LIGHT)
-            setVisualStyle(AppVisualStyle.SOFT_STUDIO)
+            setThemeMode(if (ShotRunOptions.dark) AppThemeMode.DARK else AppThemeMode.LIGHT)
+            setVisualStyle(if (ShotRunOptions.pixelStyle) AppVisualStyle.PIXEL else AppVisualStyle.SOFT_STUDIO)
+            setPixelVariant(ShotRunOptions.pixelVariant)
             setDynamicColor(false)
             setPixelFontEnabled(false)
         }

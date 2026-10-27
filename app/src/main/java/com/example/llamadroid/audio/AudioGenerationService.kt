@@ -9,6 +9,8 @@ import android.os.IBinder
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.onnx.extractReadableTextFromUri
+import com.example.llamadroid.service.ForegroundStart
+import com.example.llamadroid.service.ForegroundServiceTypes
 import com.example.llamadroid.service.UnifiedNotificationManager
 import com.example.llamadroid.service.GenerationDiagnosticsStore
 import com.example.llamadroid.util.DebugLog
@@ -139,11 +141,27 @@ class AudioGenerationService : Service() {
         )
         notificationTaskId = taskId
         try {
-            startForeground(taskId, notification)
+            startForegroundOrThrow(taskId, notification)
         } catch (error: Throwable) {
             notificationTaskId = null
             runCatching { UnifiedNotificationManager.dismissTask(taskId) }
             throw error
+        }
+    }
+
+    /** Guarded start; a denied start surfaces as an exception so the existing error paths clean up. */
+    private fun startForegroundOrThrow(id: Int, notification: android.app.Notification) {
+        val result = ForegroundStart.start(
+            this,
+            id,
+            notification,
+            ForegroundServiceTypes.MEDIA_PROCESSING or ForegroundServiceTypes.DATA_SYNC
+        )
+        if (result is ForegroundStart.Result.Failed) {
+            val title = getString(R.string.audio_runtime_title)
+            val message = ForegroundStart.failureMessage(this, result.reason, title)
+            runCatching { UnifiedNotificationManager.failTask(id, message) }
+            throw IllegalStateException(message, result.cause)
         }
     }
 
@@ -299,7 +317,7 @@ class AudioGenerationService : Service() {
             initial.modelDisplayName.ifBlank { getString(R.string.audio_runtime_title) }
         )
         notificationTaskId = newTaskId
-        startForeground(newTaskId, notification)
+        startForegroundOrThrow(newTaskId, notification)
         try {
             val text = resolveText(job)
             ensureNotCancelled()

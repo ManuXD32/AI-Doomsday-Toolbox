@@ -3,6 +3,7 @@ package com.example.llamadroid.tama.game
 import android.app.Application
 import android.content.Context
 import androidx.room.Room
+import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.tama.data.*
 import com.example.llamadroid.tama.db.TamaDatabase
@@ -77,14 +78,36 @@ class ClassicFarmPlotsTest {
     @Test fun repeatingHarvestCannotPayTwice() = runBlocking {
         seedPet(emptyList())
         saveTile(FarmTile(0, TileStatus.WET_FARMLAND,
-            PlantedCrop("carrot", stage = 3, plantedTime = 10L, lastStageUpdateTime = 20L)))
-        ClassicFarmPlots.request(context, engine, 0, FarmPlotAction.HARVEST_CROP)
+            PlantedCrop("carrot", stage = 3, plantedTime = 10L, lastStageUpdateTime = System.currentTimeMillis() - 1_000L)))
+        val message = ClassicFarmPlots.request(context, engine, 0, FarmPlotAction.HARVEST_CROP)
+        assertTrue(message.contains(cropDisplayName(context, "carrot")))
         val first = savedPet().inventory.first { it.id == "crop_carrot" }.quantity
         assertTrue(first > 0)
         ClassicFarmPlots.request(context, engine, 0, FarmPlotAction.HARVEST_CROP)
         assertEquals(first, savedPet().inventory.first { it.id == "crop_carrot" }.quantity)
         assertNull(tile().crop)
-        assertEquals(TileStatus.SOIL, tile().status)
+        // Harvest leaves the plot tilled (but dry) to save the player a hoe swing.
+        assertEquals(TileStatus.FARMLAND, tile().status)
+    }
+
+    @Test fun staleStageThreeCropIsRottenNotHarvestedFresh() = runBlocking {
+        seedPet(emptyList())
+        val ripenedAt = System.currentTimeMillis() - 20L * 60L * 60L * 1000L
+        saveTile(FarmTile(0, TileStatus.WET_FARMLAND,
+            PlantedCrop("carrot", stage = 3, plantedTime = ripenedAt - 6L * 3_600_000L, lastStageUpdateTime = ripenedAt)))
+        val refused = ClassicFarmPlots.request(context, engine, 0, FarmPlotAction.HARVEST_CROP)
+        assertEquals(context.getString(R.string.tama_farm_err_crop_not_ready), refused)
+        assertTrue(savedPet().inventory.none { it.id == "crop_carrot" })
+        ClassicFarmPlots.request(context, engine, 0, FarmPlotAction.REMOVE_DEAD_CROP)
+        assertTrue(savedPet().inventory.any { it.id == "rotten_crop" })
+        assertNull(tile().crop)
+    }
+
+    @Test fun missingToolReportsTheRealReason() = runBlocking {
+        seedPet(emptyList())
+        saveTile(FarmTile(0))
+        assertEquals(context.getString(R.string.tama_farm_err_tool),
+            ClassicFarmPlots.request(context, engine, 0, FarmPlotAction.TILL_SOIL))
     }
 
     @Test fun frozenPetCannotMutateAPlotOrSpendTools() = runBlocking {
@@ -117,12 +140,16 @@ class ClassicFarmPlotsTest {
 
     @Test fun classicFarmUpgradeChargesOnce() = runBlocking {
         seedPet(emptyList())
-        database.tamaDao().savePet(PetMapper.toEntity(savedPet().copy(money = 1000)))
+        database.tamaDao().savePet(PetMapper.toEntity(savedPet().copy(money = 1000, inventory = listOf(
+            InventoryItem("wood", "Wood", ItemType.MATERIAL, quantity = 6),
+            InventoryItem("stone", "Stone", ItemType.MATERIAL, quantity = 4)))))
+        engine.reloadPersistedPet()
         val first = WorldFarmMaintenance.request(
             context, engine, "buy_upgrade", mapOf("type" to "well"))
         assertTrue(first.success)
         val remaining = savedPet().money
         assertTrue(remaining < 1000)
+        assertTrue(savedPet().inventory.none { it.id == "wood" || it.id == "stone" })
         assertTrue(farm.getUpgrade(petId, "well")?.isPurchased == true)
         val repeated = WorldFarmMaintenance.request(
             context, engine, "buy_upgrade", mapOf("type" to "well"))

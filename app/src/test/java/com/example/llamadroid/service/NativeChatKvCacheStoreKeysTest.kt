@@ -137,4 +137,32 @@ class NativeChatKvCacheStoreKeysTest {
         write(store, KvCacheKey.Harness("rt", "s"), 10, 1L)
         assertEquals(listOf(5L), store.listChats())
     }
+
+    @Test
+    fun `pet key has hashed stem, namespace and parses back`() {
+        val key = KvCacheKey.Pet("pet-123")
+        assertTrue(Regex("pet-[0-9a-f]{16}").matches(key.fileStem))
+        assertFalse(key.fileStem.contains("123"))
+        assertEquals(key.fileStem, KvCacheKey.Pet("pet-123").fileStem)
+        assertFalse(key.fileStem == KvCacheKey.Pet("pet-124").fileStem)
+        assertEquals(KvCacheNamespace.PET, key.namespace)
+        assertEquals(KvCacheNamespace.PET, KvCacheKey.namespaceOfStem(key.fileStem))
+        assertEquals(null, KvCacheKey.namespaceOfStem("pet-xyz"))
+    }
+
+    @Test
+    fun `pet caches count in breakdown and enforce with chat budget set`() {
+        val store = store()
+        val pet = KvCacheKey.Pet("p1")
+        write(store, pet, 300, 5L)
+        write(store, KvCacheKey.Chat(1), 100, 6L)
+        assertEquals(300L + sidecarBytes(store, pet), store.breakdown()[KvCacheNamespace.PET])
+        store.enforceBudget(
+            1L,
+            emptySet(),
+            setOf(KvCacheNamespace.CHAT, KvCacheNamespace.DELEGATE, KvCacheNamespace.PET)
+        )
+        assertEquals(0L, store.sizeBytes(pet))
+        assertEquals(0L, store.sizeBytes(KvCacheKey.Chat(1)))
+    }
 }

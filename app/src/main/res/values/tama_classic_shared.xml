@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="tama_action_unavailable">That action is not available right now.</string>
+    <string name="tama_action_crop_not_food">Raw crops like wheat, rice, pumpkin and flowers aren\'t food. Sell them or use them for something else.</string>
     <string name="tama_action_already_awake">%1$s is already awake.</string>
     <string name="tama_action_use_one_item">Use one item at a time.</string>
     <string name="tama_hatch_effect_description">Pet hatching animation</string>

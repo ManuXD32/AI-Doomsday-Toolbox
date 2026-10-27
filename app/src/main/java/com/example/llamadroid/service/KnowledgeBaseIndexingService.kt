@@ -37,7 +37,20 @@ class KnowledgeBaseIndexingService : Service() {
             UnifiedNotificationManager.TaskType.KNOWLEDGE_BASE,
             taskTitle
         )
-        startForeground(taskId, notification)
+        val startResult = ForegroundStart.start(
+            this,
+            taskId,
+            notification,
+            ForegroundServiceTypes.DATA_SYNC
+        )
+        if (startResult is ForegroundStart.Result.Failed) {
+            UnifiedNotificationManager.failTask(
+                taskId,
+                ForegroundStart.failureMessage(this, startResult.reason, taskTitle)
+            )
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         UnifiedNotificationManager.updateProgress(taskId, 0f, getString(R.string.kb_notification_starting))
         // Register the start before launching work so back-to-back queued intents cannot
         // briefly look idle and stop the shared embedding server between jobs.

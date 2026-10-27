@@ -1,7 +1,6 @@
 package com.example.llamadroid.tama.ui
 
 import android.content.Context
-import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -35,6 +34,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
 import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
@@ -110,6 +110,7 @@ import com.example.llamadroid.tama.rpg.AdventureGatePhaseDefinition
 import com.example.llamadroid.tama.rpg.AdventureGateProfile
 import com.example.llamadroid.tama.rpg.AdventureGatePotionUseError
 import com.example.llamadroid.tama.rpg.AdventureGateRepository
+import com.example.llamadroid.tama.rpg.AdventureGateStartError
 import com.example.llamadroid.tama.rpg.AdventureGateRecipeDefinition
 import com.example.llamadroid.tama.rpg.AdventureGateStatusEffect
 import com.example.llamadroid.tama.rpg.AdventureGateSupplyDefinition
@@ -128,16 +129,16 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 
-private val GateDark = Color(0xFF14101F)
-private val GatePanel = Color(0xFF251B34)
-private val GateAccent = Color(0xFFFFC857)
-private val GateBlue = Color(0xFF77DDE7)
-private val GateGreen = Color(0xFF8BE38B)
-private val GateDanger = Color(0xFFFF6B6B)
-private val GateText = Color(0xFFF5EEFF)
-private val ArenaCombatantCardWidth = 84.dp
+internal val GateDark = Color(0xFF14101F)
+internal val GatePanel = Color(0xFF251B34)
+internal val GateAccent = Color(0xFFFFC857)
+internal val GateBlue = Color(0xFF77DDE7)
+internal val GateGreen = Color(0xFF8BE38B)
+internal val GateDanger = Color(0xFFFF6B6B)
+internal val GateText = Color(0xFFF5EEFF)
+internal val GateCombatColors get() = GateCombatUiColors(GatePanel, GateAccent, GateText, GateDanger, GateBlue)
 
-private data class DamagePopup(
+internal data class DamagePopup(
     val id: Long,
     val targetInstanceId: String,
     val amount: Int,
@@ -224,10 +225,11 @@ fun AdventureGateScreen(
     var showShopDialog by rememberSaveable { mutableStateOf(false) }
     var showGearClosetDialog by rememberSaveable { mutableStateOf(false) }
     var showInfoDialog by rememberSaveable { mutableStateOf(false) }
+    var showJournalDialog by rememberSaveable { mutableStateOf(false) }
     var showRetreatDialog by rememberSaveable { mutableStateOf(false) }
     var gearInfoDialog by remember { mutableStateOf<AdventureGateEquipmentDefinition?>(null) }
     var pendingStoryPhase by remember { mutableStateOf<AdventureGatePhaseDefinition?>(null) }
-    var startBattleBlocked by rememberSaveable { mutableStateOf(false) }
+    var startBattleBlocked by rememberSaveable { mutableStateOf<AdventureGateStartError?>(null) }
     var selectedWorldId by rememberSaveable(petId) { mutableStateOf(AdventureGateCatalog.worlds.first().id) }
     LaunchedEffect(progressRows, selectedWorldId) {
         val selectedWorld = AdventureGateCatalog.worlds.firstOrNull { it.id == selectedWorldId }
@@ -258,7 +260,7 @@ fun AdventureGateScreen(
                                 text = stringResource(R.string.adventure_gate_level_xp, it.level, it.xp, it.xpToNext),
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 11.sp,
-                                color = GateText.copy(alpha = 0.72f)
+                                color = GateText.copy(alpha = 0.78f)
                             )
                         }
                     }
@@ -273,6 +275,11 @@ fun AdventureGateScreen(
                 },
                 actions = {
                         com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
+                    if (mode == AdventureGateScreenMode.ADVENTURE_GATE && routeBattle == null) {
+                        IconButton(onClick = { showJournalDialog = true }) {
+                            Icon(Icons.Default.AutoStories, contentDescription = stringResource(R.string.adventure_story_journal_open))
+                        }
+                    }
                     IconButton(onClick = { showInfoDialog = true }) {
                         Icon(Icons.Default.Info, contentDescription = stringResource(R.string.adventure_gate_info_title))
                     }
@@ -341,7 +348,7 @@ fun AdventureGateScreen(
                             scope.launch {
                                 val snapshot = repository.startNightArenaBattle(id, level.levelIndex)
                                 if (snapshot == null) {
-                                    startBattleBlocked = true
+                                    startBattleBlocked = AdventureGateStartError.NO_HP
                                 }
                             }
                         }
@@ -410,7 +417,7 @@ fun AdventureGateScreen(
                         )
                     },
                     confirmButton = {
-                        TextButton(onClick = { gearInfoDialog = null }) {
+                        TextButton(colors = gateTextButtonColors(), onClick = { gearInfoDialog = null }) {
                             Text(stringResource(R.string.action_ok))
                         }
                     }
@@ -456,28 +463,62 @@ fun AdventureGateScreen(
                         pendingStoryPhase = null
                         if (id != null) {
                             scope.launch {
-                                val snapshot = repository.startBattle(id, phase.worldId, phase.phaseNumber)
-                                if (snapshot == null) {
-                                    startBattleBlocked = true
+                                val started = repository.startBattleResult(id, phase.worldId, phase.phaseNumber)
+                                if (started.snapshot == null) {
+                                    startBattleBlocked = started.error ?: AdventureGateStartError.NO_HP
                                 }
                             }
                         }
                     }
                 )
             }
+            if (mode == AdventureGateScreenMode.ADVENTURE_GATE) {
+                AdventureGateStoryOverlay(
+                    petId = petId,
+                    repository = repository,
+                    selectedWorldId = selectedWorldId,
+                    hubVisible = pet != null && profile != null && battle == null && pendingStoryPhase == null &&
+                        !showLoadoutDialog && !showShopDialog && !showGearClosetDialog && !showInfoDialog,
+                    showJournal = showJournalDialog,
+                    onDismissJournal = { showJournalDialog = false }
+                )
+            }
             if (showInfoDialog) {
                 AdventureGateInfoDialog(onDismiss = { showInfoDialog = false })
             }
-            if (startBattleBlocked) {
+            startBattleBlocked?.let { startError ->
                 AlertDialog(
-                    onDismissRequest = { startBattleBlocked = false },
+                    onDismissRequest = { startBattleBlocked = null },
                     containerColor = GatePanel,
                     titleContentColor = GateAccent,
                     textContentColor = GateText,
-                    title = { Text(stringResource(R.string.adventure_gate_rest_first_title), fontFamily = FontFamily.Monospace) },
-                    text = { Text(stringResource(R.string.adventure_gate_rest_first_body), fontFamily = FontFamily.Monospace) },
+                    title = {
+                        Text(
+                            stringResource(
+                                if (startError == AdventureGateStartError.NO_HP) {
+                                    R.string.adventure_gate_rest_first_title
+                                } else {
+                                    R.string.adventure_gate_start_blocked_title
+                                }
+                            ),
+                            fontFamily = FontFamily.Monospace
+                        )
+                    },
+                    text = {
+                        Text(
+                            stringResource(
+                                when (startError) {
+                                    AdventureGateStartError.NO_HP -> R.string.adventure_gate_rest_first_body
+                                    AdventureGateStartError.BATTLE_ACTIVE -> R.string.adventure_gate_start_blocked_active
+                                    else -> R.string.adventure_gate_start_blocked_locked
+                                }
+                            ),
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.verticalScroll(rememberScrollState())
+                        )
+                    },
                     confirmButton = {
-                        TextButton(onClick = { startBattleBlocked = false }) {
+                        TextButton(colors = gateTextButtonColors(), onClick = { startBattleBlocked = null }) {
                             Text(stringResource(R.string.action_ok))
                         }
                     }
@@ -510,7 +551,7 @@ fun AdventureGateScreen(
                     )
                 },
                 confirmButton = {
-                    TextButton(onClick = {
+                    TextButton(colors = gateTextButtonColors(), onClick = {
                         showRetreatDialog = false
                         scope.launch { repository.abandonBattle(petId, applyRetreatPenalty = true) }
                     }) {
@@ -518,7 +559,7 @@ fun AdventureGateScreen(
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showRetreatDialog = false }) {
+                    TextButton(colors = gateTextButtonColors(), onClick = { showRetreatDialog = false }) {
                         Text(stringResource(R.string.action_cancel))
                     }
                 }
@@ -919,7 +960,7 @@ private fun AdventureGateWorldPortal(
                 } else {
                     stringResource(R.string.adventure_gate_world_locked_short)
                 },
-                color = GateText.copy(alpha = 0.72f),
+                color = GateText.copy(alpha = 0.78f),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 8.sp,
                 maxLines = 1
@@ -1017,7 +1058,7 @@ private fun AdventureGateProfileCard(
 }
 
 @Composable
-private fun AdventureGateLoadoutDialog(
+internal fun AdventureGateLoadoutDialog(
     profile: AdventureGateProfile,
     onDismiss: () -> Unit,
     onSave: (List<String>, List<String>) -> Unit
@@ -1136,12 +1177,12 @@ private fun AdventureGateLoadoutDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSave(selectedAttacks, selectedMagic) }) {
+            TextButton(colors = gateTextButtonColors(), onClick = { onSave(selectedAttacks, selectedMagic) }) {
                 Text(stringResource(R.string.adventure_gate_loadout_save))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(colors = gateTextButtonColors(), onClick = onDismiss) {
                 Text(stringResource(R.string.action_cancel))
             }
         }
@@ -1201,7 +1242,7 @@ private fun AdventureGateShopDialog(
                 )
             },
             confirmButton = {
-                TextButton(onClick = { infoDialog = null }) { Text(stringResource(R.string.action_ok)) }
+                TextButton(colors = gateTextButtonColors(), onClick = { infoDialog = null }) { Text(stringResource(R.string.action_ok)) }
             }
         )
     }
@@ -1233,7 +1274,7 @@ private fun AdventureGateShopDialog(
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
+                TextButton(colors = gateTextButtonColors(), onClick = {
                     confirmation.onConfirm()
                     confirmPurchase = null
                 }) {
@@ -1241,7 +1282,7 @@ private fun AdventureGateShopDialog(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { confirmPurchase = null }) {
+                TextButton(colors = gateTextButtonColors(), onClick = { confirmPurchase = null }) {
                     Text(stringResource(R.string.action_cancel))
                 }
             }
@@ -1450,6 +1491,7 @@ private fun AdventureGateShopDialog(
                     }
                 }
                 TextButton(
+                    colors = gateTextButtonColors(),
                     onClick = onDismiss,
                     modifier = Modifier.align(Alignment.End)
                 ) {
@@ -1489,7 +1531,7 @@ private fun SupplyShopRow(
             )
             Text(
                 text = supplyEffectText(supply),
-                color = GateText.copy(alpha = 0.72f),
+                color = GateText.copy(alpha = 0.78f),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 10.sp,
                 lineHeight = 13.sp,
@@ -1497,7 +1539,7 @@ private fun SupplyShopRow(
             )
             Text(
                 text = stringResource(R.string.adventure_gate_shop_quantity, count),
-                color = GateText.copy(alpha = 0.66f),
+                color = GateText.copy(alpha = 0.78f),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 10.sp
             )
@@ -1543,7 +1585,7 @@ private fun RecipeShopRow(
             )
             Text(
                 text = stringResource(R.string.adventure_gate_recipe_makes, stringResource(supply.nameRes)),
-                color = GateText.copy(alpha = 0.72f),
+                color = GateText.copy(alpha = 0.78f),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 10.sp,
                 lineHeight = 13.sp,
@@ -1587,7 +1629,7 @@ private fun SkillTreeHeader(profile: AdventureGateProfile) {
         )
         Text(
             text = stringResource(R.string.adventure_gate_skill_tree_hint, profile.skillPoints),
-            color = GateText.copy(alpha = 0.72f),
+            color = GateText.copy(alpha = 0.78f),
             fontFamily = FontFamily.Monospace,
             fontSize = 11.sp,
             lineHeight = 15.sp
@@ -1617,7 +1659,7 @@ private fun SkillShopRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = stringResource(skill.nameRes),
-                color = if (locked) GateText.copy(alpha = 0.52f) else GateText,
+                color = if (locked) GateText.copy(alpha = 0.76f) else GateText,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
                 fontSize = 12.sp,
@@ -1626,7 +1668,7 @@ private fun SkillShopRow(
             )
             Text(
                 text = stringResource(skill.descriptionRes),
-                color = GateText.copy(alpha = 0.68f),
+                color = GateText.copy(alpha = 0.78f),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 10.sp,
                 lineHeight = 13.sp,
@@ -1634,6 +1676,7 @@ private fun SkillShopRow(
             )
         }
         TextButton(
+            colors = gateTextButtonColors(),
             onClick = onBuy,
             enabled = canBuy
         ) {
@@ -1687,7 +1730,7 @@ private fun GearShopRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = stringResource(gear.nameRes),
-                color = if (locked) GateText.copy(alpha = 0.48f) else GateText,
+                color = if (locked) GateText.copy(alpha = 0.76f) else GateText,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
                 fontSize = 12.sp,
@@ -1717,11 +1760,11 @@ private fun GearShopRow(
             }
         }
         when {
-            locked -> Text(stringResource(R.string.adventure_gate_shop_locked_world, gear.unlockWorldIndex + 1), color = GateText.copy(alpha = 0.56f), fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+            locked -> Text(stringResource(R.string.adventure_gate_shop_locked_world, gear.unlockWorldIndex + 1), color = GateText.copy(alpha = 0.76f), fontFamily = FontFamily.Monospace, fontSize = 10.sp)
             equipped -> Text(stringResource(R.string.adventure_gate_shop_equipped), color = GateGreen, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
             owned -> Column(horizontalAlignment = Alignment.End) {
                 if (!gear.uniqueDrop) {
-                    TextButton(onClick = onSell) { Text(stringResource(R.string.adventure_gate_shop_sell), fontFamily = FontFamily.Monospace, fontSize = 10.sp) }
+                    TextButton(colors = gateTextButtonColors(), onClick = onSell) { Text(stringResource(R.string.adventure_gate_shop_sell), fontFamily = FontFamily.Monospace, fontSize = 10.sp) }
                 }
             }
             else -> Button(
@@ -1760,7 +1803,7 @@ private fun GearClosetLauncher(
                 Text(stringResource(R.string.adventure_gate_gear_closet), color = GateAccent, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
                 Text(
                     stringResource(R.string.adventure_gate_gear_closet_hint),
-                    color = GateText.copy(alpha = 0.72f),
+                    color = GateText.copy(alpha = 0.78f),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     lineHeight = 15.sp
@@ -1783,12 +1826,12 @@ private fun GearClosetLauncher(
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
             AdventureGateStatChip(stringResource(R.string.adventure_gate_stat_hp), "${profile.currentHp}/${current.maxHp}", GateGreen)
             AdventureGateStatChip(stringResource(R.string.adventure_gate_stat_mana), "${profile.currentMana}/${current.maxMana}", GateBlue)
-            AdventureGateStatChip(stringResource(R.string.adventure_gate_stat_attack), "${current.attack}", GateText.copy(alpha = 0.72f))
-            AdventureGateStatChip(stringResource(R.string.adventure_gate_stat_magic), "${current.magic}", GateText.copy(alpha = 0.72f))
-            AdventureGateStatChip(stringResource(R.string.adventure_gate_stat_defense), "${current.defense}", GateText.copy(alpha = 0.72f))
-            AdventureGateStatChip(stringResource(R.string.adventure_gate_stat_speed), "${current.speed}", GateText.copy(alpha = 0.72f))
-            AdventureGateStatChip(stringResource(R.string.adventure_gate_stat_accuracy), "${current.accuracy}", GateText.copy(alpha = 0.72f))
-            AdventureGateStatChip(stringResource(R.string.adventure_gate_stat_evasion), "${current.evasion}", GateText.copy(alpha = 0.72f))
+            AdventureGateStatChip(stringResource(R.string.adventure_gate_stat_attack), "${current.attack}", GateText.copy(alpha = 0.78f))
+            AdventureGateStatChip(stringResource(R.string.adventure_gate_stat_magic), "${current.magic}", GateText.copy(alpha = 0.78f))
+            AdventureGateStatChip(stringResource(R.string.adventure_gate_stat_defense), "${current.defense}", GateText.copy(alpha = 0.78f))
+            AdventureGateStatChip(stringResource(R.string.adventure_gate_stat_speed), "${current.speed}", GateText.copy(alpha = 0.78f))
+            AdventureGateStatChip(stringResource(R.string.adventure_gate_stat_accuracy), "${current.accuracy}", GateText.copy(alpha = 0.78f))
+            AdventureGateStatChip(stringResource(R.string.adventure_gate_stat_evasion), "${current.evasion}", GateText.copy(alpha = 0.78f))
         }
     }
 }
@@ -1857,7 +1900,7 @@ private fun GearClosetDialog(
                         )
                         Text(
                             stringResource(R.string.adventure_gate_gear_closet_subtitle),
-                            color = GateText.copy(alpha = 0.72f),
+                            color = GateText.copy(alpha = 0.78f),
                             fontFamily = FontFamily.Monospace,
                             fontSize = 11.sp,
                             maxLines = 2,
@@ -1935,7 +1978,7 @@ private fun GearClosetDialog(
                             ) {
                                 Text(
                                     stringResource(R.string.adventure_gate_gear_no_owned_slot),
-                                    color = GateText.copy(alpha = 0.72f),
+                                    color = GateText.copy(alpha = 0.78f),
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 12.sp
                                 )
@@ -1980,6 +2023,7 @@ private fun GearClosetDialog(
                         Text(stringResource(R.string.adventure_gate_shop_unequip), fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1)
                     }
                     TextButton(
+                        colors = gateTextButtonColors(),
                         onClick = { previewGearId = currentSlotGearId },
                         modifier = Modifier.weight(1f),
                         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp)
@@ -2011,7 +2055,7 @@ private fun GearClosetPetPanel(
             .clip(RoundedCornerShape(18.dp))
             .background(
                 Brush.verticalGradient(
-                    listOf(GateDark.copy(alpha = 0.92f), GateDark.copy(alpha = 0.62f))
+                    listOf(GateDark.copy(alpha = 0.92f), GateDark.copy(alpha = 0.76f))
                 )
             )
             .border(1.dp, GateAccent.copy(alpha = 0.28f), RoundedCornerShape(18.dp))
@@ -2119,7 +2163,7 @@ private fun GearClosetSlotSocket(
                     .background(GateText.copy(alpha = 0.08f)),
                 contentAlignment = Alignment.Center
             ) {
-                Text("-", color = GateText.copy(alpha = 0.58f), fontFamily = FontFamily.Monospace, fontSize = 16.sp)
+                Text("-", color = GateText.copy(alpha = 0.76f), fontFamily = FontFamily.Monospace, fontSize = 16.sp)
             }
         }
         Text(
@@ -2133,7 +2177,7 @@ private fun GearClosetSlotSocket(
         )
         Text(
             gear?.let { stringResource(it.nameRes) } ?: "-",
-            color = GateText.copy(alpha = 0.68f),
+            color = GateText.copy(alpha = 0.78f),
             fontFamily = FontFamily.Monospace,
             fontSize = 9.sp,
             maxLines = 1,
@@ -2154,7 +2198,7 @@ private fun GearClosetStatsPanel(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(GateDark.copy(alpha = 0.62f))
+            .background(GateDark.copy(alpha = 0.76f))
             .border(1.dp, GateBlue.copy(alpha = 0.28f), RoundedCornerShape(12.dp))
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -2224,7 +2268,7 @@ private fun GearClosetOwnedRow(
             )
             Text(
                 text = gearBonusShort(gear),
-                color = GateText.copy(alpha = 0.72f),
+                color = GateText.copy(alpha = 0.78f),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 10.sp,
                 maxLines = 1,
@@ -2265,7 +2309,7 @@ private fun GearSlotChip(labelRes: Int, gearId: String?) {
     AdventureGateStatChip(
         label = stringResource(labelRes),
         value = gearId?.let(AdventureGateCatalog::equipment)?.let { stringResource(it.nameRes) } ?: "-",
-        color = if (gearId == null) GateText.copy(alpha = 0.54f) else GateBlue
+        color = if (gearId == null) GateText.copy(alpha = 0.76f) else GateBlue
     )
 }
 
@@ -2275,7 +2319,7 @@ private fun StatDeltaTile(labelRes: Int, current: Int, preview: Int, modifier: M
     val color = when {
         delta > 0 -> GateGreen
         delta < 0 -> GateDanger
-        else -> GateText.copy(alpha = 0.72f)
+        else -> GateText.copy(alpha = 0.78f)
     }
     Column(
         modifier = modifier
@@ -2287,7 +2331,7 @@ private fun StatDeltaTile(labelRes: Int, current: Int, preview: Int, modifier: M
     ) {
         Text(
             stringResource(labelRes),
-            color = GateText.copy(alpha = 0.62f),
+            color = GateText.copy(alpha = 0.76f),
             fontFamily = FontFamily.Monospace,
             fontSize = 9.sp,
             maxLines = 1,
@@ -2400,13 +2444,14 @@ private fun SkillLoadoutTreeRow(
         Checkbox(
             checked = checked,
             onCheckedChange = { if (enabled || checked) onToggle() },
-            enabled = (enabled || checked) && !alwaysEquipped
+            enabled = (enabled || checked) && !alwaysEquipped,
+            colors = gateCheckboxColors()
         )
         SkillIcon(skill, modifier = Modifier.size(24.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = stringResource(skill.nameRes),
-                color = if (!learned || !purchased) GateText.copy(alpha = 0.58f) else GateText,
+                color = if (!learned || !purchased) GateText.copy(alpha = 0.76f) else GateText,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
                 fontSize = 12.sp,
@@ -2415,7 +2460,7 @@ private fun SkillLoadoutTreeRow(
             )
             Text(
                 text = stringResource(skill.descriptionRes),
-                color = GateText.copy(alpha = if (!learned || !purchased) 0.44f else 0.72f),
+                color = GateText.copy(alpha = if (!learned || !purchased) 0.76f else 0.8f),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 10.sp,
                 lineHeight = 14.sp,
@@ -2435,7 +2480,7 @@ private fun SkillLoadoutTreeRow(
             },
             color = when {
                 checked || alwaysEquipped -> GateAccent
-                !learned || !purchased || slotFull -> GateText.copy(alpha = 0.52f)
+                !learned || !purchased || slotFull -> GateText.copy(alpha = 0.76f)
                 skill.manaCost > 0 -> GateBlue
                 else -> GateAccent
             },
@@ -2481,7 +2526,7 @@ private fun AdventureGateWorldCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = TamaDialogTextCatalog.localizedResource(context, world.nameRes),
-                        color = if (isUnlocked) GateAccent else GateText.copy(alpha = 0.45f),
+                        color = if (isUnlocked) GateAccent else GateText.copy(alpha = 0.76f),
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
@@ -2617,6 +2662,7 @@ private fun AdventureGateBattleView(
     onCloseBattle: () -> Unit
 ) {
     val context = LocalContext.current
+    val notice = rememberTamaNotice()
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
@@ -2835,95 +2881,22 @@ private fun AdventureGateBattleView(
             )
         }
         item {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 310.dp, max = 360.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(Color(0xFF241830))
-            ) {
-                AsyncImage(
-                    model = "file:///android_asset/${phase.backgroundAssetPath}",
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                    filterQuality = FilterQuality.None
-                )
-                Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.20f)))
-                BattleWaveChip(
-                    currentWave = viewBattle.waveIndex + 1,
-                    totalWaves = phase.waveMonsterIds.size,
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(10.dp)
-                )
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .padding(start = 10.dp, end = 10.dp, bottom = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Bottom
-                ) {
-                    Column(
-                        modifier = Modifier.width(ArenaCombatantCardWidth),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        viewBattle.minion?.takeIf { it.isAlive }?.let { minion ->
-                            SkeletonHelperCard(
-                                combatant = minion,
-                                selected = selectedTargetId == minion.instanceId,
-                                active = activeActorId == minion.instanceId,
-                                damagePopup = damagePopups.lastOrNull { it.targetInstanceId == minion.instanceId },
-                                onSelect = {
-                                    if (!locked) selectedTargetId = minion.instanceId
-                                },
-                                onInspect = { inspectedMinion = true }
-                            )
-                        }
-                        ArenaPetCard(
-                            pet = pet,
-                            combatant = viewBattle.pet,
-                            active = activeActorId == viewBattle.pet.instanceId,
-                            damagePopup = damagePopups.lastOrNull { it.targetInstanceId == viewBattle.pet.instanceId },
-                            onInspect = { inspectedPet = true }
-                        )
-                    }
-                    EnemyGridLayout(
-                        enemies = viewBattle.enemies,
-                        selectedTargetId = selectedTargetId,
-                        activeActorId = activeActorId,
-                        damagePopups = damagePopups,
-                        modifier = Modifier,
-                        onSelect = { enemy ->
-                            if (enemy.isAlive && !locked) selectedTargetId = enemy.instanceId
-                        },
-                        onInspect = { inspectedEnemy = it }
-                    )
-                }
-                activeEffectSkillId?.let { skillId ->
-                    AsyncImage(
-                        model = "file:///android_asset/${AdventureGateCatalog.effectFrameAssetPath(skillId, activeEffectFrame)}",
-                        contentDescription = null,
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .size(124.dp),
-                        contentScale = ContentScale.Fit,
-                        filterQuality = FilterQuality.None
-                    )
-                }
-                if (viewBattle.isCompleted) {
-                    BattleRewardOverlay(
-                        battle = viewBattle,
-                        phase = phase,
-                        onClaim = onCloseBattle,
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .padding(16.dp)
-                    )
-                }
-            }
+            BattleArena(
+                battle = viewBattle,
+                phase = phase,
+                pet = pet,
+                selectedTargetId = selectedTargetId,
+                activeActorId = activeActorId,
+                damagePopups = damagePopups,
+                activeEffectSkillId = activeEffectSkillId,
+                activeEffectFrame = activeEffectFrame,
+                onSelectMinion = { id -> if (!locked) selectedTargetId = id },
+                onSelectEnemy = { enemy -> if (enemy.isAlive && !locked) selectedTargetId = enemy.instanceId },
+                onInspectMinion = { inspectedMinion = true },
+                onInspectPet = { inspectedPet = true },
+                onInspectEnemy = { inspectedEnemy = it },
+                onClaim = onCloseBattle
+            )
         }
         item {
             StatusPanel(viewBattle)
@@ -3001,7 +2974,7 @@ private fun AdventureGateBattleView(
                             playBattleEvents(actionResult.events, actionResult.snapshot)
                             displayedBattle = actionResult.snapshot
                         } else if (itemResult.error != null) {
-                            Toast.makeText(context, potionUseErrorMessage(context, itemResult.error), Toast.LENGTH_SHORT).show()
+                            notice.show(potionUseErrorMessage(context, itemResult.error), isError = true)
                         }
                         delay(220)
                         locked = false
@@ -3070,7 +3043,7 @@ private fun AdventureGateBattleView(
                     }
                 },
                 confirmButton = {
-                    TextButton(onClick = { battleInfoDialog = null }) { Text(stringResource(R.string.action_ok)) }
+                    TextButton(colors = gateTextButtonColors(), onClick = { battleInfoDialog = null }) { Text(stringResource(R.string.action_ok)) }
                 }
             )
         }
@@ -3079,346 +3052,6 @@ private fun AdventureGateBattleView(
                 profile = profile,
                 skill = skill,
                 onDismiss = { skillInfoDialog = null }
-            )
-        }
-    }
-}
-
-@Composable
-private fun BattleWaveChip(
-    currentWave: Int,
-    totalWaves: Int,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        modifier = modifier,
-        color = GatePanel.copy(alpha = 0.86f),
-        contentColor = GateAccent,
-        shape = RoundedCornerShape(999.dp),
-        border = BorderStroke(1.dp, GateAccent.copy(alpha = 0.62f))
-    ) {
-        Text(
-            text = stringResource(
-                R.string.adventure_gate_wave_count,
-                currentWave.coerceAtLeast(1),
-                totalWaves.coerceAtLeast(1)
-            ),
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Bold,
-            fontSize = 11.sp,
-            maxLines = 1
-        )
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun ArenaPetCard(
-    pet: com.example.llamadroid.tama.data.TamaPet,
-    combatant: AdventureGateCombatantState,
-    active: Boolean,
-    damagePopup: DamagePopup?,
-    modifier: Modifier = Modifier,
-    onInspect: () -> Unit
-) {
-    Box(modifier = modifier) {
-        Column(
-            modifier = Modifier
-                .width(ArenaCombatantCardWidth)
-                .clip(RoundedCornerShape(12.dp))
-                .background(if (active) GateGreen.copy(alpha = 0.24f) else Color.Black.copy(alpha = 0.38f))
-                .border(1.dp, if (active) GateGreen else GateAccent.copy(alpha = 0.38f), RoundedCornerShape(12.dp))
-                .combinedClickable(onClick = {}, onLongClick = onInspect)
-                .padding(4.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            TamaPetSprite(pet = pet, size = 62.dp)
-            Text(
-                text = pet.name,
-                color = GateText,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 9.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                combatant.statuses.take(4).forEach { status ->
-                    StatusIcon(status.id, modifier = Modifier.size(12.dp))
-                }
-            }
-            CompactArenaBar(
-                label = stringResource(R.string.adventure_gate_stat_hp),
-                current = combatant.hp,
-                max = combatant.maxHp,
-                color = GateGreen
-            )
-            CompactArenaBar(
-                label = stringResource(R.string.adventure_gate_stat_mana),
-                current = combatant.mana,
-                max = combatant.maxMana,
-                color = GateBlue
-            )
-        }
-        damagePopup?.let {
-            Text(
-                text = it.label ?: if (it.healing) "+${it.amount}" else "-${it.amount}",
-                color = it.color,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold,
-                fontSize = 16.sp,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .offset(y = (-18).dp)
-                    .background(Color.Black.copy(alpha = 0.42f), RoundedCornerShape(999.dp))
-                    .padding(horizontal = 7.dp, vertical = 2.dp)
-            )
-        }
-    }
-}
-
-@Composable
-private fun CompactArenaBar(
-    label: String,
-    current: Int,
-    max: Int,
-    color: Color
-) {
-    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(label, color = GateText.copy(alpha = 0.82f), fontFamily = FontFamily.Monospace, fontSize = 8.sp, maxLines = 1)
-            Text("${current.coerceAtLeast(0)}/${max.coerceAtLeast(1)}", color = GateText.copy(alpha = 0.82f), fontFamily = FontFamily.Monospace, fontSize = 8.sp, maxLines = 1)
-        }
-        LinearProgressIndicator(
-            progress = { current.coerceAtLeast(0).toFloat() / max.coerceAtLeast(1).toFloat() },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(5.dp)
-                .clip(RoundedCornerShape(999.dp)),
-            color = color,
-            trackColor = Color.Black.copy(alpha = 0.45f)
-        )
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun SkeletonHelperCard(
-    combatant: AdventureGateCombatantState,
-    selected: Boolean,
-    active: Boolean,
-    damagePopup: DamagePopup?,
-    modifier: Modifier = Modifier,
-    onSelect: () -> Unit,
-    onInspect: () -> Unit
-) {
-    Box(modifier = modifier) {
-        Column(
-            modifier = Modifier
-                .width(ArenaCombatantCardWidth)
-                .clip(RoundedCornerShape(10.dp))
-                .background(
-                    when {
-                        active -> GateGreen.copy(alpha = 0.26f)
-                        selected -> GateBlue.copy(alpha = 0.26f)
-                        else -> Color.Black.copy(alpha = 0.24f)
-                    }
-                )
-                .border(1.dp, when {
-                    active -> GateGreen
-                    selected -> GateBlue
-                    else -> GateBlue.copy(alpha = 0.35f)
-                }, RoundedCornerShape(10.dp))
-                .combinedClickable(onClick = onSelect, onLongClick = onInspect)
-                .padding(4.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(3.dp)
-        ) {
-            AsyncImage(
-                model = "file:///android_asset/tama/adventure_gate/allies/skeleton_helper/idle_0.png",
-                contentDescription = stringResource(R.string.adventure_gate_skill_skeleton_helper),
-                modifier = Modifier.size(46.dp),
-                contentScale = ContentScale.Fit,
-                filterQuality = FilterQuality.None
-            )
-            Text(
-                text = stringResource(R.string.adventure_gate_skeleton_helper_short),
-                color = GateText,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 8.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                combatant.statuses.take(3).forEach { status ->
-                    StatusIcon(status.id, modifier = Modifier.size(12.dp))
-                }
-            }
-            CompactArenaBar(
-                label = stringResource(R.string.adventure_gate_stat_hp),
-                current = combatant.hp,
-                max = combatant.maxHp,
-                color = GateBlue
-            )
-        }
-        damagePopup?.let {
-            Text(
-                text = it.label ?: if (it.healing) "+${it.amount}" else "-${it.amount}",
-                color = it.color,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold,
-                fontSize = 16.sp,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .offset(y = (-18).dp)
-                    .background(Color.Black.copy(alpha = 0.42f), RoundedCornerShape(999.dp))
-                    .padding(horizontal = 7.dp, vertical = 2.dp)
-            )
-        }
-    }
-}
-
-@Composable
-private fun EnemyGridLayout(
-    enemies: List<AdventureGateCombatantState>,
-    selectedTargetId: String?,
-    activeActorId: String?,
-    damagePopups: List<DamagePopup>,
-    modifier: Modifier,
-    onSelect: (AdventureGateCombatantState) -> Unit,
-    onInspect: (AdventureGateCombatantState) -> Unit
-) {
-    val visibleEnemies = enemies.take(AdventureGateCatalog.MAX_ENEMIES_PER_WAVE)
-    val columns = if (visibleEnemies.size <= 2) {
-        listOf(visibleEnemies)
-    } else {
-        visibleEnemies.chunked(2)
-    }
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.Bottom
-    ) {
-        columns.forEach { columnEnemies ->
-            Column(
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                columnEnemies.forEach { enemy ->
-                    EnemySprite(
-                        enemy = enemy,
-                        selected = selectedTargetId == enemy.instanceId,
-                        active = activeActorId == enemy.instanceId,
-                        damagePopup = damagePopups.lastOrNull { it.targetInstanceId == enemy.instanceId },
-                        onClick = { onSelect(enemy) },
-                        onInspect = { onInspect(enemy) }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun EnemySprite(
-    enemy: AdventureGateCombatantState,
-    selected: Boolean,
-    active: Boolean,
-    damagePopup: DamagePopup?,
-    onClick: () -> Unit,
-    onInspect: () -> Unit
-) {
-    val monster = AdventureGateCatalog.monster(enemy.definitionId)
-    var motionPulse by remember(enemy.instanceId) { mutableStateOf(false) }
-    LaunchedEffect(enemy.instanceId, enemy.isAlive) {
-        while (enemy.isAlive) {
-            delay(620)
-            motionPulse = !motionPulse
-        }
-    }
-    val yOffset = if (enemy.isAlive && motionPulse) (-3).dp else 0.dp
-    val scale = if (enemy.boss && enemy.enraged) 1.08f else if (enemy.isAlive && motionPulse) 1.03f else 1f
-    val spriteAlpha = if (enemy.isAlive) 1f else 0.42f
-    Box {
-        Column(
-            modifier = Modifier
-                .width(ArenaCombatantCardWidth)
-                .clip(RoundedCornerShape(10.dp))
-                .background(
-                    when {
-                        active -> GateGreen.copy(alpha = 0.28f)
-                        selected -> GateAccent.copy(alpha = 0.24f)
-                        else -> Color.Black.copy(alpha = 0.18f)
-                    }
-                )
-                .border(1.dp, when {
-                    active -> GateGreen
-                    selected -> GateAccent
-                    else -> Color.Transparent
-                }, RoundedCornerShape(10.dp))
-                .combinedClickable(enabled = true, onClick = onClick, onLongClick = onInspect)
-                .padding(4.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            AsyncImage(
-                model = "file:///android_asset/${monster.assetBasePath}/idle_0.png",
-                contentDescription = stringResource(monster.nameRes),
-                modifier = Modifier
-                    .size(58.dp)
-                    .offset(y = yOffset)
-                    .graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                        alpha = spriteAlpha
-                        shadowElevation = if (enemy.boss && enemy.enraged) 10f else 0f
-                    },
-                contentScale = ContentScale.Fit,
-                filterQuality = FilterQuality.None
-            )
-            Text(
-                text = stringResource(monster.nameRes),
-                color = if (enemy.isAlive) GateText else GateText.copy(alpha = 0.35f),
-                fontFamily = FontFamily.Monospace,
-                fontSize = 9.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                enemy.statuses.take(4).forEach { status ->
-                    StatusIcon(status.id, modifier = Modifier.size(14.dp))
-                }
-            }
-            HpBar(current = enemy.hp, max = enemy.maxHp, color = if (enemy.boss) GateDanger else GateGreen)
-        }
-        Text(
-            text = stringResource(R.string.adventure_gate_enemy_level_short, enemy.level),
-            color = GateDark,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Bold,
-            fontSize = 8.sp,
-            maxLines = 1,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(3.dp)
-                .background(GateAccent.copy(alpha = 0.92f), RoundedCornerShape(999.dp))
-                .padding(horizontal = 4.dp, vertical = 1.dp)
-        )
-        damagePopup?.let {
-            Text(
-                text = it.label ?: if (it.healing) "+${it.amount}" else "-${it.amount}",
-                color = it.color,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold,
-                fontSize = 16.sp,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .offset(y = (-18).dp)
-                    .background(Color.Black.copy(alpha = 0.42f), RoundedCornerShape(999.dp))
-                    .padding(horizontal = 7.dp, vertical = 2.dp)
             )
         }
     }
@@ -3551,6 +3184,7 @@ private fun SkillActionDock(
                     fontSize = 12.sp
                 )
                 TextButton(
+                    colors = gateTextButtonColors(),
                     onClick = onToggleExpanded,
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                 ) {
@@ -3598,7 +3232,7 @@ private fun SkillActionDock(
                             battle.guardUses,
                             AdventureGateCatalog.BATTLE_GUARD_LIMIT
                         ),
-                        color = GateText.copy(alpha = 0.62f),
+                        color = GateText.copy(alpha = 0.76f),
                         fontFamily = FontFamily.Monospace,
                         fontSize = 9.sp,
                         maxLines = 1
@@ -3758,7 +3392,7 @@ private fun BattleItemDialog(
                 Text(stringResource(R.string.adventure_gate_items_title), fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
                 Text(
                     stringResource(R.string.adventure_gate_items_limit, battle.potionsUsed, AdventureGateCatalog.BATTLE_POTION_LIMIT),
-                    color = GateText.copy(alpha = 0.72f),
+                    color = GateText.copy(alpha = 0.78f),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 12.sp
                 )
@@ -3784,7 +3418,7 @@ private fun BattleItemDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(colors = gateTextButtonColors(), onClick = onDismiss) {
                 Text(stringResource(R.string.action_cancel))
             }
         }
@@ -3820,7 +3454,7 @@ private fun SupplyBattleRow(
             )
             Text(
                 text = supplyEffectText(supply) + " " + stringResource(R.string.adventure_gate_shop_quantity, count),
-                color = GateText.copy(alpha = 0.72f),
+                color = GateText.copy(alpha = 0.78f),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 10.sp,
                 maxLines = 1
@@ -3856,7 +3490,7 @@ private fun BattleLogPanel(log: List<AdventureGateBattleLogEntry>) {
 }
 
 @Composable
-private fun BattleRewardOverlay(
+internal fun BattleRewardOverlay(
     battle: AdventureGateBattleSnapshot,
     phase: AdventureGatePhaseDefinition,
     onClaim: () -> Unit,
@@ -3908,6 +3542,7 @@ private fun BattleRewardOverlay(
                     fontFamily = FontFamily.Monospace,
                     textAlign = TextAlign.Center
                 )
+                LumoBattleEndLine(victory = battle.isVictory, worldId = phase.worldId, phase = phase.phaseNumber)
                 if (battle.isVictory) {
                     Row(
                         modifier = Modifier.horizontalScroll(rememberScrollState()),
@@ -3978,7 +3613,7 @@ private fun AdventureGateStatChip(label: String, value: String, color: Color) {
 }
 
 @Composable
-private fun HpBar(current: Int, max: Int, color: Color) {
+internal fun HpBar(current: Int, max: Int, color: Color) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         LinearProgressIndicator(
             progress = { current.toFloat() / max.coerceAtLeast(1).toFloat() },
@@ -4067,20 +3702,30 @@ private fun PhaseStoryDialog(
             ) {
                 item {
                     Text(
-                        text = TamaDialogTextCatalog.localizedResource(context, phase.storyRes),
+                        text = phase.storyRes.takeIf { it != 0 }
+                            ?.let { runCatching { TamaDialogTextCatalog.localizedResource(context, it) }.getOrNull() }
+                            .orEmpty(),
                         fontFamily = FontFamily.Monospace,
                         lineHeight = 19.sp
                     )
                 }
+                item {
+                    PhaseModifierBlock(
+                        battleModifier = phase.modifier,
+                        nightArena = phase.worldId == AdventureGateCatalog.NIGHT_ARENA_WORLD_ID,
+                        colors = GateCombatColors
+                    )
+                }
+                item { LumoBeforeBattleLine(worldId = phase.worldId, phase = phase.phaseNumber) }
             }
         },
         confirmButton = {
-            TextButton(onClick = onStart) {
+            TextButton(colors = gateTextButtonColors(), onClick = onStart) {
                 Text(stringResource(R.string.adventure_gate_start_phase))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(colors = gateTextButtonColors(), onClick = onDismiss) {
                 Text(stringResource(R.string.action_cancel))
             }
         }
@@ -4125,7 +3770,7 @@ private fun AdventureGateInfoDialog(onDismiss: () -> Unit) {
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(colors = gateTextButtonColors(), onClick = onDismiss) {
                 Text(stringResource(R.string.action_ok))
             }
         }
@@ -4240,7 +3885,7 @@ private fun MonsterInspectDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(colors = gateTextButtonColors(), onClick = onDismiss) {
                 Text(stringResource(R.string.action_ok))
             }
         }
@@ -4253,11 +3898,11 @@ private fun HelperInspectDialog(
     battle: AdventureGateBattleSnapshot,
     onDismiss: () -> Unit
 ) {
-    val context = LocalContext.current
     val usedActions = battle.log
         .filter { it.actorInstanceId == combatant.instanceId && it.skillNameRes != null }
         .distinctBy { it.skillId ?: it.skillNameRes }
-        .mapNotNull { it.skillNameRes?.let(context::getString) }
+        .mapNotNull { it.skillNameRes }
+        .map { stringResource(it) }
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = GatePanel,
@@ -4321,7 +3966,7 @@ private fun HelperInspectDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(colors = gateTextButtonColors(), onClick = onDismiss) {
                 Text(stringResource(R.string.action_ok))
             }
         }
@@ -4419,7 +4064,7 @@ private fun PetInspectDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(colors = gateTextButtonColors(), onClick = onDismiss) {
                 Text(stringResource(R.string.action_ok))
             }
         }
@@ -4439,7 +4084,7 @@ private fun ActiveStatusEffectsSection(statuses: List<AdventureGateStatusEffect>
         if (statuses.isEmpty()) {
             Text(
                 stringResource(R.string.adventure_gate_status_none),
-                color = GateText.copy(alpha = 0.72f),
+                color = GateText.copy(alpha = 0.78f),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 11.sp,
                 lineHeight = 15.sp
@@ -4483,7 +4128,7 @@ private fun ActiveStatusEffectCard(status: AdventureGateStatusEffect) {
                     )
                     Text(
                         text = definition?.let { stringResource(it.descriptionRes) }.orEmpty(),
-                        color = GateText.copy(alpha = 0.72f),
+                        color = GateText.copy(alpha = 0.78f),
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp,
                         lineHeight = 14.sp
@@ -4605,7 +4250,7 @@ private fun skillPathNameRes(path: AdventureGateSkillTreePath): Int = when (path
 }
 
 @Composable
-private fun StatusIcon(statusId: String, modifier: Modifier = Modifier) {
+internal fun StatusIcon(statusId: String, modifier: Modifier = Modifier) {
     val status = remember(statusId) { runCatching { AdventureGateCatalog.status(statusId) }.getOrNull() }
     if (status != null) {
         AsyncImage(
@@ -4791,7 +4436,7 @@ private fun SkillInfoDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(colors = gateTextButtonColors(), onClick = onDismiss) {
                 Text(stringResource(R.string.action_ok))
             }
         }
@@ -4994,11 +4639,18 @@ private fun furthestUnlockedAdventureGateWorld(
     AdventureGateCatalog.worlds.lastOrNull { isWorldUnlocked(it, progressRows) }
         ?: AdventureGateCatalog.worlds.first()
 
+/** Recovers a skill/attack name from its stable id when an older save lost the string reference. */
+private fun skillNameResForId(id: String): Int? =
+    AdventureGateCatalog.skills.firstOrNull { it.id == id }?.nameRes
+        ?: AdventureGateCatalog.enemyActions.firstOrNull { it.id == id }?.nameRes
+
 @Composable
 private fun formatLogEntry(entry: AdventureGateBattleLogEntry): String {
     val context = LocalContext.current
     val resources = LocalResources.current
-    fun name(res: Int?) = res?.let { resources.getString(it) }.orEmpty()
+    fun name(res: Int?) = res?.let { runCatching { resources.getString(it) }.getOrNull() }.orEmpty()
+    fun skillName(entry: AdventureGateBattleLogEntry): String =
+        name(entry.skillNameRes ?: entry.skillId?.let(::skillNameResForId))
     fun element(element: AdventureGateElement?) = element?.let {
         resources.getString(
             when (it) {
@@ -5020,11 +4672,11 @@ private fun formatLogEntry(entry: AdventureGateBattleLogEntry): String {
     }.orEmpty()
     return when (entry.messageKey) {
         AdventureGateLogMessage.BATTLE_STARTED -> resources.getString(R.string.adventure_gate_log_battle_started)
-        AdventureGateLogMessage.PET_USED_SKILL -> resources.getString(R.string.adventure_gate_log_pet_used_skill, name(entry.skillNameRes), name(entry.targetNameRes), entry.amount)
-        AdventureGateLogMessage.PET_SUMMONED -> resources.getString(R.string.adventure_gate_log_pet_summoned, name(entry.skillNameRes))
+        AdventureGateLogMessage.PET_USED_SKILL -> resources.getString(R.string.adventure_gate_log_pet_used_skill, skillName(entry), name(entry.targetNameRes), entry.amount)
+        AdventureGateLogMessage.PET_SUMMONED -> resources.getString(R.string.adventure_gate_log_pet_summoned, skillName(entry))
         AdventureGateLogMessage.PET_GUARDED -> resources.getString(R.string.adventure_gate_log_pet_guarded)
         AdventureGateLogMessage.MANA_SHELL_RECOIL -> resources.getString(R.string.adventure_gate_log_mana_shell_recoil, entry.amount)
-        AdventureGateLogMessage.PET_HEALED -> resources.getString(R.string.adventure_gate_log_pet_healed, name(entry.skillNameRes), entry.amount)
+        AdventureGateLogMessage.PET_HEALED -> resources.getString(R.string.adventure_gate_log_pet_healed, skillName(entry), entry.amount)
         AdventureGateLogMessage.ENEMY_USED_ATTACK -> resources.getString(R.string.adventure_gate_log_enemy_attack, name(entry.actorNameRes), entry.amount)
         AdventureGateLogMessage.MISSED -> resources.getString(R.string.adventure_gate_log_missed)
         AdventureGateLogMessage.WEAK_HIT -> resources.getString(R.string.adventure_gate_log_weak_hit, element(entry.element), name(entry.targetNameRes))
@@ -5035,9 +4687,9 @@ private fun formatLogEntry(entry: AdventureGateBattleLogEntry): String {
         AdventureGateLogMessage.VICTORY -> resources.getString(R.string.adventure_gate_log_victory, entry.amount)
         AdventureGateLogMessage.DEFEAT -> resources.getString(R.string.adventure_gate_log_defeat)
         AdventureGateLogMessage.LEVEL_UP -> resources.getString(R.string.adventure_gate_log_level_up, entry.amount)
-        AdventureGateLogMessage.SKILL_UNLOCKED -> resources.getString(R.string.adventure_gate_log_skill_unlocked, name(entry.skillNameRes))
-        AdventureGateLogMessage.NOT_ENOUGH_MANA -> resources.getString(R.string.adventure_gate_log_not_enough_mana, name(entry.skillNameRes), entry.amount)
-        AdventureGateLogMessage.SKILL_ON_COOLDOWN -> resources.getString(R.string.adventure_gate_log_skill_on_cooldown, name(entry.skillNameRes), entry.amount)
+        AdventureGateLogMessage.SKILL_UNLOCKED -> resources.getString(R.string.adventure_gate_log_skill_unlocked, skillName(entry))
+        AdventureGateLogMessage.NOT_ENOUGH_MANA -> resources.getString(R.string.adventure_gate_log_not_enough_mana, skillName(entry), entry.amount)
+        AdventureGateLogMessage.SKILL_ON_COOLDOWN -> resources.getString(R.string.adventure_gate_log_skill_on_cooldown, skillName(entry), entry.amount)
         AdventureGateLogMessage.GUARD_LIMIT_REACHED -> resources.getString(R.string.adventure_gate_log_guard_limit, entry.amount)
         AdventureGateLogMessage.PET_USED_ITEM -> resources.getString(
             R.string.adventure_gate_log_pet_used_item,
@@ -5061,5 +4713,12 @@ private fun formatLogEntry(entry: AdventureGateBattleLogEntry): String {
         )
         AdventureGateLogMessage.STATUS_DAMAGE -> resources.getString(R.string.adventure_gate_log_status_damage, name(entry.targetNameRes), entry.amount)
         AdventureGateLogMessage.STATUS_SKIP -> resources.getString(R.string.adventure_gate_log_status_skip, name(entry.actorNameRes))
+        AdventureGateLogMessage.THORNS_REFLECTED,
+        AdventureGateLogMessage.ENEMY_HEALED,
+        AdventureGateLogMessage.ENEMY_GUARDED,
+        AdventureGateLogMessage.BOSS_ENRAGED,
+        AdventureGateLogMessage.CRITICAL_HIT,
+        AdventureGateLogMessage.MODIFIER_TICK,
+        AdventureGateLogMessage.YAWNED -> gateCombatLogText(resources, entry)
     }
 }

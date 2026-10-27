@@ -315,12 +315,13 @@ class DatasetForegroundService : Service(), DatasetProcessor.RuntimeHooks {
             return
         }
         activeProjectId = job.projectId
-        ensureForegroundStarted(
-            status = getString(R.string.dataset_runtime_notification_title),
-            projectId = job.projectId,
-            startSource = "enqueue",
-            requestedAction = ACTION_ENQUEUE
-        )
+        if (!ensureForegroundStarted(
+                status = getString(R.string.dataset_runtime_notification_title),
+                projectId = job.projectId,
+                startSource = "enqueue",
+                requestedAction = ACTION_ENQUEUE
+            )
+        ) return
         DatasetProcessor.queueJob(job)
         serviceScope.launch {
             persistRecoverableRuntime()
@@ -334,12 +335,13 @@ class DatasetForegroundService : Service(), DatasetProcessor.RuntimeHooks {
             return
         }
         activeProjectId = jobs.first().projectId
-        ensureForegroundStarted(
-            status = getString(R.string.dataset_runtime_notification_title),
-            projectId = jobs.first().projectId,
-            startSource = "enqueue_batch",
-            requestedAction = ACTION_ENQUEUE_BATCH
-        )
+        if (!ensureForegroundStarted(
+                status = getString(R.string.dataset_runtime_notification_title),
+                projectId = jobs.first().projectId,
+                startSource = "enqueue_batch",
+                requestedAction = ACTION_ENQUEUE_BATCH
+            )
+        ) return
         DatasetProcessor.queueJobs(jobs)
         serviceScope.launch {
             persistRecoverableRuntime()
@@ -402,12 +404,13 @@ class DatasetForegroundService : Service(), DatasetProcessor.RuntimeHooks {
     }
 
     private fun handleRequestResume() {
-        ensureForegroundStarted(
-            status = getString(R.string.dataset_runtime_recovering),
-            projectId = activeProjectId,
-            startSource = "resume_cold",
-            requestedAction = ACTION_REQUEST_RESUME
-        )
+        if (!ensureForegroundStarted(
+                status = getString(R.string.dataset_runtime_recovering),
+                projectId = activeProjectId,
+                startSource = "resume_cold",
+                requestedAction = ACTION_REQUEST_RESUME
+            )
+        ) return
         serviceScope.launch {
             recoverPersistedRuntime()
         }
@@ -527,8 +530,8 @@ class DatasetForegroundService : Service(), DatasetProcessor.RuntimeHooks {
         )
     }
 
-    private fun ensureForegroundStarted(status: String, projectId: Long?) {
-        ensureForegroundStarted(
+    private fun ensureForegroundStarted(status: String, projectId: Long?): Boolean {
+        return ensureForegroundStarted(
             status = status,
             projectId = projectId,
             startSource = "direct",
@@ -541,14 +544,33 @@ class DatasetForegroundService : Service(), DatasetProcessor.RuntimeHooks {
         projectId: Long?,
         startSource: String,
         requestedAction: String?
-    ) {
+    ): Boolean {
         activeProjectId = projectId ?: activeProjectId
         if (!foregroundStarted) {
             acquireWakeLock()
-            startForeground(
+            val startResult = ForegroundStart.start(
+                this,
                 NOTIFICATION_ID,
-                buildNotification(progress = DatasetProcessor.progress.value, status = status)
+                buildNotification(progress = DatasetProcessor.progress.value, status = status),
+                ForegroundServiceTypes.DATA_SYNC
             )
+            if (startResult is ForegroundStart.Result.Failed) {
+                releaseWakeLock()
+                val title = getString(R.string.dataset_runtime_notification_title)
+                val message = ForegroundStart.failureMessage(this, startResult.reason, title)
+                val failedTaskId = UnifiedNotificationManager.startTask(
+                    UnifiedNotificationManager.TaskType.KNOWLEDGE_BASE,
+                    title
+                )
+                UnifiedNotificationManager.failTask(failedTaskId, message)
+                recordBreadcrumb(
+                    event = "foreground_start_failed",
+                    phase = requestedAction,
+                    details = "source=$startSource reason=${startResult.reason}"
+                )
+                stopSelfIfIdle()
+                return false
+            }
             foregroundStarted = true
             isRunning = true
             recordBreadcrumb(
@@ -556,9 +578,10 @@ class DatasetForegroundService : Service(), DatasetProcessor.RuntimeHooks {
                 phase = requestedAction,
                 details = "source=$startSource projectId=${activeProjectId ?: -1}"
             )
-            return
+            return true
         }
         updateForegroundNotification(DatasetProcessor.progress.value, overrideStatus = status)
+        return true
     }
 
     private fun updateForegroundNotification(

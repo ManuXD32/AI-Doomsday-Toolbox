@@ -202,6 +202,7 @@ class LlamaClientService : Service() {
     private val sessions = ConcurrentHashMap<Long, ChatGenerationSession>()
     private val foregroundLock = Any()
     private var notificationTaskId: Int? = null
+    private var foregroundFailureMessage = ""
     private lateinit var powerLocks: ChatPowerLocks
     private lateinit var admissionPlanner: ChatAdmissionPlanner
     private lateinit var scheduler: ChatGenerationScheduler
@@ -275,8 +276,12 @@ class LlamaClientService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_GENERATE -> {
-                synchronized(foregroundLock) { ensureForegroundStarted() }
                 val chatId = intent.getLongExtra(EXTRA_CHAT_ID, -1L)
+                if (synchronized(foregroundLock) { ensureForegroundStarted() } == null) {
+                    Companion.updateState(GenerationState.Error(foregroundFailureMessage, chatId))
+                    stopSelf(startId)
+                    return START_NOT_STICKY
+                }
                 val serverId = intent.getLongExtra(EXTRA_SERVER_ID, -1L)
                 val userMessage = intent.getStringExtra(EXTRA_USER_MESSAGE)
                 val imagePath = intent.getStringExtra(EXTRA_IMAGE_PATH)
@@ -305,7 +310,10 @@ class LlamaClientService : Service() {
                 }
             }
             ACTION_STOP -> {
-                synchronized(foregroundLock) { ensureForegroundStarted() }
+                if (synchronized(foregroundLock) { ensureForegroundStarted() } == null) {
+                    stopSelf(startId)
+                    return START_NOT_STICKY
+                }
                 val chatId = intent.getLongExtra(EXTRA_CHAT_ID, -1L)
                 if (chatId > 0L) {
                     sessions[chatId]?.let(::stopSession)
@@ -315,7 +323,10 @@ class LlamaClientService : Service() {
                 releaseForegroundIfIdle()
             }
             ACTION_CANCEL_QUEUED -> {
-                synchronized(foregroundLock) { ensureForegroundStarted() }
+                if (synchronized(foregroundLock) { ensureForegroundStarted() } == null) {
+                    stopSelf(startId)
+                    return START_NOT_STICKY
+                }
                 val chatId = intent.getLongExtra(EXTRA_CHAT_ID, -1L)
                 if (chatId > 0L && scheduler.isQueued(chatId)) {
                     sessions[chatId]?.let(::stopSession)
@@ -343,14 +354,24 @@ class LlamaClientService : Service() {
     }
 
     /** Caller holds [foregroundLock]. */
-    private fun ensureForegroundStarted(): Int {
+    private fun ensureForegroundStarted(): Int? {
         notificationTaskId?.let { return it }
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.LLAMA_CLIENT,
             "Llama Chat"
         )
+        val startResult = ForegroundStart.start(
+            this,
+            taskId,
+            notification,
+            ForegroundServiceTypes.SPECIAL_USE
+        )
+        if (startResult is ForegroundStart.Result.Failed) {
+            foregroundFailureMessage = ForegroundStart.failureMessage(this, startResult.reason, "Llama Chat")
+            UnifiedNotificationManager.failTask(taskId, foregroundFailureMessage)
+            return null
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
         return taskId
     }
 
@@ -398,9 +419,21 @@ class LlamaClientService : Service() {
         callMode: Boolean = false
     ) {
         val session = ChatGenerationSession(chatId)
+        var foregroundFailed = false
         val taskId = synchronized(foregroundLock) {
-            if (sessions.containsKey(chatId)) null else ensureForegroundStarted().also { sessions[chatId] = session }
+            if (sessions.containsKey(chatId)) {
+                null
+            } else {
+                ensureForegroundStarted()?.also { sessions[chatId] = session } ?: run {
+                    foregroundFailed = true
+                    null
+                }
+            }
         } ?: run {
+            if (foregroundFailed) {
+                Companion.updateState(GenerationState.Error(foregroundFailureMessage, chatId))
+                return
+            }
             DebugLog.log("LlamaClientService: Generation already in progress for chat $chatId")
             // Surface the in-flight start instead of silently dropping the second send.
             if (NativeChatGenerationStates.stateFor(chatId).let {
