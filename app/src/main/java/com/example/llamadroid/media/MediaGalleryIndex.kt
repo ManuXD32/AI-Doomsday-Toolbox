@@ -141,10 +141,14 @@ data class MediaGalleryRoots(
     val subtitleOutputRoot: File,
     val fastSdRoot: File? = null,
     val onnxTtsRoot: File? = null,
-    val audioWorkspaceOutputRoot: File? = null
+    val audioWorkspaceOutputRoot: File? = null,
+    /** Easy-mode image outputs (`easy_output/`); only listed when [easyOnly] is true. */
+    val easyOutputRoot: File? = null,
+    /** Easy gallery mode: list only [easyOutputRoot]. The advanced gallery never lists it. */
+    val easyOnly: Boolean = false
 ) {
     companion object {
-        fun fromFilesDir(filesDir: File): MediaGalleryRoots = MediaGalleryRoots(
+        fun fromFilesDir(filesDir: File, easyOnly: Boolean = false): MediaGalleryRoots = MediaGalleryRoots(
             sdRoot = File(filesDir, "sd_output"),
             videoRoot = File(filesDir, "video_gen_output"),
             onnxImageRoot = File(filesDir, "onnx_image_output"),
@@ -158,7 +162,9 @@ data class MediaGalleryRoots(
             videoInterpolationRoot = File(filesDir, "video_interpolation_output"),
             subtitleOutputRoot = File(filesDir, "subtitle_outputs"),
             onnxTtsRoot = File(filesDir, "onnx_tts_output"),
-            audioWorkspaceOutputRoot = File(filesDir, "audio_workspace/outputs")
+            audioWorkspaceOutputRoot = File(filesDir, "audio_workspace/outputs"),
+            easyOutputRoot = File(filesDir, "easy_output"),
+            easyOnly = easyOnly
         )
     }
 }
@@ -178,8 +184,10 @@ object MediaGalleryIndex {
 
     fun scan(
         context: Context,
-        remoteFastSdItems: List<MediaGalleryRemoteItem> = emptyList()
-    ): List<MediaGalleryItem> = scan(MediaGalleryRoots.fromFilesDir(context.filesDir), remoteFastSdItems)
+        remoteFastSdItems: List<MediaGalleryRemoteItem> = emptyList(),
+        easyOnly: Boolean = false
+    ): List<MediaGalleryItem> =
+        scan(MediaGalleryRoots.fromFilesDir(context.filesDir, easyOnly), if (easyOnly) emptyList() else remoteFastSdItems)
 
     fun scan(
         filesDir: File,
@@ -196,6 +204,12 @@ object MediaGalleryIndex {
             if (item.file.isFile || item.remotePath != null) {
                 result.putIfAbsent(item.identity.value, item)
             }
+        }
+
+        if (roots.easyOnly) {
+            roots.easyOutputRoot?.let { scanEasyImages(it, ::add) }
+            return result.values
+                .sortedWith(compareByDescending<MediaGalleryItem> { it.createdAt }.thenBy { it.identity.value })
         }
 
         scanSdImages(roots.sdRoot, ::add)
@@ -285,8 +299,8 @@ object MediaGalleryIndex {
     }
 
     /** Observe allowlisted output roots so a visible gallery refreshes after a completed write. */
-    fun observe(context: Context, onChanged: () -> Unit): Observer =
-        observe(MediaGalleryRoots.fromFilesDir(context.filesDir), onChanged)
+    fun observe(context: Context, easyOnly: Boolean = false, onChanged: () -> Unit): Observer =
+        observe(MediaGalleryRoots.fromFilesDir(context.filesDir, easyOnly), onChanged)
 
     fun observe(roots: MediaGalleryRoots, onChanged: () -> Unit): Observer =
         Observer(roots, onChanged)
@@ -457,6 +471,17 @@ object MediaGalleryIndex {
                     ?: MediaGalleryLocation.UNKNOWN
             },
             add = add
+        )
+    }
+
+    private fun scanEasyImages(root: File, add: (MediaGalleryItem) -> Unit) {
+        scanImageRoot(File(root, "sd"), MediaGallerySource.SD, { MediaGalleryLocation.LOCAL }, add)
+        scanImageRoot(
+            root = File(root, "onnx"),
+            source = MediaGallerySource.ONNX,
+            locationFor = { MediaGalleryLocation.LOCAL },
+            add = add,
+            imageMetadataFor = { file -> readOnnxImageMetadata(file) }
         )
     }
 
@@ -773,8 +798,11 @@ object MediaGalleryIndex {
         subtitleOutputRoot,
         fastSdRoot,
         onnxTtsRoot,
-        audioWorkspaceOutputRoot
-    ).filterNotNull()
+        audioWorkspaceOutputRoot,
+        easyOutputRoot
+    ).filterNotNull().let { all ->
+        if (easyOnly) all.filter { it == easyOutputRoot } else all.filter { it != easyOutputRoot }
+    }
 }
 
 fun List<MediaGalleryItem>.filterMediaGallery(

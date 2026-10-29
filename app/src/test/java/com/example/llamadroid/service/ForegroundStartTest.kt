@@ -75,6 +75,16 @@ class ForegroundStartTest {
     }
 
     @Test
+    fun retriesMediaProcessingWithDataSyncOnlyWhenDeclared() {
+        assertEquals(dataSync, ForegroundStart.retryTypes(mediaProcessing, mediaProcessing or dataSync))
+        assertEquals(dataSync or playback, ForegroundStart.retryTypes(mediaProcessing or playback, mediaProcessing or dataSync))
+        assertNull(ForegroundStart.retryTypes(mediaProcessing, mediaProcessing))
+        assertNull(ForegroundStart.retryTypes(mediaProcessing, null))
+        assertNull(ForegroundStart.retryTypes(dataSync, mediaProcessing or dataSync))
+        assertNull(ForegroundStart.retryTypes(mic, mic or dataSync))
+    }
+
+    @Test
     fun visibleImportanceExcludesForegroundServiceOnly() {
         assertTrue(ForegroundStart.isVisibleImportance(100))
         assertTrue(ForegroundStart.isVisibleImportance(200))

@@ -188,7 +188,7 @@ class Converters {
         com.example.llamadroid.data.model.NativeChatCompactionEntity::class,
         com.example.llamadroid.data.model.LlamaMessageImageDescriptionEntity::class
     ],
-    version = 131,
+    version = 132,
     exportSchema = true
 )
 @TypeConverters(Converters::class)

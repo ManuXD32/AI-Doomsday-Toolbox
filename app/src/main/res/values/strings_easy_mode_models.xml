@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="easy_models_title">Models</string>
+    <string name="easy_models_tab_chat">Chat</string>
+    <string name="easy_models_tab_images">Images</string>
+    <string name="easy_models_tab_voice">Voice</string>
+    <string name="easy_models_best_for_phone">Best for your phone · %1$s RAM</string>
+    <string name="easy_models_recommended">Recommended</string>
+    <string name="easy_models_in_use">In use</string>
+    <string name="easy_models_get">Get</string>
+    <string name="easy_models_use">Use</string>
+    <string name="easy_models_downloading">Downloading %1$s</string>
+    <string name="easy_models_cancel_download">Cancel download</string>
+    <string name="easy_models_warning_ram">May run slowly or fail on this phone. Suggested: %1$s of RAM or more.</string>
+    <string name="easy_models_voice_note">Used for the microphone in chat.</string>
+    <string name="easy_models_on_this_phone">On this phone</string>
+    <string name="easy_models_on_this_phone_empty">No other compatible models are installed.</string>
+    <string name="easy_models_imported_tag">Imported</string>
+
+    <string name="easy_images_prompt_hint">Describe the image you want</string>
+    <string name="easy_images_size_label">Size</string>
+    <string name="easy_images_create">Create image</string>
+    <string name="easy_images_cancel">Cancel</string>
+    <string name="easy_images_other_busy">Another image job is running outside Easy mode. Wait for it to finish.</string>
+    <string name="easy_images_no_model">No image model is installed yet. Open Models to get one.</string>
+    <string name="easy_images_get_model">Get a model</string>
+    <string name="easy_images_empty_prompt">Write a prompt first.</string>
+    <string name="easy_images_preparing">Getting ready…</string>
+    <string name="easy_images_progress">Creating… %1$s</string>
+    <string name="easy_images_step">Step %1$d/%2$d</string>
+    <string name="easy_images_result_title">Your image</string>
+    <string name="easy_images_result_desc">Generated image</string>
+    <string name="easy_images_open_gallery">Open gallery</string>
+    <string name="easy_images_error">Image generation failed: %1$s</string>
+    <string name="easy_images_warning_ram">This model is larger than suggested for this phone and may be slow or run out of memory.</string>
+    <string name="easy_images_launch_failed">Could not start image generation: %1$s</string>
+    <string name="easy_models_sub_sdcpp">sd.cpp</string>
+    <string name="easy_models_sub_onnx">ONNX</string>
+    <string name="easy_models_download_failed">Couldn\'t start the download of %1$s. Check your connection and free storage, then try again.</string>
+    <string name="easy_models_remove_cd">Remove %1$s</string>
+    <string name="easy_models_remove_title">Remove model?</string>
+    <string name="easy_models_remove_freed">Space freed: %1$s</string>
+    <string name="easy_models_remove_shared_note">The model files are shared with advanced mode and will be removed there too.</string>
+    <string name="easy_models_remove_confirm">Remove</string>
+    <string name="easy_models_remove_busy">%1$s is answering in a chat. Wait for it to finish, then try again.</string>
+</resources>

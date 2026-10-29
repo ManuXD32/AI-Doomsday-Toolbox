@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import com.example.llamadroid.data.AppThemeMode
 import com.example.llamadroid.data.AppVisualStyle
 import com.example.llamadroid.data.PixelThemeVariant
+import com.example.llamadroid.data.easy.EasyModeSettings
 import com.example.llamadroid.data.SettingsRepository
 import androidx.core.view.WindowCompat
 
@@ -180,7 +181,12 @@ fun LlamaDroidTheme(
 fun AppThemeFromSettings(content: @Composable () -> Unit) {
     val context = LocalContext.current.applicationContext
     val settings = remember { SettingsRepository(context) }
-    val themeMode by settings.themeMode.collectAsState()
+    val advancedThemeMode by settings.themeMode.collectAsState()
+    // Easy mode keeps its own light/dark choice so it never changes the advanced theme.
+    val easySettings = remember { EasyModeSettings(context) }
+    val easyEnabled by easySettings.enabledFlow.collectAsState()
+    val easyThemeMode by easySettings.themeModeFlow.collectAsState()
+    val themeMode = if (easyEnabled) easyThemeMode else advancedThemeMode
     val dynamicColor by settings.dynamicColor.collectAsState()
     val visualStyle by settings.visualStyle.collectAsState()
     val pixelVariant by settings.pixelVariant.collectAsState()

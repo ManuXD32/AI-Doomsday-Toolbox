@@ -100,6 +100,7 @@ private class FakeLlamaServerDao(
     private var nextId = (servers.keys.maxOrNull() ?: 0L) + 1L
 
     override fun getAllServers(): Flow<List<LlamaServerEntity>> = flowOf(servers.values.toList())
+    override fun getAllServersIncludingEasy(): Flow<List<LlamaServerEntity>> = flowOf(servers.values.toList())
     override suspend fun getServerById(id: Long): LlamaServerEntity? = servers[id]
     override suspend fun getManagedServer(cardId: Long): LlamaServerEntity? =
         servers.values.firstOrNull { it.managedServerCardId == cardId }
@@ -194,7 +195,9 @@ private class FakePromptProfileDao : LlamaChatPromptProfileDao {
 private class FakeLlamaChatDao(
     val chats: MutableMap<Long, LlamaChatEntity> = mutableMapOf()
 ) : LlamaChatDao {
-    override fun getAllChats(): Flow<List<LlamaChatEntity>> = flowOf(chats.values.toList())
+    override fun getAllChats(): Flow<List<LlamaChatEntity>> = flowOf(chats.values.filter { !it.easyMode })
+    override fun getEasyChats(): Flow<List<LlamaChatEntity>> = flowOf(chats.values.filter { it.easyMode })
+    override fun observeChatById(id: Long): Flow<LlamaChatEntity?> = flowOf(chats[id])
     override fun getPinnedAiHubChats(): Flow<List<LlamaChatEntity>> =
         flowOf(chats.values.filter { it.pinnedToAiHub })
 

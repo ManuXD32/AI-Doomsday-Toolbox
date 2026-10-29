@@ -1024,6 +1024,8 @@ class LlamaClientService : Service() {
         messages: List<LlamaMessageEntity>
     ): List<LlamaMessageEntity> {
         if (server.supportsVision || messages.none { ImageFallbackLogic.hasImage(it) }) return messages
+        // Easy chats never use the advanced global vision helper.
+        if (database.llamaChatDao().getChatById(chatId)?.easyMode == true) return messages
         val descriptions = VisionDescriptionService.ensureDescriptions(
             applicationContext, chatId, server
         ) { updateLocalLlamaServerStartupStatus(chatId, it) }

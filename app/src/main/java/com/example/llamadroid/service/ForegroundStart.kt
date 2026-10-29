@@ -47,13 +47,19 @@ object ForegroundStart {
         /** The requested types are not declared by the manifest entry or are invalid. */
         INVALID_TYPE,
 
+        /** Android refused a microphone start because the app is in the background. */
+        MICROPHONE_BACKGROUND,
+
         /** Any other SecurityException. */
         SECURITY
     }
 
     sealed class Result {
         data class Started(val types: Int) : Result()
-        data class Failed(val reason: Reason, val cause: Throwable? = null) : Result()
+        data class Failed(val reason: Reason, val cause: Throwable? = null) : Result() {
+            /** Exception message (or class name) for user-visible and diagnostic detail, if any. */
+            val detail: String? get() = cause?.let { it.message?.takeIf { m -> m.isNotBlank() } ?: it.javaClass.simpleName }
+        }
     }
 
     /**
@@ -65,7 +71,8 @@ object ForegroundStart {
         val micGranted = ContextCompat.checkSelfPermission(service, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
         val needsMic = requestedTypes and ForegroundServiceTypes.MICROPHONE != 0
-        val types = effectiveTypes(requestedTypes, sdk, micGranted, declaredTypes(service))
+        val declared = declaredTypes(service)
+        val types = effectiveTypes(requestedTypes, sdk, micGranted, declared)
         if (types == 0) {
             val reason = if (needsMic && !micGranted) Reason.MICROPHONE_PERMISSION else Reason.INVALID_TYPE
             return Result.Failed(reason)
@@ -75,14 +82,41 @@ object ForegroundStart {
             Result.Started(types)
         } catch (error: Exception) {
             var reason = classifyFailure(error) ?: throw error
-            if (reason == Reason.SECURITY && needsMic) {
+            if (needsMic && (reason == Reason.SECURITY || reason == Reason.BACKGROUND_NOT_ALLOWED)) {
                 // The microphone type is denied while RECORD_AUDIO is granted only when the app is
                 // not in a state that may use it, i.e. it is in the background.
-                reason = if (micGranted) Reason.BACKGROUND_NOT_ALLOWED else Reason.MICROPHONE_PERMISSION
+                reason = if (micGranted) Reason.MICROPHONE_BACKGROUND else Reason.MICROPHONE_PERMISSION
             }
-            DebugLog.log("ForegroundStart: ${service.javaClass.simpleName} startForeground failed: ${error.javaClass.simpleName}")
+            val serviceName = service.javaClass.simpleName
+            DebugLog.log("ForegroundStart: $serviceName startForeground(types=$types) failed: ${describe(error)}")
+            val fallback = retryTypes(types, declared)
+            if (fallback != null) {
+                // E.g. mediaProcessing is refused in freeform/floating windows or after its time
+                // limit while dataSync, also declared by the manifest, is allowed.
+                try {
+                    ServiceCompat.startForeground(service, id, notification, fallback)
+                    DebugLog.log("ForegroundStart: $serviceName retried with dataSync after ${reason.name}")
+                    return Result.Started(fallback)
+                } catch (retryError: Exception) {
+                    DebugLog.log("ForegroundStart: $serviceName dataSync retry failed: ${describe(retryError)}")
+                }
+            }
             Result.Failed(reason, error)
         }
+    }
+
+    private fun describe(error: Throwable): String =
+        "${error.javaClass.simpleName}: ${error.message.orEmpty()}"
+
+    /**
+     * Pure retry decision: when a start that included mediaProcessing failed, returns the mask with
+     * mediaProcessing replaced by dataSync, but only if the manifest entry declares dataSync
+     * ([declaredTypes] null/0 means unknown, so no retry). Null means do not retry.
+     */
+    internal fun retryTypes(attempted: Int, declaredTypes: Int?): Int? {
+        if (attempted and ForegroundServiceTypes.MEDIA_PROCESSING == 0) return null
+        if (declaredTypes == null || declaredTypes and ForegroundServiceTypes.DATA_SYNC == 0) return null
+        return (attempted and ForegroundServiceTypes.MEDIA_PROCESSING.inv()) or ForegroundServiceTypes.DATA_SYNC
     }
 
     /**
@@ -114,11 +148,19 @@ object ForegroundStart {
             importance != android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE
 
     /** Readable, localized explanation for a failed start of [featureName]. */
-    fun failureMessage(context: Context, reason: Reason, featureName: String): String = when (reason) {
+    fun failureMessage(context: Context, reason: Reason, featureName: String, detail: String? = null): String = when (reason) {
         Reason.MICROPHONE_PERMISSION -> context.getString(R.string.fgs_start_failed_mic_permission, featureName)
-        Reason.BACKGROUND_NOT_ALLOWED -> context.getString(R.string.fgs_start_failed_background, featureName)
-        Reason.INVALID_TYPE, Reason.SECURITY -> context.getString(R.string.fgs_start_failed_generic, featureName)
+        Reason.MICROPHONE_BACKGROUND -> context.getString(R.string.fgs_start_failed_background, featureName)
+        Reason.BACKGROUND_NOT_ALLOWED -> context.getString(R.string.fgs_start_failed_generic, featureName)
+        Reason.INVALID_TYPE, Reason.SECURITY -> context.getString(
+            R.string.fgs_start_failed_type,
+            featureName,
+            detail?.takeIf { it.isNotBlank() } ?: reason.name
+        )
     }
+
+    fun failureMessage(context: Context, failed: Result.Failed, featureName: String): String =
+        failureMessage(context, failed.reason, featureName, failed.detail)
 
     private fun declaredTypes(service: Service): Int? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null

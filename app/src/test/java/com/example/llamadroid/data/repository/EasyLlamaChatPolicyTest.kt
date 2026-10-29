@@ -24,6 +24,38 @@ class EasyLlamaChatPolicyTest {
         assertEquals(2, easyLlamaProfile(model, 55000, 32768, 2).threads)
     }
 
+    @Test fun `context override beats the 8K baseline`() {
+        assertEquals(16384, easyLlamaProfile(model, 55000, 4096, 4, 16384).contextSize)
+        assertEquals(8192, easyLlamaProfile(model, 55000, null, 4, 0).contextSize)
+    }
+
+    @Test fun `easy chat tools allow only web search`() {
+        val off = easyChatTools()
+        assertFalse(off.hasEnabledTools())
+        assertFalse(off.toolsEnabled)
+        val on = easyChatTools(webSearch = true)
+        assertTrue(on.toolsEnabled)
+        assertTrue(on.webSearchEnabled)
+        assertFalse(on.dateTimeEnabled)
+        assertFalse(on.calculatorEnabled)
+        assertFalse(on.fileToolsEnabled)
+        assertFalse(on.customToolsEnabled)
+        assertFalse(on.deepSeekDelegationEnabled)
+        assertFalse(on.imageGenerationEnabled)
+        assertFalse(on.knowledgeBaseEnabled)
+        assertFalse(on.fetchUrlEnabled)
+        assertFalse(on.deepResearchEnabled)
+    }
+
+    @Test fun `easy api params force tools off but keep unrelated seeded keys`() {
+        val params = easyChatApiParams("""{"tools_enabled":true,"tool_date_time_enabled":true,"audio_input_mode":"whisper"}""")
+        val parsed = com.example.llamadroid.service.NativeChatToolConfig.fromApiParams(params)
+        assertFalse(parsed.toolsEnabled)
+        assertFalse(parsed.dateTimeEnabled)
+        assertTrue(params.contains("audio_input_mode"))
+        assertTrue(com.example.llamadroid.service.NativeChatToolConfig.fromApiParams(easyChatApiParams(null, true)).webSearchEnabled)
+    }
+
     @Test fun `new chats disable tools but every user-selected tool passes server permissions`() {
         val disabled = easyChatDisabledTools()
         val allowed = easyChatAllowedTools()

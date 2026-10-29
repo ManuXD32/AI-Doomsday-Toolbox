@@ -19,7 +19,7 @@ class QuickSetupBundleCatalogTest {
         )
         assertEquals(bundle.files.sumOf { it.sizeBytes }, bundle.totalBytes)
         assertEquals(
-            3_110_000_000L + 987_000_000L + 97_800_000L + 1_747_190_784L + 190_085_487L,
+            3_106_738_272L + 986_833_728L + 97_817_664L + 1_747_190_784L + 190_085_487L,
             bundle.totalBytes
         )
         assertTrue(bundle in LlamaCuratedBundleCatalog.bundles)

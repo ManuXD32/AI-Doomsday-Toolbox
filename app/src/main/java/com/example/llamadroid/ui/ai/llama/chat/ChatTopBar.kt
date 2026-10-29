@@ -90,8 +90,16 @@ internal fun ChatTopBar(
     delegationBar: ChatDelegationBar? = null,
     showWebUi: Boolean = false,
     onOpenWebUi: () -> Unit = {},
-    onGenerateTitle: () -> Unit = {}
+    onGenerateTitle: () -> Unit = {},
+    easyMode: Boolean = false,
+    easyModelName: String? = null,
+    onEasyOptions: () -> Unit = {},
+    onEasyModelClick: (() -> Unit)? = null
 ) {
+    if (easyMode) {
+        com.example.llamadroid.ui.easy.EasyChatTopBar(title, easyModelName, onBack, onEasyOptions, onEasyModelClick)
+        return
+    }
     var menuOpen by remember { mutableStateOf(false) }
     // Narrow phones move actions into the menu so the title and server chip keep room. With the
     // DeepSeek tool on: >=400dp keeps help + settings inline, 360-400dp keeps settings, <360dp neither.

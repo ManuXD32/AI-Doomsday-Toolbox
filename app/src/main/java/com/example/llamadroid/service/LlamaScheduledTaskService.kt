@@ -80,6 +80,17 @@ class LlamaScheduledTaskService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_CANCEL_RUNNING_TASK) {
+            // Cancel arrives via startService(): never promote it to foreground, and drop an idle service.
+            if (processor?.isActive != true) {
+                stopSelf(startId)
+                return START_NOT_STICKY
+            }
+            val taskId = intent.getLongExtra(EXTRA_TASK_ID, -1L).takeIf { it > 0L }
+            val logId = intent.getLongExtra(EXTRA_LOG_ID, -1L).takeIf { it > 0L }
+            cancelActiveRun(taskId = taskId, logId = logId)
+            return START_NOT_STICKY
+        }
         if (!ensureForeground()) {
             stopSelf(startId)
             return START_NOT_STICKY
@@ -101,11 +112,10 @@ class LlamaScheduledTaskService : Service() {
                     startProcessorIfNeeded()
                 }
             }
-            ACTION_CANCEL_RUNNING_TASK -> {
-                val taskId = intent.getLongExtra(EXTRA_TASK_ID, -1L).takeIf { it > 0L }
-                val logId = intent.getLongExtra(EXTRA_LOG_ID, -1L).takeIf { it > 0L }
-                cancelActiveRun(taskId = taskId, logId = logId)
-            }
+        }
+        if (processor?.isActive != true) {
+            // Invalid/unknown start that queued nothing: release the foreground we just took.
+            stopSelf(startId)
         }
         return START_NOT_STICKY
     }

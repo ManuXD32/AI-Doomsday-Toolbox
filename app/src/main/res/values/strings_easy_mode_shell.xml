@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="easy_mode_shell_toggle_label">EASY</string>
+    <string name="easy_mode_shell_toggle_description">Easy mode</string>
+    <string name="easy_mode_shell_switch_to_dark">Switch to dark mode</string>
+    <string name="easy_mode_shell_switch_to_light">Switch to light mode</string>
+    <string name="easy_mode_shell_settings">Easy mode settings</string>
+    <string name="easy_mode_shell_tab_chat">Chat</string>
+    <string name="easy_mode_shell_tab_images">Images</string>
+    <string name="easy_mode_shell_tab_gallery">Gallery</string>
+    <string name="easy_mode_shell_models_header">Models</string>
+    <string name="easy_mode_shell_models_chat">Chat models</string>
+    <string name="easy_mode_shell_models_images">Image models</string>
+    <string name="easy_mode_shell_models_voice">Voice models</string>
+    <string name="easy_mode_shell_show_intro">Show Easy mode intro again</string>
+    <string name="easy_mode_shell_all_settings">All app settings</string>
+    <string name="easy_mode_shell_intro_title">Try Easy mode?</string>
+    <string name="easy_mode_shell_intro_body">Easy mode is a simpler version of the app: chat with an AI, make images and browse your gallery. It picks the models and settings for you.</string>
+    <string name="easy_mode_shell_intro_hint">You can switch at any time with the EASY switch at the top left, or in Settings.</string>
+    <string name="easy_mode_shell_intro_try">Try Easy mode</string>
+    <string name="easy_mode_shell_intro_keep">Keep advanced mode</string>
+    <string name="easy_mode_shell_chat_with">Chatting with</string>
+    <string name="easy_mode_shell_chat_no_model">No model chosen yet</string>
+    <string name="easy_mode_shell_change">Change</string>
+    <string name="easy_mode_shell_new_chat">New chat</string>
+    <string name="easy_mode_shell_chat_starting">Starting…</string>
+    <string name="easy_mode_shell_recent_chats">Your chats</string>
+    <string name="easy_mode_shell_no_chats">No chats yet. Tap New chat to start one.</string>
+    <string name="easy_mode_shell_setting_title">Easy mode</string>
+    <string name="easy_mode_shell_setting_desc">A simpler app with Chat, Images and Gallery. Tama, Organizer and Tools are hidden while it is on.</string>
+</resources>

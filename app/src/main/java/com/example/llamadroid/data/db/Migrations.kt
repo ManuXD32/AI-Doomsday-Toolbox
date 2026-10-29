@@ -4203,7 +4203,8 @@ object Migrations {
         NativeChatServerBindingMigration.MIGRATION_127_128,
         NativeChatDelegationMigration.MIGRATION_128_129,
         ImageDescriptionMigration.MIGRATION_129_130,
-        NativeChatStepsMigration.MIGRATION_130_131
+        NativeChatStepsMigration.MIGRATION_130_131,
+        EasyModeMigration.MIGRATION_131_132
     )
     /**
      * Check if a column exists in a table.

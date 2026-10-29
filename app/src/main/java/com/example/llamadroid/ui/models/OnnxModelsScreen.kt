@@ -144,7 +144,7 @@ private data class OnnxImportSourceListing(
     val truncated: Boolean
 )
 
-private data class OnnxImportResult(
+internal data class OnnxImportResult(
     val bundleId: String,
     val message: String
 )
@@ -1130,7 +1130,7 @@ private fun CatalogOnnxModelsTab(
                     )
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        entry.summary,
+                        entry.summaryRes?.let { stringResource(it) } ?: entry.summary,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1284,7 +1284,7 @@ private fun onnxProviderLabel(provider: OnnxCatalogProvider): String {
     }
 }
 
-private suspend fun importOnnxBundleFromTree(
+internal suspend fun importOnnxBundleFromTree(
     context: android.content.Context,
     repository: ModelRepository,
     treeUri: android.net.Uri,

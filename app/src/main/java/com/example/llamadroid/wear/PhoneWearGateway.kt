@@ -641,14 +641,15 @@ private class WearRequestRouter(
                 val serverId = metadata.serverId ?: selectedServerId()
                 require(chatId != null && serverId != null) { appContext.getString(R.string.wear_bridge_invalid_id) }
                 updateChatThinking(chatId, request.enableThinking)
-                submitChatGeneration(
-                    replyNodeId = replyNodeId,
-                    requestId = metadata.meta.requestId,
-                    chatId = chatId,
-                    serverId = serverId,
-                    text = "",
-                    audioPath = pending.file.absolutePath
-                )
+                if (!submitChatGeneration(
+                        replyNodeId = replyNodeId,
+                        requestId = metadata.meta.requestId,
+                        chatId = chatId,
+                        serverId = serverId,
+                        text = "",
+                        audioPath = pending.file.absolutePath
+                    )
+                ) return errorBytes(request.meta, "app_not_visible", appContext.getString(R.string.wear_translator_open_phone_message))
                 GenerationAccepted(metadata.meta.requestId, "chat", chatId.toString(), System.currentTimeMillis())
             }
             "tama" -> {
@@ -929,7 +930,9 @@ private class WearRequestRouter(
         require(repository.getChat(request.chatId) != null) { appContext.getString(R.string.wear_bridge_invalid_id) }
         require(repository.getServer(request.serverId) != null) { appContext.getString(R.string.wear_bridge_invalid_id) }
         updateChatThinking(request.chatId, request.enableThinking)
-        submitChatGeneration(replyNodeId, request.meta.requestId, request.chatId, request.serverId, request.text, null)
+        if (!submitChatGeneration(replyNodeId, request.meta.requestId, request.chatId, request.serverId, request.text, null)) {
+            return errorBytes(request.meta, "app_not_visible", appContext.getString(R.string.wear_translator_open_phone_message))
+        }
         return ok(
             request.meta,
             GenerationAccepted.serializer(),
@@ -959,14 +962,15 @@ private class WearRequestRouter(
             ?: throw IllegalArgumentException(appContext.getString(R.string.wear_bridge_invalid_id))
         repository.deleteMessagesAfter(request.chatId, message.timestamp, message.id)
         updateChatThinking(request.chatId, request.enableThinking)
-        submitChatGeneration(
-            replyNodeId = replyNodeId,
-            requestId = request.meta.requestId,
-            chatId = request.chatId,
-            serverId = serverId,
-            text = "",
-            audioPath = message.audioPath
-        )
+        if (!submitChatGeneration(
+                replyNodeId = replyNodeId,
+                requestId = request.meta.requestId,
+                chatId = request.chatId,
+                serverId = serverId,
+                text = "",
+                audioPath = message.audioPath
+            )
+        ) return errorBytes(request.meta, "app_not_visible", appContext.getString(R.string.wear_translator_open_phone_message))
         return ok(
             request.meta,
             GenerationAccepted.serializer(),
@@ -1789,6 +1793,7 @@ private class WearRequestRouter(
             actionLabel = actionLabel
         )
 
+    /** Returns false when Android refused the foreground start (app not visible); state is rolled back. */
     private fun submitChatGeneration(
         replyNodeId: String?,
         requestId: String,
@@ -1796,19 +1801,27 @@ private class WearRequestRouter(
         serverId: Long,
         text: String,
         audioPath: String?
-    ) {
-        if (!processedGenerations.add(requestId)) return
+    ): Boolean {
+        if (!processedGenerations.add(requestId)) return true
         messageListeners[requestId] = 0L
         generationChatIds[requestId] = chatId
         NativeChatGenerationStates.clearIfIdle(chatId)
-        appContext.startForegroundService(Intent(appContext, LlamaClientService::class.java).apply {
-            action = LlamaClientService.ACTION_GENERATE
-            putExtra(LlamaClientService.EXTRA_CHAT_ID, chatId)
-            putExtra(LlamaClientService.EXTRA_SERVER_ID, serverId)
-            putExtra(LlamaClientService.EXTRA_USER_MESSAGE, text)
-            audioPath?.let { putExtra(LlamaClientService.EXTRA_AUDIO_PATH, it) }
-            putExtra(LlamaClientService.EXTRA_FORCE_ASSISTANT_TTS, false)
-        })
+        try {
+            appContext.startForegroundService(Intent(appContext, LlamaClientService::class.java).apply {
+                action = LlamaClientService.ACTION_GENERATE
+                putExtra(LlamaClientService.EXTRA_CHAT_ID, chatId)
+                putExtra(LlamaClientService.EXTRA_SERVER_ID, serverId)
+                putExtra(LlamaClientService.EXTRA_USER_MESSAGE, text)
+                audioPath?.let { putExtra(LlamaClientService.EXTRA_AUDIO_PATH, it) }
+                putExtra(LlamaClientService.EXTRA_FORCE_ASSISTANT_TTS, false)
+            })
+        } catch (error: Exception) {
+            if (!isForegroundServiceStartNotAllowed(error) && error !is SecurityException) throw error
+            processedGenerations.remove(requestId)
+            messageListeners.remove(requestId)
+            generationChatIds.remove(requestId)
+            return false
+        }
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch generationCollector@{
             var observedFreshGeneration = false
             NativeChatGenerationStates.flowFor(chatId)
@@ -1862,6 +1875,7 @@ private class WearRequestRouter(
                     }
                 }
         }
+        return true
     }
 
     private suspend fun deleteFinishedQuickChat(chatId: Long) {

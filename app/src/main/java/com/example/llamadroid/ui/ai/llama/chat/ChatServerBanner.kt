@@ -33,7 +33,8 @@ internal fun ChatServerBanner(
     onRetry: () -> Unit,
     onViewLog: () -> Unit,
     onChooseServer: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showChooseServer: Boolean = true
 ) {
     if (kind == ChatServerBannerKind.NONE) return
     val isError = kind == ChatServerBannerKind.ERROR
@@ -74,7 +75,8 @@ internal fun ChatServerBanner(
                 when (kind) {
                     ChatServerBannerKind.STOPPED -> BannerButton(R.string.native_chat_banner_start, onStart)
                     ChatServerBannerKind.NO_SERVER,
-                    ChatServerBannerKind.SERVER_REMOVED -> BannerButton(R.string.native_chat_banner_choose, onChooseServer)
+                    ChatServerBannerKind.SERVER_REMOVED ->
+                        if (showChooseServer) BannerButton(R.string.native_chat_banner_choose, onChooseServer)
                     else -> Unit
                 }
             }

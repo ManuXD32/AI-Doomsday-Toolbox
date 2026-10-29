@@ -64,6 +64,8 @@ import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.unit.dp
 import com.example.llamadroid.R
 import com.example.llamadroid.ui.components.AppIcon
+import com.example.llamadroid.ui.easy.AdvancedDarkModeToggle
+import com.example.llamadroid.ui.easy.EasyModeToggle
 import com.example.llamadroid.ui.components.AppNavigationDestination
 import com.example.llamadroid.ui.theme.sprites.AppSpriteKey
 import kotlinx.coroutines.launch
@@ -82,6 +84,8 @@ fun SoftStudioAppScaffold(
     onTour: (() -> Unit)? = null,
     onCloseTour: (() -> Unit)? = null,
     walkthroughBar: @Composable () -> Unit = {},
+    /** Easy mode shell owns its own top and bottom bars on the root route. */
+    hideRootChrome: Boolean = false,
     content: @Composable (PaddingValues) -> Unit
 ) {
     val windowSize = LocalWindowInfo.current.containerSize
@@ -171,14 +175,20 @@ fun SoftStudioAppScaffold(
             containerColor = MaterialTheme.colorScheme.surface,
             snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
-                if (presentation.isRoot) {
+                if (presentation.isRoot && !hideRootChrome) {
                     TopAppBar(
                         title = { Text(presentation.parent?.let { rootLabel(destinations, it) } ?: stringResource(R.string.studio_nav_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         navigationIcon = {
-                            if (isDrawer) IconButton(
-                                onClick = { scope.launch { drawerState.open() } },
-                                modifier = Modifier.testTag("soft_studio_menu").walkthroughTarget("shell.menu")
-                            ) { Icon(Icons.Default.Menu, stringResource(R.string.studio_nav_menu)) }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (isDrawer) IconButton(
+                                    onClick = { scope.launch { drawerState.open() } },
+                                    modifier = Modifier.testTag("soft_studio_menu").walkthroughTarget("shell.menu")
+                                ) { Icon(Icons.Default.Menu, stringResource(R.string.studio_nav_menu)) }
+                                // The Easy switch lives on the Home tab only.
+                                if (currentRoute == AppRootDestination.Home.route) {
+                                    EasyModeToggle(Modifier.padding(start = if (isDrawer) 0.dp else 12.dp))
+                                }
+                            }
                         },
                         actions = {
                             if (currentRoute == AppRootDestination.Home.route && onTour != null) {
@@ -192,6 +202,7 @@ fun SoftStudioAppScaffold(
                                 }
                                 }
                             }
+                            if (currentRoute == AppRootDestination.Home.route) AdvancedDarkModeToggle()
                             if (currentRoute != AppRootDestination.Home.route) FeatureGuideAction()
                             IconButton(onClick = onSearch, modifier = Modifier.testTag("soft_studio_search")) {
                                 Icon(Icons.Default.Search, stringResource(R.string.studio_nav_search))
@@ -207,12 +218,12 @@ fun SoftStudioAppScaffold(
             bottomBar = {
                 WalkthroughInsetHost(active = onCloseTour != null) {
                     if (onCloseTour != null) Box(if (keysPlacement == UniversalKeysPlacement.STRIP) Modifier else Modifier.navigationBarsPadding()) { walkthroughBar() }
-                if (keysPlacement == UniversalKeysPlacement.STRIP) UniversalKeyStrip(baseRoute, onUniversalKey)
+                if (keysPlacement == UniversalKeysPlacement.STRIP && !hideRootChrome) UniversalKeyStrip(baseRoute, onUniversalKey)
                 }
             }
         ) { padding ->
             Row(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
-                if (keysPlacement == UniversalKeysPlacement.RAIL) {
+                if (keysPlacement == UniversalKeysPlacement.RAIL && !hideRootChrome) {
                     NavigationRail(
                         containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                         windowInsets = WindowInsets(0, 0, 0, 0),

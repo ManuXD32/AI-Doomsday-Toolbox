@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="easy_import_hint_chat">Añade tu propio modelo de chat .gguf desde el teléfono. El modo Fácil elige los ajustes por ti.</string>
+    <string name="easy_import_hint_sd">Añade un modelo de imágenes (.gguf, .safetensors o .ckpt). El tipo se detecta automáticamente.</string>
+    <string name="easy_import_hint_onnx">Añade un modelo de imágenes ONNX desde una carpeta o un archivo .zip.</string>
+    <string name="easy_import_hint_voice">Añade un modelo de voz Whisper (archivo .bin).</string>
+    <string name="easy_import_chat_button">Importar modelo de chat</string>
+    <string name="easy_import_sd_button">Importar modelo de imágenes</string>
+    <string name="easy_import_onnx_folder_button">Importar carpeta ONNX</string>
+    <string name="easy_import_onnx_zip_button">Importar .zip ONNX</string>
+    <string name="easy_import_voice_button">Importar modelo de voz</string>
+    <string name="easy_import_copying">Copiando el archivo. Mantén la app abierta.</string>
+    <string name="easy_import_done">Se añadió y seleccionó %1$s.</string>
+    <string name="easy_import_linked">Archivo de visión/audio añadido a %1$s.</string>
+    <string name="easy_import_projector_title">Añadir archivo de visión/audio (opcional)</string>
+    <string name="easy_import_projector_hint">Permite que este modelo vea imágenes o escuche audio. Elige el archivo mmproj .gguf correspondiente u omite.</string>
+    <string name="easy_import_projector_button">Elegir archivo</string>
+    <string name="easy_import_projector_skip">Omitir</string>
+    <string name="easy_import_err_chat_file">Eso no es un modelo de chat. Elige un archivo .gguf.</string>
+    <string name="easy_import_err_projector_as_model">Parece un archivo de visión/audio. Importa primero el modelo principal y añade este cuando se te pida.</string>
+    <string name="easy_import_err_projector_file">Ese no es un archivo de visión/audio válido. Elige el archivo mmproj .gguf.</string>
+    <string name="easy_import_err_image_file">Ese no es un modelo de imágenes válido. Elige un archivo .gguf, .safetensors o .ckpt.</string>
+    <string name="easy_import_err_not_image">Este archivo no es un modelo de imágenes completo que el modo Fácil pueda usar (puede ser una pieza complementaria o un modelo de vídeo).</string>
+    <string name="easy_import_err_zip_file">Eso no es un archivo .zip. Elige un zip que contenga un modelo de imágenes ONNX.</string>
+    <string name="easy_import_err_onnx_invalid">El modelo ONNX está incompleto o dañado. Comprueba que estén todos sus archivos.</string>
+    <string name="easy_import_err_voice_file">Ese no es un modelo de voz Whisper. Elige un archivo .bin.</string>
+    <string name="easy_import_err_copy">No se pudo copiar el archivo. Comprueba que el teléfono tenga espacio libre e inténtalo de nuevo.</string>
+</resources>

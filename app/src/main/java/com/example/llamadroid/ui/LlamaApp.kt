@@ -231,6 +231,9 @@ fun LlamaApp(
 
     val hasCompletedWelcome by settingsRepo.hasCompletedWelcome.collectAsState()
     var showWelcome by remember { mutableStateOf(!hasCompletedWelcome) }
+    val easySettings = remember { com.example.llamadroid.data.easy.EasyModeSettings(context) }
+    val easyEnabled by easySettings.enabledFlow.collectAsState()
+    var easyIntroPending by remember { mutableStateOf(easySettings.shouldShowIntro()) }
     
     // Shared Tama State
     // These services used to be created for every app route. Keep them lazy so scrolling an
@@ -511,8 +514,22 @@ fun LlamaApp(
         return
     }
 
+    // Easy mode hides Chats (advanced hub), Tama, Organizer and Tools; move off them if the switch is flipped there.
+    LaunchedEffect(easyEnabled, currentRoute) {
+        val hidden = listOf(AppRootDestination.Chats, AppRootDestination.Tools, AppRootDestination.Tama, AppRootDestination.Organizer)
+        if (easyEnabled && hidden.any { it.route == currentRoute?.substringBefore('?')?.substringBefore('/') }) {
+            navController.navigateToRoot(AppRootDestination.Home.route)
+        }
+    }
+    val easyIntroVisible = easyIntroPending && allowAutomaticWalkthrough && sharedFileData == null &&
+        pendingNavigationRoute == ExternalRouteResolution.NoRoute && currentRoute == Screen.Dashboard.route
+    if (easyIntroVisible) {
+        com.example.llamadroid.ui.easy.EasyModeIntroDialog(onDone = { easyIntroPending = false })
+    }
+
+    // The automatic tour waits for the Easy intro and is skipped when the user chose Easy mode.
     val tourEligible = allowAutomaticWalkthrough && currentRoute == Screen.Dashboard.route &&
-        sharedFileData == null && !showShareChooser && pendingNavigationRoute == ExternalRouteResolution.NoRoute
+        !easyIntroPending && !easyEnabled && sharedFileData == null && !showShareChooser && pendingNavigationRoute == ExternalRouteResolution.NoRoute
     LaunchedEffect(tourEligible) { tour.observeEligibility(tourEligible) }
     LaunchedEffect(sharedFileData, pendingNavigationRoute) {
         if (sharedFileData != null || pendingNavigationRoute != ExternalRouteResolution.NoRoute) tour.dismiss()
@@ -568,6 +585,8 @@ fun LlamaApp(
             navController.navigate(Screen.Walkthrough.route) { launchSingleTop = true }
         },
         onCloseTour = if (tour.session != null) ({ tour.dismiss() }) else null,
+        // Easy mode never shows the advanced bottom keys or rail, also inside its chats.
+        hideRootChrome = easyEnabled,
         walkthroughBar = {
             if (tourTargets.modalOwners.isEmpty()) WalkthroughCoach(tour, tourTargets, currentRoute, onOpen = openTourRoute)
         }
@@ -589,7 +608,10 @@ fun LlamaApp(
             popEnterTransition = { fadeIn(tween(240)) },
             popExitTransition = { fadeOut(tween(180)) }
         ) {
-            composable(Screen.Dashboard.route) { DashboardScreen(navController) }
+            composable(Screen.Dashboard.route) {
+                if (easyEnabled) com.example.llamadroid.ui.easy.EasyModeShell(navController)
+                else DashboardScreen(navController)
+            }
             composable(Screen.Walkthrough.route) {
                 WalkthroughGuide(tour, onBack = { navController.popBackStack() }, onStart = { chapterId, resume ->
                     val root = when (chapterId) {

@@ -64,7 +64,7 @@ class SdCuratedBundleCatalogTest {
     fun curatedStorageTotalsAreStable() {
         assertEquals(4_320_207_000L, requireNotNull(SdCuratedBundleCatalog.byId("ipa-starter")).totalSizeBytes)
         assertEquals(1_747_190_784L, requireNotNull(SdCuratedBundleCatalog.byId("low-end")).totalSizeBytes)
-        assertEquals(3_940_000_000L, requireNotNull(SdCuratedBundleCatalog.byId("midrange")).totalSizeBytes)
+        assertEquals(3_940_010_720L, requireNotNull(SdCuratedBundleCatalog.byId("midrange")).totalSizeBytes)
         assertEquals(10_248_278_972L, requireNotNull(SdCuratedBundleCatalog.byId("high-end")).totalSizeBytes)
         assertEquals(13_312_527_420L, requireNotNull(SdCuratedBundleCatalog.byId("distributed")).totalSizeBytes)
         assertEquals(8_180_926_784L, requireNotNull(SdCuratedBundleCatalog.byId("local-video")).totalSizeBytes)

@@ -2,6 +2,7 @@ package com.example.llamadroid.data.repository
 
 import android.content.Context
 import com.example.llamadroid.data.dao.LlamaServerCardDao
+import com.example.llamadroid.data.easy.isEasyModeCard
 import com.example.llamadroid.data.db.SavedCommand
 import com.example.llamadroid.data.db.SavedCommandScopes
 import com.example.llamadroid.data.db.launchProfile
@@ -14,6 +15,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 
 /** A saved command lookup deliberately abstracted for the central Room integration. */
 fun interface GeneralSavedCommandProvider {
@@ -50,7 +52,9 @@ class LlamaServerCardRepository(
     private val cardDao: LlamaServerCardDao,
     private val generalSavedCommandProvider: GeneralSavedCommandProvider
 ) {
-    val cards: Flow<List<LlamaServerCardEntity>> = cardDao.observeCards()
+    /** Advanced-mode cards only: Easy-mode cards (`easy:` ids) never appear in advanced lists or pickers. */
+    val cards: Flow<List<LlamaServerCardEntity>> =
+        cardDao.observeCards().map { list -> list.filterNot(::isEasyModeCard) }
 
     fun observeCardsWithPresets(): Flow<List<LlamaServerCardSnapshot>> = flow {
         cards.collect { entities ->

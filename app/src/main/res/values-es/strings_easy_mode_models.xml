@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="easy_models_title">Modelos</string>
+    <string name="easy_models_tab_chat">Chat</string>
+    <string name="easy_models_tab_images">Imágenes</string>
+    <string name="easy_models_tab_voice">Voz</string>
+    <string name="easy_models_best_for_phone">Lo mejor para tu teléfono · %1$s de RAM</string>
+    <string name="easy_models_recommended">Recomendado</string>
+    <string name="easy_models_in_use">En uso</string>
+    <string name="easy_models_get">Obtener</string>
+    <string name="easy_models_use">Usar</string>
+    <string name="easy_models_downloading">Descargando %1$s</string>
+    <string name="easy_models_cancel_download">Cancelar descarga</string>
+    <string name="easy_models_warning_ram">Puede ir lento o fallar en este teléfono. Se sugieren %1$s de RAM o más.</string>
+    <string name="easy_models_voice_note">Se usa para el micrófono del chat.</string>
+    <string name="easy_models_on_this_phone">En este teléfono</string>
+    <string name="easy_models_on_this_phone_empty">No hay otros modelos compatibles instalados.</string>
+    <string name="easy_models_imported_tag">Importado</string>
+
+    <string name="easy_images_prompt_hint">Describe la imagen que quieres</string>
+    <string name="easy_images_size_label">Tamaño</string>
+    <string name="easy_images_create">Crear imagen</string>
+    <string name="easy_images_cancel">Cancelar</string>
+    <string name="easy_images_other_busy">Hay otro trabajo de imágenes en marcha fuera del modo Fácil. Espera a que termine.</string>
+    <string name="easy_images_no_model">Aún no hay ningún modelo de imagen instalado. Abre Modelos para obtener uno.</string>
+    <string name="easy_images_get_model">Obtener un modelo</string>
+    <string name="easy_images_empty_prompt">Escribe primero una descripción.</string>
+    <string name="easy_images_preparing">Preparando…</string>
+    <string name="easy_images_progress">Creando… %1$s</string>
+    <string name="easy_images_step">Paso %1$d/%2$d</string>
+    <string name="easy_images_result_title">Tu imagen</string>
+    <string name="easy_images_result_desc">Imagen generada</string>
+    <string name="easy_images_open_gallery">Abrir galería</string>
+    <string name="easy_images_error">Falló la generación de la imagen: %1$s</string>
+    <string name="easy_images_warning_ram">Este modelo es más grande de lo sugerido para este teléfono y puede ir lento o quedarse sin memoria.</string>
+    <string name="easy_images_launch_failed">No se pudo iniciar la generación de la imagen: %1$s</string>
+    <string name="easy_models_sub_sdcpp">sd.cpp</string>
+    <string name="easy_models_sub_onnx">ONNX</string>
+    <string name="easy_models_download_failed">No se pudo iniciar la descarga de %1$s. Revisa tu conexión y el almacenamiento libre, e inténtalo de nuevo.</string>
+    <string name="easy_models_remove_cd">Quitar %1$s</string>
+    <string name="easy_models_remove_title">¿Quitar el modelo?</string>
+    <string name="easy_models_remove_freed">Espacio liberado: %1$s</string>
+    <string name="easy_models_remove_shared_note">Los archivos del modelo se comparten con el modo avanzado y también se quitarán allí.</string>
+    <string name="easy_models_remove_confirm">Quitar</string>
+    <string name="easy_models_remove_busy">%1$s está respondiendo en un chat. Espera a que termine e inténtalo de nuevo.</string>
+</resources>

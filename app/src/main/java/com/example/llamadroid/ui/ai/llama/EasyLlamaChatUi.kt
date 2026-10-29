@@ -41,6 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.llamadroid.R
+import com.example.llamadroid.data.easy.isEasyModeCard
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
@@ -422,7 +423,7 @@ fun EasyLlamaChatEntryCard(
 private suspend fun findManagedCardIdForModel(database: AppDatabase, model: ModelEntity): Long? {
     database.llamaServerCardDao().getEasyCard(model.filename)?.let { return it.id }
     return database.llamaServerCardDao().observeCards().first().firstOrNull { card ->
-        database.savedCommandDao().getGeneralCommandById(card.savedCommandId)
+        !isEasyModeCard(card) && database.savedCommandDao().getGeneralCommandById(card.savedCommandId)
             ?.launchProfile()?.modelPath == model.path
     }?.id
 }

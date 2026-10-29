@@ -28,7 +28,7 @@ object QuickSetupBundleCatalog {
         remotePath = "gemma-4-E2B-it-Q4_K_M.gguf",
         localFilename = "gemma-4-E2B-it-Q4_K_M.gguf",
         type = ModelType.LLM,
-        sizeBytes = 3_110_000_000L,
+        sizeBytes = 3_106_738_272L,
         sha256 = "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
         license = "Apache-2.0",
         isVision = true,
@@ -42,7 +42,7 @@ object QuickSetupBundleCatalog {
         remotePath = "mmproj-BF16.gguf",
         localFilename = "mmproj-gemma-4-E2B-it-BF16.gguf",
         type = ModelType.VISION_PROJECTOR,
-        sizeBytes = 987_000_000L,
+        sizeBytes = 986_833_728L,
         sha256 = "a402f10fb5780bf91d03a10cd89061139f522bee2e679b1291bbfdcd71d9547d",
         license = "Apache-2.0",
         fixedInstallPrefix = GEMMA_PREFIX
@@ -55,7 +55,7 @@ object QuickSetupBundleCatalog {
         remotePath = "mtp-gemma-4-E2B-it.gguf",
         localFilename = "mtp-gemma-4-E2B-it.gguf",
         type = ModelType.LLM_DRAFT,
-        sizeBytes = 97_800_000L,
+        sizeBytes = 97_817_664L,
         sha256 = "9eba819938efccfd6044f8af84e3bbfddc639a2bcf32ebc36420e6a649191919",
         license = "Apache-2.0",
         fixedInstallPrefix = GEMMA_PREFIX

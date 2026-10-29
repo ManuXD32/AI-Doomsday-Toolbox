@@ -123,7 +123,9 @@ data class SDConfig(
     /** Ordered image references for families whose img2img input uses repeated `-r` flags. */
     val referenceImages: List<String> = emptyList(),
     /** Frozen binary selected when a request is added to the generation queue. */
-    val sdBinaryPathOverride: String? = null
+    val sdBinaryPathOverride: String? = null,
+    /** True for runs started by Easy mode; advanced screens ignore the state of such runs. */
+    val easyMode: Boolean = false
 ) : Parcelable
 
 /** Resolve old saved commands/drafts into the ordered representation. */

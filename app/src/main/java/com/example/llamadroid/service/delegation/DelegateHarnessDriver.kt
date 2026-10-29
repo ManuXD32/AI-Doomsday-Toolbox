@@ -406,7 +406,8 @@ class DelegateHarnessDriver(context: Context, val runtimeId: String) : AutoClose
         stopOnPending: (HarnessDigestPending) -> Boolean = { true },
     ): DelegateWaitResult {
         attachThread(sessionId)
-        val watch = watches.getValue(sessionId)
+        val watch = watches[sessionId] ?: return DelegateWaitResult(
+            DelegateWaitReason.ERROR, HarnessTaskDigest(), "Harness session is not attached.")
         val deadline = System.currentTimeMillis() + maxMillis.coerceAtLeast(0)
         var idleSince: Long? = null
         while (true) {

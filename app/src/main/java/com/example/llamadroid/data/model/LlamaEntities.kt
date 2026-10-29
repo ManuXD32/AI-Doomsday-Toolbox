@@ -119,7 +119,10 @@ data class LlamaChatEntity(
     val serverId: Long? = null,
     /** Opt-in per-chat KV cache persistence (llama-server slot save/restore). */
     @androidx.room.ColumnInfo(defaultValue = "0")
-    val persistKvCache: Boolean = false
+    val persistKvCache: Boolean = false,
+    /** True for chats created in Easy mode; hidden from every advanced list, search and backup. */
+    @androidx.room.ColumnInfo(defaultValue = "0")
+    val easyMode: Boolean = false
 )
 
 @Entity(

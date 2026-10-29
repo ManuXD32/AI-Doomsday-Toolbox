@@ -106,7 +106,10 @@ import java.util.Locale
 fun AllMediaGalleryScreen(
     navController: NavController,
     initialType: String? = null,
-    initialSource: String? = null
+    initialSource: String? = null,
+    showBack: Boolean = true,
+    /** Easy mode: list only `easy_output/` media (no FastSD, no advanced outputs). */
+    easyOnly: Boolean = false
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -138,12 +141,12 @@ fun AllMediaGalleryScreen(
     }
     val gridMinSize = if (androidx.compose.ui.platform.LocalDensity.current.fontScale >= 1.3f) 280.dp else 180.dp
 
-    LaunchedEffect(refreshNonce, fastSdConnected, fastSdEndpoint) {
-        val localItems = withContext(Dispatchers.IO) { MediaGalleryIndex.scan(context) }
+    LaunchedEffect(refreshNonce, fastSdConnected, fastSdEndpoint, easyOnly) {
+        val localItems = withContext(Dispatchers.IO) { MediaGalleryIndex.scan(context, easyOnly = easyOnly) }
         // Publish local durable outputs first. A connected FastSD host is queried separately so
         // its SSH round trip cannot block the rest of Library from becoming useful.
         items = localItems
-        if (!fastSdConnected) return@LaunchedEffect
+        if (easyOnly || !fastSdConnected) return@LaunchedEffect
 
         val remoteItems = withContext(Dispatchers.IO) {
             SSHService.executeQuietBounded(
@@ -167,8 +170,8 @@ fun AllMediaGalleryScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    DisposableEffect(context) {
-        val observer = MediaGalleryIndex.observe(context) { refreshNonce++ }
+    DisposableEffect(context, easyOnly) {
+        val observer = MediaGalleryIndex.observe(context, easyOnly = easyOnly) { refreshNonce++ }
         onDispose { observer.close() }
     }
 
@@ -179,7 +182,7 @@ fun AllMediaGalleryScreen(
     AppScreenScaffold(
         title = stringResource(R.string.media_gallery_title),
         subtitle = stringResource(R.string.media_gallery_subtitle),
-        onBack = { navController.popBackStack() },
+        onBack = if (showBack) ({ navController.popBackStack() }) else null,
         actions = {
             IconButton(onClick = {
                 walkthroughTargets?.recordEvent("media.all_gallery")

@@ -59,7 +59,7 @@ object TitleGenerationManager {
             runCatching {
                 val repository = repository(app)
                 val chat = repository.getChat(chatId) ?: return@launch
-                if (chat.isEphemeral) return@launch
+                if (chat.isEphemeral || chat.easyMode) return@launch // Easy chats are titled by Easy itself
                 val messages = repository.getMessagesOnce(chatId).filter { it.kind == null && !it.isError }
                 val eligible = TitleGenerationLogic.shouldEnqueue(
                     chat.title, defaultTitles(app), settings.handledIds(), chatId,
@@ -120,7 +120,7 @@ object TitleGenerationManager {
                 val chats = repository.allChats.first()
                 for (chat in chats) {
                     if (added >= SCAN_CAP) break
-                    if (chat.isEphemeral || chat.id in handled || chat.id in pending) continue
+                    if (chat.isEphemeral || chat.easyMode || chat.id in handled || chat.id in pending) continue
                     if (!TitleGenerationLogic.isDefaultTitle(chat.title, defaults)) continue
                     val messages = repository.getMessagesOnce(chat.id).filter { it.kind == null && !it.isError }
                     if (TitleGenerationLogic.shouldEnqueue(
@@ -239,6 +239,11 @@ object TitleGenerationManager {
     ) {
         val chat = repository.getChat(chatId)
         if (chat == null) {
+            settings.markHandled(chatId)
+            forced -= chatId
+            return
+        }
+        if (chat.easyMode) {
             settings.markHandled(chatId)
             forced -= chatId
             return

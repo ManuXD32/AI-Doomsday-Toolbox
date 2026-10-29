@@ -7921,6 +7921,7 @@
     <string name="fgs_start_failed_mic_permission">Couldn\'t start %1$s: microphone permission is needed. Open the app, allow the microphone and try again.</string>
     <string name="fgs_start_failed_background">Couldn\'t start %1$s: Android blocked the microphone in the background. Open the app and try again.</string>
     <string name="fgs_start_failed_generic">Couldn\'t start %1$s: Android refused to run it in the background. Open the app and try again.</string>
+    <string name="fgs_start_failed_type">Couldn\'t start %1$s: Android refused to start it (type or permission): %2$s. Open the app and try again.</string>
     <string name="wear_server_confirm_title">Start llama.cpp from watch?</string>
     <string name="wear_server_confirm_message">Android needs phone confirmation before this background server can start.</string>
     <string name="wear_server_confirm_action">Start server</string>

@@ -13,8 +13,13 @@ import com.example.llamadroid.data.model.LlamaSpeculativeRunEntity
 
 @Dao
 interface LlamaServerDao {
-    @Query("SELECT * FROM llama_servers ORDER BY lastUsed DESC")
+    /** Advanced-mode connections only; rows bound to Easy-mode cards (`easy:` ids) are excluded. */
+    @Query("SELECT * FROM llama_servers WHERE (managedServerCardId IS NULL OR managedServerCardId NOT IN (SELECT id FROM llama_server_cards WHERE easyModelId LIKE 'easy:%')) ORDER BY lastUsed DESC")
     fun getAllServers(): Flow<List<LlamaServerEntity>>
+
+    /** Every connection including Easy-mode ones; only the Easy UI and its coordinator should use this. */
+    @Query("SELECT * FROM llama_servers ORDER BY lastUsed DESC")
+    fun getAllServersIncludingEasy(): Flow<List<LlamaServerEntity>>
 
     @Query("SELECT * FROM llama_servers WHERE id = :id")
     suspend fun getServerById(id: Long): LlamaServerEntity?
@@ -40,7 +45,7 @@ interface LlamaServerDao {
     @Query("UPDATE llama_servers SET lastUsed = :timestamp WHERE id = :id")
     suspend fun updateLastUsed(id: Long, timestamp: Long = System.currentTimeMillis())
 
-    @Query("SELECT * FROM llama_servers ORDER BY lastUsed DESC LIMIT 1")
+    @Query("SELECT * FROM llama_servers WHERE (managedServerCardId IS NULL OR managedServerCardId NOT IN (SELECT id FROM llama_server_cards WHERE easyModelId LIKE 'easy:%')) ORDER BY lastUsed DESC LIMIT 1")
     suspend fun getLastUsedServer(): LlamaServerEntity?
 
     @Query("UPDATE llama_servers SET supportsVision = :supportsVision WHERE id = :id")
@@ -110,14 +115,23 @@ data class ServerChatCount(val serverId: Long, val chatCount: Int)
 
 @Dao
 interface LlamaChatDao {
-    @Query("SELECT * FROM llama_chats ORDER BY lastModified DESC")
+    /** Advanced-mode chats only; Easy chats (`easyMode = 1`) are listed through [getEasyChats]. */
+    @Query("SELECT * FROM llama_chats WHERE easyMode = 0 ORDER BY lastModified DESC")
     fun getAllChats(): Flow<List<LlamaChatEntity>>
 
-    @Query("SELECT * FROM llama_chats WHERE pinnedToAiHub = 1 ORDER BY pinnedAt DESC, lastModified DESC")
+    /** Easy-mode chats only, newest first. */
+    @Query("SELECT * FROM llama_chats WHERE easyMode = 1 ORDER BY lastModified DESC")
+    fun getEasyChats(): Flow<List<LlamaChatEntity>>
+
+    @Query("SELECT * FROM llama_chats WHERE pinnedToAiHub = 1 AND easyMode = 0 ORDER BY pinnedAt DESC, lastModified DESC")
     fun getPinnedAiHubChats(): Flow<List<LlamaChatEntity>>
 
     @Query("SELECT * FROM llama_chats WHERE id = :id")
     suspend fun getChatById(id: Long): LlamaChatEntity?
+
+    /** One chat by id in either mode; the chat screen uses it because [getAllChats] excludes Easy chats. */
+    @Query("SELECT * FROM llama_chats WHERE id = :id")
+    fun observeChatById(id: Long): Flow<LlamaChatEntity?>
 
     @Query("SELECT * FROM llama_chats WHERE isEphemeral = 1 AND deleteAfterSession = 1 AND expiresAtMillis IS NOT NULL AND expiresAtMillis <= :now")
     suspend fun getExpiredEphemeralChats(now: Long = System.currentTimeMillis()): List<LlamaChatEntity>

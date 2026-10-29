@@ -404,8 +404,8 @@ object R14ShotCatalog {
                 pet = TamaFixtures.demoPet(),
                 usage = TamaContextUsage(usedTokens = 6_400, windowTokens = 8_192),
                 generating = false,
-                settingsRepo = remember { SettingsRepository(context) },
-                agentService = remember { mockk<TamaAgentService>(relaxed = true) },
+                settingsRepo = SettingsRepository(context),
+                agentService = remember<TamaAgentService> { mockk(relaxed = true) },
                 onDismiss = {}
             )
         }

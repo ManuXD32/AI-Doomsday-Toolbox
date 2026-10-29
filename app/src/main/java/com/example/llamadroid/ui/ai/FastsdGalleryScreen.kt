@@ -1,5 +1,6 @@
 package com.example.llamadroid.ui.ai
 
+import com.example.llamadroid.ui.components.rememberSampledImageBitmap
 import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 
 import android.content.Intent
@@ -500,13 +501,7 @@ fun ImageCard(
         Box(modifier = Modifier.fillMaxSize()) {
             // Thumbnail or placeholder
             if (image.thumbnail != null) {
-                val bitmap = remember(image.thumbnail) {
-                    try {
-                        BitmapFactory.decodeByteArray(image.thumbnail, 0, image.thumbnail!!.size)?.asImageBitmap()
-                    } catch (e: Exception) {
-                        null
-                    }
-                }
+                val bitmap = rememberSampledImageBitmap(image.thumbnail, 512)
                 bitmap?.let {
                     Image(
                         bitmap = it,
@@ -666,13 +661,7 @@ fun FullImageDialog(
                         if (isLoading) {
                             CircularProgressIndicator()
                         } else if (fullImageData != null) {
-                            val bitmap = remember(fullImageData) {
-                                try {
-                                    BitmapFactory.decodeByteArray(fullImageData, 0, fullImageData!!.size)?.asImageBitmap()
-                                } catch (e: Exception) {
-                                    null
-                                }
-                            }
+                            val bitmap = rememberSampledImageBitmap(fullImageData)
                             bitmap?.let {
                                 Image(
                                     bitmap = it,

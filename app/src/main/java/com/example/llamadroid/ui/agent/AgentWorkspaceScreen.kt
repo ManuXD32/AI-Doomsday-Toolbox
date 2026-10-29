@@ -416,27 +416,29 @@ fun AgentWorkspaceScreen(navController: NavController, filesOnly: Boolean = fals
             scope.launch {
                 if (captured.second.isBlank()) return@launch
                 setIsLoading(true, uploadingStatusText)
-                val fileName = context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                    val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                    cursor.moveToFirst()
-                    cursor.getString(nameIndex)
-                }?.substringAfterLast('/')?.substringAfterLast('\\')?.take(255)?.takeUnless { it.isBlank() || it in setOf(".", "..") } ?: "uploaded_file"
+                try {
+                    val fileName = context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                        val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (nameIndex >= 0 && cursor.moveToFirst()) cursor.getString(nameIndex) else null
+                    }?.substringAfterLast('/')?.substringAfterLast('\\')?.take(255)?.takeUnless { it.isBlank() || it in setOf(".", "..") } ?: "uploaded_file"
                 
-                captured.first.uploadFile(uri, "${captured.second}/$fileName").onSuccess {
-                    Toast.makeText(
-                        context,
-                        formatAgentWorkspaceString(agentUploadSuccessFormat, fileName),
-                        Toast.LENGTH_SHORT
-                    ).show()
-                    loadFiles()
-                }.onFailure { e: Throwable ->
-                    Toast.makeText(
-                        context,
-                        formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
-                        Toast.LENGTH_LONG
-                    ).show()
+                    captured.first.uploadFile(uri, "${captured.second}/$fileName").onSuccess {
+                        Toast.makeText(
+                            context,
+                            formatAgentWorkspaceString(agentUploadSuccessFormat, fileName),
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        loadFiles()
+                    }.onFailure { e: Throwable ->
+                        Toast.makeText(
+                            context,
+                            formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                } finally {
+                    setIsLoading(false)
                 }
-                setIsLoading(false)
             }
         }
     }

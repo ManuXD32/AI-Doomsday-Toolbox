@@ -737,13 +737,13 @@ private fun ImportedWhisperModelsSection(
     Spacer(modifier = Modifier.height(16.dp))
 }
 
-private data class WhisperImportResult(
+internal data class WhisperImportResult(
     val filename: String,
     val didCopy: Boolean,
     val model: ModelEntity
 )
 
-private fun resolveDisplayName(
+internal fun resolveDisplayName(
     context: android.content.Context,
     uri: Uri
 ): String {
@@ -760,7 +760,7 @@ private fun resolveDisplayName(
         ?: "imported_whisper_model.bin"
 }
 
-private suspend fun importWhisperModel(
+internal suspend fun importWhisperModel(
     context: android.content.Context,
     db: AppDatabase,
     uri: Uri,

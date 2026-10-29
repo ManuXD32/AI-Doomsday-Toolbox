@@ -25,6 +25,7 @@ import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.min
@@ -45,6 +46,8 @@ class VideoInterpolationService : Service() {
     private var currentProcess: Process? = null
     private var isCancelled = false
     private var notificationTaskId: Int? = null
+    private val activeJobs = AtomicInteger(0)
+    @Volatile private var latestStartId = 0
     private lateinit var ffmpegLibDir: File
 
     inner class VideoInterpolationBinder : Binder() {
@@ -60,29 +63,78 @@ class VideoInterpolationService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (!startForegroundWithNotification()) return START_NOT_STICKY
+        latestStartId = startId
         when (intent?.action) {
+            ACTION_CANCEL_INTERPOLATION -> {
+                // A cancel sent to an idle service must never go foreground or hold a wakelock.
+                if (activeJobs.get() == 0 && notificationTaskId == null) {
+                    stopSelf(startId)
+                } else {
+                    cancel()
+                }
+            }
+            ACTION_BEGIN_JOB -> {
+                // Started by the screen right before a bound call so the job outlives the UI.
+                if (!startForegroundWithNotification()) return START_NOT_STICKY
+            }
             ACTION_START_INTERPOLATION -> {
+                if (!startForegroundWithNotification()) return START_NOT_STICKY
                 val config = intent.toInterpolationConfig()
                 if (config == null) {
                     _state.value = VideoInterpolationState.Error(getString(R.string.interpolation_error_missing_config))
+                    releaseIfIdle()
                 } else {
                     scope.launch { interpolate(config) }
                 }
             }
             ACTION_START_INTERPOLATE_UPSCALE -> {
+                if (!startForegroundWithNotification()) return START_NOT_STICKY
                 val config = intent.toInterpolateUpscaleConfig()
                 if (config == null) {
                     val message = getString(R.string.interpolation_error_missing_config)
                     VideoInterpolateUpscaleStateHolder.setError(message)
                     _state.value = VideoInterpolationState.Error(message)
+                    releaseIfIdle()
                 } else {
                     scope.launch { interpolateThenUpscale(config) }
                 }
             }
-            ACTION_CANCEL_INTERPOLATION -> cancel()
+            else -> stopSelf(startId)
         }
         return START_NOT_STICKY
+    }
+
+    /** Runs [block] as a counted job: foreground + wakelock while any job runs, released when the last ends. */
+    private suspend fun <T> trackJob(block: suspend () -> Result<T>): Result<T> {
+        val started = synchronized(this) {
+            activeJobs.incrementAndGet()
+            startForegroundWithNotification().also { if (!it) activeJobs.decrementAndGet() }
+        }
+        if (!started) {
+            val message = (_state.value as? VideoInterpolationState.Error)?.message
+                ?: getString(R.string.interpolation_error_unknown)
+            return Result.failure(IllegalStateException(message))
+        }
+        try {
+            return block()
+        } finally {
+            synchronized(this) {
+                activeJobs.decrementAndGet()
+                releaseIfIdle()
+            }
+        }
+    }
+
+    /** Drops foreground, the wakelock and the service itself when no job is running. */
+    @Synchronized
+    private fun releaseIfIdle() {
+        if (activeJobs.get() > 0) return
+        WakeLockManager.release("VideoInterpolationService")
+        // DETACH keeps the completion/error notification already posted for the finished task.
+        if (notificationTaskId != null) stopForeground(STOP_FOREGROUND_DETACH)
+        notificationTaskId = null
+        val startId = latestStartId
+        if (startId > 0) stopSelf(startId)
     }
 
     override fun onTimeout(startId: Int, fgsType: Int) {
@@ -172,7 +224,10 @@ class VideoInterpolationService : Service() {
         }
     }
 
-    suspend fun interpolate(config: VideoInterpolationConfig): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun interpolate(config: VideoInterpolationConfig): Result<String> =
+        trackJob { interpolateInternal(config) }
+
+    private suspend fun interpolateInternal(config: VideoInterpolationConfig): Result<String> = withContext(Dispatchers.IO) {
         isCancelled = false
         VideoInterpolationStateHolder.reset()
         VideoInterpolationStateHolder.setInputPath(config.inputPath)
@@ -311,7 +366,10 @@ class VideoInterpolationService : Service() {
         }
     }
 
-    suspend fun interpolateThenUpscale(config: VideoInterpolateUpscaleConfig): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun interpolateThenUpscale(config: VideoInterpolateUpscaleConfig): Result<String> =
+        trackJob { interpolateThenUpscaleInternal(config) }
+
+    private suspend fun interpolateThenUpscaleInternal(config: VideoInterpolateUpscaleConfig): Result<String> = withContext(Dispatchers.IO) {
         isCancelled = false
         VideoInterpolateUpscaleStateHolder.reset()
         VideoUpscalerStateHolder.reset()
@@ -781,6 +839,7 @@ class VideoInterpolationService : Service() {
         }
     }
 
+    @Synchronized
     private fun startForegroundWithNotification(): Boolean {
         if (notificationTaskId != null) return true
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
@@ -895,6 +954,7 @@ class VideoInterpolationService : Service() {
     companion object {
         private const val ACTION_START_INTERPOLATION = "com.example.llamadroid.action.START_VIDEO_INTERPOLATION"
         private const val ACTION_START_INTERPOLATE_UPSCALE = "com.example.llamadroid.action.START_VIDEO_INTERPOLATE_UPSCALE"
+        private const val ACTION_BEGIN_JOB = "com.example.llamadroid.action.BEGIN_VIDEO_INTERPOLATION_JOB"
         private const val ACTION_CANCEL_INTERPOLATION = "com.example.llamadroid.action.CANCEL_VIDEO_INTERPOLATION"
         private const val EXTRA_INPUT_PATH = "extra_video_interpolation_input"
         private const val EXTRA_OUTPUT_PATH = "extra_video_interpolation_output"
@@ -949,6 +1009,9 @@ class VideoInterpolationService : Service() {
                 putExtra(EXTRA_UPSCALE_PROC_THREADS, config.upscaleConfig.procThreads)
                 putExtra(EXTRA_UPSCALE_SAVE_THREADS, config.upscaleConfig.saveThreads)
             }
+
+        fun createBeginJobIntent(context: Context): Intent =
+            Intent(context, VideoInterpolationService::class.java).apply { action = ACTION_BEGIN_JOB }
 
         fun createCancelIntent(context: Context): Intent =
             Intent(context, VideoInterpolationService::class.java).apply {

@@ -158,6 +158,8 @@ class LlamaRepository(
     }
     
     suspend fun getChat(id: Long) = chatDao.getChatById(id)
+
+    fun observeChat(id: Long): Flow<LlamaChatEntity?> = chatDao.observeChatById(id)
     suspend fun deleteChat(chat: LlamaChatEntity) {
         deleteDelegationArtifacts(chat.id)
         chatDao.deleteChat(chat)

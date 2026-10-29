@@ -7919,6 +7919,7 @@
     <string name="fgs_start_failed_mic_permission">No se pudo iniciar %1$s: hace falta el permiso del micrófono. Abre la app, permite el micrófono e inténtalo de nuevo.</string>
     <string name="fgs_start_failed_background">No se pudo iniciar %1$s: Android bloqueó el micrófono en segundo plano. Abre la app e inténtalo de nuevo.</string>
     <string name="fgs_start_failed_generic">No se pudo iniciar %1$s: Android no permitió ejecutarlo en segundo plano. Abre la app e inténtalo de nuevo.</string>
+    <string name="fgs_start_failed_type">No se pudo iniciar %1$s: Android se negó a iniciarlo (tipo o permiso): %2$s. Abre la app e inténtalo de nuevo.</string>
     <string name="wear_server_confirm_title">¿Iniciar llama.cpp desde el reloj?</string>
     <string name="wear_server_confirm_message">Android necesita confirmacion en el telefono antes de iniciar este servidor en segundo plano.</string>
     <string name="wear_server_confirm_action">Iniciar servidor</string>

@@ -1518,7 +1518,10 @@ fun ImageGenScreen(
     val adetailerModeHolder = remember { SDModeStateHolder.adetailer }
     val upscaleModeHolder = remember { SDModeStateHolder.upscale }
 
-    val txt2imgGenerationState by txt2imgModeHolder.state.collectAsState()
+    val rawTxt2imgGenerationState by txt2imgModeHolder.state.collectAsState()
+    val txt2imgEasyOrigin by txt2imgModeHolder.easyOrigin.collectAsState()
+    // Easy-mode runs share this holder; the advanced screen must not show them.
+    val txt2imgGenerationState = if (txt2imgEasyOrigin) SDGenerationState.Idle else rawTxt2imgGenerationState
     val img2imgGenerationState by img2imgModeHolder.state.collectAsState()
     val adetailerGenerationState by adetailerModeHolder.state.collectAsState()
     val upscaleGenerationState by upscaleModeHolder.state.collectAsState()
@@ -1686,13 +1689,15 @@ fun ImageGenScreen(
 
     // Load existing images from disk (including subfolders)
     LaunchedEffect(Unit) {
-        val allImages = mutableListOf<File>()
-        galleryDirs.forEach { dir ->
+        diskImages = withContext(Dispatchers.IO) {
+            val allImages = mutableListOf<File>()
+            galleryDirs.forEach { dir ->
                 dir.listFiles()
                     ?.filter { it.extension.lowercase() in listOf("png", "jpg", "jpeg") }
                     ?.let { allImages.addAll(it) }
+            }
+            allImages.sortedByDescending { it.lastModified() }
         }
-        diskImages = allImages.sortedByDescending { it.lastModified() }
     }
 
     LaunchedEffect(txt2imgGenerationState, img2imgGenerationState, adetailerGenerationState, upscaleGenerationState, selectedMode, adetailerInputMode) {
@@ -1706,13 +1711,15 @@ fun ImageGenScreen(
             is SDGenerationState.Error -> errorMessage = state.message
             is SDGenerationState.Complete -> {
                 errorMessage = null
-                val allImages = mutableListOf<File>()
-                galleryDirs.forEach { dir ->
-                    dir.listFiles()
-                        ?.filter { it.extension.lowercase() in listOf("png", "jpg", "jpeg") }
-                        ?.let { allImages.addAll(it) }
+                diskImages = withContext(Dispatchers.IO) {
+                    val allImages = mutableListOf<File>()
+                    galleryDirs.forEach { dir ->
+                        dir.listFiles()
+                            ?.filter { it.extension.lowercase() in listOf("png", "jpg", "jpeg") }
+                            ?.let { allImages.addAll(it) }
+                    }
+                    allImages.sortedByDescending { it.lastModified() }
                 }
-                diskImages = allImages.sortedByDescending { it.lastModified() }
             }
             else -> Unit
         }

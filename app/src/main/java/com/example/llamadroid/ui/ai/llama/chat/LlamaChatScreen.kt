@@ -88,6 +88,8 @@ import com.example.llamadroid.data.repository.UnifiedServer
 import com.example.llamadroid.data.repository.UnifiedServerKind
 import com.example.llamadroid.data.repository.UnifiedServerStatus
 import kotlinx.coroutines.delay
+import com.example.llamadroid.data.easy.EasyModeSettings
+import com.example.llamadroid.ui.easy.EasyChatOptionsSheet
 import kotlinx.coroutines.flow.collectLatest
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -221,6 +223,10 @@ fun LlamaChatScreen(
     var pendingSwitchRowId by remember { mutableStateOf<Long?>(null) }
     var showSettingsSheet by remember { mutableStateOf(false) }
     var showChatOptions by remember { mutableStateOf(false) }
+    // Easy mode: simplified presentation (no server/settings sheets, delegation bar or advanced menus).
+    val easySettings = remember { EasyModeSettings(context) }
+    var showEasyModelPicker by remember { mutableStateOf(false) }
+    var showEasyOptions by remember { mutableStateOf(false) }
     var detailServerKey by remember { mutableStateOf<String?>(null) }
     var editingServer by remember { mutableStateOf<UnifiedServer?>(null) }
     var showServerEditor by remember { mutableStateOf(false) }
@@ -252,8 +258,13 @@ fun LlamaChatScreen(
     }
 
     // Server & Chat details
-    val chats by viewModel.chats.collectAsState()
-    val currentChat = chats.find { it.id == chatId }
+    // Load this chat by id: the shared chat list holds advanced chats only, so Easy chats are not in it.
+    val observedChat by remember(chatId) { repository.observeChat(chatId) }.collectAsState(initial = null)
+    val currentChat = observedChat
+    // Easy presentation follows the chat itself, not the global Easy switch.
+    val easyMode = currentChat?.easyMode == true
+    // Until the chat row is observed, easyMode reads false; advanced-only UI must wait for the row.
+    val chatLoaded = currentChat != null
 
     // Export launcher (declared after scope and currentChat are available)
     val exportLauncher = rememberLauncherForActivityResult(
@@ -330,7 +341,8 @@ fun LlamaChatScreen(
         }
     }
 
-    val unifiedServers by registryViewModel.servers.collectAsState()
+    // A chat must find the server it is bound to in either mode (Easy servers are not in `servers`).
+    val unifiedServers by registryViewModel.serversIncludingEasy.collectAsState()
     val serverActions by registryViewModel.actions.collectAsState()
     val activeUnified = activeServer?.id?.let { rowId -> unifiedServers.firstOrNull { it.rowId == rowId } }
     val activeServerAction = activeUnified?.let { serverActions[it.key] }
@@ -688,13 +700,19 @@ fun LlamaChatScreen(
     fun sendCurrentMessage() {
         val serverId = activeServer?.id
         if (serverId == null) {
-            showServerPicker = true
+            if (chatLoaded && !easyMode) showServerPicker = true
             return
         }
         val text = if (inputMessage.isBlank() && attachmentsUi.pendingFiles.isNotEmpty()) {
             attachedFilesFallbackText(context, attachmentsUi.pendingFiles)
         } else {
             inputMessage
+        }
+        if (easyMode && currentChat != null && messages.none { it.role == "user" }) {
+            val replaceable = com.example.llamadroid.service.titlegen.TitleGenerationManager.defaultTitles(context) +
+                listOfNotNull(activeServer.name, activeServer.modelName, activeServer.modelName?.removeSuffix(".gguf"))
+            com.example.llamadroid.ui.easy.easyChatTitleFromMessage(text, currentChat.title, replaceable)
+                ?.let { viewModel.renameChat(chatId, it) }
         }
         val intentImagePath = attachedImagePath
         val intentAudioPath = attachedAudioPath
@@ -1125,6 +1143,11 @@ fun LlamaChatScreen(
         onManageCustomTools = { showCustomToolsManager = true }
     )
 
+    // Easy mic: transcribe with the Whisper model picked in Easy mode through the chat's own audio options.
+    val easyWhisperPath = easySettings.whisperModelPath
+    com.example.llamadroid.ui.easy.EasyChatAudioPolicyEffect(easyMode, settings, easyWhisperPath, chatDirectAudioCapable)
+    val easyFriendlyModelName = com.example.llamadroid.ui.easy.rememberEasyModelName(activeServer?.modelName)
+
     Scaffold(
         contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
         topBar = {
@@ -1194,7 +1217,11 @@ fun LlamaChatScreen(
                 onGenerateTitle = {
                     Toast.makeText(context, generatingTitleMessage, Toast.LENGTH_SHORT).show()
                     com.example.llamadroid.service.titlegen.TitleGenerationManager.generateNow(context, chatId)
-                }
+                },
+                easyMode = easyMode,
+                easyModelName = easyFriendlyModelName,
+                onEasyOptions = { showEasyOptions = true },
+                onEasyModelClick = { showEasyModelPicker = true }
             )
         }
     ) { padding ->
@@ -1343,10 +1370,11 @@ fun LlamaChatScreen(
                     }
                 },
                 onViewLog = { activeUnified?.let { detailServerKey = it.key } },
-                onChooseServer = { showServerPicker = true }
+                onChooseServer = { showServerPicker = true },
+                showChooseServer = chatLoaded && !easyMode
             )
 
-            if (chatId >= 0L) ChatDelegationStopBar(chatId = chatId, navController = navController)
+            if (chatId >= 0L && chatLoaded && !easyMode) ChatDelegationStopBar(chatId = chatId, navController = navController)
 
             ChatComposer(
                 inputMessage = inputMessage,
@@ -1368,7 +1396,7 @@ fun LlamaChatScreen(
                 isCallActiveForChat = isCallActiveForChat,
                 isExtractingDocument = isExtractingDocument,
                 supportsVision = supportsVision,
-                supportsVideo = supportsVideo,
+                supportsVideo = supportsVideo && chatLoaded && !easyMode,
                 supportsAudioInput = supportsAudioInput,
                 onPickImage = {
                     photoPickerLauncher.launch(
@@ -1381,7 +1409,7 @@ fun LlamaChatScreen(
                 onPickDocument = { documentPickerLauncher.launch(nativeChatDocumentMimeTypes()) },
                 onStartRecording = { startCurrentRecording() },
                 onSend = { sendCurrentMessage() },
-                showAttachFile = settings.chatToolsEnabledByUser || settings.delegation.enabled,
+                showAttachFile = easyMode || settings.chatToolsEnabledByUser || settings.delegation.enabled,
                 onPickFile = chatFilePicker.launch,
                 isImportingFile = chatFilePicker.importing,
                 pendingFiles = attachmentsUi.pendingFiles,
@@ -1424,13 +1452,16 @@ fun LlamaChatScreen(
                 }
             }
         }
-        ChatKvCacheNoticeHost(
-            chatId = chatId,
-            persistKvCache = currentChat?.persistKvCache == true,
-            server = activeServer,
-            hasNoMessages = { viewModel.getMessagesOnce(chatId).isEmpty() },
-            onTurnOff = { scope.launch { repository.setPersistKvCache(chatId, false) } }
-        )
+        // Wait for the chat row so an Easy chat never flashes the advanced helper notice while loading.
+        if (chatLoaded && currentChat != null && !easyMode) {
+            ChatKvCacheNoticeHost(
+                chatId = chatId,
+                persistKvCache = currentChat.persistKvCache,
+                server = activeServer,
+                hasNoMessages = { viewModel.getMessagesOnce(chatId).isEmpty() },
+                onTurnOff = { scope.launch { repository.setPersistKvCache(chatId, false) } }
+            )
+        }
         messagePendingDelete?.let { messageToDelete ->
             LlamaDeleteMessageDialog(
                 onConfirm = {
@@ -1501,7 +1532,7 @@ fun LlamaChatScreen(
                 onDismiss = { showRenameDialog = false }
             )
         }
-        if (showServerSheet) {
+        if (showServerSheet && chatLoaded && !easyMode) {
             ChatServerSheet(
                 server = activeUnified,
                 action = activeServerAction,
@@ -1605,7 +1636,54 @@ fun LlamaChatScreen(
                 }
             )
         }
-        if (showSettingsSheet) {
+        if (showEasyModelPicker && easyMode) {
+            com.example.llamadroid.ui.easy.EasyChatModelPicker(
+                currentFilename = activeServer?.modelName,
+                busy = isChatBusy,
+                onSwitched = { switch ->
+                    viewModel.bindChatServer(chatId, switch.serverId)
+                    if (serverSwitchDeletesCache(currentChat?.persistKvCache == true)) {
+                        scope.launch(Dispatchers.IO) { NativeChatKvCacheStore(context.applicationContext).delete(chatId) }
+                    }
+                    currentChat?.let { viewModel.updateChat(it, it.title, switch.contextTokens, it.systemPrompt) }
+                    serverRefreshTick++
+                    showEasyModelPicker = false
+                },
+                onDismiss = { showEasyModelPicker = false }
+            )
+        }
+        if (showEasyOptions && easyMode) {
+            EasyChatOptionsSheet(
+                cardId = activeServer?.managedServerCardId,
+                webSearchEnabled = settings.toolsEnabled && settings.webSearchEnabled,
+                onWebSearchChange = { enabled ->
+                    settings.toolsEnabled = enabled
+                    settings.webSearchEnabled = enabled
+                },
+                rememberChat = currentChat?.persistKvCache == true,
+                onRememberChatChange = { enabled -> scope.launch { repository.setPersistKvCache(chatId, enabled) } },
+                busy = isChatBusy,
+                onContextApplied = { tokens ->
+                    currentChat?.let { viewModel.updateChat(it, it.title, tokens, it.systemPrompt) }
+                    serverRefreshTick++
+                },
+                onRename = {
+                    showEasyOptions = false
+                    renameText = currentChat?.title.orEmpty()
+                    showRenameDialog = true
+                },
+                onDelete = {
+                    showEasyOptions = false
+                    currentChat?.let { viewModel.deleteChat(it) }
+                    navController.popBackStack()
+                },
+                onDismiss = {
+                    flushSettings()
+                    showEasyOptions = false
+                }
+            )
+        }
+        if (showSettingsSheet && chatLoaded && !easyMode) {
             ChatSettingsSheet(
                 state = settings,
                 env = settingsEnv,

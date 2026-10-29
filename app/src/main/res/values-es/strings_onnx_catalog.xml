@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="onnx_style_analogmadness">Aspecto analógico de película, retratos intensos</string>
+    <string name="onnx_style_aniflatmix">Anime con sombreado plano</string>
+    <string name="onnx_style_beautifulrealistic_v60">Fotorrealista con luz suave</string>
+    <string name="onnx_style_cetusmix">Estilo flexible para todo uso</string>
+    <string name="onnx_style_counterfit_v3_0_babes">Personajes de estilo anime</string>
+    <string name="onnx_style_counterfit_v3_0_zovyarpg">Arte de fantasía estilo RPG</string>
+    <string name="onnx_style_counterfit_v3_0">Ilustración anime</string>
+    <string name="onnx_style_cyberrealistic_v32">Fotorrealismo nítido y de alto contraste</string>
+    <string name="onnx_style_darkjunglemix">Aspecto sombrío y cinematográfico</string>
+    <string name="onnx_style_deliberate">Versátil para todo uso</string>
+    <string name="onnx_style_dreamlikep_r_2">Renderizado fotorrealista onírico</string>
+    <string name="onnx_style_dreamshaper">Estilizado para todo uso</string>
+    <string name="onnx_style_epicrealism_pureevolutionv4">Realismo detallado y de alta calidad</string>
+    <string name="onnx_style_fantasticmix">Escenas de fantasía</string>
+    <string name="onnx_style_icbinp">Fotorrealista de uso general</string>
+    <string name="onnx_style_jucy666">Fotorrealismo estilizado de alto contraste</string>
+    <string name="onnx_style_landscape">Paisajes y escenarios</string>
+    <string name="onnx_style_lyriel">Fantasía con aspecto pictórico</string>
+    <string name="onnx_style_majicmixrealistic_betterv2v25">Retratos realistas y pulidos</string>
+    <string name="onnx_style_meinamix">Anime e ilustración</string>
+    <string name="onnx_style_meinaunreal">Renderizado estilizado, tipo videojuego</string>
+    <string name="onnx_style_mixreal">Realismo muy fotográfico</string>
+    <string name="onnx_style_realexistence">Retratos realistas</string>
+    <string name="onnx_style_realisticfantasy">Fantasía con texturas realistas</string>
+    <string name="onnx_style_realvision">Realista, de generación anterior</string>
+    <string name="onnx_style_sunshinemix">Mezcla cálida de uso general</string>
+    <string name="onnx_style_universestable">Estilo estable de uso general</string>
+</resources>

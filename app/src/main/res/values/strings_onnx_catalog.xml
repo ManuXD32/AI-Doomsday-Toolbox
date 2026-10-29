@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="onnx_style_analogmadness">Film-like analog look, strong portraits</string>
+    <string name="onnx_style_aniflatmix">Anime with flat shading</string>
+    <string name="onnx_style_beautifulrealistic_v60">Photorealistic with soft lighting</string>
+    <string name="onnx_style_cetusmix">Flexible all-purpose style</string>
+    <string name="onnx_style_counterfit_v3_0_babes">Anime-style characters</string>
+    <string name="onnx_style_counterfit_v3_0_zovyarpg">Stylized fantasy RPG art</string>
+    <string name="onnx_style_counterfit_v3_0">Anime illustration</string>
+    <string name="onnx_style_cyberrealistic_v32">Sharp, high-contrast photorealism</string>
+    <string name="onnx_style_darkjunglemix">Moody, cinematic look</string>
+    <string name="onnx_style_deliberate">Versatile all-rounder</string>
+    <string name="onnx_style_dreamlikep_r_2">Dreamy photorealistic rendering</string>
+    <string name="onnx_style_dreamshaper">Stylized all-rounder</string>
+    <string name="onnx_style_epicrealism_pureevolutionv4">Detailed, high-quality realism</string>
+    <string name="onnx_style_fantasticmix">Fantasy scenes</string>
+    <string name="onnx_style_icbinp">Photorealistic general purpose</string>
+    <string name="onnx_style_jucy666">High-contrast stylized photorealism</string>
+    <string name="onnx_style_landscape">Landscapes and scenery</string>
+    <string name="onnx_style_lyriel">Painterly fantasy</string>
+    <string name="onnx_style_majicmixrealistic_betterv2v25">Polished realistic portraits</string>
+    <string name="onnx_style_meinamix">Anime and illustration</string>
+    <string name="onnx_style_meinaunreal">Stylized, game-like rendering</string>
+    <string name="onnx_style_mixreal">Photo-heavy realism</string>
+    <string name="onnx_style_realexistence">Realistic portraits</string>
+    <string name="onnx_style_realisticfantasy">Fantasy with realistic textures</string>
+    <string name="onnx_style_realvision">Realistic, earlier generation</string>
+    <string name="onnx_style_sunshinemix">Warm all-purpose mix</string>
+    <string name="onnx_style_universestable">Stable general-purpose style</string>
+</resources>

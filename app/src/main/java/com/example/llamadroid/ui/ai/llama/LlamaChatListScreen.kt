@@ -61,7 +61,9 @@ import java.util.*
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import com.google.gson.Gson
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 private const val LLAMA_FOLDER_FILTER_ALL = Long.MIN_VALUE
@@ -171,10 +173,11 @@ fun LlamaChatListContent(
         if (uri != null) {
             scope.launch {
                 try {
+                    val (title, systemPrompt, messages) = withContext(Dispatchers.IO) {
                     val json = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }.orEmpty()
                     val gson = Gson()
                     val obj = JSONObject(json)
-                    val (title, systemPrompt, messages) = when {
+                    when {
                         obj.has("messages") -> {
                             val payload = gson.fromJson(json, LlamaChatExportPayload::class.java)
                             Triple(
@@ -213,6 +216,7 @@ fun LlamaChatListContent(
                             )
                         }
                         else -> error(importErrorUnknownFormatText)
+                    }
                     }
                     viewModel.importChat(title, systemPrompt, messages) { newId ->
                         navController.navigate(Screen.LlamaChat.createRoute(newId, -1))

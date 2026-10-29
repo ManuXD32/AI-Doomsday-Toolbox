@@ -6739,7 +6739,7 @@ private fun Txt2ImgUpscaleWorkflowContent(
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     // Show result image with badge
-                    val bitmap = remember(path) { BitmapFactory.decodeFile(path)?.asImageBitmap() }
+                    val bitmap = com.example.llamadroid.ui.components.rememberSampledImageBitmap(path)
                     bitmap?.let {
                         Box {
                             Image(

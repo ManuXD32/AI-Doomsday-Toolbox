@@ -4,6 +4,7 @@ import android.content.Context
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.SavedCommand
 import com.example.llamadroid.data.db.SavedCommandScopes
+import com.example.llamadroid.data.easy.isEasyModeCard
 import com.example.llamadroid.data.model.LlamaServerCardEntity
 import com.example.llamadroid.data.model.LlamaServerEntity
 import com.example.llamadroid.service.LlamaServerLaunchProfile
@@ -169,10 +170,12 @@ class LlamaServerRegistry(
         }
     }
 
-    fun observeServers(): Flow<List<UnifiedServer>> {
+    /** Advanced lists use the default; only Easy-mode UI passes [includeEasy] to see its own cards. */
+    fun observeServers(includeEasy: Boolean = false): Flow<List<UnifiedServer>> {
         val data = combine(
             database.llamaServerCardDao().observeCards(),
-            database.llamaServerDao().getAllServers(),
+            if (includeEasy) database.llamaServerDao().getAllServersIncludingEasy()
+            else database.llamaServerDao().getAllServers(),
             database.savedCommandDao().getCommandsByScope(SavedCommandScopes.GENERAL),
             database.llamaChatDao().observeBoundChatCounts()
         ) { cards, rows, presets, counts -> Snapshot(cards, rows, presets, counts.associate { it.serverId to it.chatCount }) }
@@ -181,7 +184,11 @@ class LlamaServerRegistry(
             val profiles = snap.cards.associate { card ->
                 card.savedCommandId to presetById[card.savedCommandId]?.launchProfileForCard(card)
             }
-            mergeUnifiedServers(snap.cards, snap.rows, profiles, sessions, legacy, snap.counts, ::modelFilesPresent)
+            // Easy-mode cards (and the connection rows bound to them) stay out of the advanced list.
+            val easyCardIds = if (includeEasy) emptySet() else snap.cards.filter(::isEasyModeCard).map { it.id }.toSet()
+            val cards = snap.cards.filterNot { it.id in easyCardIds }
+            val rows = snap.rows.filterNot { it.managedServerCardId in easyCardIds }
+            mergeUnifiedServers(cards, rows, profiles, sessions, legacy, snap.counts, ::modelFilesPresent)
         }.distinctUntilChanged().flowOn(Dispatchers.Default)
     }
 

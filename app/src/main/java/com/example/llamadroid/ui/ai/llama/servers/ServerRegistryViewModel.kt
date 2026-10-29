@@ -71,6 +71,13 @@ class ServerRegistryViewModel(application: Application) : AndroidViewModel(appli
     val servers: StateFlow<List<UnifiedServer>> = registry.observeServers()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
+    /**
+     * Every server including Easy-mode ones. Only for resolving the server a chat is already bound
+     * to (status banner, start/stop); pickers and lists keep using [servers].
+     */
+    val serversIncludingEasy: StateFlow<List<UnifiedServer>> = registry.observeServers(includeEasy = true)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
     private val _actions = MutableStateFlow<Map<String, ServerActionState>>(emptyMap())
 
     /** Transient status (progress / error) per [key]; missing key means idle with no error. */

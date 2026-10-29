@@ -1,12 +1,12 @@
 package com.example.llamadroid.ui.notes
 
+import com.example.llamadroid.ui.components.rememberSampledImageBitmap
 import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import android.text.format.DateFormat
 import android.content.Intent
-import android.graphics.BitmapFactory
 import android.media.MediaPlayer
 import android.net.Uri
 import android.widget.Toast
@@ -46,7 +46,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -2502,9 +2501,7 @@ private fun NoteImageBlock(
     onClick: () -> Unit
 ) {
     val file = remember(imageReference.path) { File(imageReference.path.removePrefix("file://")) }
-    val bitmap = remember(imageReference.path, file.lastModified()) {
-        runCatching { BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap() }.getOrNull()
-    }
+    val bitmap = rememberSampledImageBitmap(file.absolutePath)
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -2553,9 +2550,7 @@ private fun NoteImageDialog(
     onDelete: () -> Unit
 ) {
     val file = remember(imageReference.path) { File(imageReference.path.removePrefix("file://")) }
-    val bitmap = remember(imageReference.path, file.lastModified()) {
-        runCatching { BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap() }.getOrNull()
-    }
+    val bitmap = rememberSampledImageBitmap(file.absolutePath)
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)

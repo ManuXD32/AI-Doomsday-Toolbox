@@ -271,6 +271,18 @@ fun GeneralSettingsScreen(navController: NavController) {
                 }
             }
             
+            // Easy mode switch (the same app-wide flow the top-bar toggle uses)
+            item {
+                val easySettings = remember { com.example.llamadroid.data.easy.EasyModeSettings(context) }
+                val easyEnabled by easySettings.enabledFlow.collectAsState()
+                com.example.llamadroid.ui.components.SettingSwitchCard(
+                    label = stringResource(R.string.easy_mode_shell_setting_title),
+                    description = stringResource(R.string.easy_mode_shell_setting_desc),
+                    checked = easyEnabled,
+                    onCheckedChange = { easySettings.enabled = it }
+                )
+            }
+
             // Soft Studio appearance
             item {
                 val themeMode by settingsRepo.themeMode.collectAsState()
