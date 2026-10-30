@@ -75,6 +75,42 @@ class ForegroundStartTest {
     }
 
     @Test
+    fun classifiesExhaustedTimeLimitBeforeBackgroundDenial() {
+        val quota = "Time limit already exhausted for foreground service type dataSync"
+        assertEquals(
+            ForegroundStart.Reason.TIME_LIMIT_EXHAUSTED,
+            ForegroundStart.classifyFailure(ForegroundServiceStartNotAllowedException(quota))
+        )
+        assertEquals(
+            ForegroundStart.Reason.TIME_LIMIT_EXHAUSTED,
+            ForegroundStart.classifyFailure(SecurityException(quota))
+        )
+        assertEquals(
+            ForegroundStart.Reason.BACKGROUND_NOT_ALLOWED,
+            ForegroundStart.classifyFailure(ForegroundServiceStartNotAllowedException("denied"))
+        )
+    }
+
+    @Test
+    fun limitedTypesBecomeSpecialUseOnApi35WhenDeclared() {
+        val special = ForegroundServiceTypes.SPECIAL_USE
+        assertEquals(special, ForegroundStart.effectiveTypes(dataSync, 35, true, dataSync or special))
+        assertEquals(special or playback, ForegroundStart.effectiveTypes(mediaProcessing or playback, 36, true, mediaProcessing or dataSync or special or playback))
+        assertEquals(dataSync, ForegroundStart.effectiveTypes(dataSync, 35, true, dataSync))
+        assertEquals(dataSync, ForegroundStart.effectiveTypes(dataSync, 34, true, dataSync or special))
+        assertEquals(dataSync, ForegroundStart.effectiveTypes(dataSync, 35, true, null))
+    }
+
+    @Test
+    fun quotaRetryUsesSpecialUseOnlyWhenDeclared() {
+        val special = ForegroundServiceTypes.SPECIAL_USE
+        assertEquals(special or playback, ForegroundStart.specialUseRetryTypes(dataSync or playback, dataSync or special or playback))
+        assertNull(ForegroundStart.specialUseRetryTypes(dataSync, dataSync))
+        assertNull(ForegroundStart.specialUseRetryTypes(dataSync, null))
+        assertNull(ForegroundStart.specialUseRetryTypes(playback, playback or special))
+    }
+
+    @Test
     fun retriesMediaProcessingWithDataSyncOnlyWhenDeclared() {
         assertEquals(dataSync, ForegroundStart.retryTypes(mediaProcessing, mediaProcessing or dataSync))
         assertEquals(dataSync or playback, ForegroundStart.retryTypes(mediaProcessing or playback, mediaProcessing or dataSync))
@@ -94,5 +130,5 @@ class ForegroundStartTest {
 }
 
 // Same simple names as the framework classes; classification is by simple name.
-private class ForegroundServiceStartNotAllowedException : IllegalStateException()
+private class ForegroundServiceStartNotAllowedException(message: String? = null) : IllegalStateException(message)
 private class InvalidForegroundServiceTypeException : RuntimeException()

@@ -142,7 +142,7 @@ class LlamaScheduledTaskService : Service() {
             this,
             taskId,
             notification,
-            ForegroundServiceTypes.DATA_SYNC
+            ForegroundServiceTypes.SPECIAL_USE
         )
         if (startResult is ForegroundStart.Result.Failed) {
             UnifiedNotificationManager.failTask(

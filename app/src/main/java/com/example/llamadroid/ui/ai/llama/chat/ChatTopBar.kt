@@ -10,6 +10,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Folder
@@ -94,7 +95,9 @@ internal fun ChatTopBar(
     easyMode: Boolean = false,
     easyModelName: String? = null,
     onEasyOptions: () -> Unit = {},
-    onEasyModelClick: (() -> Unit)? = null
+    onEasyModelClick: (() -> Unit)? = null,
+    /** Starts the floating chat bubble; null hides the menu item. */
+    onBubbleChat: (() -> Unit)? = null
 ) {
     if (easyMode) {
         com.example.llamadroid.ui.easy.EasyChatTopBar(title, easyModelName, onBack, onEasyOptions, onEasyModelClick)
@@ -251,6 +254,14 @@ internal fun ChatTopBar(
                         onClick = { menuOpen = false; onGenerateTitle() },
                         modifier = Modifier.testTag("native_chat_generate_title")
                     )
+                    if (onBubbleChat != null) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.chat_bubble_menu_item), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            leadingIcon = { Icon(Icons.Default.ChatBubbleOutline, contentDescription = null) },
+                            onClick = { menuOpen = false; onBubbleChat() },
+                            modifier = Modifier.testTag("native_chat_bubble")
+                        )
+                    }
                     if (showWebUi) {
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.chat_menu_open_web_ui), maxLines = 2, overflow = TextOverflow.Ellipsis) },

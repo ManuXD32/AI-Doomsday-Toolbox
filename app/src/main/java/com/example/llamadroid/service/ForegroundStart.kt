@@ -50,6 +50,12 @@ object ForegroundStart {
         /** Android refused a microphone start because the app is in the background. */
         MICROPHONE_BACKGROUND,
 
+        /**
+         * Android refused the start because the app's dataSync / mediaProcessing 6 h per 24 h
+         * budget is already used up ("Time limit already exhausted"). Not a background denial.
+         */
+        TIME_LIMIT_EXHAUSTED,
+
         /** Any other SecurityException. */
         SECURITY
     }
@@ -82,6 +88,9 @@ object ForegroundStart {
             Result.Started(types)
         } catch (error: Exception) {
             var reason = classifyFailure(error) ?: throw error
+            if (reason == Reason.TIME_LIMIT_EXHAUSTED) {
+                DebugLog.log("ForegroundStart: ${service.javaClass.simpleName} refused, foreground-service time quota exhausted (types=$types)")
+            }
             if (needsMic && (reason == Reason.SECURITY || reason == Reason.BACKGROUND_NOT_ALLOWED)) {
                 // The microphone type is denied while RECORD_AUDIO is granted only when the app is
                 // not in a state that may use it, i.e. it is in the background.
@@ -89,6 +98,17 @@ object ForegroundStart {
             }
             val serviceName = service.javaClass.simpleName
             DebugLog.log("ForegroundStart: $serviceName startForeground(types=$types) failed: ${describe(error)}")
+            val quotaFallback = if (reason == Reason.TIME_LIMIT_EXHAUSTED) specialUseRetryTypes(types, declared) else null
+            if (quotaFallback != null) {
+                // dataSync / mediaProcessing share a 6 h per 24 h budget; specialUse has none.
+                try {
+                    ServiceCompat.startForeground(service, id, notification, quotaFallback)
+                    DebugLog.log("ForegroundStart: $serviceName retried with specialUse after quota exhaustion")
+                    return Result.Started(quotaFallback)
+                } catch (retryError: Exception) {
+                    DebugLog.log("ForegroundStart: $serviceName specialUse retry failed: ${describe(retryError)}")
+                }
+            }
             val fallback = retryTypes(types, declared)
             if (fallback != null) {
                 // E.g. mediaProcessing is refused in freeform/floating windows or after its time
@@ -117,6 +137,17 @@ object ForegroundStart {
         if (attempted and ForegroundServiceTypes.MEDIA_PROCESSING == 0) return null
         if (declaredTypes == null || declaredTypes and ForegroundServiceTypes.DATA_SYNC == 0) return null
         return (attempted and ForegroundServiceTypes.MEDIA_PROCESSING.inv()) or ForegroundServiceTypes.DATA_SYNC
+    }
+
+    /**
+     * Pure quota-retry decision: replaces dataSync / mediaProcessing in [attempted] with specialUse
+     * when the manifest entry declares specialUse. Null means do not retry.
+     */
+    internal fun specialUseRetryTypes(attempted: Int, declaredTypes: Int?): Int? {
+        if (declaredTypes == null || declaredTypes and ForegroundServiceTypes.SPECIAL_USE == 0) return null
+        val limited = ForegroundServiceTypes.DATA_SYNC or ForegroundServiceTypes.MEDIA_PROCESSING
+        if (attempted and limited == 0) return null
+        return (attempted and limited.inv()) or ForegroundServiceTypes.SPECIAL_USE
     }
 
     /**
@@ -152,6 +183,7 @@ object ForegroundStart {
         Reason.MICROPHONE_PERMISSION -> context.getString(R.string.fgs_start_failed_mic_permission, featureName)
         Reason.MICROPHONE_BACKGROUND -> context.getString(R.string.fgs_start_failed_background, featureName)
         Reason.BACKGROUND_NOT_ALLOWED -> context.getString(R.string.fgs_start_failed_generic, featureName)
+        Reason.TIME_LIMIT_EXHAUSTED -> context.getString(R.string.fgs_start_failed_time_limit, featureName)
         Reason.INVALID_TYPE, Reason.SECURITY -> context.getString(
             R.string.fgs_start_failed_type,
             featureName,
@@ -183,13 +215,21 @@ object ForegroundStart {
     /**
      * Pure type-mask computation. Below API 29 explicit types do not exist and [requested] is
      * returned unchanged. From API 29: mediaProcessing becomes dataSync below API 35, microphone is
-     * dropped without RECORD_AUDIO, and bits the manifest does not declare are removed
+     * dropped without RECORD_AUDIO, from API 35 dataSync/mediaProcessing become specialUse when the
+     * manifest declares it (no 6 h cap), and bits the manifest does not declare are removed
      * ([manifestTypes] null means unknown, so no manifest filtering). A result of 0 means nothing
      * can be started.
      */
     internal fun effectiveTypes(requested: Int, sdkInt: Int, recordAudioGranted: Boolean, manifestTypes: Int?): Int {
         if (sdkInt < Build.VERSION_CODES.Q) return requested
         var types = requested
+        val limited = ForegroundServiceTypes.DATA_SYNC or ForegroundServiceTypes.MEDIA_PROCESSING
+        if (sdkInt >= 35 && manifestTypes != null && manifestTypes and ForegroundServiceTypes.SPECIAL_USE != 0 &&
+            types and limited != 0
+        ) {
+            // API 35+ caps dataSync and mediaProcessing at 6 h per 24 h; specialUse has no cap.
+            types = (types and limited.inv()) or ForegroundServiceTypes.SPECIAL_USE
+        }
         if (sdkInt < 35 && types and ForegroundServiceTypes.MEDIA_PROCESSING != 0) {
             types = (types and ForegroundServiceTypes.MEDIA_PROCESSING.inv()) or
                 ForegroundServiceTypes.DATA_SYNC
@@ -199,8 +239,14 @@ object ForegroundStart {
         return types
     }
 
+    private const val TIME_LIMIT_EXHAUSTED_MESSAGE = "Time limit already exhausted"
+
     /** Maps a start exception to a [Reason] by class name (API-safe), or null when unrelated. */
     internal fun classifyFailure(error: Throwable): Reason? {
+        // Checked first: Android throws this as a ForegroundServiceStartNotAllowedException.
+        if (error.message?.contains(TIME_LIMIT_EXHAUSTED_MESSAGE, ignoreCase = true) == true) {
+            return Reason.TIME_LIMIT_EXHAUSTED
+        }
         var current: Class<*>? = error.javaClass
         while (current != null) {
             when (current.simpleName) {

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_bubble_content_desc">Burbuja de chat. Toca para abrir el chat, arrastra para moverla.</string>
+    <string name="chat_bubble_notif_channel">Burbuja de chat</string>
+    <string name="chat_bubble_notif_channel_desc">Mantiene disponible la burbuja de chat flotante sobre otras aplicaciones mientras está activa.</string>
+    <string name="chat_bubble_notif_title">La burbuja de chat está en pantalla</string>
+    <string name="chat_bubble_notif_text">Toca la burbuja para abrir el chat. Un punto rojo indica que hay una respuesta nueva.</string>
+    <string name="chat_bubble_notif_open">Abrir chat</string>
+    <string name="chat_bubble_notif_close">Cerrar burbuja</string>
+    <string name="chat_bubble_permission_body">La burbuja de chat flota sobre otras aplicaciones, así que Android necesita el permiso «Mostrar sobre otras aplicaciones». Toca Abrir ajustes, permítelo para esta app y vuelve; la burbuja aparecerá automáticamente.</string>
+    <string name="chat_bubble_menu_item">Chat burbuja</string>
+    <string name="chat_bubble_open_in_app">Abrir en la app</string>
+    <string name="chat_bubble_close">Cerrar burbuja</string>
+    <string name="chat_bubble_minimize">Minimizar</string>
+    <string name="chat_bubble_start_failed">No se pudo mostrar la burbuja de chat. Comprueba que «Mostrar sobre otras aplicaciones» esté permitido.</string>
+</resources>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_bubble_content_desc">Chat bubble. Tap to open the chat, drag to move it.</string>
+    <string name="chat_bubble_notif_channel">Chat bubble</string>
+    <string name="chat_bubble_notif_channel_desc">Keeps the floating chat bubble available over other apps while it is active.</string>
+    <string name="chat_bubble_notif_title">Chat bubble is on screen</string>
+    <string name="chat_bubble_notif_text">Tap the bubble to open the chat. A red dot means a new reply is ready.</string>
+    <string name="chat_bubble_notif_open">Open chat</string>
+    <string name="chat_bubble_notif_close">Close bubble</string>
+    <string name="chat_bubble_permission_body">The chat bubble floats above other apps, so Android needs the "Display over other apps" permission. Tap Open settings, allow it for this app and come back; the bubble will appear automatically.</string>
+    <string name="chat_bubble_menu_item">Bubble chat</string>
+    <string name="chat_bubble_open_in_app">Open in app</string>
+    <string name="chat_bubble_close">Close bubble</string>
+    <string name="chat_bubble_minimize">Minimize</string>
+    <string name="chat_bubble_start_failed">Could not show the chat bubble. Check that \"Display over other apps\" is allowed.</string>
+</resources>

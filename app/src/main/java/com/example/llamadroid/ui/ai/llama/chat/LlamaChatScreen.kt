@@ -64,6 +64,8 @@ import com.example.llamadroid.service.NativeChatToolConfig
 import com.example.llamadroid.service.withChatAudioOverrides
 import com.example.llamadroid.service.supportsSdTxt2Img
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.bubble.ChatBubbleTopBar
+import com.example.llamadroid.ui.bubble.rememberChatBubbleLauncher
 import com.example.llamadroid.service.delegation.DelegationWakeDispatcher
 import java.io.File
 import kotlin.math.roundToInt
@@ -95,9 +97,17 @@ import kotlinx.coroutines.flow.collectLatest
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LlamaChatScreen(
-    navController: NavController,
+    navController: NavController?,
     chatId: Long,
-    initialServerId: Long
+    initialServerId: Long,
+    /** True inside the floating chat window: no NavController, compact top bar, nav-only actions hidden. */
+    floating: Boolean = false,
+    /** Floating: minimize the window back to the bubble (also used as "back"). */
+    onFloatingClose: () -> Unit = {},
+    /** Floating: remove the bubble and close the window. */
+    onCloseBubble: () -> Unit = {},
+    /** Floating: open this chat in the main app. */
+    onOpenInApp: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val videoOpenFailedMessage = stringResource(R.string.llama_video_open_failed)
@@ -186,7 +196,11 @@ fun LlamaChatScreen(
         { uri ->
             val chunkId = Screen.KnowledgeChunkReader.chunkIdFromUri(uri)
             if (chunkId != null) {
-                navController.navigate(Screen.KnowledgeChunkReader.createRoute(chunkId))
+                if (navController != null) {
+                    navController.navigate(Screen.KnowledgeChunkReader.createRoute(chunkId))
+                } else {
+                    onOpenInApp()
+                }
                 true
             } else {
                 false
@@ -1139,7 +1153,7 @@ fun LlamaChatScreen(
         sdImageSupportModels = sdImageSupportModels,
         bgrModelOptions = nativeChatBgrModelOptions,
         liteRtContextCap = liteRtContextCap,
-        onOpenKnowledgeBase = { navController.navigate(Screen.KnowledgeBase.route) },
+        onOpenKnowledgeBase = { navController?.navigate(Screen.KnowledgeBase.route) ?: onOpenInApp() },
         onManageCustomTools = { showCustomToolsManager = true }
     )
 
@@ -1148,10 +1162,21 @@ fun LlamaChatScreen(
     com.example.llamadroid.ui.easy.EasyChatAudioPolicyEffect(easyMode, settings, easyWhisperPath, chatDirectAudioCapable)
     val easyFriendlyModelName = com.example.llamadroid.ui.easy.rememberEasyModelName(activeServer?.modelName)
 
+    val startBubbleChat = rememberChatBubbleLauncher(chatId, activeServer?.id) {
+        navController?.popBackStack()
+    }
+
     Scaffold(
         contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
         topBar = {
-            ChatTopBar(
+            if (floating) {
+                ChatBubbleTopBar(
+                    title = currentChat?.title ?: stringResource(R.string.llama_client_title),
+                    onOpenInApp = onOpenInApp,
+                    onCloseBubble = onCloseBubble,
+                    onMinimize = onFloatingClose
+                )
+            } else ChatTopBar(
                 title = currentChat?.title ?: stringResource(R.string.llama_client_title),
                 serverChip = serverChip,
                 isCallActive = isCallActiveForChat,
@@ -1161,7 +1186,7 @@ fun LlamaChatScreen(
                 pinned = currentChat?.pinnedToAiHub == true,
                 pinEnabled = currentChat != null && (currentChat.pinnedToAiHub || activeServer != null),
                 clearEnabled = messages.isNotEmpty() && !isChatBusy,
-                onBack = { navController.popBackStack() },
+                onBack = { navController?.popBackStack() ?: onFloatingClose() },
                 onRename = {
                     renameText = currentChat?.title.orEmpty()
                     showRenameDialog = true
@@ -1206,14 +1231,14 @@ fun LlamaChatScreen(
                 autoCompactEnabled = settings.autoCompactEnabled,
                 onAutoCompactChange = { settings.autoCompactEnabled = it },
                 isGenerating = isChatBusy,
-                delegationBar = if (settings.delegation.enabled) {
+                delegationBar = if (settings.delegation.enabled && navController != null) {
                     ChatDelegationBar(chatId, settings.delegation.runtimeId, navController)
                 } else null,
                 // The web UI WebView only reaches servers on this device (127.0.0.1), so remote servers hide it.
                 showWebUi = activeUnified != null && activeUnified.kind != UnifiedServerKind.REMOTE &&
                     activeUnified.engine == LlamaServerEntity.ENGINE_LLAMA_SERVER &&
                     activeStatus == UnifiedServerStatus.RUNNING,
-                onOpenWebUi = { activeUnified?.let { navController.navigate("chat?port=${it.port}") } },
+                onOpenWebUi = { activeUnified?.let { navController?.navigate("chat?port=${it.port}") } },
                 onGenerateTitle = {
                     Toast.makeText(context, generatingTitleMessage, Toast.LENGTH_SHORT).show()
                     com.example.llamadroid.service.titlegen.TitleGenerationManager.generateNow(context, chatId)
@@ -1221,7 +1246,8 @@ fun LlamaChatScreen(
                 easyMode = easyMode,
                 easyModelName = easyFriendlyModelName,
                 onEasyOptions = { showEasyOptions = true },
-                onEasyModelClick = { showEasyModelPicker = true }
+                onEasyModelClick = { showEasyModelPicker = true },
+                onBubbleChat = startBubbleChat
             )
         }
     ) { padding ->
@@ -1374,7 +1400,7 @@ fun LlamaChatScreen(
                 showChooseServer = chatLoaded && !easyMode
             )
 
-            if (chatId >= 0L && chatLoaded && !easyMode) ChatDelegationStopBar(chatId = chatId, navController = navController)
+            if (chatId >= 0L && chatLoaded && !easyMode && navController != null) ChatDelegationStopBar(chatId = chatId, navController = navController)
 
             ChatComposer(
                 inputMessage = inputMessage,
@@ -1596,7 +1622,7 @@ fun LlamaChatScreen(
                 },
                 onOpenChat = { otherChatId, rowId ->
                     detailServerKey = null
-                    navController.navigate(Screen.LlamaChat.createRoute(otherChatId, rowId))
+                    navController?.navigate(Screen.LlamaChat.createRoute(otherChatId, rowId))
                 },
                 onUpgraded = { serverRefreshTick++ }
             )
@@ -1639,6 +1665,7 @@ fun LlamaChatScreen(
         if (showEasyModelPicker && easyMode) {
             com.example.llamadroid.ui.easy.EasyChatModelPicker(
                 currentFilename = activeServer?.modelName,
+                currentServerId = activeServer?.id,
                 busy = isChatBusy,
                 onSwitched = { switch ->
                     viewModel.bindChatServer(chatId, switch.serverId)
@@ -1675,8 +1702,9 @@ fun LlamaChatScreen(
                 onDelete = {
                     showEasyOptions = false
                     currentChat?.let { viewModel.deleteChat(it) }
-                    navController.popBackStack()
+                    navController?.popBackStack() ?: onFloatingClose()
                 },
+                onBubbleChat = startBubbleChat.takeUnless { floating },
                 onDismiss = {
                     flushSettings()
                     showEasyOptions = false

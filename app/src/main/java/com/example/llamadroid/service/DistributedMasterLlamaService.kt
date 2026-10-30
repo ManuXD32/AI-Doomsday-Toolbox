@@ -272,7 +272,7 @@ class DistributedMasterLlamaService : Service() {
             this,
             id,
             notification,
-            ForegroundServiceTypes.DATA_SYNC
+            ForegroundServiceTypes.SPECIAL_USE
         )
         if (startResult is ForegroundStart.Result.Failed) {
             foregroundFailureMessage =

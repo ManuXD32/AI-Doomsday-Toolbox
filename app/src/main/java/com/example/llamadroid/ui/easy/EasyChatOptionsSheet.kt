@@ -81,7 +81,9 @@ internal fun EasyChatOptionsSheet(
     onContextApplied: (Int) -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** Starts the floating chat bubble; null hides the button (e.g. inside the floating window). */
+    onBubbleChat: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -241,6 +243,11 @@ internal fun EasyChatOptionsSheet(
                             color = MaterialTheme.colorScheme.error
                         )
                     }
+                }
+            }
+            if (onBubbleChat != null) {
+                OutlinedButton(onClick = { onDismiss(); onBubbleChat() }, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.chat_bubble_menu_item), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
             OutlinedButton(onClick = onRename, modifier = Modifier.fillMaxWidth()) {

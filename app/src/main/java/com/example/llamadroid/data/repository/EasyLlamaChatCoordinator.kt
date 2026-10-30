@@ -269,6 +269,24 @@ class EasyLlamaChatCoordinator(
             } finally { usage.close() }
         }
 
+    /**
+     * Starts (or reuses) a saved, non-Easy managed server and returns the row to bind a chat to plus
+     * the context its launch profile resolved to. Its profile is never rewritten (unlike Easy cards).
+     */
+    suspend fun prepareSavedServer(cardId: Long, onStatus: (String) -> Unit = {}): EasyModelSwitch =
+        withContext(Dispatchers.IO) {
+            val usage = LlamaServerUsageLease(context, LlamaServerCardEntity.sessionIdForCard(cardId), this)
+            try {
+                val ready = managed.prepare(cardId, onStatus)
+                val linked = target(ready.card, ready.profile)
+                EasyModelSwitch(linked.server.id, requireNotNull(ready.contextTokens))
+            } finally { usage.close() }
+        }
+
+    /** New Easy chat (Easy tool limits, `easyMode = true`) bound to a saved server's card. */
+    suspend fun openSavedServerChat(cardId: Long, onStatus: (String) -> Unit = {}): EasyLlamaChatSession =
+        openEasyChat(cardId, onStatus)
+
     private suspend fun target(card: LlamaServerCardEntity, launched: LlamaServerLaunchProfile? = null): EasyLlamaChatTarget =
         EasyLlamaChatTarget(card, requireNotNull(local.ensureLinkedRow(card.id, launched)))
 
@@ -291,7 +309,9 @@ class EasyLlamaChatCoordinator(
             val session = withTimeoutOrNull(210_000L) {
                 val usage = LlamaServerUsageLease(context, LlamaServerCardEntity.sessionIdForCard(cardId), this)
                 try {
-                    database.llamaServerCardDao().getCard(cardId)?.let { runCatching { syncStoredContext(it) } }
+                    // Only Easy cards follow the Easy context; saved servers keep their own profile.
+                    database.llamaServerCardDao().getCard(cardId)?.takeIf { it.easyModelId != null }
+                        ?.let { runCatching { syncStoredContext(it) } }
                     val ready = managed.prepare(cardId, onStatus)
                     onStatus(context.getString(R.string.easy_chat_opening_conversation))
                     database.withTransaction {

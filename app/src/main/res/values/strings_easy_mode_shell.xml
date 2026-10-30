@@ -28,4 +28,5 @@
     <string name="easy_mode_shell_no_chats">No chats yet. Tap New chat to start one.</string>
     <string name="easy_mode_shell_setting_title">Easy mode</string>
     <string name="easy_mode_shell_setting_desc">A simpler app with Chat, Images and Gallery. Tama, Organizer and Tools are hidden while it is on.</string>
+    <string name="easy_mode_shell_new_chat_saved_server">Chat from a saved server</string>
 </resources>

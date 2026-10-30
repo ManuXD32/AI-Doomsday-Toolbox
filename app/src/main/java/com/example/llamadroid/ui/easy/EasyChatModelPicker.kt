@@ -49,7 +49,9 @@ internal fun EasyChatModelPicker(
     currentFilename: String?,
     busy: Boolean,
     onSwitched: (EasyModelSwitch) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** Row id the chat is bound to; marks the matching saved server. Null leaves saved servers unmarked. */
+    currentServerId: Long? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -58,12 +60,14 @@ internal fun EasyChatModelPicker(
         AppDatabase.getDatabase(context).modelDao().getModelsByTypes(listOf(ModelType.LLM, ModelType.VISION))
             .map { list -> list.filter(::isEasyLlamaChatModel) }
     }.collectAsState(initial = emptyList())
+    val savedServers = rememberEasySavedServers()
+    var switchingCard by remember { mutableStateOf<Long?>(null) }
     var switching by remember { mutableStateOf<String?>(null) }
     var status by remember { mutableStateOf<String?>(null) }
     var failed by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
-        onDismissRequest = { if (switching == null) onDismiss() },
+        onDismissRequest = { if (switching == null && switchingCard == null) onDismiss() },
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ) {
         Column(
@@ -87,11 +91,33 @@ internal fun EasyChatModelPicker(
             if (models.isEmpty()) {
                 Text(stringResource(R.string.easy_chat_switch_none), style = MaterialTheme.typography.bodyMedium)
             }
+            if (savedServers.isNotEmpty()) {
+                Text(stringResource(R.string.easy_chat_saved_servers_section), style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold)
+                EasySavedServerList(savedServers, currentServerId, !busy && switching == null && switchingCard == null,
+                    switchingCard, status) { server ->
+                    val cardId = server.cardId ?: return@EasySavedServerList
+                    switchingCard = cardId; failed = false; status = null
+                    scope.launch {
+                        try {
+                            val switch = coordinator.prepareSavedServer(cardId) { status = it }
+                            currentFilename?.let { runCatching { coordinator.stopEasyModelIfIdle(it) } }
+                            onSwitched(switch)
+                        } catch (cancel: CancellationException) {
+                            throw cancel
+                        } catch (_: Throwable) {
+                            failed = true
+                        } finally { switchingCard = null; status = null }
+                    }
+                }
+                Text(stringResource(R.string.easy_chat_models_section), style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold)
+            }
             models.forEach { model ->
                 val curated = EasyModelNames.curatedTitleRes(model.filename)?.let { stringResource(it) }
                 val label = EasyModelNames.friendlyName(model.filename, curated)
                 val isCurrent = model.filename == currentFilename
-                val enabled = !busy && switching == null && !isCurrent
+                val enabled = !busy && switching == null && switchingCard == null && !isCurrent
                 Column(
                     Modifier.fillMaxWidth()
                         .clickable(enabled = enabled) {

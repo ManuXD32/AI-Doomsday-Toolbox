@@ -130,6 +130,24 @@
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.LlamaDroid.ShimejiChat" />
 
+        <activity
+            android:name=".ui.bubble.ChatBubbleActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity="com.example.llamadroid.chatbubble"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.LlamaDroid.ShimejiChat" />
+
+        <service
+            android:name=".service.bubble.ChatBubbleOverlayService"
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="floating_chat_bubble" />
+        </service>
+
         <service
             android:name=".tama.transfer.PetLinkService"
             android:foregroundServiceType="specialUse"
@@ -161,44 +179,76 @@
         <service
             android:name=".service.LlamaServerSessionService"
             android:process=":llama_sessions_runtime"
-            android:foregroundServiceType="dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started local LLM server sessions (llama.cpp) hosting on-device inference for chats, tools and API clients; runs until the user stops the server" />
+        </service>
 
         <service
             android:name=".service.DistributedMasterLlamaService"
             android:process=":distributed_llama_runtime"
-            android:foregroundServiceType="dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started distributed LLM server that hosts on-device inference split across the user's own devices; runs until the user stops it" />
+        </service>
             
         <service 
             android:name=".service.SDEnvironmentService" 
-            android:foregroundServiceType="dataSync" 
-            android:exported="false" />
+            android:foregroundServiceType="dataSync|specialUse" 
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started setup of the on-device image-generation environment (model and runtime files); stops when setup finishes" />
+        </service>
             
         <service 
             android:name=".service.DownloadService" 
-            android:foregroundServiceType="dataSync" 
-            android:exported="false" />
+            android:foregroundServiceType="dataSync|specialUse" 
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started download of large on-device AI model files; stops when the downloads finish or the user cancels" />
+        </service>
             
         <service
             android:name=".service.StableDiffusionService"
-            android:foregroundServiceType="mediaProcessing|dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="mediaProcessing|dataSync|specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started on-device image generation (stable-diffusion.cpp); stops when the job finishes or the user cancels" />
+        </service>
 
         <service
             android:name=".service.OnnxImageGenerationService"
-            android:foregroundServiceType="mediaProcessing|dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="mediaProcessing|dataSync|specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started on-device ONNX image generation; stops when the job finishes or the user cancels" />
+        </service>
 
         <service
             android:name=".service.OnnxTtsGenerationService"
-            android:foregroundServiceType="mediaProcessing|dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="mediaProcessing|dataSync|specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started on-device text-to-speech generation; stops when the job finishes or the user cancels" />
+        </service>
 
         <service
             android:name=".audio.AudioGenerationService"
-            android:foregroundServiceType="mediaProcessing|dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="mediaProcessing|dataSync|specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started on-device music and audio generation; stops when the job finishes or the user cancels" />
+        </service>
 
         <service
             android:name=".audio.music.StableAudio3WorkerService"
@@ -217,29 +267,49 @@
 
         <service
             android:name=".service.OnnxBackgroundRemovalService"
-            android:foregroundServiceType="mediaProcessing|dataSync"
+            android:foregroundServiceType="mediaProcessing|dataSync|specialUse"
             android:process=":onnx_bgr"
-            android:exported="false" />
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started on-device image background removal; stops when the job finishes or the user cancels" />
+        </service>
 
         <service
             android:name=".service.TamaArtworkGenerationService"
-            android:foregroundServiceType="mediaProcessing|dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="mediaProcessing|dataSync|specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started on-device artwork generation for the virtual pet; stops when the job finishes or the user cancels" />
+        </service>
 
         <service
             android:name=".service.TamaDeepDreamService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="dataSync|specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started on-device dream image generation for the virtual pet; stops when the job finishes or the user cancels" />
+        </service>
 
         <service
             android:name=".service.VideoGenerationService"
-            android:foregroundServiceType="mediaProcessing|dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="mediaProcessing|dataSync|specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started on-device video generation; stops when the job finishes or the user cancels" />
+        </service>
 
         <service
             android:name=".service.GenerationQueueService"
-            android:foregroundServiceType="mediaProcessing|dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="mediaProcessing|dataSync|specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started queue of on-device image, audio and video generation jobs; stops when the queue is empty or the user cancels" />
+        </service>
 
         <service
             android:name=".service.OrganizerAlarmRingingService"
@@ -248,23 +318,39 @@
             
         <service 
             android:name=".service.WhisperService" 
-            android:foregroundServiceType="dataSync" 
-            android:exported="false" />
+            android:foregroundServiceType="dataSync|specialUse" 
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started on-device speech transcription (whisper.cpp); stops when the job finishes or the user cancels" />
+        </service>
             
         <service 
             android:name=".service.VideoUpscalerService" 
-            android:foregroundServiceType="dataSync" 
-            android:exported="false" />
+            android:foregroundServiceType="dataSync|specialUse" 
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started on-device video upscaling; stops when the job finishes or the user cancels" />
+        </service>
 
         <service
             android:name=".service.VideoInterpolationService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="dataSync|specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started on-device video frame interpolation; stops when the job finishes or the user cancels" />
+        </service>
             
         <service 
             android:name=".service.ModelShareService" 
-            android:foregroundServiceType="dataSync" 
-            android:exported="false" />
+            android:foregroundServiceType="dataSync|specialUse" 
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started sharing of AI model files with the user's own devices on the local network; runs until the user stops it" />
+        </service>
             
         <service
             android:name=".service.filestation.FileStationService"
@@ -277,23 +363,39 @@
             
         <service 
             android:name=".service.ZimShareService" 
-            android:foregroundServiceType="dataSync" 
-            android:exported="false" />
+            android:foregroundServiceType="dataSync|specialUse" 
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started sharing of offline encyclopedia (ZIM) files on the local network; runs until the user stops it" />
+        </service>
 
         <service
             android:name=".service.AiToolServerService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="dataSync|specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started local AI tool server for the user's own clients; runs until the user stops it" />
+        </service>
             
         <service 
             android:name=".service.KiwixService" 
-            android:foregroundServiceType="dataSync" 
-            android:exported="false" />
+            android:foregroundServiceType="dataSync|specialUse" 
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started offline encyclopedia (Kiwix) server on the device; runs until the user stops it" />
+        </service>
             
         <service
             android:name=".service.DistributedService" 
-            android:foregroundServiceType="dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="dataSync|specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started distributed inference worker sharing compute with the user's own devices; runs until the user stops it" />
+        </service>
 
         <service
             android:name=".service.StatsCollectionService"
@@ -306,13 +408,21 @@
 
         <service
             android:name=".service.SdDistributedService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="dataSync|specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started distributed image-generation worker for the user's own devices; runs until the user stops it" />
+        </service>
             
         <service 
             android:name=".service.SubtitleBurnService" 
-            android:foregroundServiceType="dataSync" 
-            android:exported="false" />
+            android:foregroundServiceType="dataSync|specialUse" 
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started on-device subtitle burning into a video; stops when the job finishes or the user cancels" />
+        </service>
             
         <service 
             android:name=".service.AgentForegroundService" 
@@ -330,33 +440,57 @@
             
         <service 
             android:name=".service.AdventureForegroundService" 
-            android:foregroundServiceType="dataSync" 
-            android:exported="false" />
+            android:foregroundServiceType="dataSync|specialUse" 
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started on-device LLM story generation for the pet adventure game; stops when the run finishes" />
+        </service>
 
         <service
             android:name=".service.DatasetForegroundService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="dataSync|specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started on-device dataset processing with local models; stops when the queue finishes or the user cancels" />
+        </service>
 
         <service
             android:name=".service.MediaTranslationForegroundService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="dataSync|specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started on-device audio and video translation; stops when the job finishes or the user cancels" />
+        </service>
 
         <service
             android:name=".service.MangaTranslationForegroundService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="dataSync|specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started on-device comic page translation; stops when the job finishes or the user cancels" />
+        </service>
 
         <service
             android:name=".service.KnowledgeBaseIndexingService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="dataSync|specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started on-device indexing of the user documents for local search; stops when indexing finishes" />
+        </service>
 
         <service
             android:name=".service.DeepResearchService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="dataSync|specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started on-device LLM research task; stops when the report finishes or the user cancels" />
+        </service>
 
         <service 
             android:name=".service.LlamaClientService" 
@@ -395,13 +529,21 @@
 
         <service
             android:name=".service.LlamaScheduledTaskService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-scheduled on-device LLM task that runs a local model at the time the user chose; stops when the task finishes" />
+        </service>
 
         <service
             android:name=".service.QuadtrixTrainingService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="dataSync|specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started on-device model training for the Quadtrix game; stops when training finishes or the user cancels" />
+        </service>
             
         <!-- Receiver for completed ZIM downloads - must be exported for DOWNLOAD_COMPLETE -->
         <receiver

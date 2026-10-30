@@ -75,6 +75,8 @@ fun EasyChatTab(
     var status by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var job by remember { mutableStateOf<Job?>(null) }
+    var showSavedServers by remember { mutableStateOf(false) }
+    var pendingSavedCard by remember { mutableStateOf<Long?>(null) }
     var deleteTarget by remember { mutableStateOf<LlamaChatEntity?>(null) }
     val startingText = stringResource(R.string.easy_chat_starting_server)
     val pickModelText = stringResource(R.string.easy_chat_orphan_pick_model)
@@ -111,6 +113,23 @@ fun EasyChatTab(
         }
     }
 
+    fun newChatFromSavedServer(cardId: Long) {
+        if (isOpening) return
+        isOpening = true; error = null; status = startingText; pendingSavedCard = cardId
+        job = scope.launch {
+            try {
+                val session = coordinator.openSavedServerChat(cardId) { message -> status = message }
+                showSavedServers = false
+                navController.navigate(Screen.LlamaChat.createRoute(session.chatId, session.serverId))
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (throwable: Throwable) {
+                showSavedServers = false
+                error = (throwable as? ManagedLlamaServerException)?.message?.takeIf { it.isNotBlank() } ?: failedText
+            } finally { isOpening = false; status = null; pendingSavedCard = null }
+        }
+    }
+
     fun openChat(chat: LlamaChatEntity) {
         if (isOpening) return
         when (val action = easyChatOpenAction(chat.serverId, modelFile)) {
@@ -140,6 +159,15 @@ fun EasyChatTab(
                 }
             }
         }
+    }
+
+    if (showSavedServers) {
+        EasySavedServerSheet(
+            pendingCardId = pendingSavedCard,
+            status = status,
+            onPick = { server -> server.cardId?.let(::newChatFromSavedServer) },
+            onDismiss = { if (pendingSavedCard != null) job?.cancel(); showSavedServers = false }
+        )
     }
 
     deleteTarget?.let { chat ->
@@ -194,6 +222,10 @@ fun EasyChatTab(
                 Spacer(Modifier.size(6.dp))
                 Text(stringResource(if (isOpening) R.string.easy_mode_shell_chat_starting else R.string.easy_mode_shell_new_chat),
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            TextButton(onClick = { showSavedServers = true }, enabled = !isOpening,
+                modifier = Modifier.fillMaxWidth().testTag("easy_new_chat_saved_server")) {
+                Text(stringResource(R.string.easy_mode_shell_new_chat_saved_server), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (isOpening) {
                 status?.let { Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis) }

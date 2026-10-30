@@ -29,4 +29,10 @@
     <string name="easy_chat_switch_current">Modelo actual</string>
     <string name="easy_chat_orphan_pick_model">Elige primero un modelo y vuelve a abrir este chat.</string>
     <string name="easy_chat_model_missing_choose">Ese modelo ya no está en este teléfono. Elige otro modelo.</string>
+    <string name="easy_chat_saved_servers_section">Servidores guardados</string>
+    <string name="easy_chat_models_section">Modelos fáciles</string>
+    <string name="easy_chat_saved_server_current">Servidor actual</string>
+    <string name="easy_chat_saved_server_title">Chatear con un servidor guardado</string>
+    <string name="easy_chat_saved_server_hint">Inicia un chat nuevo en un servidor que configuraste en Servidores. Mantiene sus propios ajustes y arranca si hace falta.</string>
+    <string name="easy_chat_saved_server_none">Aún no hay servidores locales guardados. Crea uno en Servidores.</string>
 </resources>

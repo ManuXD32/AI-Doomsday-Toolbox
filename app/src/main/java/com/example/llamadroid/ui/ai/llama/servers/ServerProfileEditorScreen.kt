@@ -421,14 +421,14 @@ private fun ProfileEditorBottomBar(
                 OutlinedButton(onClick = onCancel, enabled = !saving, modifier = Modifier.weight(1f)) {
                     Text(stringResource(R.string.action_cancel), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                if (isEdit) {
-                    Button(onClick = onSave, enabled = !saving, modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.action_save), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                } else {
-                    Button(onClick = onSaveAndRun, enabled = !saving, modifier = Modifier.weight(2f)) {
-                        Text(stringResource(R.string.srv_save_and_start), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
+                Button(onClick = onSave, enabled = !saving, modifier = Modifier.weight(1f)) {
+                    Text(stringResource(R.string.action_save), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            if (!isEdit) {
+                // Plain Save only stores the server; the first message (or Start) launches it.
+                Button(onClick = onSaveAndRun, enabled = !saving, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.srv_save_and_start), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
             if (isEdit && running) {

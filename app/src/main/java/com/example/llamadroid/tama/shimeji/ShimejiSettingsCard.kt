@@ -1,23 +1,16 @@
 package com.example.llamadroid.tama.shimeji
 
-import android.content.Intent
 import android.content.SharedPreferences
-import android.provider.Settings
-import androidx.core.net.toUri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -37,6 +30,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.llamadroid.R
+import com.example.llamadroid.ui.overlay.rememberOverlayPermissionRequest
 import com.example.llamadroid.tama.ui.TamaHelperText
 import com.example.llamadroid.tama.ui.tamaSwitchColors
 
@@ -56,8 +50,11 @@ fun ShimejiSettingsCard(
     var enabled by remember { mutableStateOf(ShimejiSettings.isEnabled(context)) }
     var size by remember { mutableStateOf(ShimejiSettings.size(context)) }
     var activity by remember { mutableStateOf(ShimejiSettings.activity(context)) }
-    var showPermissionDialog by remember { mutableStateOf(false) }
-    var awaitingPermission by remember { mutableStateOf(false) }
+    val requestOverlayPermission = rememberOverlayPermissionRequest(R.string.tama_shimeji_permission_body) {
+        ShimejiSettings.setEnabled(context, true)
+        ShimejiOverlayService.start(context)
+        enabled = true
+    }
 
     // Live flag: the care menu and the notification Stop action turn it off from the service.
     DisposableEffect(context) {
@@ -72,13 +69,6 @@ fun ShimejiSettingsCard(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event != Lifecycle.Event.ON_RESUME) return@LifecycleEventObserver
-            if (awaitingPermission) {
-                awaitingPermission = false
-                if (Settings.canDrawOverlays(context)) {
-                    ShimejiSettings.setEnabled(context, true)
-                    ShimejiOverlayService.start(context)
-                }
-            }
             // The service turns the setting off by itself when the permission is revoked.
             enabled = ShimejiSettings.isEnabled(context)
         }
@@ -110,18 +100,12 @@ fun ShimejiSettingsCard(
                 enabled = !isAway,
                 colors = tamaSwitchColors(),
                 onCheckedChange = { wantsOn ->
-                    when {
-                        !wantsOn -> {
-                            ShimejiSettings.setEnabled(context, false)
-                            ShimejiOverlayService.stop(context)
-                            enabled = false
-                        }
-                        Settings.canDrawOverlays(context) -> {
-                            ShimejiSettings.setEnabled(context, true)
-                            ShimejiOverlayService.start(context)
-                            enabled = true
-                        }
-                        else -> showPermissionDialog = true
+                    if (!wantsOn) {
+                        ShimejiSettings.setEnabled(context, false)
+                        ShimejiOverlayService.stop(context)
+                        enabled = false
+                    } else {
+                        requestOverlayPermission()
                     }
                 }
             )
@@ -190,40 +174,6 @@ fun ShimejiSettingsCard(
             fontFamily = FontFamily.Monospace,
             fontSize = 12.sp,
             color = TamaHelperText
-        )
-    }
-
-    if (showPermissionDialog) {
-        AlertDialog(
-            onDismissRequest = { showPermissionDialog = false },
-            title = { Text(stringResource(R.string.tama_shimeji_permission_title)) },
-            text = {
-                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    Text(stringResource(R.string.tama_shimeji_permission_body))
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    showPermissionDialog = false
-                    awaitingPermission = true
-                    val intent = Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        "package:${context.packageName}".toUri()
-                    )
-                    try {
-                        context.startActivity(intent)
-                    } catch (_: RuntimeException) {
-                        awaitingPermission = false
-                    }
-                }) {
-                    Text(stringResource(R.string.tama_shimeji_permission_open))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showPermissionDialog = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            }
         )
     }
 }
