@@ -55,13 +55,11 @@
     <string name="fs_password_remove">Remove password</string>
     <string name="fs_sign_out_all">Sign out everyone</string>
     <string name="fs_signed_out">All browser sessions were signed out.</string>
-    <string name="fs_pw_current">Current password</string>
     <string name="fs_pw_new">New password</string>
     <string name="fs_pw_confirm">Repeat password</string>
     <string name="fs_pw_mismatch">The passwords do not match.</string>
     <string name="fs_pw_short">Use at least 8 characters.</string>
-    <string name="fs_pw_wrong">The current password is wrong.</string>
-    <string name="fs_pw_remove_message">Anyone who can reach File Station will be able to open it without signing in.</string>
+    <string name="fs_pw_remove_message">Anyone who can reach File Station on your network will be able to open it without signing in. You can set a new password at any time.</string>
     <string name="fs_advanced_title">Advanced</string>
     <string name="fs_trash_days">Trash retention (days)</string>
     <string name="fs_trash_days_desc">Deleted files are purged after this many days. 0 keeps them until the trash is emptied.</string>

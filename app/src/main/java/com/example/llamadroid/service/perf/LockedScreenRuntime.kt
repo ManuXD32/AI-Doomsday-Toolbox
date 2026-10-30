@@ -1,92 +1,29 @@
 package com.example.llamadroid.service.perf
 
-import android.content.Context
 import com.example.llamadroid.service.LlamaConfig
 import java.io.File
 
 /**
  * Per-launch helper used by `ProcessController.start` inside the `:llama_runtime` process.
- * It tunes the launch arguments, raises the server threads' priority from the app side (and reads
- * the nice values back), runs the PerformanceHintManager session, and mirrors every outcome to a [LockedScreenReport] file that
- * the main process shows in the server detail sheet. Nothing here may throw into the caller.
+ * It does not change the launch arguments or thread priorities; it only records the server pid in a
+ * [LockedScreenReport] file so the main process can read the CPUs the server is allowed to run on
+ * for the screen-on/off speed diagnostics. Nothing here may throw into the caller.
  */
 class LockedScreenRuntime private constructor(
-    private val context: Context?,
     private val filesDir: File,
-    private val port: Int,
-    private val options: LockedScreenOptions,
-    private val cpusetRoot: File
+    private val port: Int
 ) {
     private val store = LockedScreenReportStore(filesDir)
     @Volatile
     private var report = LockedScreenReport(port = port, updatedAtMillis = System.currentTimeMillis())
-    private var hint: LockedScreenHintSession? = null
-    private var priority: LockedScreenThreadPriority? = null
-
-    /** Rewrites [args] according to the options and records the decision. Returns [args] on error. */
-    fun tune(args: List<String>): List<String> = runCatching {
-        // Falls back to this service process's own allowed CPUs (it is a foreground-service
-        // process too) when SELinux hides the cpuset files from apps.
-        val foreground = readCpuset("foreground") ?: readSelfAllowedCpus()
-        val topApp = readCpuset("top-app")
-        val result = LockedScreenLaunchTuning.tune(args, options, foreground)
-        update {
-            it.copy(
-                threadFitEnabled = options.threadFit,
-                configuredThreads = result.threadFit.configured,
-                effectiveThreads = result.threadFit.effective,
-                threadFitReason = result.threadFit.reason.name,
-                foregroundCpus = foreground?.trim(),
-                topAppCpus = topApp?.trim(),
-                priorityState = result.priorityState.name,
-                hintState = if (options.performanceHints) HintState.PENDING.name else HintState.OFF.name,
-                running = true
-            )
-        }
-        result.args
-    }.getOrDefault(args)
 
     fun onProcessStarted(pid: Int) {
         if (pid <= 0) return
-        runCatching {
-            update { it.copy(pid = pid) }
-            if (options.threadPriority) {
-                priority = LockedScreenThreadPriority(pid, ::onPriorityOutcome).also { it.start() }
-            }
-            val ctx = context
-            if (options.performanceHints && ctx != null) {
-                hint = LockedScreenHintSession(ctx, pid, ::onHintState).also { it.start() }
-            }
-        }
-    }
-
-    /** Called when the server reports ready: the worker threads exist now, so rescan at once. */
-    fun onReady() {
-        runCatching { priority?.poke() }
+        runCatching { update { it.copy(pid = pid, running = true) } }
     }
 
     fun close() {
-        runCatching { hint?.close() }
-        hint = null
-        runCatching { priority?.close() }
-        priority = null
         if (report.running) runCatching { update { it.copy(running = false) } }
-    }
-
-    private fun onPriorityOutcome(outcome: PriorityOutcome) {
-        runCatching {
-            update {
-                it.copy(
-                    priorityState = outcome.state.name,
-                    priorityRaisedThreads = outcome.raised,
-                    priorityTotalThreads = outcome.total
-                )
-            }
-        }
-    }
-
-    private fun onHintState(state: HintState, detail: String?) {
-        runCatching { update { it.copy(hintState = state.name, hintDetail = detail) } }
     }
 
     @Synchronized
@@ -95,25 +32,8 @@ class LockedScreenRuntime private constructor(
         store.write(report)
     }
 
-    private fun readCpuset(name: String): String? =
-        runCatching { File(cpusetRoot, "$name/cpus").readText().trim() }.getOrNull()?.takeIf { it.isNotEmpty() }
-
-    private fun readSelfAllowedCpus(): String? =
-        runCatching { CpuList.parseAllowedListFromStatus(File("/proc/self/status").readText()) }.getOrNull()
-
     companion object {
-        /** Always created (the report also feeds diagnostics); the options only gate behavior. */
-        fun create(config: LlamaConfig, filesDir: File, context: Context?): LockedScreenRuntime =
-            LockedScreenRuntime(
-                context = context,
-                filesDir = filesDir,
-                port = config.port,
-                options = LockedScreenOptions(
-                    threadFit = config.lockedScreenThreadFit,
-                    threadPriority = config.lockedScreenThreadPriority,
-                    performanceHints = config.lockedScreenPerformanceHints
-                ),
-                cpusetRoot = File("/dev/cpuset")
-            )
+        fun create(config: LlamaConfig, filesDir: File): LockedScreenRuntime =
+            LockedScreenRuntime(filesDir = filesDir, port = config.port)
     }
 }

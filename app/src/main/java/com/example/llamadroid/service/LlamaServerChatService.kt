@@ -1,5 +1,6 @@
 package com.example.llamadroid.service
 
+import com.example.llamadroid.service.chat.LlamaSamplerKeys
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -1068,6 +1069,7 @@ internal fun buildLlamaServerChatRequestPayload(
     samplingParams.repeatPenalty?.let { payload["repeat_penalty"] = it }
     samplingParams.frequencyPenalty?.let { payload["frequency_penalty"] = it }
     samplingParams.presencePenalty?.let { payload["presence_penalty"] = it }
+    samplingParams.extended.forEach { (key, value) -> payload[key] = value }
 
     if (tools.isNotEmpty()) {
         payload["tools"] = tools.sortedBy { it.name }.map { tool ->
@@ -1246,7 +1248,9 @@ data class LlamaServerSamplingParams(
     val seed: Int? = null,
     val repeatPenalty: Float? = null,
     val frequencyPenalty: Float? = null,
-    val presencePenalty: Float? = null
+    val presencePenalty: Float? = null,
+    /** Extended llama.cpp samplers (LlamaSamplerKeys.EXTENDED_KEYS); absent = Auto. */
+    val extended: Map<String, Number> = emptyMap()
 ) {
     companion object {
         fun fromParams(params: Map<String, Any>): LlamaServerSamplingParams = LlamaServerSamplingParams(
@@ -1257,7 +1261,8 @@ data class LlamaServerSamplingParams(
             seed = (params["seed"] as? Number)?.toInt(),
             repeatPenalty = (params["repeat_penalty"] as? Number)?.toFloat(),
             frequencyPenalty = (params["frequency_penalty"] as? Number)?.toFloat(),
-            presencePenalty = (params["presence_penalty"] as? Number)?.toFloat()
+            presencePenalty = (params["presence_penalty"] as? Number)?.toFloat(),
+            extended = LlamaSamplerKeys.extendedFrom(params)
         )
     }
 }

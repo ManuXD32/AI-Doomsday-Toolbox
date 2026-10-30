@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="local_model_ram_freeing">Freeing memory…</string>
+    <string name="local_model_ram_insufficient">Not enough free memory to load this model: it needs about %1$s and about %2$s are available, even after stopping idle models. Stop other models or choose a smaller one.</string>
+    <string name="local_model_ram_dialog_title">Not enough free memory</string>
+    <string name="local_model_ram_dialog_hint">Starting anyway may make the phone slow, close other apps or crash the server.</string>
+    <string name="local_model_ram_start_anyway">Start anyway</string>
+</resources>

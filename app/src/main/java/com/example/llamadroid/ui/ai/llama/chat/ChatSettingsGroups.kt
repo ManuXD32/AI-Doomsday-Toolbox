@@ -79,7 +79,7 @@ internal fun ChatSettingsGroupList(
     ChatSettingsGroup(
         key = groupKey("sampling"),
         title = stringResource(R.string.native_chat_settings_section_sampling),
-        summary = "${state.temperatureText} · ${state.topPText} · ${state.topKText}",
+        summary = state.samplerSummary(stringResource(R.string.chat_sampler_auto)),
         initiallyExpanded = true
     ) { state.SamplingSection() }
     ChatSettingsGroup(

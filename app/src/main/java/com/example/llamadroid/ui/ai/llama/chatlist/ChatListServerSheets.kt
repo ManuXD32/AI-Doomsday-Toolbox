@@ -10,6 +10,7 @@ import androidx.navigation.NavController
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.ui.ai.llama.servers.ServerDetailSheet
 import com.example.llamadroid.ui.ai.llama.servers.ServerEditorSheet
+import com.example.llamadroid.ui.ai.llama.servers.LowRamStartDialog
 import com.example.llamadroid.ui.ai.llama.servers.ServerRegistryViewModel
 import com.example.llamadroid.ui.ai.llama.servers.key
 import com.example.llamadroid.ui.navigation.Screen
@@ -45,6 +46,8 @@ fun ChatListServerSheets(
 ) {
     val servers by viewModel.servers.collectAsState()
     val editing = state.editingKey?.let { key -> servers.firstOrNull { it.key == key } }
+
+    LowRamStartDialog(viewModel)
 
     state.detailKey?.let { key ->
         ServerDetailSheet(

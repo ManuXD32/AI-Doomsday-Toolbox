@@ -8,6 +8,8 @@ import com.example.llamadroid.data.HttpEndpointUrlSupport
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.model.LlamaServerCardEntity
 import com.example.llamadroid.data.repository.launchProfileForCard
+import com.example.llamadroid.service.ram.LocalModelRamRefusal
+import com.example.llamadroid.service.ram.LocalModelRamStep
 import com.example.llamadroid.util.NativeProcessCleanup
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -18,6 +20,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.io.File
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.random.Random
 
@@ -89,7 +92,8 @@ class ManagedLlamaServerCoordinator(
         }
     }
 
-    suspend fun prepare(cardId: Long, onStatus: (String) -> Unit = {}): ManagedLlamaServerInfo =
+    /** [allowLowRam] skips the refusal of the RAM check (the user confirmed "Start anyway"). */
+    suspend fun prepare(cardId: Long, onStatus: (String) -> Unit = {}, allowLowRam: Boolean = false): ManagedLlamaServerInfo =
         withContext(Dispatchers.IO) {
             withTimeoutOrNull(READY_TIMEOUT_MS + 10_000L) {
                 val usage = LlamaServerUsageLease(context, "card:$cardId", this)
@@ -129,6 +133,17 @@ class ManagedLlamaServerCoordinator(
                                 }
                             } else if (!checkLlamaServerPort(profile.host, profile.serverPort).available) {
                                 fail("MANAGED_PORT_BUSY")
+                            }
+                        }
+                        if (!joining) {
+                            try {
+                                LocalModelRamStep(context, states, owners).ensureRoom(profile, card.sessionId, allowLowRam) {
+                                    onStatus(context.getString(R.string.local_model_ram_freeing))
+                                }
+                            } catch (refusal: LocalModelRamRefusal) {
+                                throw ManagedLlamaServerException(CODE_INSUFFICIENT_RAM, context.getString(
+                                    R.string.local_model_ram_insufficient,
+                                    gbText(refusal.neededBytes), gbText(refusal.availableBytes)))
                             }
                         }
                         onStatus(context.getString(R.string.managed_llama_starting))
@@ -212,7 +227,12 @@ class ManagedLlamaServerCoordinator(
         else -> R.string.managed_llama_start_failed
     }))
 
+    private fun gbText(bytes: Long): String =
+        String.format(Locale.getDefault(), "%.1f GB", bytes.coerceAtLeast(0L) / (1024.0 * 1024.0 * 1024.0))
+
     companion object {
+        /** Thrown when the model does not fit in free RAM; the servers screen offers "Start anyway". */
+        const val CODE_INSUFFICIENT_RAM = "MANAGED_INSUFFICIENT_RAM"
         internal val creationLock = Mutex()
         private val startLocks = ConcurrentHashMap<Long, Mutex>()
         private const val READY_TIMEOUT_MS = 180_000L

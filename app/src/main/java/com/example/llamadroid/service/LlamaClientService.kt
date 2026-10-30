@@ -63,6 +63,8 @@ import com.example.llamadroid.service.chat.ChatAdmissionPlanner
 import com.example.llamadroid.service.chat.ChatGenerationScheduler
 import com.example.llamadroid.service.chat.ChatGenerationSession
 import com.example.llamadroid.service.chat.ChatPowerLocks
+import com.example.llamadroid.service.chat.LiteRtSamplerDefaults
+import com.example.llamadroid.service.chat.withExtendedSamplers
 import com.example.llamadroid.service.chat.DecodeTimings
 import com.example.llamadroid.service.chat.NativeChatModelActivity
 import com.example.llamadroid.service.chat.NativeChatStepHistory
@@ -486,9 +488,9 @@ class LlamaClientService : Service() {
                         LlamaServerUsageLease(applicationContext,
                             com.example.llamadroid.data.model.LlamaServerCardEntity.sessionIdForCard(cardId), serviceScope)
                     }
-                    val ready = ManagedLlamaServerCoordinator(applicationContext, database).prepare(cardId) {
+                    val ready = ManagedLlamaServerCoordinator(applicationContext, database).prepare(cardId, onStatus = {
                         updateLocalLlamaServerStartupStatus(chatId, it)
-                    }
+                    })
                     val profile = requireNotNull(ready.profile)
                     server = server.copy(host = managedLlamaConnectHost(profile.host), port = profile.serverPort,
                         modelName = profile.modelPath.substringAfterLast('/'),
@@ -1443,7 +1445,7 @@ class LlamaClientService : Service() {
             },
             idSlot = null,
             cachePrompt = null
-        )
+        ).withExtendedSamplers(params)
 
         // The slot lock is held for exactly this request/stream (not re-entrant); a direct-video
         // rejection leaves the lock first, then retries below.
@@ -2653,9 +2655,9 @@ class LlamaClientService : Service() {
 
     private fun liteRtGalleryParams(params: Map<String, Any>): Map<String, Any> =
         linkedMapOf<String, Any>(
-            "top_k" to ((params["top_k"] as? Number)?.toInt() ?: 40).coerceIn(5, 64),
-            "top_p" to ((params["top_p"] as? Number)?.toDouble() ?: 0.95).coerceIn(0.0, 0.95),
-            "temperature" to ((params["temperature"] as? Number)?.toDouble() ?: 1.0).coerceIn(0.0, 1.0),
+            "top_k" to ((params["top_k"] as? Number)?.toInt() ?: LiteRtSamplerDefaults.TOP_K).coerceIn(5, 64),
+            "top_p" to ((params["top_p"] as? Number)?.toDouble() ?: LiteRtSamplerDefaults.TOP_P).coerceIn(0.0, 0.95),
+            "temperature" to ((params["temperature"] as? Number)?.toDouble() ?: LiteRtSamplerDefaults.TEMPERATURE).coerceIn(0.0, 1.0),
             "enable_thinking" to ((params["enable_thinking"] as? Boolean) ?: false),
             LITERT_PARAM_MTP_ENABLED to ((params[LITERT_PARAM_MTP_ENABLED] as? Boolean) ?: false)
         ).apply {

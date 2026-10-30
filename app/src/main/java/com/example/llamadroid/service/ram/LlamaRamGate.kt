@@ -4,6 +4,7 @@ import android.app.ActivityManager
 import android.content.Context
 import com.example.llamadroid.service.LlamaLoadMode
 import com.example.llamadroid.service.LlamaServerLaunchProfile
+import com.example.llamadroid.util.NativeProcessCleanup
 import java.io.File
 
 /** Free-memory reading used by [LlamaRamGate.decide]. */
@@ -20,16 +21,30 @@ class LlamaRamGate(context: Context) {
         return LlamaRamEstimator.estimate(inputsFor(profile, model.length(), mmprojBytesFor(profile), shape))
     }
 
-    fun snapshot(): RamSnapshot {
+    fun snapshot(excludePort: Int? = null): RamSnapshot {
         val manager = app.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
             ?: return RamSnapshot(0L, true, 0L)
         val info = ActivityManager.MemoryInfo()
         manager.getMemoryInfo(info)
-        return RamSnapshot(info.availMem, info.lowMemory, readInactiveFileBytes())
+        // Mapped pages of other loaded models are in MemAvailable but in use: subtract RssFile only.
+        val avail = (info.availMem - otherLlamaResidentFileBytes(excludePort)).coerceAtLeast(0L)
+        return RamSnapshot(avail, info.lowMemory, readInactiveFileBytes())
     }
 
     fun decide(estimate: LlamaRamEstimate, snapshot: RamSnapshot = snapshot()): LlamaRamDecision =
         LlamaRamEstimator.decide(estimate, snapshot.availBytes, snapshot.lowMemory, snapshot.reclaimableCacheBytes)
+
+    /** Sum of `RssFile` of same-UID llama-server processes, skipping the one listening on [excludePort]. */
+    fun otherLlamaResidentFileBytes(excludePort: Int?, procRoot: File = File("/proc")): Long = runCatching {
+        val myPid = android.os.Process.myPid()
+        val myUid = android.os.Process.myUid()
+        val excluded = excludePort
+            ?.let { NativeProcessCleanup.findSameUidLlamaServers(procRoot, myPid, myUid, it) }
+            ?.map { it.pid }?.toSet().orEmpty()
+        NativeProcessCleanup.findSameUidLlamaServers(procRoot, myPid, myUid)
+            .filter { it.pid !in excluded }
+            .sumOf { File(procRoot, "${it.pid}/status").takeIf(File::canRead)?.readText()?.let { parseRssFileBytes(it) } ?: 0L }
+    }.getOrDefault(0L)
 
     private fun readInactiveFileBytes(): Long = runCatching {
         File("/proc/meminfo").useLines { lines ->
@@ -39,6 +54,22 @@ class LlamaRamGate(context: Context) {
     }.getOrDefault(0L)
 
     companion object {
+        /** Parses the `RssFile:` line (kB) of /proc/<pid>/status into bytes; 0 when absent. */
+        fun parseRssFileBytes(statusText: String): Long =
+            statusText.lineSequence().firstOrNull { it.startsWith("RssFile:") }
+                ?.filter { it.isDigit() }?.toLongOrNull()?.times(1024L) ?: 0L
+
+        /** Parses the `RssAnon:` line (kB) of /proc/<pid>/status into bytes; 0 when absent. */
+        fun parseRssAnonBytes(statusText: String): Long =
+            statusText.lineSequence().firstOrNull { it.startsWith("RssAnon:") }
+                ?.filter { it.isDigit() }?.toLongOrNull()?.times(1024L) ?: 0L
+
+        /** RssFile + RssAnon of [pid]; 0 when the process or its status file is unreadable. */
+        fun residentBytesOfPid(pid: Int, procRoot: File = File("/proc")): Long = runCatching {
+            val text = File(procRoot, "$pid/status").takeIf(File::canRead)?.readText() ?: return@runCatching 0L
+            parseRssFileBytes(text) + parseRssAnonBytes(text)
+        }.getOrDefault(0L)
+
         /** `--mlock`, `--no-mmap` and direct-io keep the whole file resident. */
         fun fullyResident(profile: LlamaServerLaunchProfile): Boolean {
             val mode = profile.resolvedLoadMode()

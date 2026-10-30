@@ -28,7 +28,6 @@ import com.example.llamadroid.service.NativeChatImageGenerationEngine
 import com.example.llamadroid.service.NativeChatSdImageToolParams
 import com.example.llamadroid.service.NativeChatToolConfig
 import com.example.llamadroid.service.supportsSdTxt2Img
-import com.example.llamadroid.ui.ai.llama.LlamaChatSamplerValidation
 import com.example.llamadroid.ui.ai.llama.LlamaSamplerField
 import com.example.llamadroid.data.db.KnowledgeBaseEntity
 
@@ -52,31 +51,6 @@ internal class ChatSettingsEnv(
      */
     val defaultsMode: Boolean = false
 )
-
-@Composable
-private fun ChatSettingsState.SamplerRow(
-    field: LlamaSamplerField,
-    label: String,
-    text: String,
-    integer: Boolean = false,
-    onText: (String) -> Unit,
-    onValid: (Float) -> Unit
-) {
-    val liteRt = activeServerIsLiteRt
-    val invalidNumber = stringResource(R.string.llama_sampler_invalid_number)
-    val invalidRange = stringResource(R.string.llama_sampler_invalid_range)
-    LlamaSamplerNumericField(
-        label = label,
-        value = text,
-        rangeText = LlamaChatSamplerValidation.rangeText(field, liteRt),
-        integer = integer,
-        error = samplerErrorMessage.takeIf { samplerErrorField == field },
-        onValueChange = { next ->
-            onText(next)
-            updateSamplerText(field, next, liteRt, invalidNumber, invalidRange, onValid)
-        }
-    )
-}
 
 /** Server and context: LiteRT context length, accelerator and the GPU warning. */
 @Composable
@@ -139,44 +113,17 @@ internal fun ChatSettingsState.ServerContextSection(env: ChatSettingsEnv) {
 
 @Composable
 internal fun ChatSettingsState.SamplingSection() {
-    SamplerRow(
-        field = LlamaSamplerField.TEMPERATURE,
-        label = stringResource(R.string.llama_sampler_temperature_label),
-        text = temperatureText,
-        onText = { temperatureText = it },
-        onValid = { temperature = it }
+    Text(
+        text = stringResource(R.string.chat_sampler_auto_hint),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 3,
+        overflow = TextOverflow.Ellipsis
     )
-    SamplerRow(
-        field = LlamaSamplerField.TOP_P,
-        label = stringResource(R.string.llama_sampler_top_p_label),
-        text = topPText,
-        onText = { topPText = it },
-        onValid = { topP = it }
-    )
-    SamplerRow(
-        field = LlamaSamplerField.TOP_K,
-        label = stringResource(R.string.llama_sampler_top_k_label),
-        text = topKText,
-        integer = true,
-        onText = { topKText = it },
-        onValid = { topK = it }
-    )
-    if (!activeServerIsLiteRt) {
-        SamplerRow(
-            field = LlamaSamplerField.MIN_P,
-            label = stringResource(R.string.llama_sampler_min_p_label),
-            text = minPText,
-            onText = { minPText = it },
-            onValid = { minP = it }
-        )
-        SamplerRow(
-            field = LlamaSamplerField.REPETITION_PENALTY,
-            label = stringResource(R.string.llama_sampler_repetition_penalty_label),
-            text = repPenText,
-            onText = { repPenText = it },
-            onValid = { repPen = it }
-        )
-    }
+    LlamaSamplerField.visible(activeServerIsLiteRt).filter { it.basic }
+        .forEach { SamplerRow(it) }
+    if (!activeServerIsLiteRt) AdvancedSamplingBlock()
+    ResetSamplersButton()
 }
 
 @Composable

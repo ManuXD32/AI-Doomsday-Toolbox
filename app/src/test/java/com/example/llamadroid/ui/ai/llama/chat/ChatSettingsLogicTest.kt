@@ -38,31 +38,40 @@ class ChatSettingsLogicTest {
     fun invalidSamplerTextBlocksSavingForThatField() {
         val invalid = firstInvalidSamplerField(
             liteRt = false,
-            temperatureText = "0.8",
-            topPText = "2.5",
-            topKText = "40",
-            minPText = "0.05",
-            repPenText = "1.1"
+            texts = mapOf(
+                LlamaSamplerField.TEMPERATURE to "0.8",
+                LlamaSamplerField.TOP_P to "2.5",
+                LlamaSamplerField.TOP_K to "40"
+            )
         )
         assertEquals(LlamaSamplerField.TOP_P, invalid)
     }
 
     @Test
-    fun liteRtIgnoresMinPAndRepetitionPenalty() {
+    fun autoFieldsAreNotValidated() {
+        val invalid = firstInvalidSamplerField(
+            liteRt = false,
+            texts = mapOf(LlamaSamplerField.TOP_P to null, LlamaSamplerField.MIN_P to "0.05")
+        )
+        assertNull(invalid)
+    }
+
+    @Test
+    fun liteRtIgnoresLlamaOnlyFields() {
         val invalid = firstInvalidSamplerField(
             liteRt = true,
-            temperatureText = "0.8",
-            topPText = "0.9",
-            topKText = "40",
-            minPText = "garbage",
-            repPenText = ""
+            texts = mapOf(
+                LlamaSamplerField.TEMPERATURE to "0.8",
+                LlamaSamplerField.MIN_P to "garbage",
+                LlamaSamplerField.DRY_BASE to ""
+            )
         )
         assertNull(invalid)
     }
 
     @Test
     fun liteRtTemperatureAboveOneIsInvalid() {
-        val invalid = firstInvalidSamplerField(true, "1.5", "0.9", "40", "", "")
+        val invalid = firstInvalidSamplerField(true, mapOf(LlamaSamplerField.TEMPERATURE to "1.5"))
         assertEquals(LlamaSamplerField.TEMPERATURE, invalid)
     }
 

@@ -5,7 +5,11 @@ import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.savedCommandFromLaunchProfile
 import com.example.llamadroid.data.model.LlamaServerCardEntity
 import com.example.llamadroid.util.NativeProcessCleanup
+import com.example.llamadroid.service.ram.LocalModelRamStep
+import io.mockk.coEvery
 import io.mockk.every
+import io.mockk.mockkConstructor
+import io.mockk.unmockkConstructor
 import io.mockk.mockkObject
 import io.mockk.unmockkObject
 import io.mockk.verify
@@ -66,6 +70,9 @@ class ManagedLlamaServerCoordinatorPrepareTest {
         mockkObject(LlamaServerLauncher)
         mockkObject(NativeProcessCleanup)
         mockkObject(ManagedLlamaServerHttp)
+        // These tests cover startup orchestration; the RAM step has its own tests.
+        mockkConstructor(LocalModelRamStep::class)
+        coEvery { anyConstructed<LocalModelRamStep>().ensureRoom(any(), any(), any(), any()) } returns Unit
         every {
             NativeProcessCleanup.recordedLlamaOwnerIsAliveSync(any(), any(), any())
         } returns true
@@ -78,6 +85,7 @@ class ManagedLlamaServerCoordinatorPrepareTest {
         File(context.filesDir, "llama_server_usage/$sessionId").deleteRecursively()
         modelFile.delete()
         database.close()
+        unmockkConstructor(LocalModelRamStep::class)
         unmockkObject(ManagedLlamaServerHttp)
         unmockkObject(NativeProcessCleanup)
         unmockkObject(LlamaServerLauncher)
@@ -139,14 +147,14 @@ class ManagedLlamaServerCoordinatorPrepareTest {
         var clock: Job? = null
         try {
             withTimeout(5_000) {
-                ManagedLlamaServerCoordinator(context, database).prepare(cardId) { message ->
+                ManagedLlamaServerCoordinator(context, database).prepare(cardId, onStatus = { message ->
                     if (message == context.getString(com.example.llamadroid.R.string.managed_llama_verifying)) {
                         clock = launch {
                             delay(100)
                             ShadowSystemClock.advanceBy(Duration.ofSeconds(10))
                         }
                     }
-                }
+                })
             }
             error("Missing ownership must not leave the user waiting for three minutes")
         } catch (error: ManagedLlamaServerException) {

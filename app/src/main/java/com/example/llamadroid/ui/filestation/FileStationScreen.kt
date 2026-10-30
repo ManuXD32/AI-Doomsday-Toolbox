@@ -215,7 +215,6 @@ fun FileStationScreen(onBack: () -> Unit, viewModel: FileStationViewModel = view
     passwordDialog?.let { mode ->
         FileStationPasswordDialog(
             mode = mode,
-            verifyCurrent = viewModel::verifyPassword,
             onDismiss = { passwordDialog = null },
             onSet = { viewModel.setPassword(it); passwordDialog = null },
             onRemove = { viewModel.clearPassword(); passwordDialog = null }

@@ -16,6 +16,9 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -31,16 +34,20 @@ import com.example.llamadroid.ui.theme.AppThemeFromSettings
  * publishes [ChatBubbleState.windowOpen] so the bubble hides and its red dot clears.
  */
 class ChatBubbleActivity : ComponentActivity() {
+    private val chatIdState = mutableLongStateOf(-1L)
+    private val serverIdState = mutableStateOf<Long?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        val chatId = intent.getLongExtra(EXTRA_CHAT_ID, -1L)
-        val serverId = intent.getLongExtra(EXTRA_SERVER_ID, -1L).takeIf { it >= 0L }
-        if (chatId <= 0L) {
+        readTarget(intent)
+        if (chatIdState.longValue <= 0L) {
             finish()
             return
         }
         setContent {
+            val chatId = chatIdState.longValue
+            val serverId = serverIdState.value
             AppThemeFromSettings {
                 // Tapping the dimmed area outside the panel closes the window.
                 Box(
@@ -66,19 +73,34 @@ class ChatBubbleActivity : ComponentActivity() {
                             ),
                         color = MaterialTheme.colorScheme.background
                     ) {
-                        ChatBubbleWindowContent(
-                            chatId = chatId,
-                            serverId = serverId,
-                            onClose = { finish() },
-                            onCloseBubble = {
-                                ChatBubbleOverlayService.stop(applicationContext)
-                                finish()
-                            }
-                        )
+                        key(chatId) {
+                            ChatBubbleWindowContent(
+                                chatId = chatId,
+                                serverId = serverId,
+                                onClose = { finish() },
+                                onCloseBubble = {
+                                    ChatBubbleOverlayService.stop(applicationContext)
+                                    finish()
+                                }
+                            )
+                        }
                     }
                 }
             }
         }
+    }
+
+    // singleTask: a retargeted bubble re-delivers the intent here instead of recreating the activity.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        readTarget(intent)
+        if (chatIdState.longValue <= 0L) finish()
+    }
+
+    private fun readTarget(source: Intent) {
+        chatIdState.longValue = source.getLongExtra(EXTRA_CHAT_ID, -1L)
+        serverIdState.value = source.getLongExtra(EXTRA_SERVER_ID, -1L).takeIf { it >= 0L }
     }
 
     override fun onResume() {

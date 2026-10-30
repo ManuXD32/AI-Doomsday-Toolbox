@@ -47,25 +47,36 @@ internal fun resolveChatServerBanner(
     return ChatServerBannerKind.NONE
 }
 
-/** First sampler text field that does not validate, or null when every field may be saved. */
+/**
+ * First sampler text field that does not validate, or null when every field may be saved.
+ * [texts] maps each field to its text, or null when the field is Auto (nothing to validate).
+ * Fields LiteRT does not support are skipped.
+ */
 internal fun firstInvalidSamplerField(
     liteRt: Boolean,
-    temperatureText: String,
-    topPText: String,
-    topKText: String,
-    minPText: String,
-    repPenText: String
-): LlamaSamplerField? {
-    val checks = buildList {
-        add(LlamaSamplerField.TEMPERATURE to temperatureText)
-        add(LlamaSamplerField.TOP_P to topPText)
-        add(LlamaSamplerField.TOP_K to topKText)
-        if (!liteRt) {
-            add(LlamaSamplerField.MIN_P to minPText)
-            add(LlamaSamplerField.REPETITION_PENALTY to repPenText)
-        }
+    texts: Map<LlamaSamplerField, String?>
+): LlamaSamplerField? = LlamaSamplerField.visible(liteRt).firstOrNull { field ->
+    val text = texts[field] ?: return@firstOrNull false
+    LlamaChatSamplerValidation.parse(text, field, liteRt) == null
+}
+
+/**
+ * Request entries for the committed sampler [values] (missing = Auto, left out). LiteRT only takes
+ * temperature, top_p and top_k, coerced into its ranges; llama.cpp gets every non-Auto key typed
+ * Int or Float per [LlamaSamplerField.isIntegerKey].
+ */
+internal fun samplerParamEntries(
+    liteRt: Boolean,
+    values: Map<LlamaSamplerField, Float>
+): LinkedHashMap<String, Any> {
+    val out = linkedMapOf<String, Any>()
+    LlamaSamplerField.visible(liteRt).forEach { field ->
+        val raw = values[field] ?: return@forEach
+        val value = LlamaChatSamplerValidation.range(field, liteRt)
+            ?.let { raw.coerceIn(it.minimum, it.maximum) } ?: raw
+        out[field.key] = if (field.isIntegerKey) value.toInt() else value
     }
-    return checks.firstOrNull { (field, text) -> LlamaChatSamplerValidation.parse(text, field, liteRt) == null }?.first
+    return out
 }
 
 /**

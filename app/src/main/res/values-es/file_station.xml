@@ -56,13 +56,11 @@
     <string name="fs_password_remove">Quitar contraseña</string>
     <string name="fs_sign_out_all">Cerrar todas las sesiones</string>
     <string name="fs_signed_out">Se cerraron todas las sesiones del navegador.</string>
-    <string name="fs_pw_current">Contraseña actual</string>
     <string name="fs_pw_new">Contraseña nueva</string>
     <string name="fs_pw_confirm">Repite la contraseña</string>
     <string name="fs_pw_mismatch">Las contraseñas no coinciden.</string>
     <string name="fs_pw_short">Usa al menos 8 caracteres.</string>
-    <string name="fs_pw_wrong">La contraseña actual es incorrecta.</string>
-    <string name="fs_pw_remove_message">Cualquiera que llegue a la Estación de archivos podrá abrirla sin iniciar sesión.</string>
+    <string name="fs_pw_remove_message">Cualquiera que llegue a la Estación de archivos desde tu red podrá abrirla sin iniciar sesión. Puedes poner una contraseña nueva cuando quieras.</string>
     <string name="fs_advanced_title">Avanzado</string>
     <string name="fs_trash_days">Retención de la papelera (días)</string>
     <string name="fs_trash_days_desc">Los archivos borrados se eliminan tras estos días. Con 0 se conservan hasta vaciar la papelera.</string>

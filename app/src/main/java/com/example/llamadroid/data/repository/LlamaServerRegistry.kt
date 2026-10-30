@@ -205,11 +205,11 @@ class LlamaServerRegistry(
 
     // Actions ------------------------------------------------------------------------------
 
-    suspend fun start(server: UnifiedServer, onStatus: (String) -> Unit = {}) {
+    suspend fun start(server: UnifiedServer, onStatus: (String) -> Unit = {}, allowLowRam: Boolean = false) {
         when (server.kind) {
             UnifiedServerKind.LOCAL_MANAGED -> {
                 val cardId = requireNotNull(server.cardId) { "Managed server has no card." }
-                ManagedLlamaServerCoordinator(context, database).prepare(cardId, onStatus)
+                ManagedLlamaServerCoordinator(context, database).prepare(cardId, onStatus, allowLowRam)
             }
             UnifiedServerKind.LOCAL_LEGACY -> {
                 val row = database.llamaServerDao().getServerById(requireNotNull(server.rowId)) ?: return
@@ -229,13 +229,13 @@ class LlamaServerRegistry(
         }
     }
 
-    suspend fun restart(server: UnifiedServer, onStatus: (String) -> Unit = {}) {
+    suspend fun restart(server: UnifiedServer, onStatus: (String) -> Unit = {}, allowLowRam: Boolean = false) {
         stop(server)
         // Wait (bounded) for the old process to report stopped before launching again.
         withTimeoutOrNull(STOP_WAIT_MS) {
             while (!isStopped(server)) delay(300)
         }
-        start(server, onStatus)
+        start(server, onStatus, allowLowRam)
     }
 
     private suspend fun isStopped(server: UnifiedServer): Boolean = withContext(Dispatchers.IO) {

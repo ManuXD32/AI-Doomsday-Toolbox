@@ -10,23 +10,8 @@ data class LockedScreenReport(
     val port: Int = 0,
     val pid: Int = 0,
     val updatedAtMillis: Long = 0L,
-    val threadFitEnabled: Boolean = false,
-    val configuredThreads: Int = 0,
-    val effectiveThreads: Int = 0,
-    val threadFitReason: String = ThreadFitReason.DISABLED.name,
-    val foregroundCpus: String? = null,
-    val topAppCpus: String? = null,
-    val priorityState: String = PriorityState.OFF.name,
-    /** Threads whose nice value read back at the target, and the threads read (for PARTIAL). */
-    val priorityRaisedThreads: Int = 0,
-    val priorityTotalThreads: Int = 0,
-    /** One of OFF, UNSUPPORTED, ACCEPTED, REFUSED. */
-    val hintState: String = HintState.OFF.name,
-    val hintDetail: String? = null,
     val running: Boolean = true
 )
-
-enum class HintState { OFF, UNSUPPORTED, PENDING, ACCEPTED, REFUSED }
 
 /** Small JSON files under `files/locked_screen_perf/`, one per server port. */
 class LockedScreenReportStore(filesDir: File) {

@@ -1011,14 +1011,12 @@ class ProcessController {
         } else {
             null
         }
-        val lockedScreen = LockedScreenRuntime.create(config, filesDir, LlamaApplication.instance)
-        val args = lockedScreen.tune(
-            NativeChatKvCacheStore.withSlotSavePath(
-                args = customArgs?.let {
-                    appendVideoArgsIfNeeded(it, config, enabled = config.videoEnabled)
-                } ?: getCommand(binaryPath, config, binaryCapabilities),
-                filesDir = filesDir
-            ),
+        val lockedScreen = LockedScreenRuntime.create(config, filesDir)
+        val args = NativeChatKvCacheStore.withSlotSavePath(
+            args = customArgs?.let {
+                appendVideoArgsIfNeeded(it, config, enabled = config.videoEnabled)
+            } ?: getCommand(binaryPath, config, binaryCapabilities),
+            filesDir = filesDir
         )
         var launchedProcess: Process? = null
         
@@ -1227,7 +1225,6 @@ class ProcessController {
                             modelLoaded = true
                             onState?.invoke(ServerState.Running(config.port))
                             onReady?.invoke()
-                            lockedScreen.onReady()
                             DebugLog.log("ProcessController: Server is ready and healthy on port ${config.port}")
                         } else {
                             throw IllegalStateException(
@@ -1284,6 +1281,14 @@ class ProcessController {
             }
             DebugLog.log("ProcessController: FAILED - ${e.message}")
             Log.e("ProcessController", "Failed to start", e)
+            // A non-intentional failure (readiness timeout, reader IOException) must not leave the
+            // llama-server child alive and orphaned. Only kill the child this launch spawned, and
+            // restore the intentional-stop flag so callers do not treat the failure as a user stop.
+            if (launchedProcess != null && process === launchedProcess) {
+                val wasIntentional = stoppedIntentionally
+                runCatching { stop() }
+                stoppedIntentionally = wasIntentional
+            }
             activeChildPid = -1
             activeBinaryWasOpenCl = false
             throw e

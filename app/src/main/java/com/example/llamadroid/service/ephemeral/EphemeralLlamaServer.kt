@@ -123,9 +123,7 @@ object EphemeralLlamaServer {
             contextSize = contextTokens,
             parallel = 1,
             sleepIdleSeconds = null,
-            idleStopSeconds = IDLE_STOP_SECONDS,
-            // Low impact: short-lived helpers never get raised thread priority.
-            lockedScreenThreadPriority = false
+            idleStopSeconds = IDLE_STOP_SECONDS
         )
     }
 

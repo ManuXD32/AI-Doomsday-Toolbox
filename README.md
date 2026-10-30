@@ -29,15 +29,19 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 ## Highlights
 
 - Offline AI on Android with local LLM, Whisper, image and video generation, upscaling, and media tools
-- Material 3 interface with Home, Tools, Library, and Tama navigation, phone and tablet layouts, and English and Spanish support
+- Material 3 interface with Home, Chats, Tools, Tama, and Organizer navigation, app-wide search, phone and tablet layouts, an optional pixel retro theme, and English and Spanish support
+- Easy mode: a simpler app for everyday use with its own model picker, chats, images, and voice
+- Native chat with floating bubble windows, parallel chats, a steps view, per-chat disk caches, and DeepSeek delegation for coding and file work
+- A unified Servers hub for local and remote model servers
+- File Station: a browser-based file manager for your phone's folders over the LAN
 - Guided tours with real controls, screenshots, and feature-by-feature recipes that you can skip, resume, or replay
 - Custom model downloads, full Hugging Face repository browsing, saved links, and your own model bundles
 - Distributed inference features for coordinating multiple Android devices on the same network
 - Built-in Ollama manager, llama native chat, and remote summary tools
 - Dataset creator that turns text and PDFs into cleaned, rated instruction-answer pairs with Alpaca export
 - Termux + proot tool environment with install helpers, SSH workflows, in-app webview access, and file management
-- AI agent workspace with custom tools, custom agents, and project memory
-- Tama virtual pet systems with adventures, farming, chat, and persistent memories
+- AI agent workspace with custom tools, custom agents, project memory, and multiple runtime environments
+- Tama virtual pet systems with adventures, a living farm, dream adventures, chat, a Shimeji mode that roams over your screen, pet transfer between phones, and persistent memories
 - Android share-intent support for PDFs, videos, images, and audio files
 
 ## Guide Index
@@ -54,16 +58,17 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 
 ### Dashboard
 
-- The Dashboard is now Home, with pinned tools, recent conversations and projects, and compact device and server status.
-- The bottom navigation connects Home, Tools, Library, and Tama, with a navigation rail on larger layouts and a menu on compact or large-text layouts.
+- The Dashboard is now Home, with pinned tools, recent conversations and projects, compact device and server status, and sections for features you have not tried yet and what is new in this version.
+- The navigation connects Home, Chats, Tools, Tama, and Organizer, with search across the whole app, a navigation rail on larger layouts, and a menu on compact or large-text layouts.
 - The Explore button beside Settings opens the app tour, with options to start, resume, replay, or choose a chapter.
-- The file server browser can now receive uploads from connected devices too, including whole folders that stay grouped under the selected folder name, plus progress, speed, and remaining-time feedback behind a compact `+` upload picker.
+- File Station replaces the old file server; see [File Station](#file-station) below.
+- Easy mode can be chosen on first launch or switched on and off at any time; see [Easy Mode](#easy-mode).
 
 ### AI HUB
 
 - The AI HUB is now the Tools catalog, grouping the main AI work surfaces by task with search and pin controls.
-- It groups AI Servers, image and video generation, ONNX image generation, background removal, text to speech, audio transcription, subtitle and translation workflows, PDF tools, video summary, benchmark, dataset creation, training, Termux SSH tools, the AI agent workspace, Ollama Manager, and native llama chat.
-- The browser-facing AI Servers Hub also maps Image Studio, Video Studio, Workflows, Voice Studio, Video Upscale, Docs and Datasets, and Llama Chat into local web UIs with QR and LAN access controls.
+- It groups the Servers hub, image and video generation, ONNX image generation, background removal, text to speech, audio transcription, subtitle and translation workflows, PDF tools, video summary, benchmark, dataset creation, training, Termux SSH tools, the AI agent workspace, Ollama Manager, and native llama chat.
+- The browser-facing Servers hub also maps Image Studio, Video Studio, Workflows, Voice Studio, Video Upscale, Docs and Datasets, and Llama Chat into local web UIs with QR and LAN access controls.
 
 ### Library
 
@@ -86,17 +91,17 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 - It also contains the backup and restore flows, including full app backup and the native chat plus Organizer ZIP transfer flow.
 - Full app backup includes portable saved sources and bundle definitions so you can download missing models after moving devices.
 - Choose system, light, or dark appearance, optional wallpaper colors, and English or Spanish.
-- It includes output-folder, acceleration, thread-count, and saved-prompt controls, plus a permanent entry for managing llama.cpp servers.
+- It includes output-folder, acceleration, thread-count, and saved-prompt controls, a permanent entry for the Servers hub, and cache management for per-chat disk caches.
 
 ### Organizer
 
-- The Organizer groups notes, calendar events, alarms, and their widget surfaces.
+- The Organizer is a main navigation destination that groups notes, calendar events, alarms, and their widget surfaces.
 - It also connects with the native chat tooling and the ZIP transfer flow described in Settings.
 
 ### P.E.T.
 
 - P.E.T. is the app's Tamagotchi-like subsystem with its own home screen, chat, gallery, farm, store, and adventure systems.
-- The broader P.E.T. area includes dream recaps, artwork/gallery flows, room and decoration systems, and Adventure Gate.
+- The broader P.E.T. area includes dream adventures, artwork/gallery flows, room and decoration systems, Adventure Gate, Shimeji mode, and pet transfer.
 - It also connects with the app's local AI backends and long-term saved state.
 
 ## Features
@@ -104,17 +109,31 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 ### App Navigation And Guided Tours
 
 - Keep pinned tools and recent work on Home
+- Move between Home, Chats, Tools, Tama, and Organizer, and search the whole app from one place
 - Search the Tools catalog by task and open models, knowledge, offline content, and galleries from Library
 - Use the same Material 3 interface on phones and tablets, with layouts that adapt to screen size and text size
+- Pick the optional pixel retro theme for a handheld-game look
 - Follow the automatic first-use tour after setup, or replay it from the Explore button on Home
 - Open the Explore button inside each feature for practical quick starts, common options, and screenshot examples
-- Choose from 26 guides and 89 recipes, with Previous, Next, Skip, Resume, Replay, and an always-available X
+- Choose from more than 30 guides and 100 recipes, with Previous, Next, Skip, Resume, Replay, and an always-available X
 - Complete the explanations without downloading models, granting permissions, creating data, or starting inference
 
 <p align="center">
-  <img width="31%" alt="App tour and chapters" src="assets/readme/app-tour.png" />
-  <img width="31%" alt="Tools walkthrough with live guidance" src="assets/readme/tools-tour.png" />
   <img width="31%" alt="Library on a tablet" src="assets/readme/tablet-library.png" />
+  <img width="31%" alt="Pixel retro theme on the home screen" src="assets/readme/pixel-theme.webp" />
+</p>
+
+### Easy Mode
+
+- Choose "Try Easy mode" on first launch, or switch between Easy and advanced mode any time
+- Chat, generate images, and use the voice mic from one simple app
+- Pick models from one curated list plus compatible installed models, with memory-aware recommendations and a light/dark toggle
+- Recommendations never block you: any model and context can be chosen, with a warning when it exceeds what the phone suggests
+- Tama, Organizer, and Tools stay hidden while Easy mode is on
+
+<p align="center">
+  <img width="31%" alt="Easy mode chat" src="assets/readme/easy-mode.webp" />
+  <img width="31%" alt="Easy mode model picker" src="assets/readme/easy-models.webp" />
 </p>
 
 ### Distributed Inference And Android Cluster Workflows
@@ -132,22 +151,45 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 
 ### Local AI Chat
 
-- Chat with local LLMs on Android
-- Support GGUF-based llama.cpp workflows
-- Connect to llama.cpp-compatible servers and llama-server backends through a native in-app chat UI
-- OpenAI-compatible local server mode on port `8080`
-- Multiple model support with switching from the app interface
-- Create, start, and stop llama.cpp servers from the server manager even while chat is available
-- Choose between running servers from inside chat when more than one is active
+- Chat with local LLMs on Android through the native Chat Llama, using GGUF-based llama.cpp workflows or other llama.cpp-compatible servers
+- Use the Servers hub to manage local and remote model servers in one place, with a full server editor, per-server defaults for new chats, and Web UI shortcuts
+- Run several chats at once; a queue holds extra requests when a server has no free slots
+- Follow the steps view with tool cards, folded thinking, a context ring with auto-compaction, and Stop and Continue that resumes mid-sentence
+- Keep a per-chat disk KV cache for long chats, and use Prepare caches to build bases for the system prompt and tools
+- Attach files to a chat workspace the model can list and read; every image in a message reaches vision models
+- Use a vision helper to describe images for models without vision, and helper models for chat titles
+- Tune advanced sampling (penalties, typical-p, XTC, DRY, dynamic temperature, Mirostat) with Auto defaults and a reset button
+- Send audio and video directly where the model supports it, with automatic fallback to Whisper or a transcript
+- Start safely: the app checks RAM before loading a model, can stop idle models for you, and offers Start anyway when you decide to proceed
+- OpenAI-compatible local server mode on port `8080`, with optional LAN visibility through settings
 - Schedule tasks and review their next run and logs from the built-in scheduler
-- Optional LAN-visible server behavior through settings when needed
 - Use Ollama-compatible workflows where they fit best for your setup
 - Keep inference on-device or on your own local network instead of relying on cloud chat
 
 <p align="center">
-  <img width="31%" alt="Native llama server manager" src="assets/readme/llama-servers.webp" />
-  <img width="31%" alt="llama.cpp server controls" src="assets/readme/server-selection.webp" />
+  <img width="31%" alt="Chat steps view with tool cards and context ring" src="assets/readme/chat-steps.webp" />
+  <img width="31%" alt="Servers hub with local and remote servers" src="assets/readme/llama-servers.webp" />
   <img width="31%" alt="Scheduled AI tasks" src="assets/readme/scheduler.webp" />
+</p>
+
+### Bubble Chat
+
+- Turn any chat into a draggable floating bubble over other apps
+- A red dot shows when the model has answered
+- Open the floating chat window to read and reply without leaving what you are doing
+
+<p align="center">
+  <img width="31%" alt="Floating bubble chat window over the app" src="assets/readme/bubble-chat.webp" />
+</p>
+
+### DeepSeek Delegation
+
+- A Chat Llama Native chat can delegate coding, projects, and files to a background subagent driving a DeepSeek Harness runtime
+- Follow the work in a task viewer, stop it from the Stop bar, and reuse projects and threads
+- Pass files and images between the chat and the subagent, with a per-chat delegation option
+
+<p align="center">
+  <img width="31%" alt="DeepSeek delegation from a native chat" src="assets/readme/deepseek-delegation.webp" />
 </p>
 
 ### Ollama Manager
@@ -182,6 +224,10 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 - Export in Alpaca JSON format
 - Customize the prompts used for cleaning, question generation, answer generation, and review
 
+<p align="center">
+  <img width="31%" alt="Dataset creator" src="assets/readme/dataset.webp" />
+</p>
+
 
 ### Termux Tools And Ubuntu SSH Workflows
 
@@ -206,6 +252,7 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 - Create custom tools and custom agents
 - Keep project-specific workspace memory and task context
 - Build reusable automation flows around your own projects
+- Run several runtime environments, each on its own port, with ADT models available in every runtime
 - Review plans in a full-screen editor, inspect approvals, and use Continue to recover interrupted work
 - Return to the previous app page with Back while keeping saved conversations and running work
 
@@ -236,6 +283,10 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 - Extract audio from videos with FFmpeg as part of summarization/transcription workflows
 - Burn subtitles into video with styling controls such as font, color, and position
 - Process media directly from Android share intents
+
+<p align="center">
+  <img width="31%" alt="Audio transcription" src="assets/readme/transcription.webp" />
+</p>
 
 
 ### Model Downloads, Saved Links, And Bundles
@@ -286,6 +337,7 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 
 <p align="center">
   <img width="31%" alt="Image generation screen" src="assets/readme/image-generation.png" />
+  <img width="31%" alt="Video upscaler" src="assets/readme/video-upscaler.webp" />
 </p>
 
 ### Offline Knowledge, Sharing, And Utilities
@@ -296,16 +348,42 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 - Optional LAN access so other devices on your network can connect to shared content
 - Share models and ZIM files over LAN with web UI and QR-based connection flows
 - Export shared files to storage when needed
-- Create and manage notes with Markdown support
-- Automatic note creation for summaries and transcription workflows
 - Use Android share intents to send PDFs, videos, images, and audio into the app’s processing flows
+
+<p align="center">
+  <img width="31%" alt="Offline library" src="assets/readme/offline-library.webp" />
+</p>
+
+### File Station
+
+- Open your phone's folders from any browser on the LAN in a Nextcloud-style web page, with an optional password
+- Search, preview, upload with progress (including whole folders), and move deleted items to a trash
+- Edit documents in the browser and use file tools for zip, PDF, images, audio/video, and conversions
+- Built-in calculators and survival planners
+- File Station replaces the old file server
+
+<p align="center">
+  <img width="31%" alt="File Station web page" src="assets/readme/file-station.webp" />
+</p>
+
+### Organizer
+
+- Create and manage notes with Markdown support, calendar events, and alarms, with widgets
+- Notes are created automatically for summaries and transcription workflows
+
+<p align="center">
+  <img width="31%" alt="Organizer" src="assets/readme/organizer.webp" />
+</p>
 
 ### Tama Virtual Pet
 
 - Raise a Tamagotchi-like pet inside the app
 - Go on AI-generated adventures
-- Work, farm, and interact across multiple gameplay systems
-- Talk to your pet and build memories over time
+- Work and interact across multiple gameplay systems, including a living farm with watering, obstacles, animals, and weather
+- Follow Lumo's dream adventures: story scenes with choices, a journal, and a Dream Chronicle
+- Let your pet roam over your screen and other apps in Shimeji mode, with a care panel for feeding, bathing, sleep, study, and pomodoro
+- Transfer your pet between phones with a 6-digit code, QR, or file
+- Talk to your pet with a server picker, per-pet prompt cache, and auto-compaction, and build memories over time
 - Discover different personalities and long-term companionship mechanics
 - Let your pet dream, paint, and keep growing with you over long play sessions
 - Keep the full-height room for your generated scenery and placed decorations
@@ -314,6 +392,10 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 <p align="center">
   <img width="31%" alt="Tama in its full-height room" src="assets/readme/tama.png" />
   <img width="31%" alt="Tama farm" src="assets/readme/farm.png" />
+  <img width="31%" alt="Shimeji pet roaming over the screen" src="assets/readme/shimeji.webp" />
+</p>
+<p align="center">
+  <img width="31%" alt="Pet transfer between phones" src="assets/readme/pet-transfer.webp" />
 </p>
 
 

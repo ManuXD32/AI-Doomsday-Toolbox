@@ -22,6 +22,7 @@ import com.example.llamadroid.data.repository.normalizedManagedToolDefaults
 import com.example.llamadroid.service.LlamaServerLaunchProfile
 import com.example.llamadroid.service.LlamaServerLauncher
 import com.example.llamadroid.service.LlamaServerSessionLogStore
+import com.example.llamadroid.service.ManagedLlamaServerCoordinator
 import com.example.llamadroid.service.ManagedLlamaServerException
 import com.example.llamadroid.service.NativeChatServerStartException
 import com.example.llamadroid.util.GGUFParser
@@ -54,6 +55,9 @@ data class ServerActionState(
     val error: String? = null
 )
 
+/** A start refused for low RAM; the screen asks whether to start [server] anyway. */
+data class LowRamStartPrompt(val server: UnifiedServer, val message: String)
+
 /**
  * Single state holder for the unified server UI: the Servers screen, the strip card, the detail
  * sheet, the editor and the picker all observe this and call these actions, so status, progress
@@ -77,6 +81,11 @@ class ServerRegistryViewModel(application: Application) : AndroidViewModel(appli
      */
     val serversIncludingEasy: StateFlow<List<UnifiedServer>> = registry.observeServers(includeEasy = true)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+    private val _lowRamPrompt = MutableStateFlow<LowRamStartPrompt?>(null)
+
+    /** Non-null while the "not enough free memory" confirmation should be shown. */
+    val lowRamPrompt: StateFlow<LowRamStartPrompt?> = _lowRamPrompt.asStateFlow()
 
     private val _actions = MutableStateFlow<Map<String, ServerActionState>>(emptyMap())
 
@@ -118,7 +127,13 @@ class ServerRegistryViewModel(application: Application) : AndroidViewModel(appli
                 setAction(key, null)
                 throw cancel
             } catch (throwable: Throwable) {
-                setAction(key, ServerActionState(error = failureText(throwable, fallbackRes)))
+                if (throwable is ManagedLlamaServerException &&
+                    throwable.code == ManagedLlamaServerCoordinator.CODE_INSUFFICIENT_RAM) {
+                    setAction(key, null)
+                    _lowRamPrompt.value = LowRamStartPrompt(server, throwable.message.orEmpty())
+                } else {
+                    setAction(key, ServerActionState(error = failureText(throwable, fallbackRes)))
+                }
             } finally {
                 jobs.remove(key)
             }
@@ -126,14 +141,27 @@ class ServerRegistryViewModel(application: Application) : AndroidViewModel(appli
     }
 
     /** Start a local server; the progress text arrives through [actions]. Remote servers are ignored. */
-    fun start(server: UnifiedServer) {
+    fun start(server: UnifiedServer, allowLowRam: Boolean = false) {
         if (server.kind == UnifiedServerKind.REMOTE) return
-        runAction(server, R.string.managed_llama_start_failed) { onStatus -> registry.start(server, onStatus) }
+        runAction(server, R.string.managed_llama_start_failed) { onStatus ->
+            registry.start(server, onStatus, allowLowRam)
+        }
     }
 
     fun restart(server: UnifiedServer) {
         if (server.kind == UnifiedServerKind.REMOTE) return
         runAction(server, R.string.managed_llama_start_failed) { onStatus -> registry.restart(server, onStatus) }
+    }
+
+    /** "Start anyway" in the low-RAM dialog: retry once without the RAM refusal. */
+    fun confirmLowRamStart() {
+        val prompt = _lowRamPrompt.value ?: return
+        _lowRamPrompt.value = null
+        start(prompt.server, allowLowRam = true)
+    }
+
+    fun dismissLowRamPrompt() {
+        _lowRamPrompt.value = null
     }
 
     /** Stop (or cancel an in-flight start of) a local server. */

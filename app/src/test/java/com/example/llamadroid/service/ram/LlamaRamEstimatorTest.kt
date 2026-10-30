@@ -4,7 +4,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.math.abs
 
 class LlamaRamEstimatorTest {
     private val gib = 1024L * 1024L * 1024L
@@ -27,10 +26,10 @@ class LlamaRamEstimatorTest {
         kvTypeK = k, kvTypeV = v, fullyResident = resident, swaFull = swaFull, shape = shape
     )
 
-    @Test fun mmapCountsOnlyTheWorkingSetOfTheFile() {
+    @Test fun mmapCountsTheWholeFile() {
         val estimate = LlamaRamEstimator.estimate(inputs())
-        assertTrue(abs(estimate.weightsBytes - (10 * gib * 0.30).toLong()) <= 1L)
-        assertEquals(10 * gib - estimate.weightsBytes, estimate.pageableWeightBytes)
+        assertEquals(10 * gib, estimate.weightsBytes)
+        assertEquals(0L, estimate.pageableWeightBytes)
     }
 
     @Test fun mlockOrNoMmapCountsTheWholeFile() {
@@ -100,16 +99,10 @@ class LlamaRamEstimatorTest {
         assertFalse(LlamaRamEstimator.decide(estimate, needed * 2, lowMemory = true).ok)
     }
 
-    @Test fun reclaimableCacheOnlyHelpsMmapModels() {
+    @Test fun reclaimableCacheGivesNoCredit() {
         val mmap = LlamaRamEstimator.estimate(inputs())
-        val resident = LlamaRamEstimator.estimate(inputs(resident = true))
-        val shortBy = 500 * mib
-        val availMmap = mmap.totalBytes + LlamaRamEstimator.SAFETY_MARGIN_BYTES - shortBy
-        assertFalse(LlamaRamEstimator.decide(mmap, availMmap, false).ok)
-        // 25% of 4 GiB reclaimable cache = 1 GiB credit >= the 500 MiB shortfall.
-        assertTrue(LlamaRamEstimator.decide(mmap, availMmap, false, reclaimableCacheBytes = 4 * gib).ok)
-        val availResident = resident.totalBytes + LlamaRamEstimator.SAFETY_MARGIN_BYTES - shortBy
-        assertFalse(LlamaRamEstimator.decide(resident, availResident, false, reclaimableCacheBytes = 4 * gib).ok)
+        val avail = mmap.totalBytes + LlamaRamEstimator.SAFETY_MARGIN_BYTES - 500 * mib
+        assertFalse(LlamaRamEstimator.decide(mmap, avail, false, reclaimableCacheBytes = 4 * gib).ok)
     }
 
     @Test fun kvTypeSizesMatchGgmlBlocks() {

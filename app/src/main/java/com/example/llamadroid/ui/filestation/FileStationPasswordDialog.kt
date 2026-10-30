@@ -26,24 +26,20 @@ import com.example.llamadroid.R
 
 enum class PasswordDialogMode { SET, CHANGE, REMOVE }
 
-/** Set / change / remove the File Station password. Changing or removing requires the current one. */
+/** Set / change / remove the File Station password. No current password is needed: it only gates web logins. */
 @Composable
 fun FileStationPasswordDialog(
     mode: PasswordDialogMode,
-    verifyCurrent: (String) -> Boolean,
     onDismiss: () -> Unit,
     onSet: (String) -> Unit,
     onRemove: () -> Unit,
 ) {
-    var current by remember { mutableStateOf("") }
     var first by remember { mutableStateOf("") }
     var second by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<Int?>(null) }
-    val needsCurrent = mode != PasswordDialogMode.SET
     val needsNew = mode != PasswordDialogMode.REMOVE
 
     fun submit() {
-        if (needsCurrent && !verifyCurrent(current)) { error = R.string.fs_pw_wrong; return }
         if (needsNew) {
             if (first.length < 8) { error = R.string.fs_pw_short; return }
             if (first != second) { error = R.string.fs_pw_mismatch; return }
@@ -74,7 +70,6 @@ fun FileStationPasswordDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 if (mode == PasswordDialogMode.REMOVE) Text(stringResource(R.string.fs_pw_remove_message))
-                if (needsCurrent) PasswordField(current, R.string.fs_pw_current) { current = it; error = null }
                 if (needsNew) {
                     PasswordField(first, R.string.fs_pw_new) { first = it; error = null }
                     PasswordField(second, R.string.fs_pw_confirm) { second = it; error = null }

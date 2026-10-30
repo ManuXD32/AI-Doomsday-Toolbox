@@ -119,9 +119,6 @@ fun ServerProfileEditorScreen(navController: NavController, cardId: Long, modelP
     var portText by rememberSaveable { mutableStateOf("") }
     var allowWear by rememberSaveable { mutableStateOf(false) }
     // Locked-screen speed options live on the launch profile but not in the draft settings store.
-    var lockedThreadFit by rememberSaveable { mutableStateOf(true) }
-    var lockedThreadPriority by rememberSaveable { mutableStateOf(true) }
-    var lockedPerformanceHints by rememberSaveable { mutableStateOf(true) }
     var baselineProfile by rememberSaveable { mutableStateOf("") }
     var baselineMeta by rememberSaveable { mutableStateOf("") }
     // Chat options a new chat of this server starts with: the JSON survives rotation, and the
@@ -133,7 +130,7 @@ fun ServerProfileEditorScreen(navController: NavController, cardId: Long, modelP
     var saveError by remember { mutableStateOf<String?>(null) }
     var showDiscard by remember { mutableStateOf(false) }
 
-    fun metaOf() = "$name|$portText|$allowWear|$lockedThreadFit|$lockedThreadPriority|$lockedPerformanceHints|" +
+    fun metaOf() = "$name|$portText|$allowWear|" +
         defaults.buildApiParamsJson()
 
     LaunchedEffect(Unit) {
@@ -159,9 +156,6 @@ fun ServerProfileEditorScreen(navController: NavController, cardId: Long, modelP
         }
         defaults.loadFromDefaults(toolDefaultsJson)
         if (!isEdit && !nameTouched) name = suggestedServerName(name, false, profile.modelPath)
-        lockedThreadFit = profile.lockedScreenThreadFit
-        lockedThreadPriority = profile.lockedScreenThreadPriority
-        lockedPerformanceHints = profile.lockedScreenPerformanceHints
         LlamaServerLaunchProfile.restore(profile, draft)
         baselineProfile = profileFingerprint(LlamaServerLaunchProfile.capture(draft))
         baselineMeta = metaOf()
@@ -197,11 +191,7 @@ fun ServerProfileEditorScreen(navController: NavController, cardId: Long, modelP
         saving = true
         saveError = null
         val port = portText.trim().toIntOrNull()
-        val profile = profileForSave(captured, port).copy(
-            lockedScreenThreadFit = lockedThreadFit,
-            lockedScreenThreadPriority = lockedThreadPriority,
-            lockedScreenPerformanceHints = lockedPerformanceHints
-        )
+        val profile = profileForSave(captured, port)
         val toolDefaultsToSave = markedDefaultsJson(defaults.buildApiParamsJson())
         val finalName = name.trim().ifBlank { defaultServerName(profile.modelPath) }
         scope.launch {
@@ -272,18 +262,6 @@ fun ServerProfileEditorScreen(navController: NavController, cardId: Long, modelP
                             allowWear = allowWear,
                             onAllowWearChange = { allowWear = it },
                             errors = errors
-                        )
-                    }
-                    item(key = "server_locked_screen") {
-                        LockedScreenPerformanceOptions(
-                            threadFit = lockedThreadFit,
-                            threadPriority = lockedThreadPriority,
-                            performanceHints = lockedPerformanceHints,
-                            onChange = { fit, prio, hints ->
-                                lockedThreadFit = fit
-                                lockedThreadPriority = prio
-                                lockedPerformanceHints = hints
-                            }
                         )
                     }
                     item(key = "server_tool_defaults") {

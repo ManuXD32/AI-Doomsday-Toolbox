@@ -16,32 +16,52 @@ import com.example.llamadroid.R
 import com.example.llamadroid.ui.components.DraftIntTextField
 
 
+/** Numeric sampler field plus an "Auto" chip; Auto disables the field and the request omits the key. */
 @Composable
 internal fun LlamaSamplerNumericField(
     label: String,
     value: String,
     rangeText: String,
     error: String?,
+    auto: Boolean,
     integer: Boolean = false,
+    onAutoChange: (Boolean) -> Unit,
     onValueChange: (String) -> Unit
 ) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
+    val autoLabel = stringResource(R.string.chat_sampler_auto)
+    Row(
         modifier = Modifier.fillMaxWidth(),
-        singleLine = true,
-        label = { Text(label) },
-        isError = error != null,
-        supportingText = {
-            Text(error ?: stringResource(R.string.llama_sampler_range_hint, rangeText))
-        },
-        keyboardOptions = KeyboardOptions(
-            keyboardType = if (integer) KeyboardType.Number else KeyboardType.Decimal
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        OutlinedTextField(
+            value = if (auto) "" else value,
+            onValueChange = onValueChange,
+            modifier = Modifier.weight(1f),
+            enabled = !auto,
+            singleLine = true,
+            label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            placeholder = { Text(autoLabel) },
+            isError = error != null && !auto,
+            supportingText = {
+                Text(
+                    if (auto) "" else error ?: stringResource(R.string.llama_sampler_range_hint, rangeText),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            },
+            keyboardOptions = KeyboardOptions(
+                keyboardType = if (integer) KeyboardType.Number else KeyboardType.Decimal
+            )
         )
-    )
+        FilterChip(
+            selected = auto,
+            onClick = { onAutoChange(!auto) },
+            label = { Text(autoLabel, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            modifier = Modifier.padding(top = 8.dp)
+        )
+    }
 }
-
-
 
 @Composable
 internal fun LlamaMaxOutputTokensControl(

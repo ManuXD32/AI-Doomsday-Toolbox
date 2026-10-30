@@ -18,11 +18,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.llamadroid.R
 import com.example.llamadroid.service.perf.CoreMix
-import com.example.llamadroid.service.perf.HintState
 import com.example.llamadroid.service.perf.LockedScreenSpeedRecorder
 import com.example.llamadroid.service.perf.LockedScreenView
-import com.example.llamadroid.service.perf.PriorityState
-import com.example.llamadroid.service.perf.ThreadFitReason
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -72,43 +69,6 @@ fun LockedScreenSpeedBlock(port: Int, modifier: Modifier = Modifier) {
                     speedText(stats?.screenOnTps, stats?.screenOnCpus, current.coreMixOn)
                 )
             )
-            current.report?.let { report ->
-                if (report.configuredThreads > 0) {
-                    Line(
-                        stringResource(
-                            R.string.locked_screen_threads,
-                            report.configuredThreads,
-                            report.effectiveThreads,
-                            stringResource(threadReasonRes(report.threadFitReason))
-                        )
-                    )
-                }
-                if (report.foregroundCpus != null) {
-                    Line(
-                        stringResource(
-                            R.string.locked_screen_granted,
-                            report.foregroundCpus,
-                            report.topAppCpus ?: "?"
-                        )
-                    )
-                }
-                val priorityText = if (report.priorityState == PriorityState.PARTIAL.name) {
-                    stringResource(
-                        R.string.locked_screen_priority_partial,
-                        report.priorityRaisedThreads,
-                        report.priorityTotalThreads
-                    )
-                } else {
-                    stringResource(priorityRes(report.priorityState))
-                }
-                Line(stringResource(R.string.locked_screen_priority, priorityText))
-                val hint = if (report.hintState == HintState.REFUSED.name && !report.hintDetail.isNullOrBlank()) {
-                    stringResource(R.string.locked_screen_hints_refused, report.hintDetail)
-                } else {
-                    stringResource(hintRes(report.hintState))
-                }
-                Line(stringResource(R.string.locked_screen_hints, hint))
-            }
         }
     }
 }
@@ -130,28 +90,4 @@ private fun speedText(tps: Double?, cpus: String?, mix: CoreMix?): String {
         if (mix.little > 0) add(stringResource(R.string.locked_screen_core_little, mix.little))
     }
     return "$base ${stringResource(R.string.locked_screen_core_mix, parts.joinToString(", "))}"
-}
-
-private fun threadReasonRes(reason: String): Int = when (reason) {
-    ThreadFitReason.FITS.name -> R.string.locked_screen_reason_fits
-    ThreadFitReason.REDUCED.name -> R.string.locked_screen_reason_reduced
-    ThreadFitReason.UNKNOWN_CPUSET.name -> R.string.locked_screen_reason_unknown
-    ThreadFitReason.NOT_IN_COMMAND.name -> R.string.locked_screen_reason_not_in_command
-    else -> R.string.locked_screen_reason_disabled
-}
-
-private fun priorityRes(state: String): Int = when (state) {
-    PriorityState.UNSUPPORTED.name -> R.string.locked_screen_priority_unsupported
-    PriorityState.REQUESTED.name -> R.string.locked_screen_priority_requested
-    PriorityState.APPLIED.name -> R.string.locked_screen_priority_applied
-    PriorityState.REFUSED.name -> R.string.locked_screen_priority_refused
-    else -> R.string.locked_screen_priority_off
-}
-
-private fun hintRes(state: String): Int = when (state) {
-    HintState.UNSUPPORTED.name -> R.string.locked_screen_hints_unsupported
-    HintState.PENDING.name -> R.string.locked_screen_hints_pending
-    HintState.ACCEPTED.name -> R.string.locked_screen_hints_accepted
-    HintState.REFUSED.name -> R.string.locked_screen_hints_refused_plain
-    else -> R.string.locked_screen_hints_off
 }

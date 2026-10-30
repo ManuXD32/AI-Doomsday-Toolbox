@@ -136,13 +136,7 @@ data class LlamaServerLaunchProfile(
     val ngramMapKMinHits: Int = 1,
     val ngramMapK4VSizeN: Int = 12,
     val ngramMapK4VSizeM: Int = 48,
-    val ngramMapK4VMinHits: Int = 1,
-    /** Locked-screen speed: cap `--threads` to the CPUs Android grants to background services. */
-    val lockedScreenThreadFit: Boolean = true,
-    /** Locked-screen speed: pass llama.cpp `--prio 2` (and `--prio-batch 2` when supported). */
-    val lockedScreenThreadPriority: Boolean = true,
-    /** Locked-screen speed: register the server threads with Android's PerformanceHintManager. */
-    val lockedScreenPerformanceHints: Boolean = true
+    val ngramMapK4VMinHits: Int = 1
 ) {
     fun hasModel(): Boolean = modelPath.isNotBlank()
 
@@ -223,10 +217,7 @@ data class LlamaServerLaunchProfile(
             sleepIdleSeconds = sleepIdleSeconds,
             customFlags = customFlags,
             flashAttention = flashAttention,
-            openClCpuTargetGpuDraft = openClCpuTargetGpuDraft,
-            lockedScreenThreadFit = lockedScreenThreadFit,
-            lockedScreenThreadPriority = lockedScreenThreadPriority,
-            lockedScreenPerformanceHints = lockedScreenPerformanceHints
+            openClCpuTargetGpuDraft = openClCpuTargetGpuDraft
         )
     }
 

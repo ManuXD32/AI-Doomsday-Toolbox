@@ -1,5 +1,6 @@
 package com.example.llamadroid.service
 
+import com.example.llamadroid.service.chat.LiteRtSamplerDefaults
 import android.content.Context
 import com.example.llamadroid.R
 import com.example.llamadroid.data.model.LITERT_BACKEND_AUTO
@@ -514,9 +515,9 @@ class LiteRtLmChatService(
                     input = input,
                     thinkingEnabled = (request.params["enable_thinking"] as? Boolean) ?: true,
                     speculativeDecodingEnabled = mtpEnabled,
-                    topK = (request.params["top_k"] as? Number)?.toInt() ?: 40,
-                    topP = (request.params["top_p"] as? Number)?.toDouble() ?: 0.95,
-                    temperature = (request.params["temperature"] as? Number)?.toDouble() ?: 0.7,
+                    topK = (request.params["top_k"] as? Number)?.toInt() ?: LiteRtSamplerDefaults.TOP_K,
+                    topP = (request.params["top_p"] as? Number)?.toDouble() ?: LiteRtSamplerDefaults.TOP_P,
+                    temperature = (request.params["temperature"] as? Number)?.toDouble() ?: LiteRtSamplerDefaults.TEMPERATURE,
                     seed = (request.params["seed"] as? Number)?.toInt() ?: 0,
                     holdGpuEglContext = false,
                     engineOwner = request.params[LITERT_PARAM_ENGINE_OWNER] as? String,

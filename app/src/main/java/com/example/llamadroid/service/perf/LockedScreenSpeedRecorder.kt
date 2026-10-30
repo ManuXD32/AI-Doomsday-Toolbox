@@ -115,17 +115,14 @@ object LockedScreenSpeedRecorder {
             append("Locked-screen performance\n")
             ports.forEach { port ->
                 val stats = synchronized(lock) { aggregator.stats(port) }
-                val report = reports.firstOrNull { it.port == port }
                 append("- port ").append(port).append(": ")
-                append(
-                    summaryLine(stats, report)
-                )
+                append(summaryLine(stats))
                 append('\n')
             }
         }.trimEnd()
     }
 
-    internal fun summaryLine(stats: ServerSpeedStats?, report: LockedScreenReport?): String {
+    internal fun summaryLine(stats: ServerSpeedStats?): String {
         fun speed(tps: Double?, cpus: String?, samples: Int): String =
             if (tps == null) "no samples" else
                 String.format(Locale.US, "%.1f t/s (%d samples%s)", tps, samples,
@@ -133,12 +130,6 @@ object LockedScreenSpeedRecorder {
         val parts = mutableListOf<String>()
         parts += "screen off " + speed(stats?.screenOffTps, stats?.screenOffCpus, stats?.screenOffSamples ?: 0)
         parts += "screen on " + speed(stats?.screenOnTps, stats?.screenOnCpus, stats?.screenOnSamples ?: 0)
-        if (report != null) {
-            parts += "threads ${report.configuredThreads}->${report.effectiveThreads} (${report.threadFitReason}, " +
-                "foreground CPUs ${report.foregroundCpus ?: "?"}, top-app ${report.topAppCpus ?: "?"})"
-            parts += "priority ${report.priorityState}"
-            parts += "hints ${report.hintState}" + (report.hintDetail?.let { " ($it)" } ?: "")
-        }
         return parts.joinToString("; ")
     }
 

@@ -37,18 +37,13 @@ internal class ChatSettingsState {
     var liteRtContextRange: IntRange by mutableStateOf(LITERT_CHAT_MIN_CONTEXT_TOKENS..LITERT_CHAT_FALLBACK_CONTEXT_MAX)
     var liteRtDefaultContext by mutableIntStateOf(LITERT_CHAT_FALLBACK_CONTEXT_MAX)
 
-    var temperature by mutableFloatStateOf(parseParam(null, "temperature", 0.8f))
-    var temperatureText by mutableStateOf(formatSamplerText(parseParam(null, "temperature", 0.8f)))
-    var topP by mutableFloatStateOf(parseParam(null, "top_p", 0.95f))
-    var topPText by mutableStateOf(formatSamplerText(parseParam(null, "top_p", 0.95f)))
-    var topK by mutableFloatStateOf(parseParam(null, "top_k", 40f))
-    var topKText by mutableStateOf(formatSamplerText(parseParam(null, "top_k", 40f), integer = true))
-    var minP by mutableFloatStateOf(parseParam(null, "min_p", 0.05f))
-    var minPText by mutableStateOf(formatSamplerText(parseParam(null, "min_p", 0.05f)))
-    var repPen by mutableFloatStateOf(parseParam(null, "repeat_penalty", 1.1f))
-    var repPenText by mutableStateOf(formatSamplerText(parseParam(null, "repeat_penalty", 1.1f)))
+    /** Text shown in each sampler field (kept while a field is Auto so toggling back restores it). */
+    val samplerTexts = mutableStateMapOf<LlamaSamplerField, String>()
+    /** Committed sampler values; a missing entry means Auto (the request omits the key). */
+    val samplerValues = mutableStateMapOf<LlamaSamplerField, Float>()
     var samplerErrorField by mutableStateOf<LlamaSamplerField?>(null)
     var samplerErrorMessage by mutableStateOf<String?>(null)
+    init { resetSamplersToAuto() }
     var enableThinking by mutableStateOf(parseParam(null, "enable_thinking", true))
     var liteRtMtpEnabled by mutableStateOf(parseParam(null, LITERT_PARAM_MTP_ENABLED, false))
     var maxOutputTokensEnabled by mutableStateOf(parseParam(null, NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS_ENABLED, false))
@@ -256,16 +251,7 @@ internal class ChatSettingsState {
         activeServer = server
         this.liteRtDefaultContext = liteRtDefaultContext
         this.liteRtContextRange = liteRtContextRange
-        temperature = parseParam(params, "temperature", 0.8f)
-        temperatureText = formatSamplerText(temperature)
-        topP = parseParam(params, "top_p", 0.95f)
-        topPText = formatSamplerText(topP)
-        topK = parseParam(params, "top_k", 40f)
-        topKText = formatSamplerText(topK, integer = true)
-        minP = parseParam(params, "min_p", 0.05f)
-        minPText = formatSamplerText(minP)
-        repPen = parseParam(params, "repeat_penalty", 1.1f)
-        repPenText = formatSamplerText(repPen)
+        loadSamplers(parseParamMap(params))
         samplerErrorField = null
         samplerErrorMessage = null
         enableThinking = parseParam(params, "enable_thinking", true)
@@ -389,15 +375,70 @@ internal class ChatSettingsState {
         bgrToolResizeMaxEdge = bgrParams.resizeMaxEdge
     }
 
-    /** Validates a sampler text field and records an inline error; invalid text is never saved. */
+    fun isSamplerAuto(field: LlamaSamplerField): Boolean = !samplerValues.containsKey(field)
+
+    /** Present numeric keys become values; absent keys are Auto. Texts fall back to start values. */
+    private fun loadSamplers(map: Map<String, Any?>) {
+        samplerValues.clear()
+        LlamaSamplerField.entries.forEach { field ->
+            val value = (map[field.key] as? Number)?.toFloat()?.takeIf { it.isFinite() }
+            if (value != null) samplerValues[field] = value
+            samplerTexts[field] = formatSamplerText(value ?: field.startValue, field.integer)
+        }
+    }
+
+    /** Every sampler back to Auto (keys omitted from requests) with neutral start texts. */
+    fun resetSamplersToAuto() {
+        loadSamplers(emptyMap())
+        samplerErrorField = null
+        samplerErrorMessage = null
+    }
+
+    /** Turns Auto on or off. Turning it off commits the field's text, or its start value if invalid. */
+    fun setSamplerAuto(field: LlamaSamplerField, auto: Boolean, liteRt: Boolean) {
+        if (auto) {
+            samplerValues.remove(field)
+            if (samplerErrorField == field) {
+                samplerErrorField = null
+                samplerErrorMessage = null
+            }
+            return
+        }
+        val text = samplerTexts[field].orEmpty()
+        val parsed = LlamaChatSamplerValidation.parse(text, field, liteRt)
+            ?: LlamaChatSamplerValidation.startValue(field, liteRt).also {
+                samplerTexts[field] = formatSamplerText(it, field.integer)
+            }
+        samplerValues[field] = parsed
+    }
+
+    /** Picks one choice of a chip-based field (mirostat); null selects Auto. */
+    fun setSamplerChoice(field: LlamaSamplerField, choice: Int?) {
+        if (choice == null) {
+            samplerValues.remove(field)
+        } else {
+            samplerValues[field] = choice.toFloat()
+            samplerTexts[field] = choice.toString()
+        }
+    }
+
+    /** First visible non-Auto sampler whose text does not validate, or null when saving is safe. */
+    fun firstInvalidSampler(): LlamaSamplerField? = firstInvalidSamplerField(
+        activeServerIsLiteRt,
+        LlamaSamplerField.entries.associateWith { field ->
+            if (isSamplerAuto(field)) null else samplerTexts[field].orEmpty()
+        }
+    )
+
+    /** Validates a sampler text field and records an inline error; invalid text is never committed. */
     fun updateSamplerText(
         field: LlamaSamplerField,
         text: String,
         liteRt: Boolean,
         invalidNumber: String,
-        invalidRangeFormat: String,
-        onValid: (Float) -> Unit
+        invalidRangeFormat: String
     ) {
+        samplerTexts[field] = text
         val value = LlamaChatSamplerValidation.parse(text, field, liteRt)
         samplerErrorField = field
         samplerErrorMessage = when {
@@ -411,8 +452,15 @@ internal class ChatSettingsState {
         }
         if (value != null) {
             samplerErrorField = null
-            onValid(value)
+            samplerValues[field] = value
         }
+    }
+
+    /** Short summary of the basic samplers; "Auto" for fields left on Auto. */
+    fun samplerSummary(auto: String): String = listOf(
+        LlamaSamplerField.TEMPERATURE, LlamaSamplerField.TOP_P, LlamaSamplerField.TOP_K
+    ).joinToString(" · ") { field ->
+        samplerValues[field]?.let { formatSamplerText(it, field.integer) } ?: auto
     }
 
     /** The chat-level tool configuration as persisted in the chat's API params. */
@@ -543,13 +591,10 @@ internal class ChatSettingsState {
             nextKnowledgeBaseAutoContextEnabled = knowledgeBaseAutoContextEnabled || forceKnowledgeBaseTools,
             chatDocumentKnowledgeBaseIdOverride = chatDocumentKnowledgeBaseIdOverride
         )
-        val map = linkedMapOf<String, Any>(
-            "temperature" to if (liteRt) temperature.coerceIn(0f, 1f) else temperature,
-            "top_p" to if (liteRt) topP.coerceIn(0f, 0.95f) else topP,
-            "top_k" to if (liteRt) topK.toInt().coerceIn(5, 64) else topK.toInt(),
-            NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS_ENABLED to maxOutputTokensEnabled,
-            NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS to maxOutputTokens.coerceAtLeast(1)
-        )
+        val map = linkedMapOf<String, Any>()
+        samplerParamEntries(liteRt, samplerValues).forEach { (key, value) -> map[key] = value }
+        map[NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS_ENABLED] = maxOutputTokensEnabled
+        map[NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS] = maxOutputTokens.coerceAtLeast(1)
         seedText.trim().toIntOrNull()?.let { map["seed"] = it }
         if (liteRt) {
             map[LITERT_PARAM_MTP_ENABLED] = liteRtMtpEnabled
@@ -558,8 +603,6 @@ internal class ChatSettingsState {
             }
             map["enable_thinking"] = enableThinking
         } else {
-            map["min_p"] = minP
-            map["repeat_penalty"] = repPen
             map["enable_thinking"] = enableThinking
         }
         map.putAll(config.toParamMap())

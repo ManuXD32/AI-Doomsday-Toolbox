@@ -1,65 +1,325 @@
 {
-  "description": "README screenshot copies. Source sets retain their original capture/build identity; images are not represented as captures from the newly signed release.",
+  "description": "README screenshots. Rendered on the host JVM from the real app screens (docs/screenshot-renderer.md, README renders); repository-browser.webp is an older capture.",
   "images": [
     {
       "file": "home.png",
-      "source": "docs/play-store/soft-studio/phone/en/01-home.png",
-      "sha256": "9341231e49c87ad6a0cd866e81d2d99a1ed063a138bdcd17bd110916d310928f",
+      "source": "screenshots-readme/guide/phone/en/preview_home.png",
+      "sha256": "15e506c4764087baed3c4a39e02f0d61c97d42cfbe2aaca7b430da40aa216bf5",
       "dimensions_px": [
-        1080,
-        1920
+        720,
+        1280
       ],
-      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
     },
     {
       "file": "tools.png",
-      "source": "docs/play-store/soft-studio/phone/en/02-tools.png",
-      "sha256": "2f6846c6ed68a22776ce201264d123fb6cf77922fc1b1302db6c899c8cb5d609",
+      "source": "screenshots-readme/guide/phone/en/preview_tools.png",
+      "sha256": "0e082c17dee3b602e07dc2034dede6e42943387dd28ec05ce741d1a1d97f306f",
       "dimensions_px": [
-        1080,
-        1920
+        720,
+        1280
       ],
-      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
     },
     {
       "file": "library.png",
-      "source": "docs/play-store/soft-studio/phone/en/03-library.png",
-      "sha256": "2083450d811b39b18d233a0e6dab2d7761547f5a7e6a2774732ff7b3afd5aa60",
+      "source": "screenshots-readme/guide/phone/en/library.png",
+      "sha256": "c92b8dc1d916e9e2778415d7e9271bfdcfc811a0f39f0d260a9767346f92d9b4",
       "dimensions_px": [
-        1080,
-        1920
+        720,
+        1280
       ],
-      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
     },
     {
       "file": "image-generation.png",
-      "source": "docs/play-store/soft-studio/phone/en/04-create-images.png",
-      "sha256": "93d726c18db36afb026d7d1a7b5a95ed74bdd2a34307ffffc2538446d7c75ee4",
+      "source": "screenshots-readme/guide/phone/en/preview_create.png",
+      "sha256": "7f480f70f01dcf594e63b170eb1172aa9d918879c198b6c09c5d9476baf2a82d",
       "dimensions_px": [
-        1080,
-        1920
+        720,
+        1280
       ],
-      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
     },
     {
       "file": "tama.png",
-      "source": "docs/play-store/soft-studio/phone/en/05-tama.png",
-      "sha256": "8d46098f58a92d38ec53380a3b86ce0dd15a400fbde4d39acdba7cc96cb38012",
+      "source": "screenshots-readme/guide/phone/en/preview_tama.png",
+      "sha256": "7e7ccc2ffdd6deae87913689102ed27d4e336fe5e910e4dce49e317485fe84cc",
       "dimensions_px": [
-        1080,
-        1920
+        720,
+        1280
       ],
-      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
     },
     {
       "file": "farm.png",
-      "source": "docs/play-store/soft-studio/phone/en/06-farm.png",
-      "sha256": "6fb11aca3407b630033f7baf810af802a4a54d712f743b28733f696e4f0db750",
+      "source": "screenshots-readme/guide/phone/en/preview_farm.png",
+      "sha256": "563037492cce371ef6c5f6f92717f7b2f01fc514728da3a0888f80dd09bf61df",
       "dimensions_px": [
-        1080,
-        1920
+        720,
+        1280
       ],
-      "review": "Existing reviewed native app capture; demonstration/empty states retained"
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "tablet-library.png",
+      "source": "screenshots-readme/guide/tablet10/en/library.png",
+      "sha256": "a6c921ea656d9dde984ffaaafdc8cfef5c31994c8ed01fc5e36264169db3a6d5",
+      "dimensions_px": [
+        800,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "distributed.webp",
+      "source": "screenshots-readme/guide/phone/en/distributed_roles.webp",
+      "sha256": "1b2c25b8cd13a81631192add83962e0c55fe8e2c211ac1da9b2c4926eca5db5a",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "llama-servers.webp",
+      "source": "screenshots-readme/guide/phone/en/servers_hub.webp",
+      "sha256": "a20221d1212fe2db546f4b5ddd85884883d5068812b38b6f2001e998fbdf9efd",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "scheduler.webp",
+      "source": "screenshots-readme/guide/phone/en/conversations_scheduler.webp",
+      "sha256": "4deec678338900b4c14015428ea0e0bb696e95bd878ce9a3cd79c419970b9987",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "ollama.webp",
+      "source": "screenshots-readme/guide/phone/en/ollama.webp",
+      "sha256": "da5b3400db0be0dc81d36f858660ccbd5cb1c67f821a361830c7e7c4560f714c",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "benchmark.webp",
+      "source": "screenshots-readme/guide/phone/en/benchmark.webp",
+      "sha256": "86a6e0abf823514bdb0445087ba3679e9e0978779b89fdc480a7710c22a0f51b",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "termux.webp",
+      "source": "screenshots-readme/guide/phone/en/termux.webp",
+      "sha256": "7e6759bf1d7576fe9d7a07ade5092e79feb88bf0d4cc42fdb4c67e3f44ec2184",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "agent.webp",
+      "source": "screenshots-readme/guide/phone/en/agent.webp",
+      "sha256": "0f0ba9155453f4c1b5dcec741b06d5009446cc3328d3f4b7c265d6aeca99bb29",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "pdf-tools.webp",
+      "source": "screenshots-readme/guide/phone/en/pdf_tools.webp",
+      "sha256": "b3cbc3f42f439f0b2ee236271b4bf6b1099e2e09903ed2348cfc1fc55bb2ba2c",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "video-summary.webp",
+      "source": "screenshots-readme/guide/phone/en/video_summary.webp",
+      "sha256": "ec814c0344ae4c78b343860d0193cfed76efa2ae22e6a568d9e962382a17ac6b",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "custom-download.webp",
+      "source": "screenshots-readme/guide/phone/en/models_saved_links.webp",
+      "sha256": "f412c407d33aa77cdbdbb81c2a93ea2acafff69aa77447061b5a14b4fbd2ea0d",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "model-bundles.webp",
+      "source": "screenshots-readme/guide/phone/en/models_onnx_bundle.webp",
+      "sha256": "7abe75e40b10dfce1d01892f7dc6c3e8f1e1ca8222e7718807893081db13a647",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "file-station.webp",
+      "source": "screenshots-readme/guide/phone/en/file_station.webp",
+      "sha256": "d0e620772733c23779cc3da444ca9e69f2e50981f8212703c24c31b3e0dd1712",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "offline-library.webp",
+      "source": "screenshots-readme/guide/phone/en/offline_library.webp",
+      "sha256": "e0e0fd6606c8957b49ffe05391951ca95baecf3046cc126f2e1cb902cda4ec01",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "transcription.webp",
+      "source": "screenshots-readme/guide/phone/en/transcription.webp",
+      "sha256": "7f6b2b9063c37a8eb2a1e8e603ce3fecfa1183da919c6f981f55cdb800552a27",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "dataset.webp",
+      "source": "screenshots-readme/guide/phone/en/dataset.webp",
+      "sha256": "8690cfb8172966608e4de86491af3300f74b23c39b6f3a9ead32e43471fe5fb3",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "organizer.webp",
+      "source": "screenshots-readme/guide/phone/en/organizer.webp",
+      "sha256": "863fcd1370bb7e98d4360ba26b69ce7c337aef068e2c1b88a9f0f4b100dfec78",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "video-upscaler.webp",
+      "source": "screenshots-readme/guide/phone/en/video_upscaler.webp",
+      "sha256": "e630d4b358ff38b0e60468bb47b2e725b691654d5d3f05f6d2d20e8ef9ba645b",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "deepseek-delegation.webp",
+      "source": "screenshots-readme/guide/phone/en/deepseek_delegation.webp",
+      "sha256": "b750a48700ec6d6b89436ff0daee0919f4024c7edd635ede7786e01f2d70d5b2",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "easy-mode.webp",
+      "source": "screenshots-readme/phone/en/readme_easy_chat.png",
+      "sha256": "a75e1e2c09b99898d0cbb07d096f38408060fce22fae47fe1b46ddd7b09a47b0",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "easy-models.webp",
+      "source": "screenshots-readme/phone/en/readme_easy_models.png",
+      "sha256": "61aec8127741c51c82fb868bc29f3fe88c0894428a2a15eced13413ad25761d6",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "bubble-chat.webp",
+      "source": "screenshots-readme/phone/en/readme_bubble.png",
+      "sha256": "b7852fa32f03ea2f15f496d8ba4cd659c55ea48f0bc2043ee2eb0e1a07cd6d42",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "shimeji.webp",
+      "source": "screenshots-readme/phone/en/readme_shimeji.png",
+      "sha256": "c5639cc213e9031b6c157bbd7e6122f0a53ddfac41ad798e2dc7bfb6a7789324",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "chat-steps.webp",
+      "source": "screenshots-readme/phone/en/store_chat.png",
+      "sha256": "ea579bea8ca4e57f2502ac03f4aa3cdb5126acb1526db27c98dc08feb9c3a36d",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "pet-transfer.webp",
+      "source": "screenshots-readme/dialogs/light-soft/transfer_hub.png",
+      "sha256": "15a8de2d38d310b1a98f184a82dbfa95d986249c3c3144971f479475559eb424",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
+    },
+    {
+      "file": "pixel-theme.webp",
+      "source": "screenshots-readme-pixel/guide/phone/en/preview_home.webp",
+      "sha256": "53d837aa8e8e32e35b5998bed5b498a0adbabfb7d6244b8b612542e16a9b89c4",
+      "dimensions_px": [
+        720,
+        1280
+      ],
+      "review": "Robolectric render of the current app (0.999997), reviewed 2026-10-30"
     },
     {
       "file": "app-tour.png",
@@ -82,129 +342,9 @@
       "review": "Existing reviewed native app capture; demonstration/empty states retained"
     },
     {
-      "file": "tablet-library.png",
-      "source": "docs/play-store/soft-studio/tablet/en/03-library.png",
-      "sha256": "1339303fad5ed79c973bbe10f6ae5e3c2d454023607dba25c971b56ce9a5be00",
-      "dimensions_px": [
-        2560,
-        1440
-      ],
-      "review": "Existing reviewed native app capture; demonstration/empty states retained"
-    },
-    {
-      "file": "distributed.webp",
-      "source": "app/src/main/res/drawable-nodpi/tour_lesson_distributed_roles.webp",
-      "sha256": "006227109e08476797b038dfb23822cf2bd9fd19701f50fd1303a677b66aa5f1",
-      "dimensions_px": [
-        819,
-        1280
-      ],
-      "review": "Existing reviewed native app capture; demonstration/empty states retained"
-    },
-    {
-      "file": "llama-servers.webp",
-      "source": "app/src/main/res/drawable-nodpi/tour_lesson_conversations_native_management.webp",
-      "sha256": "b102688d775ed677cb1fccedf8d212d63894d7af449d8ffc00b3c3cf3446a185",
-      "dimensions_px": [
-        819,
-        1280
-      ],
-      "review": "Existing reviewed native app capture; demonstration/empty states retained"
-    },
-    {
       "file": "server-selection.webp",
       "source": "app/src/main/res/drawable-nodpi/tour_lesson_conversations_server_selection.webp",
       "sha256": "271856790795be5c5b616f40bc72eee110d0894619aed8860a5cbf0d2de8328e",
-      "dimensions_px": [
-        819,
-        1280
-      ],
-      "review": "Existing reviewed native app capture; demonstration/empty states retained"
-    },
-    {
-      "file": "scheduler.webp",
-      "source": "app/src/main/res/drawable-nodpi/tour_lesson_conversations_scheduler.webp",
-      "sha256": "d427e3d53fca508b950c807674d5a228c8ab224d9e83e86b08b12f8d39b03091",
-      "dimensions_px": [
-        819,
-        1280
-      ],
-      "review": "Existing reviewed native app capture; demonstration/empty states retained"
-    },
-    {
-      "file": "ollama.webp",
-      "source": "app/src/main/res/drawable-nodpi/tour_lesson_ollama.webp",
-      "sha256": "eb8403cdc22034761373507bb46c7747dd4d6406d0256d70d6da28d8dcedfc6d",
-      "dimensions_px": [
-        1080,
-        1920
-      ],
-      "review": "Existing reviewed native app capture; demonstration/empty states retained"
-    },
-    {
-      "file": "benchmark.webp",
-      "source": "app/src/main/res/drawable-nodpi/tour_lesson_benchmark.webp",
-      "sha256": "f8f014c9745d8b70b192e9d459e14d407d9cf22a099439b3961983e4632745dd",
-      "dimensions_px": [
-        1080,
-        1920
-      ],
-      "review": "Existing reviewed native app capture; demonstration/empty states retained"
-    },
-    {
-      "file": "termux.webp",
-      "source": "app/src/main/res/drawable-nodpi/tour_lesson_termux.webp",
-      "sha256": "7ff3109a47fad1ee88aade5ac292dbb84ac773958b96dbec3a85d52e4dd3c474",
-      "dimensions_px": [
-        1080,
-        1920
-      ],
-      "review": "Existing reviewed native app capture; demonstration/empty states retained"
-    },
-    {
-      "file": "agent.webp",
-      "source": "app/src/main/res/drawable-nodpi/tour_lesson_agent.webp",
-      "sha256": "3495bdb0c21ec23e5444f6eaa736a6d33563fc5f265c4cedff53d418f058d896",
-      "dimensions_px": [
-        1080,
-        1920
-      ],
-      "review": "Existing reviewed native app capture; demonstration/empty states retained"
-    },
-    {
-      "file": "pdf-tools.webp",
-      "source": "app/src/main/res/drawable-nodpi/tour_lesson_pdf_tools.webp",
-      "sha256": "31b7b3aacc4e419f6271cda98c92469234485a89a4b187d9c3c4fe9578b2ba5d",
-      "dimensions_px": [
-        1080,
-        1920
-      ],
-      "review": "Existing reviewed native app capture; demonstration/empty states retained"
-    },
-    {
-      "file": "video-summary.webp",
-      "source": "app/src/main/res/drawable-nodpi/tour_lesson_video_summary.webp",
-      "sha256": "32ba27f40970bd733d62158a37e2f121e35888e767f410240283f819cf4efcb9",
-      "dimensions_px": [
-        1080,
-        1920
-      ],
-      "review": "Existing reviewed native app capture; demonstration/empty states retained"
-    },
-    {
-      "file": "custom-download.webp",
-      "source": "app/src/main/res/drawable-nodpi/tour_lesson_models_custom_url.webp",
-      "sha256": "d3bcf269c7d5a681efb59ec923adcca8de48e89d13366f41ae4388adfa6a37f5",
-      "dimensions_px": [
-        819,
-        1280
-      ],
-      "review": "Existing reviewed native app capture; demonstration/empty states retained"
-    },
-    {
-      "file": "model-bundles.webp",
-      "source": "app/src/main/res/drawable-nodpi/tour_lesson_models_bundles.webp",
-      "sha256": "c0185dc60b3c672d3a474160207cdd366b4171d0ada2f5a0615502f1a57c90a7",
       "dimensions_px": [
         819,
         1280

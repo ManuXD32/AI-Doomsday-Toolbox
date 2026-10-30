@@ -108,7 +108,6 @@ class FileStationViewModel(application: Application) : AndroidViewModel(applicat
 
     fun setPassword(password: String) { store.setPassword(password); changed() }
     fun clearPassword() { store.clearPassword(); changed() }
-    fun verifyPassword(password: String): Boolean = store.verifyPassword(password)
     fun signOutEveryone() { store.rotateSecret(); changed() }
 
     fun setTrashDays(text: String) {

@@ -78,12 +78,9 @@ class ChatBubbleOverlayService : Service() {
         }
         val chatId = intent?.getLongExtra(EXTRA_CHAT_ID, -1L) ?: -1L
         val serverId = intent?.getLongExtra(EXTRA_SERVER_ID, -1L)?.takeIf { it >= 0L }
-        if (chatId <= 0L && target == null) {
-            stopSelf()
-            return START_NOT_STICKY
-        }
         if (chatId > 0L) setTarget(ChatBubbleTarget(chatId, serverId))
-        if (!startForegroundSafely()) {
+        // Always satisfy startForegroundService() first; shutdown() then removes the notification.
+        if (!startForegroundSafely() || target == null) {
             shutdown()
             return START_NOT_STICKY
         }
@@ -330,7 +327,7 @@ class ChatBubbleOverlayService : Service() {
 
         /** Starts (or retargets) the bubble. Returns false without overlay permission or when the start was refused. */
         fun start(context: Context, chatId: Long, serverId: Long?): Boolean {
-            if (!Settings.canDrawOverlays(context)) return false
+            if (chatId <= 0L || !Settings.canDrawOverlays(context)) return false
             val intent = Intent(context, ChatBubbleOverlayService::class.java)
                 .putExtra(EXTRA_CHAT_ID, chatId)
                 .putExtra(EXTRA_SERVER_ID, serverId ?: -1L)

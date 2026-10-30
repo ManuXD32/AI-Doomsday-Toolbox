@@ -40,7 +40,22 @@ data class LlamaChatRequest(
     @SerializedName("chat_template_kwargs") val chat_template_kwargs: Map<String, Any>? = null,
     /** Pinned llama-server slot for per-chat KV persistence; omitted when null. */
     @SerializedName("id_slot") val idSlot: Int? = null,
-    @SerializedName("cache_prompt") val cachePrompt: Boolean? = null
+    @SerializedName("cache_prompt") val cachePrompt: Boolean? = null,
+    // Extended llama.cpp samplers (LlamaSamplerKeys.EXTENDED_KEYS); null = Auto, omitted by Gson.
+    @SerializedName("repeat_last_n") val repeat_last_n: Int? = null,
+    @SerializedName("typical_p") val typical_p: Float? = null,
+    @SerializedName("top_n_sigma") val top_n_sigma: Float? = null,
+    @SerializedName("xtc_probability") val xtc_probability: Float? = null,
+    @SerializedName("xtc_threshold") val xtc_threshold: Float? = null,
+    @SerializedName("dry_multiplier") val dry_multiplier: Float? = null,
+    @SerializedName("dry_base") val dry_base: Float? = null,
+    @SerializedName("dry_allowed_length") val dry_allowed_length: Int? = null,
+    @SerializedName("dry_penalty_last_n") val dry_penalty_last_n: Int? = null,
+    @SerializedName("dynatemp_range") val dynatemp_range: Float? = null,
+    @SerializedName("dynatemp_exponent") val dynatemp_exponent: Float? = null,
+    @SerializedName("mirostat") val mirostat: Int? = null,
+    @SerializedName("mirostat_tau") val mirostat_tau: Float? = null,
+    @SerializedName("mirostat_eta") val mirostat_eta: Float? = null
 )
 
 @Keep
