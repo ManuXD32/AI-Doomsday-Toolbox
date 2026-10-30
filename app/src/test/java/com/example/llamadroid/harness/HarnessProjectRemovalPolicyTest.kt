@@ -10,14 +10,14 @@ class HarnessProjectRemovalPolicyTest {
         assertFalse(canRemoveHarnessProject(null, starting = true, connected = false))
         assertFalse(canRemoveHarnessProject(null, starting = false, connected = true))
         for (state in listOf("STARTING", "RUNNING", "STOP_REQUESTED", "FORCE_STOPPING", "INTERRUPTED")) {
-            assertFalse(canRemoveHarnessProject(HarnessRuntimeEntity(state = state), false, false))
+            assertFalse(canRemoveHarnessProject(HarnessRuntimeEntity(id = "rt", state = state), false, false))
         }
-        assertFalse(canRemoveHarnessProject(HarnessRuntimeEntity(state = "FAILED", brokerPid = 42), false, false))
+        assertFalse(canRemoveHarnessProject(HarnessRuntimeEntity(id = "rt", state = "FAILED", brokerPid = 42), false, false))
     }
 
     @Test fun neverStartedAndConfirmedStoppedProjectsCanBeRemoved() {
         assertTrue(canRemoveHarnessProject(null, false, false))
-        assertTrue(canRemoveHarnessProject(HarnessRuntimeEntity(state = "FAILED"), false, false))
-        assertTrue(canRemoveHarnessProject(HarnessRuntimeEntity(state = "STOPPED", brokerPid = 42), false, false))
+        assertTrue(canRemoveHarnessProject(HarnessRuntimeEntity(id = "rt", state = "FAILED"), false, false))
+        assertTrue(canRemoveHarnessProject(HarnessRuntimeEntity(id = "rt", state = "STOPPED", brokerPid = 42), false, false))
     }
 }

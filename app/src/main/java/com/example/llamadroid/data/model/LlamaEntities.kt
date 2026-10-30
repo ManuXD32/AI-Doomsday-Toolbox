@@ -6,7 +6,7 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import com.example.llamadroid.data.HttpEndpointUrlSupport
 
-@Entity(tableName = "llama_servers")
+@Entity(tableName = "llama_servers", indices = [Index(value = ["managedServerCardId"], unique = true)])
 data class LlamaServerEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
@@ -26,7 +26,9 @@ data class LlamaServerEntity(
     val localLaunchProfileJson: String? = null,
     val lastUsed: Long = System.currentTimeMillis(),
     @androidx.room.ColumnInfo(defaultValue = "0")
-    val supportsVideo: Boolean = false
+    val supportsVideo: Boolean = false,
+    /** Linked cards own their profile and endpoint; never use the legacy global launcher. */
+    @androidx.room.ColumnInfo(defaultValue = "NULL") val managedServerCardId: Long? = null
 ) {
     fun normalizedEngine(): String = normalizeLlamaServerEngine(engine)
 
@@ -94,7 +96,8 @@ data class LlamaChatPromptProfileEntity(
         Index("pinnedAt"),
         Index("isEphemeral"),
         Index("source"),
-        Index("expiresAtMillis")
+        Index("expiresAtMillis"),
+        Index("serverId")
     ]
 )
 data class LlamaChatEntity(
@@ -111,7 +114,15 @@ data class LlamaChatEntity(
     val isEphemeral: Boolean = false,
     val source: String? = null,
     val deleteAfterSession: Boolean = false,
-    val expiresAtMillis: Long? = null
+    val expiresAtMillis: Long? = null,
+    /** The connection row this chat talks to; null for legacy chats not yet bound (no FK by design). */
+    val serverId: Long? = null,
+    /** Opt-in per-chat KV cache persistence (llama-server slot save/restore). */
+    @androidx.room.ColumnInfo(defaultValue = "0")
+    val persistKvCache: Boolean = false,
+    /** True for chats created in Easy mode; hidden from every advanced list, search and backup. */
+    @androidx.room.ColumnInfo(defaultValue = "0")
+    val easyMode: Boolean = false
 )
 
 @Entity(
@@ -167,7 +178,14 @@ data class LlamaMessageEntity(
     val completionTokens: Int = 0,
     val tps: Double = 0.0,
     val generationTimeMs: Long = 0L,
-    val videoPath: String? = null
+    val videoPath: String? = null,
+    /** Null for ordinary messages; see [LlamaMessageKind] for app-written notices. */
+    val kind: String? = null,
+    /**
+     * Visible work steps of an assistant reply (intermediate text, tool calls and bounded results),
+     * encoded by `NativeChatStepsCodec`; null when the reply has no steps. [content] stays the final answer.
+     */
+    val stepsJson: String? = null
 )
 
 object LlamaScheduledTaskScheduleType {

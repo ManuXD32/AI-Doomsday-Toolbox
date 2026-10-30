@@ -14,19 +14,24 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PendingActions
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Web
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -50,6 +55,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -526,24 +532,31 @@ internal fun HarnessProjectsLanding(
     }
 }
 
+/** Work tabs: Chat, Plan, Changes, Files, Terminal and a More menu (Requests, Commands, Tools). */
 @Composable
 internal fun HarnessWorkTabs(
     selectedTab: HarnessSurfaceTab,
     onSelected: (HarnessSurfaceTab) -> Unit,
     modifier: Modifier = Modifier,
+    pendingRequests: Int = 0,
 ) {
     val tabs = listOf(
         HarnessSurfaceTab.CONVERSATION to stringResource(R.string.harness_tab_conversation),
         HarnessSurfaceTab.PLAN to stringResource(R.string.harness_tab_plan),
-        HarnessSurfaceTab.REQUESTS to stringResource(R.string.harness_tab_requests),
         HarnessSurfaceTab.CHANGES to stringResource(R.string.harness_tab_changes),
-        HarnessSurfaceTab.TOOLS to stringResource(R.string.harness_tab_tools),
         HarnessSurfaceTab.FILES to stringResource(R.string.harness_tab_files),
-        HarnessSurfaceTab.COMMANDS to stringResource(R.string.harness_tab_commands),
         HarnessSurfaceTab.TERMINAL to stringResource(R.string.harness_tab_terminal),
     )
+    val moreTabs = listOf(
+        HarnessSurfaceTab.REQUESTS to R.string.harness_tab_requests,
+        HarnessSurfaceTab.COMMANDS to R.string.harness_tab_commands,
+        HarnessSurfaceTab.TOOLS to R.string.harness_menu_tools_log,
+    )
+    val moreSelected = moreTabs.any { it.first == selectedTab }
+    var moreExpanded by rememberSaveable { mutableStateOf(false) }
     AppScrollableTabRow(
-        selectedTabIndex = tabs.indexOfFirst { it.first == selectedTab }.coerceAtLeast(0),
+        selectedTabIndex = if (moreSelected) tabs.size
+        else tabs.indexOfFirst { it.first == selectedTab }.coerceAtLeast(0),
         edgePadding = 0.dp,
         modifier = modifier.testTag("harness_work_tabs"),
     ) {
@@ -555,9 +568,69 @@ internal fun HarnessWorkTabs(
                 modifier = Modifier.testTag("harness_work_tab_${tab.name.lowercase()}"),
             )
         }
+        val moreLabel = stringResource(R.string.harness_tab_more)
+        val moreDescription = if (pendingRequests > 0) {
+            pluralStringResource(R.plurals.harness_tab_more_badge, pendingRequests, pendingRequests)
+        } else moreLabel
+        Tab(
+            selected = moreSelected,
+            onClick = { moreExpanded = true },
+            text = {
+                Box {
+                    BadgedBox(
+                        badge = {
+                            if (pendingRequests > 0) {
+                                Badge(modifier = Modifier.testTag("harness_work_tab_more_badge")) {
+                                    Text(if (pendingRequests > 9) "9+" else pendingRequests.toString())
+                                }
+                            }
+                        },
+                    ) {
+                        Text(moreLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    DropdownMenu(expanded = moreExpanded, onDismissRequest = { moreExpanded = false }) {
+                        moreTabs.forEach { (tab, label) ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(stringResource(label), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                },
+                                trailingIcon = if (tab == HarnessSurfaceTab.REQUESTS && pendingRequests > 0) {
+                                    { Badge { Text(if (pendingRequests > 9) "9+" else pendingRequests.toString()) } }
+                                } else null,
+                                onClick = {
+                                    moreExpanded = false
+                                    onSelected(tab)
+                                },
+                                modifier = Modifier.testTag("harness_work_tab_${tab.name.lowercase()}"),
+                            )
+                        }
+                    }
+                }
+            },
+            modifier = Modifier
+                .testTag("harness_work_tab_more")
+                .semantics { contentDescription = moreDescription },
+        )
     }
 }
 
+@Composable
+private fun HarnessMenuSectionLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.primary,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+    )
+}
+
+/**
+ * Single header overflow. Groups: Project (Projects, Sessions, Export), Environment
+ * (Environments, Runtime, Debian terminal, Debian files) and Other (Settings, Extensions,
+ * App tools, Original web UI). The long menu scrolls inside the popup on small phones.
+ */
 @Composable
 internal fun HarnessSecondaryDestinationMenu(
     onSelected: (HarnessSurfaceTab) -> Unit,
@@ -565,75 +638,128 @@ internal fun HarnessSecondaryDestinationMenu(
     onProjects: (() -> Unit)? = null,
     onRecoveryTerminal: (() -> Unit)? = null,
     onRecoveryFileServer: (() -> Unit)? = null,
+    sessions: List<HarnessSessionUiState> = emptyList(),
+    onSelectSession: (String) -> Unit = {},
+    onNewSession: (() -> Unit)? = null,
+    onExport: (() -> Unit)? = null,
+    onEnvironments: (() -> Unit)? = null,
+    onAppTools: (() -> Unit)? = null,
+    webEnabled: Boolean = true,
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
-    IconButton(
-        onClick = { expanded = true },
-        modifier = modifier.testTag("harness_secondary_menu"),
-    ) {
-        Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.harness_more_destinations))
+    var sessionsExpanded by rememberSaveable { mutableStateOf(false) }
+    Box(modifier = modifier) {
+        IconButton(
+            onClick = { expanded = true },
+            modifier = Modifier.testTag("harness_secondary_menu"),
+        ) {
+            Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.harness_more_destinations))
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            HarnessMenuSectionLabel(stringResource(R.string.harness_menu_group_project))
+            if (onProjects != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.harness_projects_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    leadingIcon = { Icon(Icons.Default.Folder, contentDescription = null) },
+                    onClick = { expanded = false; onProjects() },
+                    modifier = Modifier.testTag("harness_back_to_projects"),
+                )
+            }
+            if (sessions.isNotEmpty() || onNewSession != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.harness_menu_switch_session), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null) },
+                    onClick = { expanded = false; sessionsExpanded = true },
+                    modifier = Modifier.testTag("harness_session_selector"),
+                )
+            }
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.harness_tab_sessions), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                leadingIcon = { Icon(Icons.Default.Description, contentDescription = null) },
+                onClick = { expanded = false; onSelected(HarnessSurfaceTab.SESSIONS) },
+            )
+            if (onExport != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.harness_menu_export), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    leadingIcon = { Icon(Icons.Default.FileDownload, contentDescription = null) },
+                    onClick = { expanded = false; onExport() },
+                    modifier = Modifier.testTag("harness_context_runtime_transfer"),
+                )
+            }
+            HarnessMenuSectionLabel(stringResource(R.string.harness_menu_group_environment))
+            if (onEnvironments != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.harness_menu_environments), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    leadingIcon = { Icon(Icons.Default.Storage, contentDescription = null) },
+                    onClick = { expanded = false; onEnvironments() },
+                    modifier = Modifier.testTag("harness_menu_environments"),
+                )
+            }
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.harness_tab_runtime), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                leadingIcon = { Icon(Icons.Default.Build, contentDescription = null) },
+                onClick = { expanded = false; onSelected(HarnessSurfaceTab.RUNTIME) },
+            )
+            if (onRecoveryTerminal != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.harness_recovery_terminal_menu), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    leadingIcon = { Icon(Icons.Default.Terminal, contentDescription = null) },
+                    onClick = { expanded = false; onRecoveryTerminal() },
+                )
+            }
+            if (onRecoveryFileServer != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.harness_recovery_debian_files_menu), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    leadingIcon = { Icon(Icons.Default.Storage, contentDescription = null) },
+                    onClick = { expanded = false; onRecoveryFileServer() },
+                )
+            }
+            HarnessMenuSectionLabel(stringResource(R.string.harness_menu_group_other))
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.harness_tab_settings), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                onClick = { expanded = false; onSelected(HarnessSurfaceTab.SETTINGS) },
+            )
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.harness_tab_extensions), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                leadingIcon = { Icon(Icons.Default.Extension, contentDescription = null) },
+                onClick = { expanded = false; onSelected(HarnessSurfaceTab.EXTENSIONS) },
+            )
+            if (onAppTools != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.harness_menu_app_tools), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null) },
+                    onClick = { expanded = false; onAppTools() },
+                    modifier = Modifier.testTag(HarnessAppToolsNavigationContract.testTag),
+                )
+            }
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.harness_tab_web), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                leadingIcon = { Icon(Icons.Default.Web, contentDescription = null) },
+                enabled = webEnabled,
+                onClick = { expanded = false; onSelected(HarnessSurfaceTab.WEB) },
+                modifier = Modifier.testTag("harness_open_web_ui"),
+            )
+        }
+        HarnessSessionPickerMenu(
+            expanded = sessionsExpanded,
+            onDismiss = { sessionsExpanded = false },
+            sessions = sessions,
+            onSelectSession = onSelectSession,
+            onNewSession = onNewSession,
+        )
     }
-    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-        if (onProjects != null) {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.harness_projects_title)) },
-                leadingIcon = {
-                    Icon(Icons.Default.Folder, contentDescription = null)
-                },
-                onClick = {
-                    expanded = false
-                    onProjects()
-                },
-            )
-        }
-        listOf(
-            HarnessSurfaceTab.RUNTIME to R.string.harness_tab_runtime,
-            HarnessSurfaceTab.SESSIONS to R.string.harness_tab_sessions,
-            HarnessSurfaceTab.SETTINGS to R.string.harness_tab_settings,
-            HarnessSurfaceTab.EXTENSIONS to R.string.harness_tab_extensions,
-            HarnessSurfaceTab.WEB to R.string.harness_tab_web,
-        ).forEach { (tab, label) ->
-            DropdownMenuItem(
-                text = { Text(stringResource(label)) },
-                leadingIcon = {
-                    Icon(
-                        when (tab) {
-                            HarnessSurfaceTab.RUNTIME -> Icons.Default.Build
-                            HarnessSurfaceTab.SESSIONS -> Icons.Default.Chat
-                            HarnessSurfaceTab.SETTINGS -> Icons.Default.Settings
-                            HarnessSurfaceTab.EXTENSIONS -> Icons.Default.Extension
-                            HarnessSurfaceTab.WEB -> Icons.Default.Web
-                            else -> Icons.Default.MoreVert
-                        },
-                        contentDescription = null,
-                    )
-                },
-                onClick = {
-                    expanded = false
-                    onSelected(tab)
-                },
-            )
-        }
-        if (onRecoveryTerminal != null) {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.harness_recovery_terminal_menu)) },
-                leadingIcon = { Icon(Icons.Default.Terminal, contentDescription = null) },
-                onClick = {
-                    expanded = false
-                    onRecoveryTerminal()
-                },
-            )
-        }
-        if (onRecoveryFileServer != null) {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.harness_recovery_debian_files_menu)) },
-                leadingIcon = { Icon(Icons.Default.Storage, contentDescription = null) },
-                onClick = {
-                    expanded = false
-                    onRecoveryFileServer()
-                },
-            )
-        }
+}
+
+/** "<session title> · <environment>" header subtitle; omits whichever part is unknown. */
+@Composable
+internal fun harnessHeaderSubtitle(sessionTitle: String?, environmentName: String?): String? {
+    val session = sessionTitle?.takeIf { it.isNotBlank() }
+    val environment = environmentName?.takeIf { it.isNotBlank() }
+    return when {
+        session != null && environment != null ->
+            stringResource(R.string.harness_header_subtitle_env, session, environment)
+        else -> session ?: environment
     }
 }
 

@@ -27,6 +27,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -132,9 +133,14 @@ private fun HarnessSettingsLoadPanel(
 internal fun HarnessSettingsNavigator(
     state: NativeHarnessUiState,
     onAction: (NativeHarnessUiAction) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    openModelToken: Int = 0,
 ) {
     var destination by rememberSaveable { mutableStateOf(SETTINGS_ROOT) }
+    // A positive token means a shortcut (composer model menu) asked for the Model editor.
+    LaunchedEffect(openModelToken) {
+        if (openModelToken > 0) destination = SETTINGS_MODEL
+    }
     var query by rememberSaveable { mutableStateOf("") }
     val stateHolder = rememberSaveableStateHolder()
     val providerSearchText = remember(state.provider.providers, state.provider.configs) {

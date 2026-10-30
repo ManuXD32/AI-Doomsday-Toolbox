@@ -5,22 +5,36 @@ import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class AppRoutePresentationTest {
-    @Test fun `only the four root destinations retain global navigation`() {
+    @Test fun `only the five root destinations retain global navigation`() {
         AppRootDestination.entries.forEach {
             assertEquals(AppRoutePresentation(it, true), AppRoutePresentations.forRoute(it.route))
         }
         listOf("image_gen?startMode={startMode}&tab={tab}", "video_gen?tab={tab}",
-            "llama_chat/{chatId}/{serverId}", "agent_workspace", "settings", "notes_manager",
+            "llama_chat/{chatId}/{serverId}", "agent_workspace", "settings",
             "farm", "kiwix_viewer", "llm_models").forEach {
             assertFalse("Deep task kept global chrome: $it", AppRoutePresentations.forRoute(it).isRoot)
         }
     }
 
     @Test fun `deep routes keep their conceptual parent without rendering global chrome`() {
-        assertEquals(AppRootDestination.Library, AppRoutePresentations.forRoute("knowledge_chunk/42").parent)
+        assertEquals(AppRootDestination.Tools, AppRoutePresentations.forRoute("knowledge_chunk/42").parent)
+        assertEquals(AppRoutePresentation(AppRootDestination.Tools, true), AppRoutePresentations.forRoute("library"))
+        assertEquals(AppRoutePresentation(AppRootDestination.Organizer, true), AppRoutePresentations.forRoute("notes_manager"))
+        assertEquals(AppRootDestination.Chats, AppRoutePresentations.forRoute("server_profile_editor").parent)
+        assertEquals(AppRootDestination.Chats, AppRoutePresentations.forRoute("native_chat_delegation").parent)
+        assertEquals(AppRootDestination.Chats, AppRoutePresentations.forRoute("llama_scheduler").parent)
+        assertEquals(AppRootDestination.Tools, AppRoutePresentations.forRoute("generation_queue").parent)
+        assertEquals(AppRootDestination.Tools, AppRoutePresentations.forRoute("all_media_gallery?type=image").parent)
         assertEquals(AppRootDestination.Tama, AppRoutePresentations.forRoute("adventure/FOREST").parent)
         assertEquals(AppRootDestination.Tools, AppRoutePresentations.forRoute("dataset_project/7").parent)
+        assertEquals(AppRootDestination.Chats, AppRoutePresentations.forRoute("llama_chat/3/4").parent)
+        assertEquals(AppRootDestination.Chats, AppRoutePresentations.forRoute("agent?conversationId=1").parent)
+        assertEquals(AppRootDestination.Chats, AppRoutePresentations.forRoute("llama_chat_list").parent)
+        assertEquals(AppRootDestination.Tools, AppRoutePresentations.forRoute("ollama_manager").parent)
+        assertEquals(AppRootDestination.Tools, AppRoutePresentations.forRoute("generation_queue").parent)
         assertEquals(null, AppRoutePresentations.forRoute("settings_general").parent)
+        assertEquals(null, AppRoutePresentations.forRoute("about").parent)
+        assertEquals(null, AppRoutePresentations.forRoute("logs").parent)
         assertFalse(AppRoutePresentations.forRoute(null).isRoot)
     }
 
@@ -35,6 +49,52 @@ class AppRoutePresentationTest {
             assertEquals(AppNavigationLayout.Drawer, appNavigationLayout(width, 800, 1.3f))
             assertEquals(AppNavigationLayout.Drawer, appNavigationLayout(width, 800, 2f))
         }
+    }
+
+    @Test fun `one bar of five keys in fixed order on every screen`() {
+        assertEquals(listOf("dashboard", "chats", "ai_hub", "tama", "notes_manager"), UniversalKey.entries.map { it.route })
+        assertEquals(UniversalKeysPlacement.STRIP, universalKeysPlacement(AppNavigationLayout.Bar, false))
+        assertEquals(UniversalKeysPlacement.STRIP, universalKeysPlacement(AppNavigationLayout.Drawer, false))
+        assertEquals(UniversalKeysPlacement.RAIL, universalKeysPlacement(AppNavigationLayout.Rail, false))
+    }
+
+    @Test fun `navigation hides only on first run`() {
+        AppNavigationLayout.entries.forEach { layout ->
+            assertEquals(UniversalKeysPlacement.NONE, universalKeysPlacement(layout, true))
+        }
+    }
+
+    @Test fun `selected key follows the owning parent`() {
+        assertEquals(UniversalKey.DASHBOARD, selectedUniversalKey("dashboard"))
+        assertEquals(UniversalKey.TOOLS, selectedUniversalKey("ai_hub"))
+        assertEquals(UniversalKey.TOOLS, selectedUniversalKey("library"))
+        assertEquals(UniversalKey.TOOLS, selectedUniversalKey("image_gen"))
+        assertEquals(UniversalKey.TOOLS, selectedUniversalKey("generation_queue"))
+        assertEquals(UniversalKey.TOOLS, selectedUniversalKey("all_media_gallery"))
+        assertEquals(UniversalKey.CHATS, selectedUniversalKey("llama_scheduler"))
+        assertEquals(UniversalKey.CHATS, selectedUniversalKey("native_chat_delegation"))
+        assertEquals(UniversalKey.CHATS, selectedUniversalKey("chats"))
+        assertEquals(UniversalKey.CHATS, selectedUniversalKey("llama_chat"))
+        assertEquals(UniversalKey.CHATS, selectedUniversalKey("agent"))
+        assertEquals(UniversalKey.TAMA, selectedUniversalKey("tama"))
+        assertEquals(UniversalKey.TAMA, selectedUniversalKey("farm"))
+        assertEquals(UniversalKey.ORGANIZER, selectedUniversalKey("notes_manager"))
+        assertEquals(null, selectedUniversalKey("settings"))
+        assertEquals(null, selectedUniversalKey("settings_general"))
+        assertEquals(null, selectedUniversalKey("about"))
+        assertEquals(null, selectedUniversalKey("logs"))
+        assertEquals(null, selectedUniversalKey(null))
+    }
+
+    @Test fun `universal key highlight follows the owning route`() {
+        assertEquals(true, UniversalKey.ORGANIZER.isCurrent("notes_manager"))
+        assertEquals(true, UniversalKey.TOOLS.isCurrent("ai_hub"))
+        assertEquals(true, UniversalKey.DASHBOARD.isCurrent("dashboard"))
+        assertEquals(true, UniversalKey.TAMA.isCurrent("tama"))
+        assertEquals(false, UniversalKey.TAMA.isCurrent("tama_chat"))
+        assertEquals(true, universalKeyLabelsVisible(360, 1.0f))
+        assertEquals(false, universalKeyLabelsVisible(359, 1.0f))
+        assertEquals(false, universalKeyLabelsVisible(411, 1.3f))
     }
 
     @Test fun `gallery links are validated without breaking legacy creation shortcuts`() {

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Per-chat options dialog (chat menu) -->
+    <string name="native_chat_options_menu">Chat options</string>
+    <string name="native_chat_options_title">Chat options</string>
+    <string name="native_chat_options_done">Done</string>
+    <string name="native_chat_options_audio_title">Audio input</string>
+    <string name="native_chat_options_audio_server">Server default</string>
+    <string name="native_chat_options_audio_server_desc">Follow what the server card does with audio.</string>
+    <string name="native_chat_options_audio_whisper">Transcribe with Whisper</string>
+    <string name="native_chat_options_audio_direct">Send audio directly</string>
+    <string name="native_chat_options_audio_direct_desc">The model receives the audio file itself.</string>
+    <string name="native_chat_options_tools_title">Tools</string>
+    <string name="native_chat_options_tools_desc">Tools for this chat are set in Chat settings, under Tools.</string>
+    <string name="native_chat_options_open_settings">Open Chat settings</string>
+    <string name="native_chat_options_server_title">Server</string>
+    <string name="native_chat_options_server_none">No server selected for this chat.</string>
+    <string name="native_chat_options_audio_direct_try_desc">Use this if you know the server accepts audio. If it returns an error, the chat transcribes with Whisper instead.</string>
+    <string name="native_chat_options_audio_rejected_hint">The server rejected direct audio last time, so this chat uses Whisper.</string>
+    <string name="native_chat_audio_fallback_status">Server rejected audio — transcribed with Whisper</string>
+    <string name="native_chat_video_fallback_status">Server rejected video — using the transcript instead</string>
+    <string name="native_chat_options_video_title">Video input</string>
+    <string name="native_chat_options_video_server">Server default</string>
+    <string name="native_chat_options_video_server_desc">Follow the server card and the global video settings.</string>
+    <string name="native_chat_options_video_native">Send video natively (try)</string>
+    <string name="native_chat_options_video_native_desc">Try sending the video to the model even if the server is not flagged for video. If the server returns an error, the chat uses the transcript instead.</string>
+    <string name="native_chat_options_video_transcript">Use transcript</string>
+    <string name="native_chat_options_video_transcript_desc">Always transcribe the video audio with Whisper and send the text.</string>
+</resources>

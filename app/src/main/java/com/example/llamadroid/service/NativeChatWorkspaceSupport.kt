@@ -21,6 +21,40 @@ object NativeChatWorkspaceSupport {
         }
     }
 
+    /** Folder inside the workspace where composer attachments are stored. */
+    const val ATTACHMENTS_DIR = "attachments"
+    /** Folder inside the workspace where DeepSeek result files are exported. */
+    const val RESULTS_DIR = "results"
+
+    /** Workspace subfolder [name], created on demand. */
+    fun subDir(context: Context, chatId: Long, name: String): File =
+        File(root(context, chatId), name).apply {
+            require((isDirectory || mkdirs()) && isDirectory) { "Could not create the chat workspace folder." }
+        }
+
+    /** Workspace root without creating it (for read-only checks). */
+    fun rootIfPresent(context: Context, chatId: Long): File =
+        File(context.filesDir, "native_chat_workspaces/$chatId")
+
+    /** Legacy attachment root, still honored for rows imported before round 8. */
+    fun legacyAttachmentRoot(context: Context, chatId: Long): File =
+        File(context.filesDir, "llama_chat_files/$chatId")
+
+    /** A name not yet used in [dir]: `report.zip`, then `report-2.zip`, `report-3.zip`... */
+    fun uniqueFile(dir: File, name: String): File {
+        var target = File(dir, name)
+        if (!target.exists()) return target
+        val dot = name.lastIndexOf('.')
+        val stem = if (dot > 0) name.substring(0, dot) else name
+        val ext = if (dot > 0) name.substring(dot) else ""
+        var n = 2
+        while (target.exists()) {
+            target = File(dir, "$stem-$n$ext")
+            n++
+        }
+        return target
+    }
+
     fun resolve(context: Context, chatId: Long, relativePath: String): File {
         val root = root(context, chatId).canonicalFile
         val normalized = relativePath.trim().trimStart('/').ifBlank { "." }

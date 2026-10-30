@@ -96,7 +96,7 @@ fun HarnessTerminalDialog(conversationId: Long, onDismiss: () -> Unit) {
     }
     LaunchedEffect(conversationId) {
         try {
-            sessionId = requireNotNull(runtime.database.harnessDao().sessionForConversation(conversationId)).harnessSessionId
+            sessionId = requireNotNull(runtime.dao.sessionForConversation(conversationId)).harnessSessionId
             while (isActive) {
                 try { repository.refresh(requireNotNull(sessionId)); failed = false }
                 catch (cancel: CancellationException) { throw cancel }

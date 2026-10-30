@@ -99,6 +99,8 @@ data class LlamaServerLaunchProfile(
     val kvUnifiedMode: String = LlamaKvUnifiedMode.AUTO.value,
     val swaFull: Boolean = false,
     val sleepIdleSeconds: Int? = 1800,
+    /** App-owned process shutdown, separate from llama.cpp's model sleep setting. */
+    val idleStopSeconds: Int? = null,
     val customFlags: String? = null,
     val flashAttention: Boolean = false,
     /** OpenCL-only placement policy for this launch profile. */

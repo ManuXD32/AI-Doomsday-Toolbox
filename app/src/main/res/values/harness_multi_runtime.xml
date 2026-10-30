@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_multi_runtime_header_note">Several runtimes can run at the same time, each on its own port. Every running runtime uses memory (Node and PRoot) and shares the phone\'s process budget. Dev servers started inside different runtimes share the phone\'s network ports. \"Open\" only switches which runtime you are viewing; it never stops the others.</string>
+    <string name="harness_multi_runtime_start">Start</string>
+    <string name="harness_multi_runtime_stop">Stop</string>
+    <string name="harness_multi_runtime_force_stop">Force stop</string>
+    <string name="harness_multi_runtime_running_port">Running · port %1$d</string>
+</resources>

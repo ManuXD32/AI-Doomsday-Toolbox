@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_steps_thought">Proceso de pensamiento</string>
+    <string name="chat_steps_message_title">Mensaje completo</string>
+    <string name="chat_steps_show_more_text">Mostrar más</string>
+    <plurals name="chat_steps_show_more_steps">
+        <item quantity="one">Mostrar %1$d paso más</item>
+        <item quantity="many">Mostrar %1$d pasos más</item>
+        <item quantity="other">Mostrar %1$d pasos más</item>
+    </plurals>
+    <string name="chat_steps_hide_steps">Ocultar pasos</string>
+    <string name="chat_steps_tool_running">En curso</string>
+    <string name="chat_steps_tool_done">Hecho</string>
+    <string name="chat_steps_tool_failed">Falló</string>
+    <string name="chat_steps_tool_skipped">Omitido</string>
+    <string name="chat_steps_tool_interrupted">Interrumpido</string>
+    <string name="chat_steps_tool_card_description">Herramienta %1$s, %2$s. Toca para ver los detalles.</string>
+    <string name="chat_steps_details_arguments">Argumentos</string>
+    <string name="chat_steps_details_result">Resultado</string>
+    <string name="chat_steps_details_no_arguments">Sin argumentos.</string>
+    <string name="chat_steps_details_no_result">Aún no hay resultado.</string>
+    <string name="chat_steps_details_shortened">Resultado acortado. Longitud original: %1$s caracteres.</string>
+    <string name="chat_steps_export_tool_used">Herramienta usada: %1$s (%2$s)</string>
+    <string name="chat_steps_export_status_ok">hecho</string>
+    <string name="chat_steps_export_status_error">error</string>
+    <string name="chat_steps_export_status_skipped">omitido</string>
+    <string name="chat_steps_export_status_running">interrumpido</string>
+    <string name="chat_thinking_show_all">Mostrar todo</string>
+    <string name="chat_thinking_earlier_chars">… %1$s caracteres anteriores</string>
+    <string name="chat_message_role_user">Tú</string>
+    <string name="chat_message_role_assistant">Asistente</string>
+    <string name="chat_message_role_system">Sistema</string>
+</resources>

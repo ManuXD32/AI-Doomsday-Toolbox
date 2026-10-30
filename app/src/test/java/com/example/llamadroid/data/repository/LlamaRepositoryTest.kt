@@ -5,6 +5,7 @@ import com.example.llamadroid.data.dao.LlamaChatFolderDao
 import com.example.llamadroid.data.dao.LlamaChatPromptProfileDao
 import com.example.llamadroid.data.dao.LlamaMessageDao
 import com.example.llamadroid.data.dao.LlamaServerDao
+import com.example.llamadroid.data.dao.ServerChatCount
 import com.example.llamadroid.data.model.LlamaChatEntity
 import com.example.llamadroid.data.model.LlamaChatFolderEntity
 import com.example.llamadroid.data.model.LlamaChatPromptProfileEntity
@@ -99,7 +100,15 @@ private class FakeLlamaServerDao(
     private var nextId = (servers.keys.maxOrNull() ?: 0L) + 1L
 
     override fun getAllServers(): Flow<List<LlamaServerEntity>> = flowOf(servers.values.toList())
+    override fun getAllServersIncludingEasy(): Flow<List<LlamaServerEntity>> = flowOf(servers.values.toList())
     override suspend fun getServerById(id: Long): LlamaServerEntity? = servers[id]
+    override suspend fun getManagedServer(cardId: Long): LlamaServerEntity? =
+        servers.values.firstOrNull { it.managedServerCardId == cardId }
+    override suspend fun updateManagedEndpoint(cardId: Long, host: String, port: Int) {
+        servers.values.filter { it.managedServerCardId == cardId }.forEach { server ->
+            servers[server.id] = server.copy(host = host, port = port)
+        }
+    }
     override suspend fun insertServer(server: LlamaServerEntity): Long {
         val id = server.id.takeIf { it != 0L } ?: nextId++
         servers[id] = server.copy(id = id)
@@ -107,6 +116,12 @@ private class FakeLlamaServerDao(
     }
     override suspend fun deleteServer(server: LlamaServerEntity) {
         servers.remove(server.id)
+    }
+    override suspend fun deleteServerById(id: Long) {
+        servers.remove(id)
+    }
+    override suspend fun linkManagedCard(id: Long, cardId: Long?) {
+        servers[id] = servers.getValue(id).copy(managedServerCardId = cardId)
     }
     override suspend fun updateLastUsed(id: Long, timestamp: Long) {
         servers[id] = servers.getValue(id).copy(lastUsed = timestamp)
@@ -180,7 +195,9 @@ private class FakePromptProfileDao : LlamaChatPromptProfileDao {
 private class FakeLlamaChatDao(
     val chats: MutableMap<Long, LlamaChatEntity> = mutableMapOf()
 ) : LlamaChatDao {
-    override fun getAllChats(): Flow<List<LlamaChatEntity>> = flowOf(chats.values.toList())
+    override fun getAllChats(): Flow<List<LlamaChatEntity>> = flowOf(chats.values.filter { !it.easyMode })
+    override fun getEasyChats(): Flow<List<LlamaChatEntity>> = flowOf(chats.values.filter { it.easyMode })
+    override fun observeChatById(id: Long): Flow<LlamaChatEntity?> = flowOf(chats[id])
     override fun getPinnedAiHubChats(): Flow<List<LlamaChatEntity>> =
         flowOf(chats.values.filter { it.pinnedToAiHub })
 
@@ -201,6 +218,26 @@ private class FakeLlamaChatDao(
     override suspend fun deleteChat(chat: LlamaChatEntity) {
         chats.remove(chat.id)
     }
+    override suspend fun bindChatServer(chatId: Long, serverId: Long?) {
+        chats[chatId] = chats.getValue(chatId).copy(serverId = serverId)
+    }
+    override suspend fun bindChatServerIfUnbound(chatId: Long, serverId: Long): Int {
+        val chat = chats[chatId]?.takeIf { it.serverId == null } ?: return 0
+        chats[chatId] = chat.copy(serverId = serverId)
+        return 1
+    }
+    override suspend fun clearChatServerBinding(serverId: Long) {
+        chats.values.filter { it.serverId == serverId }.forEach { chats[it.id] = it.copy(serverId = null) }
+    }
+    override suspend fun setPersistKvCache(chatId: Long, enabled: Boolean) {
+        chats[chatId] = chats.getValue(chatId).copy(persistKvCache = enabled)
+    }
+    override suspend fun getChatsBoundToServer(serverId: Long): List<LlamaChatEntity> =
+        chats.values.filter { it.serverId == serverId }.sortedByDescending { it.lastModified }
+    override fun observeBoundChatCounts(): Flow<List<ServerChatCount>> = flowOf(
+        chats.values.mapNotNull { it.serverId }.groupingBy { it }.eachCount()
+            .map { (serverId, count) -> ServerChatCount(serverId, count) }
+    )
     override suspend fun deleteEphemeralChatById(id: Long) {
         val chat = chats[id] ?: return
         if (chat.isEphemeral && chat.deleteAfterSession) {
@@ -261,6 +298,18 @@ private class FakeLlamaMessageDao : LlamaMessageDao {
         tps: Double,
         generationTimeMs: Long
     ) = Unit
+    override suspend fun updateMessageThinkingContentAndSteps(
+        id: Long,
+        content: String,
+        thinking: String?,
+        promptTokens: Int,
+        completionTokens: Int,
+        tps: Double,
+        generationTimeMs: Long,
+        stepsJson: String?
+    ) = Unit
+    override suspend fun updateMessageSteps(id: Long, stepsJson: String?) = Unit
+    override suspend fun updateMessageStepsAndText(id: Long, content: String, thinking: String?, stepsJson: String?) = Unit
     override suspend fun updateMessageTruncatedStatus(id: Long, isTruncated: Boolean) = Unit
     override suspend fun updateMessageAudioPath(id: Long, audioPath: String?) = Unit
 }

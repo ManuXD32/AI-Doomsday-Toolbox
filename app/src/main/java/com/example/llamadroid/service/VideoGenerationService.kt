@@ -3,7 +3,6 @@ package com.example.llamadroid.service
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.os.Binder
 import android.os.IBinder
@@ -106,8 +105,14 @@ class VideoGenerationService : Service() {
                         VideoGenerationState.Error(getString(R.string.video_gen_error_already_running))
                     )
                 } else {
-                    ensureForegroundTask()
-                    startGeneration(config, useDistributedStateHolder)
+                    val foregroundError = ensureForegroundTask()
+                    if (foregroundError != null) {
+                        VideoGenerationStateHolder.getForMode(config.mode, useDistributedStateHolder)
+                            .updateState(VideoGenerationState.Error(foregroundError))
+                        stopSelf()
+                    } else {
+                        startGeneration(config, useDistributedStateHolder)
+                    }
                 }
             }
             ACTION_CANCEL_MODE -> {
@@ -133,8 +138,14 @@ class VideoGenerationService : Service() {
                         VideoGenerationState.Error(getString(R.string.video_gen_error_already_running))
                     )
                 } else {
-                    ensureForegroundTask()
-                    startConversionRetry(metadata, useDistributedStateHolder)
+                    val foregroundError = ensureForegroundTask()
+                    if (foregroundError != null) {
+                        VideoGenerationStateHolder.getForMode(metadata.modeEnum, useDistributedStateHolder)
+                            .updateState(VideoGenerationState.Error(foregroundError))
+                        stopSelf()
+                    } else {
+                        startConversionRetry(metadata, useDistributedStateHolder)
+                    }
                 }
             }
         }
@@ -451,6 +462,8 @@ class VideoGenerationService : Service() {
                 totalStepsHint = config.steps.coerceAtLeast(1),
                 startedAtMs = SystemClock.elapsedRealtime()
             )
+            val nativeOutputBuffer = SdNativeOutputBuffer()
+            val nativePhaseTracker = VideoNativePhaseTracker()
             val progressPublishMutex = Mutex()
             var pendingSamplingSnapshot: SdProgressSnapshot? = null
             var lastSamplingProgressPublishMs = 0L
@@ -499,6 +512,8 @@ class VideoGenerationService : Service() {
             suspend fun handleSamplingOutput(text: String, appendToLog: Boolean) {
                 markActivity(config.mode, "generating")
                 stageTimings = stageTimings.withLine(text)
+                nativePhaseTracker.update(text)
+                if (appendToLog) nativeOutputBuffer.add(text)
                 if (appendToLog) {
                     DebugLog.log("[VIDEO-GEN] $text")
                 }
@@ -542,8 +557,16 @@ class VideoGenerationService : Service() {
                     publishPendingSamplingSnapshot(force = true)
                     modeProcesses.remove(lane)
                     if (sdExitCode != 0) {
-                        throw IllegalStateException(
-                            getString(R.string.video_gen_error_generation_failed, sdExitCode)
+                        val acceleratorBinary = DeviceAcceleration.isAcceleratorBinary(candidateBinary)
+                        throw videoNativeFailureException(
+                            classifyVideoNativeFailure(
+                                exitCode = sdExitCode,
+                                recentOutput = nativeOutputBuffer.snapshot(),
+                                phase = nativePhaseTracker.phase,
+                                acceleratorBinary = acceleratorBinary
+                            ),
+                            usedTae = videoRunUsesTae(config),
+                            acceleratorBinary = acceleratorBinary
                         )
                     }
                 }
@@ -554,6 +577,7 @@ class VideoGenerationService : Service() {
             return resolveGeneratedNativeOutput(outputAvi)
         }
 
+        verifyVideoTaeBeforeLaunch(config)
         val generatedAvi = runCatching {
             runSamplingWithBinary(sdBinary, binaryCapabilities)
         }.getOrElse { error ->
@@ -1051,16 +1075,24 @@ class VideoGenerationService : Service() {
         }
     }
 
-    private fun ensureForegroundTask() {
-        if (notificationTaskId != null) return
+    /** Returns null once the service is foreground, otherwise the localized failure message. */
+    private fun ensureForegroundTask(): String? {
+        if (notificationTaskId != null) return null
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.VIDEO_GEN,
             getString(R.string.video_gen_title),
             cancellationOwner = UnifiedNotificationManager.CancellationOwner.VIDEO
         )
+        val started = ForegroundStart.start(this, taskId, notification, ForegroundServiceTypes.MEDIA_PROCESSING)
+        if (started is ForegroundStart.Result.Failed) {
+            val message = ForegroundStart.failureMessage(this, started.reason, getString(R.string.video_gen_title))
+            UnifiedNotificationManager.failTask(taskId, message)
+            recordServiceBreadcrumb("foreground_start_failed", started.reason.name)
+            return message
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
         recordServiceBreadcrumb("foreground_started", "taskId=$taskId")
+        return null
     }
 
     private fun updateNotification(text: String, progress: Float) {
@@ -1304,7 +1336,7 @@ class VideoGenerationService : Service() {
     override fun onTimeout(startId: Int, fgsType: Int) {
         if (!isMediaProcessingForegroundTimeout(
                 fgsType,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING
+                ForegroundServiceTypes.MEDIA_PROCESSING
             )
         ) {
             super.onTimeout(startId, fgsType)

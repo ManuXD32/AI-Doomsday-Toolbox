@@ -11,6 +11,7 @@ import android.media.MediaRecorder
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.res.stringResource
@@ -64,6 +65,7 @@ import com.example.llamadroid.onnx.resolveSupertonicVoices
 import com.example.llamadroid.onnx.supertonicLanguageCodes
 import com.example.llamadroid.service.*
 import com.example.llamadroid.ui.components.AppTaskActionFooter
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppAdvancedSection
 import com.example.llamadroid.ui.components.DraftIntTextField
 import com.example.llamadroid.ui.components.DraftLongTextField
@@ -627,48 +629,25 @@ fun WorkflowsScreen(navController: NavController) {
             }
         )
     }
-    
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .imePadding()
-            .background(MaterialTheme.colorScheme.background)
-    ) {
-        // Header
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(
-                onClick = {
-                    if (selectedWorkflow == 0) navController.popBackStack()
-                    else selectedWorkflow = 0
-                },
-                modifier = Modifier.walkthroughTarget("back")
-            ) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
-            }
-                Text(
-                    when (selectedWorkflow) {
-                    1 -> stringResource(R.string.workflow_transcribe_summary)
-                    2 -> stringResource(R.string.workflow_txt2img_upscale)
-                    3 -> stringResource(R.string.workflow_manga_translation)
-                    4 -> stringResource(R.string.workflow_media_translate_title)
-                    5 -> stringResource(R.string.workflow_subtitle_translate_title)
-                    6 -> stringResource(R.string.workflow_video_interpolate_upscale)
-                    else -> stringResource(R.string.workflow_title)
-                },
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.titleLarge.copy(
-                    fontWeight = FontWeight.Bold
-                ),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
+
+    BackHandler(enabled = selectedWorkflow != 0) { selectedWorkflow = 0 }
+
+    AppScreenScaffold(
+        title = when (selectedWorkflow) {
+            1 -> stringResource(R.string.workflow_transcribe_summary)
+            2 -> stringResource(R.string.workflow_txt2img_upscale)
+            3 -> stringResource(R.string.workflow_manga_translation)
+            4 -> stringResource(R.string.workflow_media_translate_title)
+            5 -> stringResource(R.string.workflow_subtitle_translate_title)
+            6 -> stringResource(R.string.workflow_video_interpolate_upscale)
+            else -> stringResource(R.string.workflow_title)
+        },
+        onBack = {
+            if (selectedWorkflow == 0) navController.popBackStack()
+            else selectedWorkflow = 0
         }
+    ) { _ ->
+    Column(modifier = Modifier.fillMaxSize()) {
         
         Column(
             modifier = Modifier
@@ -1406,6 +1385,7 @@ fun WorkflowsScreen(navController: NavController) {
             Spacer(modifier = Modifier.height(16.dp))
         }
     }
+    }
 
     BatteryOptimizationWarningDialog(state = batteryGateState)
     
@@ -2090,6 +2070,7 @@ private fun MangaTranslationWorkflowContent(
                         label = stringResource(R.string.workflow_manga_ocr_model),
                         models = ocrModels,
                         selectedPath = translationOptions.llamaOcr.modelPath,
+                        onOpenModels = onOpenModels,
                         onSelected = { model ->
                             val selection = MangaTranslationSupport.resolveOcrModelSelection(model, projectors)
                             ocrModelRef = MangaTranslationSupport.modelRef(model)
@@ -2108,6 +2089,7 @@ private fun MangaTranslationWorkflowContent(
                         label = stringResource(R.string.workflow_manga_projector_model),
                         models = projectors,
                         selectedPath = translationOptions.llamaOcr.mmprojPath,
+                        onOpenModels = onOpenModels,
                         onSelected = { model ->
                             ocrProjectorRef = MangaTranslationSupport.modelRef(model)
                             translationOptions = translationOptions.copy(
@@ -2692,6 +2674,7 @@ private fun MangaInstalledModelPicker(
     label: String,
     models: List<ModelEntity>,
     selectedPath: String?,
+    onOpenModels: () -> Unit,
     onSelected: (ModelEntity) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -2746,6 +2729,9 @@ private fun MangaInstalledModelPicker(
                 )
             }
         }
+    }
+    TextButton(onClick = onOpenModels) {
+        Text(stringResource(R.string.common_get_models_link), maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -6753,7 +6739,7 @@ private fun Txt2ImgUpscaleWorkflowContent(
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     // Show result image with badge
-                    val bitmap = remember(path) { BitmapFactory.decodeFile(path)?.asImageBitmap() }
+                    val bitmap = com.example.llamadroid.ui.components.rememberSampledImageBitmap(path)
                     bitmap?.let {
                         Box {
                             Image(

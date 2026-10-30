@@ -4197,7 +4197,14 @@ object Migrations {
         MIGRATION_121_122,
         HarnessMigration.MIGRATION_122_123,
         GenerationQueueMigration.MIGRATION_123_124,
-        GenerationQueueMigration.MIGRATION_124_125
+        GenerationQueueMigration.MIGRATION_124_125,
+        EasyLlamaChatMigration.MIGRATION_125_126,
+        HarnessInstallationsMigration.MIGRATION_126_127,
+        NativeChatServerBindingMigration.MIGRATION_127_128,
+        NativeChatDelegationMigration.MIGRATION_128_129,
+        ImageDescriptionMigration.MIGRATION_129_130,
+        NativeChatStepsMigration.MIGRATION_130_131,
+        EasyModeMigration.MIGRATION_131_132
     )
     /**
      * Check if a column exists in a table.

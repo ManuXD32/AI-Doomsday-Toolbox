@@ -35,6 +35,9 @@ import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.ui.ai.applyKeyboardAwareInsetsFix
 import com.example.llamadroid.ui.ai.injectKeyboardViewportFix
 import com.example.llamadroid.ui.ai.llama.RunningLlamaChatServerUi
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.llamadroid.ui.ai.llama.servers.ServerPickerSheet
+import com.example.llamadroid.ui.ai.llama.servers.ServerRegistryViewModel
 import com.example.llamadroid.ui.ai.llama.rememberRunningLlamaChatServers
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
@@ -99,7 +102,7 @@ fun ChatScreen(
 
     fun openServerManager() {
         showServerPicker = false
-        navController.navigate(Screen.LlamaServers.route) {
+        navController.navigate(Screen.Chats.route) {
             launchSingleTop = true
         }
     }
@@ -327,7 +330,7 @@ fun ChatScreen(
                         }
                     }
                     IconButton(onClick = { loadChatUrl() }) {
-                        Icon(Icons.Default.Refresh, stringResource(R.string.chat_clear))
+                        Icon(Icons.Default.Refresh, stringResource(R.string.action_refresh))
                     }
                 }
             )
@@ -391,12 +394,17 @@ fun ChatScreen(
     }
 
     if (showServerPicker) {
-        ChatServerPickerDialog(
-            servers = runningChatServers,
+        val serverRegistry: ServerRegistryViewModel = viewModel()
+        ServerPickerSheet(
+            viewModel = serverRegistry,
+            selectedRowId = null,
             selectedPort = selectedServerPort,
+            title = stringResource(R.string.chat_servers_picker_title),
+            runningOnly = true,
             onDismiss = { showServerPicker = false },
             onManageServers = ::openServerManager,
-            onServerSelected = { server ->
+            onPick = {},
+            onPickServer = { server ->
                 fileUploadCallback?.onReceiveValue(null)
                 fileUploadCallback = null
                 selectedServerPort = server.port
@@ -404,113 +412,4 @@ fun ChatScreen(
             }
         )
     }
-}
-
-@Composable
-internal fun ChatServerPickerDialog(
-    servers: List<RunningLlamaChatServerUi>,
-    selectedPort: Int,
-    onDismiss: () -> Unit,
-    onManageServers: () -> Unit,
-    onServerSelected: (RunningLlamaChatServerUi) -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Text(
-                text = stringResource(R.string.chat_servers_picker_title),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-        },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 360.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text = stringResource(R.string.chat_servers_picker_hint),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 4,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = stringResource(R.string.chat_servers_picker_current_port, selectedPort),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2
-                )
-                if (servers.isEmpty()) {
-                    Text(
-                        text = stringResource(R.string.chat_servers_no_running),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                } else {
-                    servers.forEach { server ->
-                        val isSelected = server.port == selectedPort
-                        OutlinedButton(
-                            onClick = { onServerSelected(server) },
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
-                                    Text(
-                                        text = server.name,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = stringResource(R.string.chat_servers_port, server.port),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                                if (isSelected) {
-                                    Icon(
-                                        Icons.Default.Check,
-                                        contentDescription = stringResource(R.string.chat_servers_selected)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                OutlinedButton(
-                    onClick = onManageServers,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
-                ) {
-                    Icon(Icons.Default.Settings, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = stringResource(R.string.chat_servers_manage),
-                        maxLines = 2
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) {
-                Text(
-                    text = stringResource(R.string.action_cancel)
-                )
-            }
-        }
-    )
 }

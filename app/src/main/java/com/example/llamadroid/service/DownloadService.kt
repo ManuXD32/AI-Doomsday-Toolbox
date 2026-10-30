@@ -288,12 +288,26 @@ class DownloadService : Service() {
                     explicitRetry
                 )
                 
+                val downloadTitle = filename ?: downloadId ?: getString(R.string.models_tab_downloading)
                 val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
                     UnifiedNotificationManager.TaskType.DOWNLOAD,
-                    filename ?: downloadId ?: getString(R.string.models_tab_downloading)
+                    downloadTitle
                 )
+                val startResult = ForegroundStart.start(
+                    this,
+                    taskId,
+                    notification,
+                    ForegroundServiceTypes.DATA_SYNC
+                )
+                if (startResult is ForegroundStart.Result.Failed) {
+                    UnifiedNotificationManager.failTask(
+                        taskId,
+                        ForegroundStart.failureMessage(this, startResult.reason, downloadTitle)
+                    )
+                    stopSelf(startId)
+                    return START_NOT_STICKY
+                }
                 notificationTaskId = taskId
-                startForeground(taskId, notification)
                 startDownloadInternal(
                     url = url,
                     destPath = destPath,
@@ -1764,6 +1778,10 @@ class DownloadService : Service() {
         }
     }
     
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        ForegroundTimeoutSupport.handle(this, fgsType)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         serviceScope.cancel()

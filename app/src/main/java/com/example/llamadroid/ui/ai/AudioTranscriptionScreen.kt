@@ -22,7 +22,6 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -492,28 +491,16 @@ fun AudioTranscriptionScreen(navController: NavController) {
         }
     }
     
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.whisper_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                navigationIcon = {
-                    IconButton(
-                        onClick = { navController.popBackStack() },
-                        modifier = Modifier.walkthroughTarget("back")
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
-                    }
-                },
-                actions = {
-                    com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
-                    IconButton(onClick = { navController.navigate("settings_whisper") }) {
-                        Icon(
-                            Icons.Default.Settings,
-                            contentDescription = stringResource(R.string.whisper_settings_title)
-                        )
-                    }
-                }
-            )
+    com.example.llamadroid.ui.components.AppScreenScaffold(
+        title = stringResource(R.string.whisper_title),
+        onBack = { navController.popBackStack() },
+        actions = {
+            IconButton(onClick = { navController.navigate("settings_whisper") }) {
+                Icon(
+                    Icons.Default.Settings,
+                    contentDescription = stringResource(R.string.whisper_settings_title)
+                )
+            }
         }
     ) { padding ->
         Column(

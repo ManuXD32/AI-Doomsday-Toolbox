@@ -11,10 +11,19 @@ import kotlinx.coroutines.flow.Flow
 /** Persistence boundary for app-managed Debian/PRoot environments. */
 @Dao
 interface AgentProotEnvironmentDao {
-    @Query("SELECT * FROM agent_proot_environments ORDER BY updatedAt DESC, displayName COLLATE NOCASE ASC")
+    /** Generic Debian catalog; Harness installations are exposed by HarnessInstallationDao. */
+    @Query(
+        "SELECT * FROM agent_proot_environments " +
+            "WHERE purpose = '${HarnessInstallationPurpose.LEGACY}' " +
+            "ORDER BY updatedAt DESC, displayName COLLATE NOCASE ASC"
+    )
     fun observeAll(): Flow<List<AgentProotEnvironmentEntity>>
 
-    @Query("SELECT * FROM agent_proot_environments ORDER BY updatedAt DESC, displayName COLLATE NOCASE ASC")
+    @Query(
+        "SELECT * FROM agent_proot_environments " +
+            "WHERE purpose = '${HarnessInstallationPurpose.LEGACY}' " +
+            "ORDER BY updatedAt DESC, displayName COLLATE NOCASE ASC"
+    )
     suspend fun getAll(): List<AgentProotEnvironmentEntity>
 
     @Query("SELECT * FROM agent_proot_environments WHERE id = :id LIMIT 1")

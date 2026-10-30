@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="pixel_theme_style_title">Visual style</string>
+    <string name="pixel_theme_style_desc">Pick the overall look of the app. Light and dark mode work with both styles.</string>
+    <string name="pixel_theme_style_soft_studio">Soft Studio</string>
+    <string name="pixel_theme_style_pixel">Pixel retro</string>
+    <string name="pixel_theme_variant_title">Pixel palette</string>
+    <string name="pixel_theme_variant_selected">Selected</string>
+    <string name="pixel_theme_variant_candy_pop">Candy Pop</string>
+    <string name="pixel_theme_variant_candy_pop_desc">Pastel pink, mint and lavender.</string>
+    <string name="pixel_theme_variant_pocket_lcd">Pocket LCD</string>
+    <string name="pixel_theme_variant_pocket_lcd_desc">Classic handheld greens.</string>
+    <string name="pixel_theme_variant_arcade_night">Arcade Night</string>
+    <string name="pixel_theme_variant_arcade_night_desc">Navy with neon cyan, magenta and yellow.</string>
+    <string name="pixel_theme_variant_sunset_cartridge">Sunset Cartridge</string>
+    <string name="pixel_theme_variant_sunset_cartridge_desc">Warm orange, purple and cream.</string>
+    <string name="pixel_theme_dynamic_color_disabled">Dynamic colors are not used with the Pixel retro style.</string>
+    <string name="pixel_theme_font_title">Pixel font for titles</string>
+    <string name="pixel_theme_font_desc">Off keeps the standard, easier-to-read font.</string>
+</resources>

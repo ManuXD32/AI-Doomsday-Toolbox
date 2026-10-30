@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="spe_title_new">Nuevo servidor local</string>
+    <string name="spe_title_edit">Editar servidor</string>
+    <string name="spe_subtitle">Todas las opciones de lanzamiento del LLM, guardadas solo con este servidor.</string>
+    <string name="spe_section_title">Servidor</string>
+    <string name="spe_intro">Todas las opciones de abajo pertenecen solo a este servidor. Cambiarlas nunca afecta a otros servidores ni a los ajustes globales del LLM.</string>
+    <string name="spe_loading">Cargando ajustes del servidor…</string>
+    <string name="spe_save_and_restart">Guardar y reiniciar</string>
+    <string name="spe_discard_title">¿Descartar los cambios?</string>
+    <string name="spe_discard_message">Tus cambios en este servidor no se han guardado.</string>
+    <string name="spe_discard_confirm">Descartar</string>
+    <string name="spe_discard_keep">Seguir editando</string>
+    <string name="server_defaults_title">Valores iniciales de los chats nuevos</string>
+    <string name="server_defaults_desc">Los chats nuevos creados con este servidor empiezan con estas opciones: los mismos ajustes que tiene cualquier chat. Cada chat guarda su propia copia y puede cambiarla después.</string>
+</resources>

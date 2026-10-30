@@ -1,5 +1,6 @@
 package com.example.llamadroid.ui.agent.harness
 
+import com.example.llamadroid.harness.HarnessModelLabels
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -120,7 +121,11 @@ internal fun harnessTextFrom(value: JsonElement): String = when (value) {
         .mapNotNull { key -> value[key] }
         .map(::harnessTextFrom)
         .firstOrNull { it.isNotBlank() }
-        ?: value.entries.joinToString(" ") { (key, child) -> "$key: ${harnessTextFrom(child)}" }.trim()
+        ?: value.entries.joinToString(" ") { (key, child) ->
+            val text = harnessTextFrom(child)
+            // Show the managed card's model name instead of its bare wire id (llama:3).
+            "$key: ${if (key == "model" && child is JsonPrimitive) HarnessModelLabels.display(text) else text}"
+        }.trim()
 }
 
 internal fun harnessProjectFromCwd(cwd: String?): String {

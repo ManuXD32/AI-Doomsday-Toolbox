@@ -265,8 +265,19 @@ class LlamaService : Service() {
             UnifiedNotificationManager.TaskType.LLAMA_SERVER,
             "LLM Server"
         )
+        val startResult = ForegroundStart.start(
+            this,
+            taskId,
+            notification,
+            ForegroundServiceTypes.SPECIAL_USE
+        )
+        if (startResult is ForegroundStart.Result.Failed) {
+            val message = ForegroundStart.failureMessage(this, startResult.reason, "LLM Server")
+            UnifiedNotificationManager.failTask(taskId, message)
+            // The callers' existing catch path reports the start failure and cleans up.
+            throw IllegalStateException(message, startResult.cause)
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
     }
 
     private fun effectiveBinaryForPath(binaryPath: String): EffectiveLlamaBinary {
@@ -1418,7 +1429,7 @@ class LlamaService : Service() {
                         kvOffloadMode = effectiveKvOffloadModeForBinary(candidateBinary, candidateConfig.kvOffloadMode)
                     )
                     return if (commandTemplate.isNullOrBlank()) {
-                        processController.getCommand(
+                        val built = processController.getCommand(
                             candidateBinary,
                             effectiveConfig,
                             processController.probeBinaryCapabilities(
@@ -1427,6 +1438,12 @@ class LlamaService : Service() {
                                 workingDirectory = videoRuntime?.root ?: filesDir
                             )
                         )
+                        // An explicit EXTRA_PORT wins over any --port/-p in global custom flags.
+                        if (portOverride != null && !isMasterProfile && !isOcrProfile) {
+                            normalizeManagedLlamaServerPortArgs(built, effectiveConfig.port)
+                        } else {
+                            built
+                        }
                     } else {
                         DebugLog.log("LlamaService: Rendering command template for ${if (isMasterProfile) "master" else "general"} profile")
                         val rendered = processController.renderCommandTemplate(

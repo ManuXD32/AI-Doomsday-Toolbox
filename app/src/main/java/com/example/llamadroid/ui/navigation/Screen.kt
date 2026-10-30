@@ -5,7 +5,7 @@ sealed class Screen(val route: String) {
     object Walkthrough : Screen("walkthrough")
     object Library : Screen("library")
     object AllMediaGallery : Screen("all_media_gallery") // Shared saved image and video gallery
-    object ModelManager : Screen("models")       // Now goes to Model Hub
+    object Chats : Screen("chats")               // Chats root: native chats + Agent projects
     object Chat : Screen("chat")
     object Settings : Screen("settings")
     object Stats : Screen("settings_stats")
@@ -84,7 +84,6 @@ sealed class Screen(val route: String) {
     object PDFSummary : Screen("pdf_summary")
     object PDFSettings : Screen("settings_pdf")
     // Kiwix screens
-    object KiwixHub : Screen("kiwix_hub")        // Landing page for Kiwix
     object ZimManager : Screen("zim_manager")    // ZIM file management
     object KiwixViewer : Screen("kiwix_viewer")  // WebView for Kiwix content
     // Distributed inference screens
@@ -124,10 +123,12 @@ sealed class Screen(val route: String) {
     object FastsdGallery : Screen("fastsd_gallery")           // FastSD CPU generated images gallery
     // AI Agent screens
     object Agent : Screen("agent") {                           // AI coding agent chat
-        fun createRoute(conversationId: Long, harnessTab: String? = null): String {
+        /** [returnToCaller]: back from the conversation pops to the opener (e.g. the native chat) instead of the project list. */
+        fun createRoute(conversationId: Long, harnessTab: String? = null, returnToCaller: Boolean = false): String {
             require(conversationId > 0L) { "Conversation ID must be positive" }
             require(harnessTab == null || harnessTab in setOf("conversation", "requests", "plan"))
-            return "$route?conversationId=$conversationId" + (harnessTab?.let { "&harnessTab=$it" } ?: "")
+            return "$route?conversationId=$conversationId" + (harnessTab?.let { "&harnessTab=$it" } ?: "") +
+                (if (returnToCaller) "&returnToCaller=true" else "")
         }
     }
     object AgentWorkspace : Screen("agent_workspace")          // Agent workspace file manager
@@ -160,14 +161,17 @@ sealed class Screen(val route: String) {
     object OllamaManager : Screen("ollama_manager")            // Ollama server/model manager
     
     // Native Llama Client
-    object LlamaServers : Screen("llama_servers")        // Managed llama.cpp server cards
-    object LlamaServerList : Screen("llama_server_list")       // Server management (entry point)
     object LlamaChatList : Screen("llama_chat_list") {         // Chat history
         const val folderRoute = "llama_chat_list/folder/{folderId}"
         fun createFolderRoute(folderId: Long): String = "llama_chat_list/folder/$folderId"
     }
     object LlamaScheduler : Screen("llama_scheduler")           // Scheduled native Llama tasks
+    /** Full-screen local server editor; open it with `serverProfileEditorRoute(cardId, modelPath)`. */
+    object ServerProfileEditor : Screen("server_profile_editor?cardId={cardId}&modelPath={modelPath}")
     object LlamaChat : Screen("llama_chat/{chatId}/{serverId}") { // Chat interface
         fun createRoute(chatId: Long, serverId: Long): String = "llama_chat/$chatId/$serverId"
+    }
+    object NativeChatDelegation : Screen("native_chat_delegation/{chatId}") { // DeepSeek delegation viewer
+        fun createRoute(chatId: Long): String = "native_chat_delegation/$chatId"
     }
 }

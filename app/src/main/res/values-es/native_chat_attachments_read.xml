@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="native_chat_attachments_read_status">Leyendo archivo adjunto…</string>
+    <string name="native_chat_attachments_adding_file">Añadiendo archivo…</string>
+</resources>

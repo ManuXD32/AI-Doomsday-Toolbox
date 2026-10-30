@@ -59,7 +59,7 @@ data class GuestMount(
  * operations never follow directory symlinks. The limits also protect a phone from accidentally
  * archiving an entire image.
  */
-class HarnessRootfsFileStore(private val mounts: List<GuestMount>) {
+class HarnessRootfsFileStore(private val mounts: List<GuestMount>, private val runtimeContext: Context? = null) {
     constructor(root: Path) : this(listOf(GuestMount("/", root)))
 
     /**
@@ -68,7 +68,7 @@ class HarnessRootfsFileStore(private val mounts: List<GuestMount>) {
      * guest path in the UI while resolving it here makes `/workspace/projects` usable while the
      * Harness is either running or stopped.
      */
-    constructor(context: Context) : this(defaultGuestMounts(context))
+    constructor(context: Context) : this(defaultGuestMounts(context), context)
 
     private data class MountState(
         val definition: GuestMount,
@@ -404,7 +404,9 @@ class HarnessRootfsFileStore(private val mounts: List<GuestMount>) {
     private suspend fun <T> operation(block: suspend () -> T): Result<T> = withContext(Dispatchers.IO) {
         try {
             currentCoroutineContext().ensureActive()
-            Result.success(block())
+            Result.success(if (runtimeContext == null) block() else
+                HarnessInstallationManager.get(runtimeContext).withFiles(
+                    com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(runtimeContext), block))
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Throwable) {
@@ -724,7 +726,7 @@ class HarnessRootfsFileStore(private val mounts: List<GuestMount>) {
 }
 
 private fun defaultGuestMounts(context: Context): List<GuestMount> {
-    val environmentId = HarnessRuntimePaths.SHARED_ENVIRONMENT_ID
+    val environmentId = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context)
     val rootfs = AgentProotEnvironmentPaths.rootfs(context, environmentId).toPath()
     val runtime = HarnessRuntimePaths.runtimeRoot(context, environmentId).apply { mkdirs() }
     val temp = java.io.File(runtime, "tmp").apply { mkdirs() }.toPath()

@@ -136,7 +136,7 @@ internal object FeatureMediaModelGuides {
                     id = "models.import",
                     titleRes = R.string.feature_recipe_models_import_title,
                     previewKey = "model_library",
-                    route = "models",
+                    route = "model_hub",
                     targetId = "models.import",
                     eventId = "models.import",
                     orientBodyRes = R.string.feature_step_models_import_orient_body,

@@ -8,8 +8,9 @@ import kotlin.math.absoluteValue
 import kotlin.random.Random
 
 object NightArenaGenerator {
-    private val ResetTime: LocalTime = LocalTime.of(21, 0)
+    /** The arena opens at 20:00 and the night key rolls at the same moment: exactly one run per night. */
     private val OpensAt: LocalTime = LocalTime.of(20, 0)
+    private val ResetTime: LocalTime = OpensAt
     private val ClosesAt: LocalTime = LocalTime.of(9, 0)
     private val NodePositions = listOf(
         0.18f to 0.70f,
@@ -70,6 +71,12 @@ object NightArenaGenerator {
         return AdventureGateCatalog.WORLD_COUNT * AdventureGateCatalog.PHASES_PER_WORLD
     }
 
+    /** The night's omen (one of the 7 battle modifiers), derived from the seed so it never touches the level rolls. */
+    fun omenForNight(petId: String, nightKey: String): AdventureGateBattleModifier {
+        val omens = AdventureGateBattleModifier.entries
+        return omens[(stableSeed(petId, nightKey) % omens.size).toInt()]
+    }
+
     fun generateRun(
         petId: String,
         nightKey: String,
@@ -79,6 +86,7 @@ object NightArenaGenerator {
         val seed = stableSeed(petId, nightKey)
         val rng = Random(seed)
         val levelCount = rng.nextInt(3, 6)
+        val omen = omenForNight(petId, nightKey)
         val safeDepth = sourceDepth.coerceIn(1, AdventureGateCatalog.WORLD_COUNT * AdventureGateCatalog.PHASES_PER_WORLD)
         val levels = (1..levelCount).map { levelIndex ->
             generateLevel(
@@ -87,7 +95,8 @@ object NightArenaGenerator {
                     .coerceAtMost(AdventureGateCatalog.WORLD_COUNT * AdventureGateCatalog.PHASES_PER_WORLD),
                 rng = rng,
                 seed = seed + levelIndex * 1_003L,
-                node = NodePositions[levelIndex - 1]
+                node = NodePositions[levelIndex - 1],
+                omen = omen
             )
         }
         return AdventureGateNightArenaRun(
@@ -112,7 +121,8 @@ object NightArenaGenerator {
             coinRewardOverride = level.coinReward,
             potionRewardChanceOverride = level.potionRewardChancePercent,
             sourceDepth = level.sourceAdventureDepth,
-            nightArenaLevelId = level.id
+            nightArenaLevelId = level.id,
+            modifier = level.omen
         )
     }
 
@@ -121,7 +131,8 @@ object NightArenaGenerator {
         sourceDepth: Int,
         rng: Random,
         seed: Long,
-        node: Pair<Float, Float>
+        node: Pair<Float, Float>,
+        omen: AdventureGateBattleModifier
     ): NightArenaLevel {
         val worldIndex = ((sourceDepth - 1) / AdventureGateCatalog.PHASES_PER_WORLD)
             .coerceIn(0, AdventureGateCatalog.WORLD_COUNT - 1)
@@ -163,7 +174,8 @@ object NightArenaGenerator {
             potionRewardChancePercent = (18 + sourceDepth / 4 + index).coerceIn(18, 42),
             seed = seed,
             nodeX = node.first,
-            nodeY = node.second
+            nodeY = node.second,
+            omen = omen
         )
     }
 

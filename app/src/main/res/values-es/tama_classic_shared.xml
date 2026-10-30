@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_action_unavailable">Esa acción no está disponible ahora.</string>
+    <string name="tama_action_crop_not_food">Los cultivos crudos como el trigo, el arroz, la calabaza y las flores no son comida. Véndelos o úsalos para otra cosa.</string>
+    <string name="tama_action_already_awake">%1$s ya está despierto.</string>
+    <string name="tama_action_use_one_item">Usa un objeto cada vez.</string>
+    <string name="tama_hatch_effect_description">Animación de eclosión de la mascota</string>
+    <string name="tama_place_home">Casa de la mascota</string>
+    <string name="tama_place_shop">Tienda de Mimi</string>
+    <string name="tama_place_park">Parque</string>
+    <string name="tama_place_hospital">Clínica de Pip</string>
+    <string name="tama_place_arcade">Arcade de Pixel Pop</string>
+    <string name="tama_place_alchemist">Tienda de alquimia de Bruma</string>
+    <string name="tama_place_school">Escuela de Trébol</string>
+    <string name="tama_place_workplace">Lugar de trabajo</string>
+    <string name="tama_place_farm">Granja de Patch</string>
+    <string name="tama_place_boxing_gym">Gimnasio de boxeo</string>
+    <string name="tama_place_dungeon">Entrada de mazmorra</string>
+    <string name="tama_place_adventure_gate">Puerta de aventuras</string>
+    <string name="tama_place_farm_barn">Granero de la granja</string>
+    <string name="tama_place_landmark">Lugar emblemático</string>
+    <string name="tama_arcade_session_starting">Iniciando una sesión guardada del arcade…</string>
+    <string name="tama_arcade_session_recovery">Hay una sesión guardada del arcade que debe resolverse antes de iniciar otra partida.</string>
+    <string name="tama_arcade_session_cancel">Cancelar sesión guardada</string>
+    <string name="tama_arcade_session_cancel_failed">La sesión guardada del arcade sigue activa. Inténtalo de nuevo.</string>
+    <string name="tama_arcade_reward_submitting">Guardando el resultado del arcade…</string>
+    <string name="tama_arcade_reward_queued">Resultado del arcade en cola</string>
+    <string name="tama_arcade_reward_saved">Recompensa del arcade guardada</string>
+    <string name="tama_arcade_reward_rejected">Resultado del arcade rechazado</string>
+    <string name="tama_arcade_reward_failed">No se pudo guardar la recompensa del arcade</string>
+    <string name="tama_arcade_reward_unavailable">Las recompensas del arcade no están disponibles</string>
+    <string name="tama_arcade_session_pending">El resultado del arcade todavía se está guardando.</string>
+    <string name="tama_arcade_session_retry">Reintentar sesión</string>
+    <string name="tama_arcade_session_recovery_unavailable">La recuperación de la sesión del arcade no está disponible temporalmente. Inténtalo de nuevo.</string>
+    <string name="tama_arcade_session_ack_failed">No se pudo cerrar el resultado del arcade. Inténtalo de nuevo.</string>
+    <string name="tama_chat_gameplay_limits">El chat sirve para conversar. Usa los cuidados para alimentar, jugar o atender a tu mascota.</string>
+</resources>

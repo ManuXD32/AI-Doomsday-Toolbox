@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_model_failure_unstable_message">The model server stopped repeatedly during harness requests, so new requests are paused for a few minutes. Use a smaller context or model, or close other apps, then try again.</string>
+    <string name="native_chat_delegation_viewer_model_error_title">Last model error</string>
+    <string name="native_chat_delegation_viewer_model_error_unstable">The model server keeps stopping, so new requests are paused for a few minutes. Try a smaller context or model, or close other apps.</string>
+    <string name="native_chat_delegation_viewer_model_error_context">The prompt is larger than the model\'s context.</string>
+    <string name="native_chat_delegation_viewer_model_error_died">The model server stopped during generation.</string>
+    <string name="native_chat_delegation_viewer_model_error_died_oom">The model server stopped during generation — likely out of memory (free RAM %1$s).</string>
+    <string name="native_chat_delegation_viewer_model_error_rejected">llama-server rejected the request.</string>
+    <string name="native_chat_delegation_viewer_model_error_rejected_body">llama-server rejected the request: %1$s</string>
+    <string name="native_chat_delegation_viewer_model_error_connection">Connection to the model server was lost.</string>
+    <string name="native_chat_delegation_viewer_model_error_adapter">The app could not read the model\'s response stream.</string>
+    <string name="native_chat_delegation_viewer_model_error_litert">The on-device LiteRT model worker crashed.</string>
+    <string name="native_chat_delegation_viewer_model_error_other">The model request failed.</string>
+    <string name="native_chat_delegation_viewer_model_error_details">Code %1$s · %2$s elapsed · prompt tokens: %3$s · generated: %4$s</string>
+    <string name="native_chat_delegation_viewer_model_error_copy">Copy diagnostics</string>
+    <string name="native_chat_delegation_viewer_model_error_copied">Diagnostics copied</string>
+</resources>

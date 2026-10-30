@@ -25,7 +25,12 @@ data class SdBinaryCapabilities(
     val supportedModes: Set<String> = emptySet(),
     val allowAll: Boolean = false,
     /** New stable-diffusion.cpp parses `--auto-fit` as an `on|off` value. */
-    val autoFitRequiresValue: Boolean = false
+    val autoFitRequiresValue: Boolean = false,
+    /**
+     * stable-diffusion.cpp 2988060+ interprets `--vae-tile-size` in image pixels (default 256x256);
+     * older builds used latent units (default 32x32). The app stores latent units.
+     */
+    val vaeTileSizeInImagePixels: Boolean = false
 ) {
     fun supports(flag: String): Boolean = allowAll || supportedFlags.contains(flag)
 
@@ -37,7 +42,8 @@ data class SdBinaryCapabilities(
         val ALLOW_ALL = SdBinaryCapabilities(
             emptySet(),
             allowAll = true,
-            autoFitRequiresValue = true
+            autoFitRequiresValue = true,
+            vaeTileSizeInImagePixels = true
         )
     }
 }
@@ -84,7 +90,60 @@ fun parseSdBinaryCapabilities(helpText: String): SdBinaryCapabilities {
             .map { it.value.lowercase(Locale.US) }
             .toSet(),
         autoFitRequiresValue = autoFitHelp.contains("on|off", ignoreCase = true) ||
-            autoFitHelp.contains("on or off", ignoreCase = true)
+            autoFitHelp.contains("on or off", ignoreCase = true),
+        vaeTileSizeInImagePixels = vaeTileSizeHelpUsesImagePixels(helpText)
+    )
+}
+
+/** VAE spatial downscale factor between image pixels and latent units for every supported VAE. */
+private const val SD_VAE_SPATIAL_SCALE = 8
+
+private fun vaeTileSizeHelpUsesImagePixels(helpText: String): Boolean {
+    val option = Regex("(?m)^\\s*--vae-tile-size\\b").find(helpText) ?: return false
+    val optionEnd = helpText.indexOf('\n', option.range.last).takeIf { it >= 0 }?.plus(1) ?: helpText.length
+    val nextOption = Regex("(?m)^\\s*(?:-[^\\s,]+\\s*,\\s*)?--[A-Za-z0-9][A-Za-z0-9_-]*\\b")
+        .find(helpText, optionEnd)
+    val block = helpText.substring(option.range.first, nextOption?.range?.first ?: helpText.length)
+        .replace(Regex("\\s+"), " ")
+    // Old help reads "in latent units, not image pixels"; only the new one counts tiles in pixels.
+    return block.contains("image pixels", ignoreCase = true) && !block.contains("latent units", ignoreCase = true)
+}
+
+/**
+ * Converts the app's stored latent-unit tile size (`32`, `32x32`) to the unit the probed binary
+ * expects. Values that do not parse are passed through so native validation reports them.
+ */
+internal fun sdVaeTileSizeForBinary(stored: String, capabilities: SdBinaryCapabilities?): String {
+    // Unknown capabilities mean the bundled binary, which counts tiles in image pixels since 1011.
+    if (capabilities != null && !capabilities.vaeTileSizeInImagePixels) return stored
+    val parts = stored.trim().lowercase(Locale.US).split('x')
+    val numbers = parts.map { it.trim().toIntOrNull() ?: return stored }
+    if (numbers.size !in 1..2 || numbers.any { it <= 0 }) return stored
+    return numbers.joinToString("x") { (it * SD_VAE_SPATIAL_SCALE).toString() }
+}
+
+/**
+ * stable-diffusion.cpp f0aac52+ defaults flash attention and direct convolutions to `auto`
+ * (probed per backend) and deprecates `--diffusion-fa`/`--diffusion-conv-direct`/`--vae-conv-direct`.
+ * Binaries whose help lists `--flash-attn` and `--conv-direct` get explicit values so the
+ * app's on/off toggles behave as they did on older builds. Unknown or older binaries keep the legacy flags.
+ */
+internal fun sdUsesModuleAccelerationFlags(capabilities: SdBinaryCapabilities?): Boolean =
+    capabilities != null && capabilities.supports("--flash-attn") && capabilities.supports("--conv-direct")
+
+internal fun sdModuleAccelerationArgs(
+    diffusionFlashAttn: Boolean,
+    diffusionConvDirect: Boolean,
+    vaeConvDirect: Boolean
+): List<String> {
+    val conv = buildList {
+        add("off")
+        if (diffusionConvDirect) add("diffusion=on,controlnet=on")
+        if (vaeConvDirect) add("vae=on")
+    }.joinToString(",")
+    return listOf(
+        "--flash-attn", if (diffusionFlashAttn) "off,diffusion=on" else "off",
+        "--conv-direct", conv
     )
 }
 
@@ -472,19 +531,25 @@ fun buildSdCommandArgs(
         requireFlag("--flow-shift")
         args.addAll(listOf("--flow-shift", config.flowShift.toString()))
     }
-    if (config.diffusionFa && spec.supportsDiffusionFa) {
-        requireFlag("--diffusion-fa")
-        args.add("--diffusion-fa")
-    }
-    if (config.diffusionConvDirect) {
-        requireFlag("--diffusion-conv-direct")
-        args.add("--diffusion-conv-direct")
+    val diffusionFaOn = config.diffusionFa && spec.supportsDiffusionFa
+    val vaeConvDirectOn = config.vaeConvDirect && spec.supportsVaeConvDirect
+    if (sdUsesModuleAccelerationFlags(binaryCapabilities)) {
+        args.addAll(sdModuleAccelerationArgs(diffusionFaOn, config.diffusionConvDirect, vaeConvDirectOn))
+    } else {
+        if (diffusionFaOn) {
+            requireFlag("--diffusion-fa")
+            args.add("--diffusion-fa")
+        }
+        if (config.diffusionConvDirect) {
+            requireFlag("--diffusion-conv-direct")
+            args.add("--diffusion-conv-direct")
+        }
     }
     if (config.mmap && spec.supportsMmap) {
         requireFlag("--mmap")
         args.add("--mmap")
     }
-    if (config.vaeConvDirect && spec.supportsVaeConvDirect) {
+    if (!sdUsesModuleAccelerationFlags(binaryCapabilities) && vaeConvDirectOn) {
         requireFlag("--vae-conv-direct")
         args.add("--vae-conv-direct")
     }
@@ -566,7 +631,7 @@ fun buildSdCommandArgs(
         args.addAll(listOf("--vae-tile-overlap", config.vaeTileOverlap.toString()))
         if (config.vaeTileSize.isNotBlank()) {
             requireFlag("--vae-tile-size")
-            args.addAll(listOf("--vae-tile-size", config.vaeTileSize))
+            args.addAll(listOf("--vae-tile-size", sdVaeTileSizeForBinary(config.vaeTileSize, binaryCapabilities)))
         }
         if (config.vaeRelativeTileSize.isNotBlank()) {
             requireFlag("--vae-relative-tile-size")

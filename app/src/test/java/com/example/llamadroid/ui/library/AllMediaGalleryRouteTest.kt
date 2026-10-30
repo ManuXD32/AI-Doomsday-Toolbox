@@ -10,14 +10,14 @@ import org.junit.Test
 
 class AllMediaGalleryRouteTest {
     @Test
-    fun `all media route is registered as a Library feature`() {
+    fun `all media route is registered as a Tools feature`() {
         val guide = FeatureGuideCatalog.forRoute(Screen.AllMediaGallery.route)
 
         assertEquals("media_gallery", guide?.id)
         assertEquals(Screen.AllMediaGallery.route, guide?.route)
         assertTrue(FeatureGuideCatalog.recipe("media_gallery.browse")?.steps?.size == 3)
         assertEquals(
-            AppRootDestination.Library,
+            AppRootDestination.Tools,
             AppRoutePresentations.forRoute(Screen.AllMediaGallery.route).parent
         )
     }

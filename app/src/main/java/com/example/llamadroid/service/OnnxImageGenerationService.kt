@@ -71,6 +71,9 @@ private data class OnnxSharedExportResult(
 )
 
 class OnnxImageGenerationStateHolder {
+    /** True while the holder's current/last run was started by Easy mode (set from the config). */
+    val easyOrigin = kotlinx.coroutines.flow.MutableStateFlow(false)
+
     private val _state = MutableStateFlow<OnnxImageGenerationState>(OnnxImageGenerationState.Idle)
     val state: StateFlow<OnnxImageGenerationState> = _state
 
@@ -105,7 +108,7 @@ class OnnxImageGenerationStateHolder {
                 _progress.value = 1f
                 _status.value = ""
                 val file = File(newState.outputPath)
-                if (file.exists()) {
+                if (file.exists() && !easyOrigin.value) {
                     _generatedImages.value = (_generatedImages.value + file)
                         .distinctBy { it.absolutePath }
                         .sortedByDescending { it.lastModified() }
@@ -170,19 +173,33 @@ class OnnxImageGenerationService : Service() {
                     OnnxImageGenerationStateStore.imageGen.updateState(
                         OnnxImageGenerationState.Error(getString(R.string.onnx_image_gen_error_missing_config))
                     )
+                    stopIfIdle(startId)
                 } else if (generationJob?.isActive == true) {
                     DebugLog.log("[OnnxImageGenerationService] Ignoring duplicate start while generation is active")
                     OnnxImageGenerationStateStore.imageGen.updateState(
                         OnnxImageGenerationState.Error(getString(R.string.onnx_image_gen_error_already_running))
                     )
                 } else {
-                    ensureForeground(config.modelName)
-                    startGeneration(config)
+                    if (ensureForeground(config.modelName)) startGeneration(config)
                 }
             }
-            ACTION_CANCEL_GENERATION -> if (intent.matchesNotificationTask(notificationTaskId)) cancelGeneration()
+            ACTION_CANCEL_GENERATION -> {
+                if (intent.matchesNotificationTask(notificationTaskId)) cancelGeneration()
+                stopIfIdle(startId)
+            }
+            else -> stopIfIdle(startId)
         }
         return START_NOT_STICKY
+    }
+
+    /** A fresh start-foreground-service launch that never reached startForeground must stop itself. */
+    private fun stopIfIdle(startId: Int) {
+        if (generationJob?.isActive == true) return
+        stopSelfResult(startId)
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        ForegroundTimeoutSupport.handle(this, fgsType)
     }
 
     override fun onDestroy() {
@@ -191,18 +208,28 @@ class OnnxImageGenerationService : Service() {
         notificationTaskId?.let { UnifiedNotificationManager.dismissTask(it) }
     }
 
-    private fun ensureForeground(title: String) {
+    private fun ensureForeground(title: String): Boolean {
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.IMAGE_GEN,
             title,
             cancellationOwner = UnifiedNotificationManager.CancellationOwner.ONNX_IMAGE
         )
+        val started = ForegroundStart.start(this, taskId, notification, ForegroundServiceTypes.MEDIA_PROCESSING)
+        if (started is ForegroundStart.Result.Failed) {
+            UnifiedNotificationManager.failTask(taskId, ForegroundStart.failureMessage(this, started, title))
+            OnnxImageGenerationStateStore.imageGen.updateState(
+                OnnxImageGenerationState.Error(ForegroundStart.failureMessage(this, started, title))
+            )
+            stopSelf()
+            return false
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
+        return true
     }
 
     private fun startGeneration(config: OnnxImageGenConfig) {
         val holder = OnnxImageGenerationStateStore.imageGen
+        holder.easyOrigin.value = config.easyMode
         holder.updatePrompt(config.prompt)
         holder.updateState(OnnxImageGenerationState.Preparing(getString(R.string.onnx_image_gen_status_preparing)))
         lastProgressStatus = null

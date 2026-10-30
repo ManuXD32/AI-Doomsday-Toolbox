@@ -1,6 +1,7 @@
 package com.example.llamadroid.ui.models
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -98,9 +99,11 @@ internal fun ModelManagerShortcutRow(
         val index = modelManagerShortcuts.indexOfFirst { it.walkthroughTarget == target }
         if (index >= 0) listState.animateScrollToItem(index)
     }
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        ModelFamilyChipRow(navController, family)
         LazyRow(
             state = listState,
-            modifier = modifier.testTag("model_manager_shortcuts")
+            modifier = Modifier.testTag("model_manager_shortcuts")
                 .fillMaxWidth()
                 .heightIn(min = 48.dp),
             contentPadding = PaddingValues(horizontal = 0.dp),
@@ -135,4 +138,5 @@ internal fun ModelManagerShortcutRow(
                 }
             }
         }
+    }
 }

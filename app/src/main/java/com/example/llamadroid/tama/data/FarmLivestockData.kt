@@ -25,7 +25,7 @@ enum class FarmLivestockType(
         id = "barn",
         buyPrice = 500,
         productInventoryId = "produce_milk",
-        productSellPrice = 50,
+        productSellPrice = 27,
         productionIntervalMs = 6L * HOUR_MS,
         perAnimalStorageCap = 5,
         maxAnimals = 8,
@@ -38,7 +38,7 @@ enum class FarmLivestockType(
         id = "coop",
         buyPrice = 300,
         productInventoryId = "produce_egg",
-        productSellPrice = 20,
+        productSellPrice = 16,
         productionIntervalMs = 4L * HOUR_MS,
         perAnimalStorageCap = 6,
         maxAnimals = 8,
@@ -169,6 +169,7 @@ object FarmShopCatalog {
         "fertilizer" -> FERTILIZER_BUY_PRICE
         FARM_FUEL_BUCKET_ID -> 1
         "water" -> 5
+        FARM_WOOD_ID, FARM_STONE_ID -> FarmMaterialPrices.buyPrice(inventoryId) ?: 5
         else -> 5
     }
 

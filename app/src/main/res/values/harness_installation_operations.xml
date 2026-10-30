@@ -1,0 +1,17 @@
+<resources>
+    <string name="harness_installation_default_name">Default runtime</string>
+    <string name="harness_installation_working">Managing AI agent runtimes…</string>
+    <string name="harness_installation_phase_stopping">Stopping runtime services…</string>
+    <string name="harness_installation_phase_preparing">Preparing runtime files…</string>
+    <string name="harness_installation_phase_validating">Checking archive integrity…</string>
+    <string name="harness_installation_phase_saving">Saving runtime changes…</string>
+    <string name="harness_installation_phase_complete">Completed</string>
+    <string name="harness_installation_phase_cancelled">Cancelled. Recover interrupted installations with Retry.</string>
+    <string name="harness_installation_not_installed">Ready to install when started</string>
+    <string name="harness_installation_phase_rootfs_check">Reading and verifying Debian…</string>
+    <string name="harness_installation_phase_rootfs_extract">Installing Debian files. This can take several minutes…</string>
+    <string name="harness_installation_phase_payload_check">Reading and verifying the agent…</string>
+    <string name="harness_installation_phase_payload_extract">Installing agent files…</string>
+    <string name="harness_installation_phase_failed">Operation failed. Retry to continue.</string>
+    <string name="harness_installation_phase_catalog">Updating the runtime catalog…</string>
+</resources>

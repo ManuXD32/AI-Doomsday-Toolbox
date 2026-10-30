@@ -94,12 +94,21 @@ class WhisperService : Service() {
             UnifiedNotificationManager.TaskType.TRANSCRIPTION,
             "Whisper Transcription"
         )
+        val started = ForegroundStart.start(this, taskId, notification, ForegroundServiceTypes.DATA_SYNC)
+        if (started is ForegroundStart.Result.Failed) {
+            UnifiedNotificationManager.failTask(taskId, ForegroundStart.failureMessage(this, started.reason, "Whisper Transcription"))
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
         WakeLockManager.acquire(applicationContext, "WhisperService")
         return START_NOT_STICKY
     }
     
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        ForegroundTimeoutSupport.handle(this, fgsType)
+    }
+
     override fun onDestroy() {
         cancellationRequested = true
         currentProcess?.destroyForcibly()
@@ -260,6 +269,8 @@ class WhisperService : Service() {
                         throw IllegalStateException(
                             if (whisperExitCodeIndicatesMissingModel(exitCode)) {
                                 getString(R.string.whisper_error_no_model)
+                            } else if (whisperExitCodeIndicatesInputFailure(exitCode)) {
+                                getString(R.string.whisper_error_input_failed)
                             } else {
                                 getString(R.string.whisper_error_failed_with_exit_code, exitCode)
                             }

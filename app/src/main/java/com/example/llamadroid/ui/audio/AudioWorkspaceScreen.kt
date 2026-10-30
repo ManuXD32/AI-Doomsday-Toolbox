@@ -107,7 +107,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation.NavController
 import com.example.llamadroid.R
 import com.example.llamadroid.ui.components.AppChromeDefaults
-import com.example.llamadroid.ui.components.AppPageHeader
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppSectionCard
 import com.example.llamadroid.ui.components.AppStateKind
@@ -445,18 +444,23 @@ private fun SpeechWorkspace(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
-            AppPageHeader(
-                title = stringResource(R.string.audio_workspace_speech_title),
-                subtitle = stringResource(R.string.audio_workspace_speech_subtitle),
-                eyebrow = stringResource(R.string.audio_workspace_local_badge),
-                trailing = {
-                    AssistChip(
-                        onClick = onManageModels,
-                        label = { Text(stringResource(R.string.audio_workspace_models)) },
-                        leadingIcon = { Icon(Icons.Default.Memory, contentDescription = null) }
-                    )
-                }
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = stringResource(R.string.audio_workspace_speech_subtitle),
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                AssistChip(
+                    onClick = onManageModels,
+                    label = { Text(stringResource(R.string.audio_workspace_models), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    leadingIcon = { Icon(Icons.Default.Memory, contentDescription = null) }
+                )
+            }
         }
         item {
             GuidedStepRow(
@@ -1158,10 +1162,10 @@ private fun VoicesWorkspace(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
-            AppPageHeader(
-                title = stringResource(R.string.audio_workspace_voices_title),
-                subtitle = stringResource(R.string.audio_workspace_voices_subtitle),
-                eyebrow = stringResource(R.string.audio_workspace_local_badge)
+            Text(
+                text = stringResource(R.string.audio_workspace_voices_subtitle),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
         item {

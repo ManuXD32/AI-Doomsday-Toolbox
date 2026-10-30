@@ -54,17 +54,16 @@ import com.example.llamadroid.data.model.DownloadProgressHolder
 import com.example.llamadroid.data.model.progressForDownloadTask
 import com.example.llamadroid.data.model.stableDownloadTaskOrder
 import com.example.llamadroid.data.model.FileInfo
-import com.example.llamadroid.data.model.ModelLibraryManager
+import com.example.llamadroid.data.model.SdAdetailerImportException
+import com.example.llamadroid.data.model.importSDModel
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.data.model.library.ModelFamily
-import com.example.llamadroid.data.model.library.ModelClassificationPolicy
-import com.example.llamadroid.data.model.library.ModelClassificationSource
 import com.example.llamadroid.data.model.library.ModelSourceDraft
 import com.example.llamadroid.data.model.library.ModelSourceRepository
 import com.example.llamadroid.data.model.isStableDiffusionArtifact
 import com.example.llamadroid.ui.models.ModelManagerShortcutRow
 import com.example.llamadroid.ui.components.DownloadTaskSection
-import com.example.llamadroid.ui.components.AppPageBackground
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.sd.SdModelFamily
 import com.example.llamadroid.sd.SdComponentRole
 import com.example.llamadroid.sd.SdArtifactInspection
@@ -80,9 +79,7 @@ import com.example.llamadroid.sd.matchesSdFamily
 import com.example.llamadroid.sd.parseSdCompatProfiles
 import com.example.llamadroid.sd.sdFamilyEnum
 import com.example.llamadroid.sd.sdArtifactInspection
-import com.example.llamadroid.sd.withSdArtifactInspection
 import com.example.llamadroid.data.model.SdArtifactValidationException
-import com.example.llamadroid.service.smokeCheckSdADetailerDetector
 import com.example.llamadroid.service.DownloadService
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.util.FormatUtils
@@ -90,15 +87,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-
-/**
- * Recommended SD model search queries
- */
-data class SDSearchSuggestion(
-    val name: String,
-    val query: String,
-    val capabilities: List<SDCapability>
-)
 
 data class PendingSdDiscoverDownload(
     val repoId: String,
@@ -188,7 +176,6 @@ private data class SdInspectionRowState(
     val detail: String? = null
 )
 
-private class SdAdetailerImportException : Exception()
 
 /**
  * SDModelsScreen - Manage Stable Diffusion models with HuggingFace search
@@ -291,106 +278,6 @@ fun SDModelsScreen(navController: NavController) {
     
     // Selected tab: 0 = Installed, 1 = Downloading, 2 = Discover
     var selectedTab by remember { mutableIntStateOf(0) }
-    
-    // Search suggestions organized by model type and RAM requirements
-    val suggestions = remember {
-        listOf(
-            // === Classic SD Models ===
-            SDSearchSuggestion(
-                "SD 1.5 GGUF (4GB+)",
-                "stable-diffusion gguf q4",
-                listOf(SDCapability.TXT2IMG, SDCapability.IMG2IMG)
-            ),
-            SDSearchSuggestion(
-                "SDXL GGUF (8GB+)",
-                "sdxl gguf q4",
-                listOf(SDCapability.TXT2IMG, SDCapability.IMG2IMG)
-            ),
-            
-            SDSearchSuggestion(
-                resources.getString(R.string.sd_models_ip_adapter_search_sd15),
-                "h94/IP-Adapter",
-                listOf(SDCapability.TXT2IMG, SDCapability.IMG2IMG)
-            ),
-            SDSearchSuggestion(
-                resources.getString(R.string.sd_models_ip_adapter_search_sdxl),
-                "h94/IP-Adapter SDXL",
-                listOf(SDCapability.TXT2IMG, SDCapability.IMG2IMG)
-            ),
-            SDSearchSuggestion(
-                resources.getString(R.string.sd_models_clip_vision_search),
-                "CLIP-Vision safetensors",
-                listOf(SDCapability.TXT2IMG, SDCapability.IMG2IMG)
-            ),
-
-            // === Standalone Diffusion Models ===
-            SDSearchSuggestion(
-                "FLUX Schnell Q4 (8GB+)",
-                "city96/FLUX.1-schnell-gguf",
-                listOf(SDCapability.FLUX, SDCapability.TXT2IMG)
-            ),
-            SDSearchSuggestion(
-                "FLUX Dev Q4 (12GB+)",
-                "city96/FLUX.1-dev-gguf",
-                listOf(SDCapability.FLUX, SDCapability.TXT2IMG)
-            ),
-            SDSearchSuggestion(
-                "FLUX Lite (4GB+)",
-                "flux gguf q2 q3",
-                listOf(SDCapability.FLUX, SDCapability.TXT2IMG)
-            ),
-            
-            // === FLUX Text Encoders ===
-            SDSearchSuggestion(
-                "T5-XXL Encoder (GGUF)",
-                "city96/t5-v1_1-xxl-encoder-gguf",
-                listOf(SDCapability.FLUX)
-            ),
-            SDSearchSuggestion(
-                "CLIP-L Encoder (GGUF)",
-                "zer0int/CLIP-GmP-ViT-L-14",
-                listOf(SDCapability.FLUX)
-            ),
-            
-            // === VAE Models ===
-            SDSearchSuggestion(
-                "FLUX VAE (GGUF)",
-                "city96/FLUX.1-dev-gguf",
-                listOf(SDCapability.FLUX)
-            ),
-            SDSearchSuggestion(
-                "SDXL VAE",
-                "sdxl-vae-fp16-fix",
-                listOf(SDCapability.TXT2IMG, SDCapability.IMG2IMG)
-            ),
-            
-            // === ControlNet ===
-            SDSearchSuggestion(
-                "ControlNet GGUF",
-                "controlnet gguf",
-                listOf(SDCapability.IMG2IMG)
-            ),
-            
-            // === LoRA ===
-            SDSearchSuggestion(
-                "LoRA Models",
-                "lora safetensors",
-                listOf(SDCapability.TXT2IMG, SDCapability.IMG2IMG)
-            ),
-            
-            // === Upscalers ===
-            SDSearchSuggestion(
-                "ESRGAN 4x Upscaler",
-                "esrgan 4x",
-                listOf(SDCapability.UPSCALE)
-            ),
-            SDSearchSuggestion(
-                "RealESRGAN Anime",
-                "realesrgan anime",
-                listOf(SDCapability.UPSCALE)
-            )
-        )
-    }
     
     // Search function. Accept the requested text explicitly so tapping a suggestion does not
     // race Compose state propagation and accidentally submit the previous field value.
@@ -716,31 +603,10 @@ fun SDModelsScreen(navController: NavController) {
         )
     }
     
-    AppPageBackground {
-        Column(modifier = Modifier.fillMaxSize()) {
-        // Header
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(
-                onClick = { navController.popBackStack() },
-                modifier = Modifier.walkthroughTarget("back")
-            ) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
-            }
-            Text(
-                stringResource(R.string.sd_models_title),
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.headlineSmall.copy(
-                    fontWeight = FontWeight.Bold
-                ),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
+    AppScreenScaffold(
+        title = stringResource(R.string.sd_models_title),
+        onBack = { navController.popBackStack() },
+        actions = {
             IconButton(
                 onClick = { navController.navigate("${Screen.ModelSources.route}?family=SD&tab=download") },
                 modifier = Modifier.walkthroughTarget("models.download")
@@ -748,7 +614,8 @@ fun SDModelsScreen(navController: NavController) {
                 Icon(Icons.Default.Download, contentDescription = stringResource(R.string.model_library_custom_download_heading))
             }
         }
-
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
         ModelManagerShortcutRow(
             navController = navController,
             family = ModelFamily.SD,
@@ -822,11 +689,6 @@ fun SDModelsScreen(navController: NavController) {
                 onSearch = doSearch,
                 isSearching = isSearching,
                 searchResults = searchResults,
-                suggestions = suggestions,
-                onSuggestionClick = { query ->
-                    updateSearchQuery(query)
-                    launchSearch(query)
-                },
                 onRepoClick = loadRepoFiles
             )
         }
@@ -1100,7 +962,9 @@ private fun InstalledSDModelsTab(
                             pendingInspectionError = null
                             if (inspectionSelectionType == selectedImportType) {
                                 detectedSelectionType(inspection.detectedRole)?.let { detectedType ->
-                                    selectedImportType = detectedType
+                                    if (shouldApplyDetectedSelection(selectedImportType, detectedType, inspection.confidence)) {
+                                        selectedImportType = detectedType
+                                    }
                                 }
                             }
                             inspection.detectedFamily?.let { detectedFamily ->
@@ -1647,6 +1511,10 @@ private fun InstalledSDModelsTab(
         com.example.llamadroid.ui.models.LocalModelSourceRequest provides onSourceRequest
     ) {
     Box(modifier = Modifier.fillMaxSize()) {
+        var baseExpanded by rememberSaveable { mutableStateOf(true) }
+        var componentsExpanded by rememberSaveable { mutableStateOf(false) }
+        var adaptersExpanded by rememberSaveable { mutableStateOf(false) }
+        var upscalersExpanded by rememberSaveable { mutableStateOf(false) }
         val hasAnyModels = checkpoints.isNotEmpty() || upscalers.isNotEmpty() ||
             diffusionModels.isNotEmpty() || clipLModels.isNotEmpty() || clipGModels.isNotEmpty() ||
             t5xxlModels.isNotEmpty() || taeModels.isNotEmpty() || vaeModels.isNotEmpty() ||
@@ -1706,8 +1574,10 @@ private fun InstalledSDModelsTab(
                     )
                 }
 
+                sdInstalledGroupHeader("base", R.string.ui_sd_group_base, checkpoints.size + diffusionModels.size, baseExpanded) { baseExpanded = !baseExpanded }
+
                 // SD/SDXL Checkpoints
-                if (checkpoints.isNotEmpty()) {
+                if (checkpoints.isNotEmpty() && baseExpanded) {
                     item {
                         Text(
                             stringResource(R.string.sd_models_checkpoints_label, checkpoints.size),
@@ -1737,7 +1607,7 @@ private fun InstalledSDModelsTab(
                 }
                 
                 // Standalone Diffusion Models
-                if (diffusionModels.isNotEmpty()) {
+                if (diffusionModels.isNotEmpty() && baseExpanded) {
                     item {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
@@ -1767,8 +1637,10 @@ private fun InstalledSDModelsTab(
                     }
                 }
                 
+                sdInstalledGroupHeader("components", R.string.ui_sd_group_components, clipLModels.size + t5xxlModels.size + clipGModels.size + taeModels.size + vaeModels.size + clipVisionModels.size + additionalModels.size, componentsExpanded) { componentsExpanded = !componentsExpanded }
+
                 // CLIP-L Encoders
-                if (clipLModels.isNotEmpty()) {
+                if (clipLModels.isNotEmpty() && componentsExpanded) {
                     item {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
@@ -1799,7 +1671,7 @@ private fun InstalledSDModelsTab(
                 }
                 
                 // T5-XXL Encoders
-                if (t5xxlModels.isNotEmpty()) {
+                if (t5xxlModels.isNotEmpty() && componentsExpanded) {
                     item {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
@@ -1829,7 +1701,7 @@ private fun InstalledSDModelsTab(
                     }
                 }
 
-                if (clipGModels.isNotEmpty()) {
+                if (clipGModels.isNotEmpty() && componentsExpanded) {
                     item {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
@@ -1862,7 +1734,7 @@ private fun InstalledSDModelsTab(
                     }
                 }
 
-                if (taeModels.isNotEmpty()) {
+                if (taeModels.isNotEmpty() && componentsExpanded) {
                     item {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
@@ -1896,7 +1768,7 @@ private fun InstalledSDModelsTab(
                 }
                 
                 // VAE Models
-                if (vaeModels.isNotEmpty()) {
+                if (vaeModels.isNotEmpty() && componentsExpanded) {
                     item {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
@@ -1926,102 +1798,7 @@ private fun InstalledSDModelsTab(
                     }
                 }
                 
-                // ControlNet Models
-                if (controlNetModels.isNotEmpty()) {
-                    item {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            stringResource(R.string.sd_models_controlnet_label, controlNetModels.size),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
-                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:SD_CONTROLNET"), loaded = storage.loaded)
-                    }
-                    items(controlNetModels) { model ->
-                        InstalledModelCard(
-                            model = model,
-                            capabilities = installedCapabilitiesFor(model),
-                            onDelete = { pendingDeleteModel = model },
-                            onExport = { exportModel(model) },
-                            onInspect = { inspectOne(model) },
-                            inspectionState = inspectionStates[model.path]
-                                ?: SdInspectionRowState(),
-                            onEdit = {
-                                editingModel = model
-                                editedFilename = model.filename
-                                selectedEditType = selectionTypeForModel(model)
-                                editSupportsTxt2Img = checkpointSupportsTxt2Img(model)
-                                editSupportsImg2Img = checkpointSupportsImg2Img(model)
-                            }
-                        )
-                    }
-                }
-                
-                // LoRA Models
-                if (loraModels.isNotEmpty()) {
-                    item {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            stringResource(R.string.sd_models_lora_label, loraModels.size),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
-                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:SD_LORA"), loaded = storage.loaded)
-                    }
-                    items(loraModels) { model ->
-                        InstalledModelCard(
-                            model = model,
-                            capabilities = installedCapabilitiesFor(model),
-                            onDelete = { pendingDeleteModel = model },
-                            onExport = { exportModel(model) },
-                            onInspect = { inspectOne(model) },
-                            inspectionState = inspectionStates[model.path]
-                                ?: SdInspectionRowState(),
-                            onEdit = {
-                                editingModel = model
-                                editedFilename = model.filename
-                                selectedEditType = selectionTypeForModel(model)
-                                editSupportsTxt2Img = checkpointSupportsTxt2Img(model)
-                                editSupportsImg2Img = checkpointSupportsImg2Img(model)
-                            }
-                        )
-                    }
-                }
-
-                if (photoMakerModels.isNotEmpty()) {
-                    item {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            stringResource(R.string.sd_models_photomaker_label, photoMakerModels.size),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
-                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:SD_PHOTOMAKER"), loaded = storage.loaded)
-                    }
-                    items(photoMakerModels) { model ->
-                        InstalledModelCard(
-                            model = model,
-                            capabilities = installedCapabilitiesFor(model),
-                            onDelete = { pendingDeleteModel = model },
-                            onExport = { exportModel(model) },
-                            onInspect = { inspectOne(model) },
-                            inspectionState = inspectionStates[model.path]
-                                ?: SdInspectionRowState(),
-                            onEdit = {
-                                editingModel = model
-                                editedFilename = model.filename
-                                selectedEditType = selectionTypeForModel(model)
-                                editSupportsTxt2Img = checkpointSupportsTxt2Img(model)
-                                editSupportsImg2Img = checkpointSupportsImg2Img(model)
-                                editSdFamily = model.sdFamilyEnum()
-                                editSdVariant = model.sdVariant.orEmpty()
-                                editCompatProfiles = model.sdCompatProfiles.orEmpty()
-                            }
-                        )
-                    }
-                }
-
-                if (clipVisionModels.isNotEmpty()) {
+                if (clipVisionModels.isNotEmpty() && componentsExpanded) {
                     item {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
@@ -2054,7 +1831,126 @@ private fun InstalledSDModelsTab(
                     }
                 }
 
-                if (ipAdapterModels.isNotEmpty()) {
+                if (componentsExpanded) additionalModels.groupBy { it.type }.forEach { (type, group) ->
+                    item(key = "component-${type.name}") {
+                        Text(stringResource(selectionTypeForModel(group.first()).labelRes),
+                            style = MaterialTheme.typography.titleMedium)
+                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:${type.name}"), loaded = storage.loaded)
+                    }
+                    items(group, key = { "component-${it.path}" }) { model ->
+                        InstalledModelCard(model = model, capabilities = installedCapabilitiesFor(model),
+                            onDelete = { pendingDeleteModel = model }, onExport = { exportModel(model) },
+                            onInspect = { inspectOne(model) },
+                            inspectionState = inspectionStates[model.path] ?: SdInspectionRowState(),
+                            onEdit = {
+                                editingModel = model
+                                editedFilename = model.filename
+                                selectedEditType = selectionTypeForModel(model)
+                                editSupportsTxt2Img = checkpointSupportsTxt2Img(model)
+                                editSupportsImg2Img = checkpointSupportsImg2Img(model)
+                                editCompatProfiles = model.sdCompatProfiles.orEmpty()
+                            })
+                    }
+                }
+
+                sdInstalledGroupHeader("adapters", R.string.ui_sd_group_adapters, controlNetModels.size + loraModels.size + photoMakerModels.size + ipAdapterModels.size, adaptersExpanded) { adaptersExpanded = !adaptersExpanded }
+
+                // ControlNet Models
+                if (controlNetModels.isNotEmpty() && adaptersExpanded) {
+                    item {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            stringResource(R.string.sd_models_controlnet_label, controlNetModels.size),
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:SD_CONTROLNET"), loaded = storage.loaded)
+                    }
+                    items(controlNetModels) { model ->
+                        InstalledModelCard(
+                            model = model,
+                            capabilities = installedCapabilitiesFor(model),
+                            onDelete = { pendingDeleteModel = model },
+                            onExport = { exportModel(model) },
+                            onInspect = { inspectOne(model) },
+                            inspectionState = inspectionStates[model.path]
+                                ?: SdInspectionRowState(),
+                            onEdit = {
+                                editingModel = model
+                                editedFilename = model.filename
+                                selectedEditType = selectionTypeForModel(model)
+                                editSupportsTxt2Img = checkpointSupportsTxt2Img(model)
+                                editSupportsImg2Img = checkpointSupportsImg2Img(model)
+                            }
+                        )
+                    }
+                }
+                
+                // LoRA Models
+                if (loraModels.isNotEmpty() && adaptersExpanded) {
+                    item {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            stringResource(R.string.sd_models_lora_label, loraModels.size),
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:SD_LORA"), loaded = storage.loaded)
+                    }
+                    items(loraModels) { model ->
+                        InstalledModelCard(
+                            model = model,
+                            capabilities = installedCapabilitiesFor(model),
+                            onDelete = { pendingDeleteModel = model },
+                            onExport = { exportModel(model) },
+                            onInspect = { inspectOne(model) },
+                            inspectionState = inspectionStates[model.path]
+                                ?: SdInspectionRowState(),
+                            onEdit = {
+                                editingModel = model
+                                editedFilename = model.filename
+                                selectedEditType = selectionTypeForModel(model)
+                                editSupportsTxt2Img = checkpointSupportsTxt2Img(model)
+                                editSupportsImg2Img = checkpointSupportsImg2Img(model)
+                            }
+                        )
+                    }
+                }
+
+                if (photoMakerModels.isNotEmpty() && adaptersExpanded) {
+                    item {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            stringResource(R.string.sd_models_photomaker_label, photoMakerModels.size),
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:SD_PHOTOMAKER"), loaded = storage.loaded)
+                    }
+                    items(photoMakerModels) { model ->
+                        InstalledModelCard(
+                            model = model,
+                            capabilities = installedCapabilitiesFor(model),
+                            onDelete = { pendingDeleteModel = model },
+                            onExport = { exportModel(model) },
+                            onInspect = { inspectOne(model) },
+                            inspectionState = inspectionStates[model.path]
+                                ?: SdInspectionRowState(),
+                            onEdit = {
+                                editingModel = model
+                                editedFilename = model.filename
+                                selectedEditType = selectionTypeForModel(model)
+                                editSupportsTxt2Img = checkpointSupportsTxt2Img(model)
+                                editSupportsImg2Img = checkpointSupportsImg2Img(model)
+                                editSdFamily = model.sdFamilyEnum()
+                                editSdVariant = model.sdVariant.orEmpty()
+                                editCompatProfiles = model.sdCompatProfiles.orEmpty()
+                            }
+                        )
+                    }
+                }
+
+                if (ipAdapterModels.isNotEmpty() && adaptersExpanded) {
                     item {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
@@ -2087,7 +1983,9 @@ private fun InstalledSDModelsTab(
                     }
                 }
 
-                if (adetailerModels.isNotEmpty()) {
+                sdInstalledGroupHeader("upscalers", R.string.ui_sd_group_upscalers, adetailerModels.size + upscalers.size, upscalersExpanded) { upscalersExpanded = !upscalersExpanded }
+
+                if (adetailerModels.isNotEmpty() && upscalersExpanded) {
                     item {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
@@ -2118,30 +2016,8 @@ private fun InstalledSDModelsTab(
                     }
                 }
                 
-                additionalModels.groupBy { it.type }.forEach { (type, group) ->
-                    item(key = "component-${type.name}") {
-                        Text(stringResource(selectionTypeForModel(group.first()).labelRes),
-                            style = MaterialTheme.typography.titleMedium)
-                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:${type.name}"), loaded = storage.loaded)
-                    }
-                    items(group, key = { "component-${it.path}" }) { model ->
-                        InstalledModelCard(model = model, capabilities = installedCapabilitiesFor(model),
-                            onDelete = { pendingDeleteModel = model }, onExport = { exportModel(model) },
-                            onInspect = { inspectOne(model) },
-                            inspectionState = inspectionStates[model.path] ?: SdInspectionRowState(),
-                            onEdit = {
-                                editingModel = model
-                                editedFilename = model.filename
-                                selectedEditType = selectionTypeForModel(model)
-                                editSupportsTxt2Img = checkpointSupportsTxt2Img(model)
-                                editSupportsImg2Img = checkpointSupportsImg2Img(model)
-                                editCompatProfiles = model.sdCompatProfiles.orEmpty()
-                            })
-                    }
-                }
-
                 // Upscalers
-                if (upscalers.isNotEmpty()) {
+                if (upscalers.isNotEmpty() && upscalersExpanded) {
                     item {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
@@ -2395,152 +2271,6 @@ private fun InstalledSDModelsTab(
     }
 }
 
-// Helper function to import SD model with progress
-private suspend fun importSDModel(
-    context: android.content.Context,
-    repository: ModelRepository,
-    uri: android.net.Uri,
-    filename: String,
-    type: ModelType,
-    capabilities: String?,
-    sdFamily: String? = null,
-    sdVariant: String? = null,
-    sdCompatProfiles: String? = null,
-    onProgress: (Float) -> Unit = {}
-) : Result<ModelEntity> {
-    var tempFile: File? = null
-    var targetFile: File? = null
-    var previousFile: File? = null
-    var replacementStarted = false
-    var databaseCommitted = false
-    return try {
-        val requestedFilename = filename.ifBlank { "imported_sd_model.safetensors" }
-        val targetFilename = ModelLibraryManager.canonicalFilename(requestedFilename)
-        val fileSize = context.contentResolver.openAssetFileDescriptor(uri, "r")?.use {
-            it.length
-        } ?: 0L
-        val runtimeDir = repository.getModelDir(type).apply { mkdirs() }
-        targetFile = File(runtimeDir, targetFilename)
-        tempFile = File(runtimeDir, "$targetFilename.importing")
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            tempFile!!.outputStream().use { output ->
-                if (fileSize > 0) {
-                    val buffer = ByteArray(8192)
-                    var bytesCopied = 0L
-                    var bytes = input.read(buffer)
-                    while (bytes >= 0) {
-                        output.write(buffer, 0, bytes)
-                        bytesCopied += bytes
-                        onProgress((bytesCopied.toFloat() / fileSize.toFloat()).coerceIn(0f, 1f))
-                        bytes = input.read(buffer)
-                    }
-                } else {
-                    input.copyTo(output)
-                }
-            }
-        } ?: error("Unable to open selected SD model")
-        // Inspect the completed temporary file before the final rename.  This
-        // is the trust boundary for local imports: malformed payloads and
-        // high-confidence role/family contradictions never become model rows.
-        onProgress(0.98f)
-        val inspection: SdArtifactInspection? = when (type) {
-            ModelType.SD_ADETAILER -> {
-                if (!smokeCheckSdADetailerDetector(tempFile!!)) {
-                    throw SdAdetailerImportException()
-                }
-                null
-            }
-            // These established SD assets are not SafeTensors/GGUF pipeline
-            // artifacts. Keep .pth/.pt opaque and leave validation to their
-            // consuming runtime instead of attempting to parse or unpickle.
-            ModelType.SD_UPSCALER,
-            ModelType.SD_TEXTUAL_INVERSION -> null
-            else -> repository.inspectSdArtifact(
-                file = tempFile!!,
-                configuredType = type,
-                configuredFamily = sdFamily,
-                force = true
-            )
-        }
-        val finalTargetFile = targetFile ?: error("Unable to prepare import destination")
-        val finalPath = finalTargetFile.absolutePath
-        val existing = AppDatabase.getDatabase(context).modelDao().getModelByFilename(targetFilename)
-        val modelEntity = ModelEntity(
-            filename = targetFilename,
-            path = finalPath,
-            sizeBytes = tempFile!!.length(),
-            type = type,
-            repoId = "custom-import/$targetFilename",
-            isDownloaded = false,
-            sdCapabilities = capabilities,
-            sdFamily = sdFamily,
-            sdVariant = sdVariant,
-            sdCompatProfiles = sdCompatProfiles,
-            classificationSource = ModelClassificationSource.USER_OVERRIDE.storedValue,
-            detectedClassificationJson = inspection?.toJson()
-                ?.let(ModelClassificationPolicy::boundedEvidence)
-        ).let { entity ->
-            inspection?.let { entity.withSdArtifactInspection(it) } ?: entity
-        }
-
-        // Keep an existing file recoverable if the database write fails.  The
-        // temporary source remains in place until the replacement is complete.
-        if (finalTargetFile.exists()) {
-            previousFile = File(runtimeDir, ".$targetFilename.previous-${System.currentTimeMillis()}")
-            check(finalTargetFile.renameTo(previousFile!!)) { "Unable to stage the existing model file" }
-        }
-        replacementStarted = true
-        replaceImportedSdFile(tempFile!!, finalTargetFile)
-        repository.insertModel(modelEntity)
-        databaseCommitted = true
-        if (existing != null && existing.path != finalPath) {
-            runCatching { repository.deleteModelArtifacts(existing) }
-                .onFailure { error ->
-                    com.example.llamadroid.util.DebugLog.log(
-                        "[SD-IMPORT] Existing artifact cleanup deferred: ${error.message}"
-                    )
-                }
-        }
-        previousFile?.delete()
-        onProgress(1f)
-        com.example.llamadroid.util.DebugLog.log("[SD-IMPORT] Imported: $targetFilename as ${type.name}")
-        Result.success(modelEntity)
-    } catch (e: Exception) {
-        // Do not delete the temporary artifact.  A failed inspection/import is
-        // recoverable and can be retried without selecting the source again.
-        if (replacementStarted && !databaseCommitted) {
-            previousFile?.takeIf { it.exists() }?.let { backup ->
-                targetFile?.let { target ->
-                    if (target.exists()) {
-                        val failedCopy = File(
-                            target.parentFile,
-                            "${target.name}.failed-${System.currentTimeMillis()}"
-                        )
-                        target.renameTo(failedCopy)
-                    }
-                    backup.renameTo(target)
-                }
-            }
-        }
-        com.example.llamadroid.util.DebugLog.log("[SD-IMPORT] Failed: ${e.message}")
-        Result.failure(e)
-    }
-}
-
-private fun replaceImportedSdFile(tempFile: File, targetFile: File) {
-    if (targetFile.exists()) {
-        targetFile.delete()
-    }
-    if (!tempFile.renameTo(targetFile)) {
-        tempFile.inputStream().use { input ->
-            targetFile.outputStream().use { output ->
-                input.copyTo(output)
-            }
-        }
-        tempFile.delete()
-    }
-}
-
 private data class SdMetadataDraft(
     val family: SdModelFamily? = null,
     val variant: String? = null,
@@ -2730,7 +2460,7 @@ private fun inferSelectionType(repoId: String, filename: String): SDModelSelecti
         SDModelSelectionType.PHOTOMAKER
     filename.contains("taesd") || filename.contains("tae") || repoId.contains("taesd") ->
         SDModelSelectionType.TAE
-    filename.contains("clip_g") || filename.contains("clip-g") || repoId.contains("clip-g") ->
+    isClipGName(filename) || isClipGName(repoId) ->
         SDModelSelectionType.CLIP_G
     // Start the bounded inspection with the generic standalone role for
     // architecture names that are not FLUX. A full SD3 checkpoint is
@@ -2764,6 +2494,34 @@ private fun inferSelectionType(repoId: String, filename: String): SDModelSelecti
     filename.contains("lora") || repoId.contains("lora") ->
         SDModelSelectionType.LORA
     else -> SDModelSelectionType.CHECKPOINT
+}
+
+/** CLIP-G / OpenCLIP bigG spellings (case-insensitive); "bigger" and similar words do not match. */
+private val CLIP_G_NAME_PATTERN = Regex(
+    "clip[_\\- ]?g(?![a-z])|open[_\\- ]?clip|big[_\\- ]g(?![a-z])|bigg(?![a-z])",
+    RegexOption.IGNORE_CASE
+)
+
+private fun isClipGName(value: String): Boolean = CLIP_G_NAME_PATTERN.containsMatchIn(value)
+
+/**
+ * A header-derived type may replace the filename guess, but low-confidence
+ * evidence (for example generic `text_model.*` tensors that default to CLIP-L)
+ * must never flip one text-encoder choice into the other.
+ */
+internal fun shouldApplyDetectedSelection(
+    current: SDModelSelectionType,
+    detected: SDModelSelectionType,
+    confidence: SdInspectionConfidence
+): Boolean {
+    if (current == detected) return true
+    val isClip = { type: SDModelSelectionType ->
+        type == SDModelSelectionType.CLIP_L || type == SDModelSelectionType.CLIP_G
+    }
+    if (isClip(current) && isClip(detected)) {
+        return confidence == SdInspectionConfidence.HIGH || confidence == SdInspectionConfidence.MEDIUM
+    }
+    return true
 }
 
 private fun isVideoGenHint(value: String): Boolean {
@@ -3791,8 +3549,6 @@ private fun DiscoverTab(
     onSearch: () -> Unit,
     isSearching: Boolean,
     searchResults: List<HfModelDto>,
-    suggestions: List<SDSearchSuggestion>,
-    onSuggestionClick: (String) -> Unit,
     onRepoClick: (String) -> Unit
 ) {
     Column(
@@ -3865,45 +3621,6 @@ private fun DiscoverTab(
                         result = result,
                         onClick = { onRepoClick(result.id) }
                     )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SuggestionCard(
-    suggestion: SDSearchSuggestion,
-    onClick: () -> Unit
-) {
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-        ) {
-            Text(
-                suggestion.name,
-                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                stringResource(R.string.sd_models_search_label, suggestion.query),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                suggestion.capabilities.forEach { cap ->
-                    CapabilityBadge(cap)
                 }
             }
         }
@@ -3985,5 +3702,41 @@ private fun CapabilityBadge(capability: SDCapability) {
             style = MaterialTheme.typography.labelSmall,
             color = androidx.compose.ui.graphics.Color(capability.color)
         )
+    }
+}
+
+/** Collapsible group header for the Installed tab; hidden when the group has no models. */
+private fun androidx.compose.foundation.lazy.LazyListScope.sdInstalledGroupHeader(
+    id: String,
+    titleRes: Int,
+    count: Int,
+    expanded: Boolean,
+    onToggle: () -> Unit
+) {
+    if (count == 0) return
+    item(key = "sd-group-$id") {
+        androidx.compose.material3.Card(
+            colors = androidx.compose.material3.CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f)
+            ),
+            modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "${stringResource(titleRes)} ($count)",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+                Icon(
+                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = null
+                )
+            }
+        }
     }
 }

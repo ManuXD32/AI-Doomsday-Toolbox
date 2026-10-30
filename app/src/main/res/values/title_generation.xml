@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="title_generation_title">Chat titles: generate with a model</string>
+    <string name="title_generation_description">Runs only when there is enough free RAM. It starts a small temporary server, writes the title after a reply and stops it. Chats you rename are never changed.</string>
+    <string name="title_generation_switch">Generate chat titles</string>
+    <string name="title_generation_model_label">Title model</string>
+    <string name="title_generation_model_none">No model selected</string>
+    <string name="title_generation_choose_model">Choose model</string>
+    <string name="title_generation_change_model">Change</string>
+    <string name="title_generation_picker_title">Title model</string>
+    <string name="title_generation_picker_empty">No downloaded language models found. Download one in the Model Manager first.</string>
+    <string name="title_generation_needs_model">Pick a model to enable title generation.</string>
+    <string name="title_generation_run_now">Title untitled chats now</string>
+    <string name="title_generation_status_idle">Ready. Untitled chats are titled after replies.</string>
+    <string name="title_generation_status_disabled">Title generation is turned off.</string>
+    <string name="title_generation_status_no_model">No title model selected.</string>
+    <string name="title_generation_status_waiting">Waiting for free RAM: needs %1$s GB, %2$s GB free.</string>
+    <string name="title_generation_status_generating">Writing a chat title…</string>
+    <string name="title_generation_status_generating_chat">Writing a title for \"%1$s\"…</string>
+    <string name="title_generation_status_error">Last attempt failed: %1$s</string>
+    <string name="title_generation_menu_item">Helper models…</string>
+    <string name="title_generation_sheet_close">Close</string>
+</resources>

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="easy_mode_shell_toggle_label">FÁCIL</string>
+    <string name="easy_mode_shell_toggle_description">Modo fácil</string>
+    <string name="easy_mode_shell_switch_to_dark">Cambiar a modo oscuro</string>
+    <string name="easy_mode_shell_switch_to_light">Cambiar a modo claro</string>
+    <string name="easy_mode_shell_settings">Ajustes del modo fácil</string>
+    <string name="easy_mode_shell_tab_chat">Chat</string>
+    <string name="easy_mode_shell_tab_images">Imágenes</string>
+    <string name="easy_mode_shell_tab_gallery">Galería</string>
+    <string name="easy_mode_shell_models_header">Modelos</string>
+    <string name="easy_mode_shell_models_chat">Modelos de chat</string>
+    <string name="easy_mode_shell_models_images">Modelos de imágenes</string>
+    <string name="easy_mode_shell_models_voice">Modelos de voz</string>
+    <string name="easy_mode_shell_show_intro">Mostrar de nuevo la introducción del modo fácil</string>
+    <string name="easy_mode_shell_all_settings">Todos los ajustes de la app</string>
+    <string name="easy_mode_shell_intro_title">¿Probar el modo fácil?</string>
+    <string name="easy_mode_shell_intro_body">El modo fácil es una versión más simple de la app: chatea con una IA, crea imágenes y explora tu galería. Elige los modelos y ajustes por ti.</string>
+    <string name="easy_mode_shell_intro_hint">Puedes cambiar en cualquier momento con el interruptor FÁCIL de la esquina superior izquierda, o en Ajustes.</string>
+    <string name="easy_mode_shell_intro_try">Probar modo fácil</string>
+    <string name="easy_mode_shell_intro_keep">Mantener modo avanzado</string>
+    <string name="easy_mode_shell_chat_with">Chateando con</string>
+    <string name="easy_mode_shell_chat_no_model">Aún no hay modelo elegido</string>
+    <string name="easy_mode_shell_change">Cambiar</string>
+    <string name="easy_mode_shell_new_chat">Nuevo chat</string>
+    <string name="easy_mode_shell_chat_starting">Iniciando…</string>
+    <string name="easy_mode_shell_recent_chats">Tus chats</string>
+    <string name="easy_mode_shell_no_chats">Aún no hay chats. Toca Nuevo chat para empezar uno.</string>
+    <string name="easy_mode_shell_setting_title">Modo fácil</string>
+    <string name="easy_mode_shell_setting_desc">Una app más simple con Chat, Imágenes y Galería. Tama, Organizador y Herramientas se ocultan mientras está activo.</string>
+    <string name="easy_mode_shell_new_chat_saved_server">Chat desde un servidor guardado</string>
+</resources>

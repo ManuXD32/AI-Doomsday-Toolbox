@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_server_web_ui">Web UI de llama.cpp</string>
+    <string name="chat_server_web_ui_description">Abrir %1$s en la interfaz web de llama.cpp</string>
+    <string name="chat_menu_open_web_ui">Abrir Web UI de llama.cpp</string>
+    <string name="chat_menu_generate_title">Generar título</string>
+    <string name="chat_generating_title">Generando título…</string>
+    <string name="harness_composer_hide">Ocultar entrada</string>
+    <string name="harness_composer_show">Mostrar entrada</string>
+    <string name="settings_hub_agent_runtimes">Entornos del agente</string>
+    <string name="settings_hub_agent_runtimes_desc">Abre directamente los entornos de ejecuci\u00f3n de DeepSeek Harness.</string>
+</resources>

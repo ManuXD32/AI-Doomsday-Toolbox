@@ -138,6 +138,16 @@ class HarnessLocalModelCapabilitiesTest {
     }
 
     @Test
+    fun oldManagedOverridesCannotReplaceInheritedServerCapacity() {
+        val store = HarnessLocalModelCapabilityStore(app)
+        store.set("llama:42", contextTokens = 131_072, maxOutputTokens = 32_768)
+        val catalog = Json.parseToJsonElement(
+            """{"data":[{"id":"llama:42","owned_by":"adt-llama-server","context_length":8192,"contextWindow":8192,"capabilitySource":"server","contextInherited":true}]}"""
+        ).jsonObject
+        assertEquals(catalog, store.apply(catalog))
+    }
+
+    @Test
     fun savedLimitsDoNotReplaceCurrentBackendEffectiveCatalogLimits() {
         val store = HarnessLocalModelCapabilityStore(app)
         store.setOverrides(

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="whisper_error_input_failed">Whisper could not process or save one or more input files (exit code 11)</string>
+</resources>

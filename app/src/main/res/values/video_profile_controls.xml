@@ -14,7 +14,4 @@
     <string name="llm_video_whisper_parallel_title">Process audio with Whisper in parallel</string>
     <string name="llm_video_whisper_parallel_desc">Use Whisper alongside visual processing when a Whisper model is configured.</string>
     <string name="llm_video_low_end_warning">Longer segments, more frames, and parallel audio use more memory on small phones.</string>
-    <string name="video_profile_fps">Sampling rate: %1$.1f FPS</string>
-    <string name="video_profile_timestamp">Timestamp interval: %1$d ms</string>
-    <string name="video_profile_sampling_hint">Saved with this local server. Long videos may use a lower rate to stay within frame and context limits.</string>
 </resources>

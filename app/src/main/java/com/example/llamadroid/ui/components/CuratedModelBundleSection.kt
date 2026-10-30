@@ -23,6 +23,8 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Collections
 import androidx.compose.material.icons.filled.SmartToy
+import com.example.llamadroid.ui.theme.LocalAppVisualStyle
+import com.example.llamadroid.ui.theme.sprites.AppSpriteKey
 import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -71,6 +73,9 @@ import com.example.llamadroid.data.model.CuratedModelBundle
 import com.example.llamadroid.data.model.DownloadProgressHolder
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.data.model.PendingDownloadHolder
+import com.example.llamadroid.data.model.QuickSetupBundleCatalog
+import com.example.llamadroid.data.model.QuickSetupState
+import com.example.llamadroid.data.repository.QuickSetupServerWatcher
 import com.example.llamadroid.data.model.buildDownloadTaskId
 import com.example.llamadroid.data.model.calculateBundleProgressSnapshot
 import com.example.llamadroid.data.model.curatedVisionRepairTargets
@@ -173,6 +178,11 @@ internal fun requestCuratedBundleDownload(
         .toMap()
     var requested = 0
     var failed = 0
+    // Durable opt-in for the starter bundle's automatic MTP server (survives backgrounding).
+    if (bundle.id == QuickSetupBundleCatalog.BUNDLE_ID) {
+        QuickSetupState.markRequested(context)
+        QuickSetupServerWatcher.ensureStarted(context)
+    }
     resolveCuratedFiles(bundle, prefix, installedModels, taskByProgressKey, progressMap).forEach { resolved ->
         if (resolved.installed) return@forEach
         requested += 1
@@ -206,6 +216,10 @@ internal fun requestCuratedBundleDownload(
                     filename = resolved.file.remotePath,
                     type = resolved.file.type,
                     isVision = bundle.runtimeIsVision(resolved.file),
+                    sdCapabilities = resolved.file.sdCapabilities,
+                    sdFamily = resolved.file.sdFamily,
+                    sdVariant = resolved.file.sdVariant,
+                    sdCompatProfiles = resolved.file.sdCompatProfiles,
                     downloadUrlOverride = resolved.file.downloadUrl,
                     localFilenameOverride = resolved.expectedName,
                     artifactFamily = resolved.file.audioFamily,
@@ -515,11 +529,9 @@ private fun CuratedModelBundleCard(
 ) {
     val context = LocalContext.current
     val allInstalled = installedCount == bundle.files.size && !hasPrefixError
-    val catalogIcon = if (bundle.files.any { it.type == ModelType.LLM || it.type == ModelType.LLM_DRAFT }) {
-        Icons.Default.SmartToy
-    } else {
-        Icons.Default.Collections
-    }
+    val isLlmBundle = bundle.files.any { it.type == ModelType.LLM || it.type == ModelType.LLM_DRAFT }
+    val catalogIcon = if (isLlmBundle) Icons.Default.SmartToy else Icons.Default.Collections
+    val catalogSprite = if (isLlmBundle) AppSpriteKey.MODEL_LLM else AppSpriteKey.MODEL_BUNDLE
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -549,12 +561,13 @@ private fun CuratedModelBundleCard(
                     else MaterialTheme.colorScheme.secondaryContainer,
                     modifier = Modifier.size(52.dp)
                 ) {
-                    Icon(
+                    AppIcon(
                         catalogIcon,
                         contentDescription = null,
                         tint = if (allInstalled) MaterialTheme.colorScheme.onPrimaryContainer
                         else MaterialTheme.colorScheme.onSecondaryContainer,
-                        modifier = Modifier.padding(12.dp)
+                        modifier = Modifier.padding(if (LocalAppVisualStyle.current.isPixel) 10.dp else 12.dp),
+                        sprite = catalogSprite
                     )
                 }
                 Spacer(Modifier.width(12.dp))
@@ -710,11 +723,13 @@ private fun CuratedModelBundleDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(stringResource(bundle.descriptionRes))
-                Text(
-                    stringResource(R.string.sd_bundle_prefix_note, prefix),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
+                if (bundle.files.any { it.fixedInstallPrefix == null }) {
+                    Text(
+                        stringResource(R.string.sd_bundle_prefix_note, prefix),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
                 if (prefixInvalid) {
                     Text(
                         stringResource(R.string.audio_models_prefix_invalid),
@@ -828,5 +843,7 @@ private fun curatedBundleModelTypeLabel(type: ModelType): String = when (type) {
     ModelType.SD_ADETAILER -> stringResource(R.string.curated_bundle_type_adetailer_detector)
     ModelType.LLAMA_TTS,
     ModelType.LLAMA_TTS_COMPANION -> stringResource(R.string.model_promote_audio_tts)
+    ModelType.SD_CHECKPOINT -> stringResource(R.string.quick_setup_type_image_model)
+    ModelType.WHISPER -> stringResource(R.string.quick_setup_type_whisper)
     else -> type.name
 }

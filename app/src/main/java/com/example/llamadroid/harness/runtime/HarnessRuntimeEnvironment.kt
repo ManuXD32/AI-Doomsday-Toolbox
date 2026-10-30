@@ -4,6 +4,7 @@ import android.content.Context
 import com.example.llamadroid.data.proot.AgentProotEnvironmentManager
 import com.example.llamadroid.data.proot.AgentProotEnvironmentPaths
 import com.example.llamadroid.data.proot.AgentProotEnvironmentSpec
+import com.example.llamadroid.data.proot.AgentProotPreparationPhase
 import com.example.llamadroid.data.proot.AgentProotNetworkConfig
 import com.example.llamadroid.data.proot.DebianAssetPack
 import kotlinx.coroutines.Dispatchers
@@ -25,7 +26,7 @@ import java.security.MessageDigest
 import java.util.UUID
 import java.util.zip.GZIPInputStream
 
-/** Shared app-owned paths for the single Harness environment. */
+/** Paths are resolved from a captured installation, never the current UI selection. */
 object HarnessRuntimePaths {
     const val HARNESS_HOME_DIRECTORY = "agent_harness/dsh_home"
     const val RUNTIME_DIRECTORY = "agent_harness/runtime"
@@ -34,7 +35,7 @@ object HarnessRuntimePaths {
     const val DEFAULT_PROJECT_GUEST = "/workspace/projects/$DEFAULT_PROJECT_DIRECTORY"
     const val SHARED_ENVIRONMENT_ID = HarnessRuntimeRecord.DEFAULT_ENVIRONMENT_ID
 
-    fun harnessHome(context: Context): File = File(context.filesDir, HARNESS_HOME_DIRECTORY).canonicalFile
+    fun harnessHome(context: Context): File = HarnessRuntimeScope.dataFile(context, HARNESS_HOME_DIRECTORY).canonicalFile
 
     fun runtimeRoot(context: Context, environmentId: String): File {
         AgentProotEnvironmentPaths.requireSafeEnvironmentId(environmentId)
@@ -45,18 +46,20 @@ object HarnessRuntimePaths {
         return root
     }
 
-    fun projects(context: Context): File = File(context.filesDir, PROJECTS_DIRECTORY).canonicalFile
+    fun projects(context: Context): File = HarnessRuntimeScope.projects(context)
 }
 
 /** Prepares the existing verified Debian environment and the persistent Harness bind paths. */
 class AndroidHarnessEnvironmentProvider(
     private val context: Context,
-    private val environmentManager: AgentProotEnvironmentManager = AgentProotEnvironmentManager(context)
+    private val environmentManager: AgentProotEnvironmentManager = AgentProotEnvironmentManager(context),
+    private val progress: (AgentProotPreparationPhase) -> Unit = {},
 ) : HarnessEnvironmentProvider {
     override suspend fun prepare(environmentId: String): HarnessEnvironmentPaths = withContext(Dispatchers.IO) {
         AgentProotEnvironmentPaths.requireSafeEnvironmentId(environmentId)
-        val rootfs = environmentManager.prepare(AgentProotEnvironmentSpec(environmentId)).getOrThrow()
-        val projects = HarnessRuntimePaths.projects(context).apply { mkdirs() }.canonicalFile
+        val scoped = HarnessRuntimeScope.context(context, environmentId)
+        val rootfs = environmentManager.prepare(AgentProotEnvironmentSpec(environmentId), progress = progress).getOrThrow()
+        val projects = HarnessRuntimePaths.projects(scoped).apply { mkdirs() }.canonicalFile
         // DSH starts new WebUI sessions from this scoped project directory. Keep the parent
         // mount shared so existing project folders remain visible, while ensuring the default
         // session cwd is always present inside the guest.
@@ -66,7 +69,7 @@ class AndroidHarnessEnvironmentProvider(
         require(AgentProotEnvironmentPaths.isDescendantOrSame(defaultProject, projects)) {
             "Harness default project escaped the shared projects directory"
         }
-        val dshHome = HarnessRuntimePaths.harnessHome(context).apply { mkdirs() }.canonicalFile
+        val dshHome = HarnessRuntimePaths.harnessHome(scoped).apply { mkdirs() }.canonicalFile
         val runtime = HarnessRuntimePaths.runtimeRoot(context, environmentId).apply { mkdirs() }
         val temp = File(runtime, "tmp").apply { mkdirs() }.canonicalFile
         val run = File(runtime, "run").apply { mkdirs() }.canonicalFile
@@ -103,11 +106,19 @@ fun interface HarnessPayloadCancellation {
 
 /** Asset-backed provider for the pinned, real DeepSeek Harness payload. */
 class AssetHarnessPayloadProvider(
-    private val context: Context
+    private val context: Context,
+    private val progress: (HarnessPayloadWorkPhase) -> Unit = {},
 ) : HarnessPayloadProvider {
     override suspend fun prepare(paths: HarnessEnvironmentPaths): HarnessPayload = withContext(Dispatchers.IO) {
         val coroutineContext = currentCoroutineContext()
-        val cancellation = HarnessPayloadCancellation { coroutineContext.ensureActive() }
+        var lastPhase: HarnessPayloadWorkPhase? = null
+        val cancellation = HarnessPayloadCancellation { phase ->
+            coroutineContext.ensureActive()
+            if (phase != lastPhase) {
+                lastPhase = phase
+                progress(phase)
+            }
+        }
         val manifest = readManifest()
         val payload = parseManifest(manifest)
         installPayload(paths.rootfs, payload, cancellation)

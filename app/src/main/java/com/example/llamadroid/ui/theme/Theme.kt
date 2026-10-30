@@ -10,12 +10,22 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
 import com.example.llamadroid.data.AppThemeMode
+import com.example.llamadroid.data.AppVisualStyle
+import com.example.llamadroid.data.PixelThemeVariant
+import com.example.llamadroid.data.easy.EasyModeSettings
+import com.example.llamadroid.data.SettingsRepository
 import androidx.core.view.WindowCompat
 
 private val DarkColorScheme = darkColorScheme(
@@ -96,6 +106,17 @@ private val SoftStudioShapes = Shapes(
     extraLarge = RoundedCornerShape(24.dp)
 )
 
+/** Active visual style, pixel variant and sprite colours for components that adapt to the style. */
+data class AppVisualStyleState(
+    val style: AppVisualStyle = AppVisualStyle.SOFT_STUDIO,
+    val variant: PixelThemeVariant = PixelThemeVariant.CANDY_POP,
+    val spritePalette: PixelSpritePalette = pixelSpritePalette(PixelThemeVariant.CANDY_POP, dark = false)
+) {
+    val isPixel: Boolean get() = style == AppVisualStyle.PIXEL
+}
+
+val LocalAppVisualStyle = staticCompositionLocalOf { AppVisualStyleState() }
+
 @Composable
 fun LlamaDroidTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
@@ -103,6 +124,9 @@ fun LlamaDroidTheme(
     // default so the Soft Studio identity is stable across devices.
     dynamicColor: Boolean = false,
     themeMode: AppThemeMode? = null,
+    visualStyle: AppVisualStyle = AppVisualStyle.SOFT_STUDIO,
+    pixelVariant: PixelThemeVariant = PixelThemeVariant.CANDY_POP,
+    pixelFont: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val resolvedDarkTheme = when (themeMode) {
@@ -110,7 +134,10 @@ fun LlamaDroidTheme(
         AppThemeMode.DARK -> true
         AppThemeMode.SYSTEM, null -> darkTheme
     }
+    val isPixel = visualStyle == AppVisualStyle.PIXEL
     val colorScheme = when {
+        // Pixel palettes are fixed; dynamic color is ignored while Pixel is active.
+        isPixel -> pixelColorScheme(pixelVariant, resolvedDarkTheme)
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
             if (resolvedDarkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
@@ -118,20 +145,58 @@ fun LlamaDroidTheme(
         resolvedDarkTheme -> DarkColorScheme
         else -> LightColorScheme
     }
+    val backgroundIsLight = colorScheme.background.luminance() > 0.5f
     val activity = LocalActivity.current
     val view = LocalView.current
     if (activity != null && !view.isInEditMode) {
         SideEffect {
             WindowCompat.getInsetsController(activity.window, view).apply {
-                isAppearanceLightStatusBars = !resolvedDarkTheme
-                isAppearanceLightNavigationBars = !resolvedDarkTheme
+                isAppearanceLightStatusBars = backgroundIsLight
+                isAppearanceLightNavigationBars = backgroundIsLight
             }
         }
     }
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = Typography,
-        shapes = SoftStudioShapes,
+    val styleState = remember(visualStyle, pixelVariant, resolvedDarkTheme) {
+        AppVisualStyleState(
+            style = visualStyle,
+            variant = pixelVariant,
+            spritePalette = pixelSpritePalette(pixelVariant, resolvedDarkTheme)
+        )
+    }
+    CompositionLocalProvider(LocalAppVisualStyle provides styleState) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = if (isPixel && pixelFont) PixelTypography else Typography,
+            shapes = if (isPixel) PixelShapes else SoftStudioShapes,
+            content = content
+        )
+    }
+}
+
+/**
+ * Applies the theme from the persisted appearance settings. Shared by every entry point
+ * (main activity, alarm screen, widget configuration activities).
+ */
+@Composable
+fun AppThemeFromSettings(content: @Composable () -> Unit) {
+    val context = LocalContext.current.applicationContext
+    val settings = remember { SettingsRepository(context) }
+    val advancedThemeMode by settings.themeMode.collectAsState()
+    // Easy mode keeps its own light/dark choice so it never changes the advanced theme.
+    val easySettings = remember { EasyModeSettings(context) }
+    val easyEnabled by easySettings.enabledFlow.collectAsState()
+    val easyThemeMode by easySettings.themeModeFlow.collectAsState()
+    val themeMode = if (easyEnabled) easyThemeMode else advancedThemeMode
+    val dynamicColor by settings.dynamicColor.collectAsState()
+    val visualStyle by settings.visualStyle.collectAsState()
+    val pixelVariant by settings.pixelVariant.collectAsState()
+    val pixelFont by settings.pixelFontEnabled.collectAsState()
+    LlamaDroidTheme(
+        themeMode = themeMode,
+        dynamicColor = dynamicColor,
+        visualStyle = visualStyle,
+        pixelVariant = pixelVariant,
+        pixelFont = pixelFont,
         content = content
     )
 }

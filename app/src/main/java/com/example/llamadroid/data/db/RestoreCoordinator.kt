@@ -306,6 +306,7 @@ internal object RestoreCoordinator {
                 val lines = journalLines(journal)
                 if (lines.any { it == "COMMITTED" }) {
                     finishCommitted(operation, pending)
+                    clearChatKvCaches(context)
                     return InstallResult.RESTORED
                 }
                 return recoverUnfinished(operation, pending, replacements, lines)
@@ -338,6 +339,7 @@ internal object RestoreCoordinator {
                 validateInstalledDatabases(context, entries)
                 appendJournal(journal, "COMMITTED")
                 finishCommitted(operation, pending)
+                clearChatKvCaches(context)
                 return InstallResult.RESTORED
             } catch (_: Exception) {
                 return recoverUnfinished(operation, pending, replacements, journalLines(journal))
@@ -387,6 +389,11 @@ internal object RestoreCoordinator {
         } catch (_: Exception) {
             InstallResult.RECOVERY_BLOCKED
         }
+    }
+
+    /** Saved KV slots belong to the replaced chats; restored chat ids may now mean other chats. */
+    private fun clearChatKvCaches(context: Context) {
+        runCatching { com.example.llamadroid.service.NativeChatKvCacheStore(context).clearAll() }
     }
 
     private fun finishCommitted(operation: File, pending: File) {

@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Chat top bar and rename -->
+    <string name="native_chat_rename_action">Renombrar chat</string>
+    <string name="native_chat_rename_title">Renombrar chat</string>
+    <string name="native_chat_rename_label">Título del chat</string>
+    <string name="native_chat_menu_search_close">Cerrar búsqueda</string>
+    <string name="native_chat_pin_watch">Fijar en el reloj</string>
+    <string name="native_chat_unpin_watch">Quitar del reloj</string>
+    <string name="native_chat_pin_watch_done">Chat fijado en el reloj.</string>
+    <string name="native_chat_unpin_watch_done">Chat quitado del reloj.</string>
+    <string name="native_chat_pin_watch_requires_server">Elige un servidor antes de fijar este chat.</string>
+    <string name="native_chat_server_chip_none">Sin servidor</string>
+
+    <!-- Server banner and sheet -->
+    <string name="native_chat_banner_stopped">Servidor detenido</string>
+    <string name="native_chat_banner_starting">Iniciando servidor…</string>
+    <string name="native_chat_banner_error">No se pudo iniciar el servidor.</string>
+    <string name="native_chat_banner_removed">Se eliminó el servidor de este chat</string>
+    <string name="native_chat_banner_no_server">Elige un servidor para chatear</string>
+    <string name="native_chat_banner_start">Iniciar</string>
+    <string name="native_chat_banner_choose">Elegir servidor</string>
+    <string name="native_chat_banner_retry">Reintentar</string>
+    <string name="native_chat_banner_view_log">Ver registro</string>
+    <string name="native_chat_server_sheet_title">Servidor del chat</string>
+    <string name="native_chat_switch_server">Cambiar de servidor</string>
+    <string name="native_chat_server_details">Detalles del servidor</string>
+
+    <!-- Chat settings sheet -->
+    <string name="native_chat_settings_title">Ajustes del chat</string>
+    <string name="native_chat_settings_autosave_hint">Los cambios se guardan automáticamente.</string>
+    <string name="native_chat_settings_section_server">Servidor y contexto</string>
+    <string name="native_chat_settings_section_sampling">Muestreo</string>
+    <string name="native_chat_settings_section_thinking">Razonamiento</string>
+    <string name="native_chat_settings_section_voice">Voz y llamada</string>
+    <string name="native_chat_settings_section_tools">Herramientas</string>
+    <string name="native_chat_settings_section_image_tools">Herramientas de imagen</string>
+    <string name="native_chat_settings_section_knowledge">Base de conocimiento</string>
+    <string name="native_chat_settings_section_memory">Memoria</string>
+    <string name="native_chat_settings_section_advanced">Avanzado</string>
+    <string name="native_chat_settings_on">Activado</string>
+    <string name="native_chat_settings_off">Desactivado</string>
+    <string name="native_chat_settings_voice_on">Respuestas de voz activadas</string>
+    <string name="native_chat_settings_voice_off">Respuestas de voz desactivadas</string>
+    <string name="native_chat_settings_tools_summary">%1$d de %2$d activadas</string>
+    <string name="native_chat_settings_open_server">Abrir servidor</string>
+    <string name="native_chat_settings_collapse">Contraer sección</string>
+    <string name="native_chat_settings_expand">Expandir sección</string>
+    <string name="native_chat_settings_context_server_hint">El tamaño de contexto de este chat lo define su servidor. Abre el servidor para cambiarlo.</string>
+    <string name="native_chat_settings_tools_off_hint">Activa primero las herramientas para configurar esta sección.</string>
+
+    <!-- Messages -->
+    <string name="native_chat_message_more">Más acciones del mensaje</string>
+    <string name="native_chat_change_server">Cambiar servidor</string>
+    <string name="native_chat_change_server_title">¿Cambiar de servidor?</string>
+    <string name="native_chat_change_server_message">El nuevo servidor tendrá que procesar de nuevo toda la conversación con tu próximo mensaje.</string>
+    <string name="native_chat_change_server_message_cache">El nuevo servidor tendrá que procesar de nuevo toda la conversación con tu próximo mensaje. La caché en disco guardada de este chat se eliminará; se reconstruye en el nuevo servidor si lo admite.</string>
+    <string name="native_chat_change_server_confirm">Cambiar servidor</string>
+</resources>

@@ -10,6 +10,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Queue
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -26,9 +29,23 @@ import com.example.llamadroid.R
 import com.example.llamadroid.ui.navigation.Screen
 
 @Composable
-fun GenerationQueueHeaderAction(navController: NavController) {
+fun GenerationQueueHeaderAction(navController: NavController, pendingCount: Int = 0) {
     IconButton(onClick = { navController.navigate(Screen.GenerationQueue.route) }) {
-        Icon(Icons.AutoMirrored.Filled.List, contentDescription = stringResource(R.string.generation_queue_title))
+        BadgedBox(badge = {
+            if (pendingCount > 0) {
+                Badge { Text(if (pendingCount > 99) "99+" else pendingCount.toString()) }
+            }
+        }) {
+            Icon(Icons.AutoMirrored.Filled.List, contentDescription = stringResource(R.string.generation_queue_title))
+        }
+    }
+}
+
+/** Gear action that opens the shared image/video generation settings. */
+@Composable
+fun GenerationSettingsHeaderAction(navController: NavController) {
+    IconButton(onClick = { navController.navigate("settings_imagegen") }) {
+        Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.ui_redesign_gen_settings))
     }
 }
 

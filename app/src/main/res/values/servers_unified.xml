@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="srv_status_remote">Remote</string>
+    <string name="srv_status_error">Needs attention</string>
+    <string name="srv_kind_managed">Local</string>
+    <string name="srv_kind_legacy">Local (legacy)</string>
+    <string name="srv_kind_remote">Remote</string>
+    <string name="srv_action_failed">The action could not be completed. Try again.</string>
+    <string name="srv_save_failed">The server could not be saved. Check the fields and try again.</string>
+    <string name="srv_restart">Restart</string>
+    <string name="srv_edit">Edit server</string>
+    <string name="srv_delete">Delete server</string>
+    <string name="srv_delete_title">Delete this server?</string>
+    <string name="srv_delete_body">%1$s and its saved settings and logs will be removed.</string>
+    <plurals name="srv_more_chats">
+        <item quantity="one">and %1$d more</item>
+        <item quantity="other">and %1$d more</item>
+    </plurals>
+    <string name="srv_upgrade">Upgrade to managed server</string>
+    <string name="srv_upgrade_title">Upgrade to a managed server?</string>
+    <string name="srv_upgrade_body">The app will create a managed server with its own saved settings from this connection. Your chats stay linked to it. A server that is currently running on this connection will be stopped, and nothing changes until you start it again.</string>
+    <string name="srv_upgrade_confirm">Upgrade</string>
+    <string name="srv_bound_chats_title">Chats on this server</string>
+    <string name="srv_no_bound_chats">No chats use this server yet.</string>
+    <string name="srv_untitled_chat">Untitled chat</string>
+    <string name="srv_editor_new_remote_title">Add a remote server</string>
+    <string name="srv_editor_edit_title">Edit server</string>
+    <string name="srv_save_and_start">Save and start</string>
+    <string name="srv_port_auto">Auto</string>
+    <string name="srv_port_hint">Leave empty to pick a free port automatically.</string>
+    <string name="srv_error_name_blank">Enter a name.</string>
+    <string name="srv_error_host_blank">Enter the host address.</string>
+    <string name="srv_error_port_invalid">The port must be a number from 1 to 65535.</string>
+    <string name="srv_error_port_in_use">That port is already used by another local server.</string>
+    <string name="srv_error_remote_model_blank">Choose or enter a model name.</string>
+    <string name="srv_error_litert_model">Choose a LiteRT model.</string>
+    <string name="srv_error_model_not_selected">Choose a model.</string>
+    <string name="srv_error_model_file_missing">The model file is missing or unreadable. Choose it again.</string>
+    <string name="srv_error_mmproj_missing">The vision projector file is missing. Turn vision off or reinstall the model.</string>
+    <string name="srv_error_draft_missing">The draft model file is missing. Clear it or choose another.</string>
+    <string name="srv_error_flags_invalid">The custom flags or command template are not valid.</string>
+    <string name="srv_picker_title">Choose a server</string>
+    <string name="srv_picker_empty">No servers yet. Add one to continue.</string>
+    <string name="srv_picker_new_local">New local server from a model</string>
+    <plurals name="srv_bound_chats">
+        <item quantity="one">%1$d chat</item>
+        <item quantity="other">%1$d chats</item>
+    </plurals>
+    <plurals name="srv_delete_chats_warning">
+        <item quantity="one">%1$d chat uses this server and will ask you to pick another one:</item>
+        <item quantity="other">%1$d chats use this server and will ask you to pick another one:</item>
+    </plurals>
+</resources>

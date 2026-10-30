@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chats_rework_servers_header">Servidores</string>
+    <string name="chats_rework_add_server_chip">Servidor</string>
+    <string name="chats_rework_add_remote_chip">Remoto</string>
+    <string name="chats_rework_add_remote">Conectar un servidor remoto</string>
+    <string name="chats_rework_new_local_hint">Elige un modelo: se abre el editor completo del servidor con él (incluido MTP y todas las opciones de arranque); al guardar, se abre un chat en el nuevo servidor.</string>
+    <string name="chats_rework_empty_title">Aún no hay servidores de modelos</string>
+    <string name="chats_rework_empty_body">Un servidor ejecuta un modelo para que puedas chatear con él. Añade uno desde un modelo descargado o conéctate a un servidor remoto.</string>
+    <string name="chats_rework_add_server">Añadir un servidor de modelos</string>
+    <string name="chats_rework_get_model">Obtener un modelo</string>
+    <string name="chats_rework_fab_new_chat">Nuevo chat</string>
+    <string name="chats_rework_new_chat_title">Nuevo chat</string>
+    <string name="chats_rework_choose_server">Servidor</string>
+    <string name="chats_rework_sheet_no_servers">Aún no hay servidores. Añade uno o crea un servidor local desde un modelo descargado.</string>
+    <string name="chats_rework_new_local">Nuevo servidor local desde un modelo descargado</string>
+    <string name="chats_rework_create">Crear chat</string>
+    <string name="chats_rework_create_failed">No se pudo crear el chat. Revisa el servidor e inténtalo de nuevo.</string>
+</resources>

@@ -170,7 +170,7 @@ internal object HarnessProjectManagementRules {
  * cannot recreate a project the user explicitly removed.
  */
 internal class HarnessProjectTombstoneStore(private val context: Context) {
-    private val directory = File(context.filesDir, "agent_harness/project-management/tombstones")
+    private val directory = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.dataFile(context, "agent_harness/project-management/tombstones")
 
     fun readAll(): List<HarnessProjectTombstone> = directory.listFiles().orEmpty()
         .filter { it.extension == "json" }
@@ -258,11 +258,11 @@ class HarnessProjectManagement(
     @Suppress("UNUSED_PARAMETER") private val files: HarnessWorkspaceAccess,
     private val ensureStopped: suspend () -> Unit = {},
 ) {
-    private val dao = database.harnessDao()
+    private val dao = database.harnessDao(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context))
     private val chats = database.agentChatDao()
     private val tombstones = HarnessProjectTombstoneStore(context)
     private val operations = Mutex()
-    private val quarantine = File(context.filesDir, "agent_harness/deleted-projects")
+    private val quarantine = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.dataFile(context, "agent_harness/deleted-projects")
 
     suspend fun preview(workspaceId: String): HarnessProjectRemovalPreview = operations.withLock {
         withContext(Dispatchers.IO) { previewLocked(workspaceId) }
@@ -457,7 +457,7 @@ class HarnessProjectManagement(
 
     private fun quarantineLocalRoot(group: ProjectGroup): String {
         require(group.backend != REMOTE_BACKEND) { "REMOTE_PROJECT_FILE_DELETE_UNSUPPORTED" }
-        val managed = File(context.filesDir, "agent_local_workspaces").canonicalFile
+        val managed = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.projects(context)
         val root = AgentLocalWorkspaceSupport.rootPathForProject(context, group.projectFolder)
         require(!Files.isSymbolicLink(root.toPath())) { "WORKSPACE_PATH_OUTSIDE_SCOPE" }
         require(root.canonicalFile.parentFile == managed) { "WORKSPACE_PATH_OUTSIDE_SCOPE" }
@@ -564,7 +564,7 @@ class HarnessProjectManagement(
                 it.runtimeSource == AgentRuntimeSource.LEGACY_ARCHIVE || it.runtimeSource == AgentRuntimeSource.WORKSPACE_ONLY
             }
         val conversations = candidateConversations
-        val sessions = dao.observeSessionsOnce().filter { it.workspaceId in workspaces.map { workspace -> workspace.id }.toSet() }
+        val sessions = dao.observeSessions().first().filter { it.workspaceId in workspaces.map { workspace -> workspace.id }.toSet() }
         return ProjectGroup(
             id = anchor?.id ?: row!!.projectId,
             title = anchor?.title ?: row!!.title,
@@ -589,6 +589,3 @@ internal fun harnessPathContains(workspacePath: String, cwd: String): Boolean {
     val child = normalize(cwd)
     return child == root || child.startsWith("$root/")
 }
-
-private suspend fun com.example.llamadroid.data.db.HarnessDao.observeSessionsOnce(): List<HarnessSessionEntity> =
-    observeSessions().first()

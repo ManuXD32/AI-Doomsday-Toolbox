@@ -312,6 +312,12 @@ data class HarnessProviderOption(
     val modelAdvertisedContextWindows: Map<String, Long?> = emptyMap(),
     /** Actual LiteRT worker limits and backend selected by the current policy. */
     val modelBackendLimits: Map<String, HarnessModelBackendLimitsUi> = emptyMap(),
+    /** Runtime availability reported by Android-managed model rows. */
+    val modelAvailability: Map<String, Boolean?> = emptyMap(),
+    /** Runtime status reported by Android-managed model rows. */
+    val modelStatuses: Map<String, String?> = emptyMap(),
+    /** Stable error marker kept for repair/status presentation; never shown raw. */
+    val modelErrorCodes: Map<String, String?> = emptyMap(),
 )
 
 data class HarnessModelBackendLimitsUi(
@@ -391,6 +397,9 @@ data class HarnessProviderUiState(
     val isCatalogLoading: Boolean = false,
     /** A manual catalog reload failed; keep this visible inside either picker. */
     val catalogRefreshFailed: Boolean = false,
+    /** True while Android prepares an on-demand managed local model. */
+    val isPreparingModel: Boolean = false,
+    val preparingModelId: String? = null,
 )
 
 enum class HarnessSchemaFieldType {
@@ -682,6 +691,8 @@ data class HarnessNoticeUi(
     val titleRes: Int? = null,
     val messageRes: Int? = null,
     val messageArgs: List<Any> = emptyList(),
+    val action: NativeHarnessUiAction? = null,
+    val actionLabelRes: Int? = null,
     val recoverable: Boolean = true
 )
 
@@ -748,10 +759,12 @@ sealed interface NativeHarnessUiAction {
     data object RefreshRuntimeDiagnostics : NativeHarnessUiAction
     data object CopyRuntimeDiagnostics : NativeHarnessUiAction
     data object Continue : NativeHarnessUiAction
+    data object RetryModelSelection : NativeHarnessUiAction
     data object OpenWorkspace : NativeHarnessUiAction
     data object OpenProjectIntegration : NativeHarnessUiAction
     data object OpenOriginalWebUi : NativeHarnessUiAction
     data object OpenModelManager : NativeHarnessUiAction
+    data object OpenManagedLocalServers : NativeHarnessUiAction
     data object CloseModelManager : NativeHarnessUiAction
     data object OpenLegacyHistory : NativeHarnessUiAction
     data object CreateSession : NativeHarnessUiAction

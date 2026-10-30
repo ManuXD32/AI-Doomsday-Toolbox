@@ -17,6 +17,10 @@ object AdventureGateCombatEngine {
     private const val GUARD_DAMAGE_MULTIPLIER = 0.6f
     private const val DEFAULT_GUARD_MANA_RESTORE = 6
     private const val STUDY_MANA_REGEN_UNLOCK_POINTS = 200f
+    private const val ELITE_REGEN_PERCENT = 6
+    private const val ELITE_SHIELD_PERCENT = 25
+    private const val ELITE_HASTE_PERCENT = 125
+    private const val ELITE_THORNS_PERCENT = 10
 
     private sealed class QueuedPetAction {
         data class Skill(val skill: AdventureGateSkillDefinition, val targetInstanceId: String?) : QueuedPetAction()
@@ -145,8 +149,8 @@ object AdventureGateCombatEngine {
             weaknesses = shield?.petWeaknesses?.toList().orEmpty(),
             resistances = shield?.petResistances?.toList().orEmpty()
         )
-        val enemies = createWave(phase, 0)
-        return AdventureGateBattleSnapshot(
+        val enemies = createWave(phase, 0, seed)
+        return planIntents(AdventureGateBattleSnapshot(
             petId = safeProfile.petId,
             worldId = phase.worldId,
             phaseNumber = phase.phaseNumber,
@@ -156,8 +160,9 @@ object AdventureGateCombatEngine {
             enemies = enemies,
             log = listOf(AdventureGateBattleLogEntry(AdventureGateLogMessage.BATTLE_STARTED)),
             rngSeed = seed,
-            phaseOverride = phase.takeIf { it.worldId == AdventureGateCatalog.NIGHT_ARENA_WORLD_ID }
-        )
+            phaseOverride = phase.takeIf { it.worldId == AdventureGateCatalog.NIGHT_ARENA_WORLD_ID },
+            modifier = phase.modifier
+        ))
     }
 
     fun performSkill(
@@ -256,36 +261,14 @@ object AdventureGateCombatEngine {
         }
     }
 
-    fun resolveEnemyTurn(
-        profile: AdventureGateProfile,
-        snapshot: AdventureGateBattleSnapshot,
-        educationLevel: Float = profile.educationLevel,
-        introspectionLevel: Float = profile.introspectionLevel
-    ): AdventureGateActionResult {
-        if (snapshot.isCompleted) {
-            return AdventureGateActionResult(snapshot = snapshot, profile = profile)
-        }
-        val safeProfile = normalizedProfile(profile, educationLevel, introspectionLevel)
-        if (!snapshot.pet.isAlive) {
-            val defeated = completeDefeatIfPetDown(snapshot)
-            val result = finishBattle(safeProfile, defeated, educationLevel, introspectionLevel)
-            return result.copy(events = eventsFromLogs(logsAddedSince(snapshot.log, result.snapshot.log)))
-        }
-        if (snapshot.turn != AdventureGateTurn.ENEMY) {
-            return AdventureGateActionResult(snapshot = snapshot, profile = profile)
-        }
-        val phase = snapshot.phaseDefinition()
-        val afterEnemyTurn = runEnemyTurn(snapshot, phase, safeProfile)
-        val result = if (afterEnemyTurn.isCompleted) {
-            finishBattle(safeProfile, afterEnemyTurn, educationLevel, introspectionLevel)
-        } else {
-            val updated = afterEnemyTurn.copy(turn = AdventureGateTurn.PET, updatedAt = System.currentTimeMillis())
-            AdventureGateActionResult(
-                snapshot = updated,
-                profile = safeProfile.persistBattleVitals(updated.pet)
-            )
-        }
-        return result.copy(events = eventsFromLogs(logsAddedSince(snapshot.log, result.snapshot.log)))
+    /**
+     * Older saves could be persisted mid-round with the turn marker on ENEMY; rounds now
+     * resolve atomically in [performSkill]/[useSupply], so an unfinished battle is always
+     * waiting on the pet (a downed pet is finished by the next action). Returns the snapshot unchanged when it needs no repair.
+     */
+    fun recoverStuckTurn(snapshot: AdventureGateBattleSnapshot): AdventureGateBattleSnapshot {
+        if (snapshot.isCompleted || snapshot.turn == AdventureGateTurn.PET) return snapshot
+        return snapshot.copy(turn = AdventureGateTurn.PET, updatedAt = System.currentTimeMillis())
     }
 
     fun useSupply(
@@ -377,11 +360,13 @@ object AdventureGateCombatEngine {
         completeDefeatIfPetDown(turnSnapshot).takeIf { it.isCompleted }?.let { return it }
         val rng = roundRandom(turnSnapshot)
         var state = applyTurnRegeneration(turnSnapshot, profile, loadout)
+        state = applyModifierManaDrain(state)
         val statusLogs = mutableListOf<AdventureGateBattleLogEntry>()
         val petAfterStatus = applyStatusTick(state.pet, statusLogs)
         val minionAfterStatus = state.minion?.let { applyStatusTick(it, statusLogs) }
-        val enemiesAfterStatus = state.enemies.map { applyStatusTick(it, statusLogs) }
+        val enemiesAfterStatus = state.enemies.map { applyEliteRegen(applyStatusTick(it, statusLogs), statusLogs) }
         state = state.copy(pet = petAfterStatus, minion = minionAfterStatus, enemies = enemiesAfterStatus, log = appendLog(state, statusLogs), updatedAt = System.currentTimeMillis())
+        state = applyClockworkTick(state, turnSnapshot.actionSequence)
         if (!state.pet.isAlive) {
             return state.copy(
                 turn = AdventureGateTurn.COMPLETE,
@@ -405,6 +390,7 @@ object AdventureGateCombatEngine {
         ).map { it.first }
 
         var petActionTaken = false
+        var petYawned = false
         for (actorId in actors) {
             if (state.isCompleted) break
             if (actorId == state.pet.instanceId) {
@@ -419,6 +405,19 @@ object AdventureGateCombatEngine {
                         updatedAt = System.currentTimeMillis()
                     )
                     petActionTaken = true
+                    continue
+                }
+                // Sleepy Moon: skills can be lost to a yawn; supplies are exempt so a potion is never wasted.
+                if (action is QueuedPetAction.Skill && yawns(state.modifier, rng)) {
+                    state = state.copy(
+                        log = appendLog(state, AdventureGateBattleLogEntry(
+                            messageKey = AdventureGateLogMessage.YAWNED,
+                            actorInstanceId = state.pet.instanceId
+                        )),
+                        updatedAt = System.currentTimeMillis()
+                    )
+                    petActionTaken = true
+                    petYawned = true
                     continue
                 }
                 val petAfterCost = when (action) {
@@ -461,15 +460,15 @@ object AdventureGateCombatEngine {
             state
         } else {
             val cooldowns = when (action) {
-                is QueuedPetAction.Skill -> nextCooldowns(state.skillCooldowns, action.skill)
+                is QueuedPetAction.Skill -> if (petYawned) tickCooldowns(state.skillCooldowns) else nextCooldowns(state.skillCooldowns, action.skill)
                 is QueuedPetAction.Supply -> tickCooldowns(state.skillCooldowns)
             }
-            state.copy(
+            planIntents(state.copy(
                 pet = state.pet.copy(guarding = false),
                 skillCooldowns = cooldowns,
                 turn = AdventureGateTurn.PET,
                 updatedAt = System.currentTimeMillis()
-            )
+            ))
         }
     }
 
@@ -504,24 +503,118 @@ object AdventureGateCombatEngine {
         return if (actorCooldowns.isEmpty()) cooldowns - actorInstanceId else cooldowns + (actorInstanceId to actorCooldowns)
     }
 
-    private fun chooseEnemyAction(
+    /** Executes the telegraphed intent when it is still usable, else re-rolls with the weighted AI. */
+    private fun resolveEnemyAction(
         snapshot: AdventureGateBattleSnapshot,
         enemy: AdventureGateCombatantState,
         rng: Random
-    ): AdventureGateEnemyActionDefinition? {
-        val monster = AdventureGateCatalog.monster(enemy.definitionId)
-        val actorCooldowns = snapshot.actorCooldowns[enemy.instanceId].orEmpty()
-        val special = monster.specialActionId
-            ?.let(AdventureGateCatalog::enemyAction)
-            ?.takeIf { enemy.boss && enemy.mana >= it.manaCost && (actorCooldowns[it.id] ?: 0) <= 0 }
-        if (special != null) return special
-        val magic = monster.magicActionIds
-            .map(AdventureGateCatalog::enemyAction)
-            .filter { enemy.mana >= it.manaCost }
-            .takeIf { it.isNotEmpty() }
-            ?.random(rng)
-        if (magic != null) return magic
-        return monster.attackActionIds.map(AdventureGateCatalog::enemyAction).takeIf { it.isNotEmpty() }?.random(rng)
+    ): AdventureGateEnemyActionDefinition {
+        val cooldowns = snapshot.actorCooldowns[enemy.instanceId].orEmpty()
+        val planned = enemy.intent
+            ?.let { AdventureGateCatalog.enemyActionOrNull(it.actionId) }
+            ?.takeIf { AdventureGateEnemyAi.isUsable(it, enemy, cooldowns) }
+        return planned ?: AdventureGateEnemyAi.chooseAction(enemy, snapshot.pet, cooldowns, rng)
+    }
+
+    /** Telegraphs every living enemy's next action (seeded, so replays match); resets the big-hit tracker. */
+    private fun planIntents(snapshot: AdventureGateBattleSnapshot): AdventureGateBattleSnapshot {
+        if (snapshot.isCompleted) return snapshot
+        val rng = AdventureGateEnemyAi.intentRandom(snapshot)
+        val enemies = snapshot.enemies.map { enemy ->
+            if (!enemy.isAlive) {
+                enemy
+            } else {
+                val action = AdventureGateEnemyAi.chooseAction(
+                    enemy,
+                    snapshot.pet,
+                    snapshot.actorCooldowns[enemy.instanceId].orEmpty(),
+                    rng
+                )
+                enemy.copy(intent = AdventureGateEnemyAi.intentFor(action, enemy, snapshot.pet), lastHitTaken = 0)
+            }
+        }
+        return snapshot.copy(enemies = enemies)
+    }
+
+    private fun yawns(modifier: AdventureGateBattleModifier?, rng: Random): Boolean {
+        val chance = modifier.yawnChancePercent()
+        return chance > 0 && rng.nextInt(100) < chance
+    }
+
+    private fun rollCrit(modifier: AdventureGateBattleModifier?, rng: Random): Boolean {
+        val chance = modifier.critChancePercent()
+        return chance > 0 && rng.nextInt(100) < chance
+    }
+
+    /** Applies [damage] to [target], draining its elite shield first, and records the hit for the AI. */
+    private fun absorbDamage(target: AdventureGateCombatantState, damage: Int): AdventureGateCombatantState {
+        val absorbed = minOf(target.shieldHp, damage)
+        return target.copy(
+            shieldHp = target.shieldHp - absorbed,
+            hp = (target.hp - (damage - absorbed)).coerceAtLeast(0),
+            lastHitTaken = target.lastHitTaken + damage
+        )
+    }
+
+    private fun applyEliteRegen(
+        enemy: AdventureGateCombatantState,
+        logs: MutableList<AdventureGateBattleLogEntry>
+    ): AdventureGateCombatantState {
+        if (!enemy.isAlive || enemy.hp >= enemy.maxHp || AdventureGateEliteTrait.REGEN !in enemy.traits) return enemy
+        val healed = (enemy.maxHp * ELITE_REGEN_PERCENT / 100f).roundToInt().coerceAtLeast(1)
+        val hp = (enemy.hp + healed).coerceAtMost(enemy.maxHp)
+        logs += AdventureGateBattleLogEntry(
+            messageKey = AdventureGateLogMessage.ENEMY_HEALED,
+            actorInstanceId = enemy.instanceId,
+            actorNameRes = AdventureGateCatalog.monster(enemy.definitionId).nameRes,
+            amount = hp - enemy.hp
+        )
+        return enemy.copy(hp = hp)
+    }
+
+    private fun applyModifierManaDrain(snapshot: AdventureGateBattleSnapshot): AdventureGateBattleSnapshot {
+        val drain = snapshot.modifier.manaDrainPerRound()
+        if (drain <= 0 || !snapshot.pet.isAlive) return snapshot
+        return snapshot.copy(pet = snapshot.pet.copy(mana = (snapshot.pet.mana - drain).coerceAtLeast(0)))
+    }
+
+    /** Clockwork tick: every third round everyone loses 5% max HP (the pet is left at 1 HP at worst). */
+    private fun applyClockworkTick(snapshot: AdventureGateBattleSnapshot, round: Int): AdventureGateBattleSnapshot {
+        if (!snapshot.modifier.hasClockworkTick() || round <= 0 ||
+            round % AdventureGateBattleModifier.TICK_EVERY_ROUNDS != 0
+        ) return snapshot
+        fun loss(combatant: AdventureGateCombatantState) =
+            (combatant.maxHp * AdventureGateBattleModifier.TICK_PERCENT / 100f).roundToInt().coerceAtLeast(1)
+        val petLoss = if (snapshot.pet.isAlive) minOf(loss(snapshot.pet), snapshot.pet.hp - 1).coerceAtLeast(0) else 0
+        val logs = mutableListOf(
+            AdventureGateBattleLogEntry(
+                messageKey = AdventureGateLogMessage.MODIFIER_TICK,
+                actorInstanceId = snapshot.pet.instanceId,
+                amount = petLoss
+            )
+        )
+        val enemies = snapshot.enemies.map { enemy ->
+            if (!enemy.isAlive) {
+                enemy
+            } else {
+                enemy.copy(hp = (enemy.hp - loss(enemy)).coerceAtLeast(0)).also { ticked ->
+                    if (!ticked.isAlive) {
+                        logs += AdventureGateBattleLogEntry(
+                            messageKey = AdventureGateLogMessage.ENEMY_DEFEATED,
+                            targetInstanceId = enemy.instanceId,
+                            targetNameRes = AdventureGateCatalog.monster(enemy.definitionId).nameRes
+                        )
+                    }
+                }
+            }
+        }
+        return snapshot.copy(
+            pet = snapshot.pet.copy(hp = snapshot.pet.hp - petLoss),
+            minion = snapshot.minion?.takeIf { it.isAlive }?.let { it.copy(hp = (it.hp - loss(it)).coerceAtLeast(0)) },
+            enemies = enemies,
+            log = appendLog(snapshot, logs),
+            updatedAt = System.currentTimeMillis()
+        )
     }
 
     private fun maybeApplyStatus(
@@ -671,7 +764,7 @@ object AdventureGateCombatEngine {
         val target = snapshot.enemies.firstOrNull { it.instanceId == targetInstanceId && it.isAlive }
             ?: snapshot.enemies.firstOrNull { it.isAlive }
             ?: return snapshot
-        if (rng != null && !rollHit(snapshot.pet, target, skill.accuracyPercent, rng, guaranteed = skill.accuracyPercent >= 100)) {
+        if (rng != null && !rollHit(snapshot.pet, target, skill.accuracyPercent, rng, guaranteed = skill.accuracyPercent >= 100, modifier = snapshot.modifier)) {
             val missLog = AdventureGateBattleLogEntry(
                 messageKey = AdventureGateLogMessage.MISSED,
                 actorInstanceId = snapshot.pet.instanceId,
@@ -687,16 +780,25 @@ object AdventureGateCombatEngine {
                 updatedAt = System.currentTimeMillis()
             )
         }
-        val damage = calculateDamage(
+        val baseDamage = calculateDamage(
             attacker = snapshot.pet,
             target = target,
             skillPower = skill.power,
             element = skill.element,
             magic = skill.kind == AdventureGateSkillKind.MAGIC,
-            loadout = loadout
+            loadout = loadout,
+            modifier = snapshot.modifier
         )
+        val crit = rollCrit(snapshot.modifier, rng ?: roundRandom(snapshot))
+        val damage = if (crit) (baseDamage * AdventureGateBattleModifier.CRIT_MULTIPLIER).roundToInt() else baseDamage
         var pet = snapshot.pet
-        val damagedTarget = target.copy(hp = (target.hp - damage).coerceAtLeast(0))
+        val damagedTarget = absorbDamage(target, damage)
+        val thornsDamage = if (skill.kind == AdventureGateSkillKind.ATTACK && AdventureGateEliteTrait.THORNS in target.traits) {
+            (damage * ELITE_THORNS_PERCENT / 100f).roundToInt().coerceAtLeast(1)
+        } else 0
+        if (thornsDamage > 0) {
+            pet = pet.copy(hp = (pet.hp - thornsDamage).coerceAtLeast(1))
+        }
         val updatedTarget = if (damagedTarget.isAlive && skill.status != null) {
             val bonus = loadout.equipment.sumOf { it.effect.statusChanceBonusPercent }
             damagedTarget.copy(statuses = maybeApplyStatus(damagedTarget, skill.status, skill.statusChancePercent + bonus, rng ?: roundRandom(snapshot)))
@@ -749,6 +851,22 @@ object AdventureGateCombatEngine {
                 amount = refund
             )
         } else null
+        val critLog = if (crit) {
+            AdventureGateBattleLogEntry(
+                messageKey = AdventureGateLogMessage.CRITICAL_HIT,
+                actorInstanceId = snapshot.pet.instanceId,
+                targetInstanceId = target.instanceId
+            )
+        } else null
+        val thornsLog = if (thornsDamage > 0) {
+            AdventureGateBattleLogEntry(
+                messageKey = AdventureGateLogMessage.THORNS_REFLECTED,
+                actorInstanceId = target.instanceId,
+                targetInstanceId = snapshot.pet.instanceId,
+                actorNameRes = AdventureGateCatalog.monster(target.definitionId).nameRes,
+                amount = thornsDamage
+            )
+        } else null
         val defeatedLog = if (defeated) {
             AdventureGateBattleLogEntry(
                 messageKey = AdventureGateLogMessage.ENEMY_DEFEATED,
@@ -759,7 +877,7 @@ object AdventureGateCombatEngine {
         return snapshot.copy(
             pet = pet,
             enemies = enemies,
-            log = appendLog(snapshot, listOfNotNull(hitLog, multiplierLog, refundLog, defeatedLog)),
+            log = appendLog(snapshot, listOfNotNull(hitLog, critLog, multiplierLog, thornsLog, refundLog, defeatedLog)),
             turn = AdventureGateTurn.ENEMY,
             updatedAt = System.currentTimeMillis()
         )
@@ -908,9 +1026,10 @@ object AdventureGateCombatEngine {
             skillPower = 80,
             element = AdventureGateElement.STRIKE,
             magic = false,
-            loadout = AdventureGateCatalog.loadoutForProfile(profile)
+            loadout = AdventureGateCatalog.loadoutForProfile(profile),
+            modifier = snapshot.modifier
         )
-        val damagedTarget = target.copy(hp = (target.hp - damage).coerceAtLeast(0))
+        val damagedTarget = absorbDamage(target, damage)
         val enemies = snapshot.enemies.map { if (it.instanceId == target.instanceId) damagedTarget else it }
         val hitLog = AdventureGateBattleLogEntry(
             messageKey = AdventureGateLogMessage.PET_USED_SKILL,
@@ -957,12 +1076,37 @@ object AdventureGateCombatEngine {
             )
             return snapshot.copy(log = appendLog(snapshot, logs), updatedAt = System.currentTimeMillis())
         }
-        val enragedEnemy = if (enemy.boss && !enemy.enraged && enemy.hp <= enemy.maxHp / 2) {
+        if (yawns(snapshot.modifier, rng)) {
+            logs += AdventureGateBattleLogEntry(
+                messageKey = AdventureGateLogMessage.YAWNED,
+                actorInstanceId = enemy.instanceId,
+                actorNameRes = AdventureGateCatalog.monster(enemy.definitionId).nameRes
+            )
+            val rested = snapshot.enemies.map {
+                if (it.instanceId == enemy.instanceId) it.copy(intent = null, guarding = false) else it
+            }
+            return snapshot.copy(enemies = rested, log = appendLog(snapshot, logs), updatedAt = System.currentTimeMillis())
+        }
+        val enragedEnemy = (if (enemy.boss && !enemy.enraged && enemy.hp <= enemy.maxHp / 2) {
             enemy.copy(enraged = true)
-        } else enemy
-        val chosenAction = chooseEnemyAction(snapshot, enragedEnemy, rng) ?: return snapshot
-        if (!rollHit(enragedEnemy, target, chosenAction.accuracyPercent, rng)) {
-            val missedEnemy = enragedEnemy.copy(mana = (enragedEnemy.mana - chosenAction.manaCost).coerceAtLeast(0))
+        } else enemy).copy(guarding = false)
+        if (enragedEnemy.enraged && !enemy.enraged) {
+            logs += AdventureGateBattleLogEntry(
+                messageKey = AdventureGateLogMessage.BOSS_ENRAGED,
+                actorInstanceId = enemy.instanceId,
+                skillId = enemy.definitionId,
+                actorNameRes = AdventureGateCatalog.monster(enemy.definitionId).nameRes
+            )
+        }
+        val chosenAction = resolveEnemyAction(snapshot, enragedEnemy, rng)
+        if (chosenAction.kind == AdventureGateSkillKind.HEAL || chosenAction.kind == AdventureGateSkillKind.GUARD) {
+            return applyEnemySelfAction(snapshot, enragedEnemy, chosenAction, logs)
+        }
+        if (!rollHit(enragedEnemy, target, chosenAction.accuracyPercent, rng, modifier = snapshot.modifier)) {
+            val missedEnemy = enragedEnemy.copy(
+                mana = (enragedEnemy.mana - chosenAction.manaCost).coerceAtLeast(0),
+                intent = null
+            )
             logs += AdventureGateBattleLogEntry(
                 messageKey = AdventureGateLogMessage.MISSED,
                 actorInstanceId = enragedEnemy.instanceId,
@@ -980,8 +1124,13 @@ object AdventureGateCombatEngine {
                 updatedAt = System.currentTimeMillis()
             )
         }
-        val actingEnemy = enragedEnemy.copy(mana = (enragedEnemy.mana - chosenAction.manaCost).coerceAtLeast(0))
-        val damage = calculateEnemyDamage(actingEnemy, target, loadout, chosenAction)
+        val actingEnemy = enragedEnemy.copy(
+            mana = (enragedEnemy.mana - chosenAction.manaCost).coerceAtLeast(0),
+            intent = null
+        )
+        val baseDamage = calculateEnemyDamage(actingEnemy, target, loadout, chosenAction, snapshot.modifier)
+        val enemyCrit = rollCrit(snapshot.modifier, rng)
+        val damage = if (enemyCrit) (baseDamage * AdventureGateBattleModifier.CRIT_MULTIPLIER).roundToInt() else baseDamage
         val manaDamage = chosenAction.manaDamage.coerceAtLeast(0)
         val reflectPercent = if (target.isPet) loadout.equipment.sumOf { it.effect.reflectDamagePercent } else 0
         val reflected = if (reflectPercent > 0) {
@@ -1019,6 +1168,13 @@ object AdventureGateCombatEngine {
             amount = damage + manaDamage,
             element = chosenAction.element
         )
+        if (enemyCrit) {
+            logs += AdventureGateBattleLogEntry(
+                messageKey = AdventureGateLogMessage.CRITICAL_HIT,
+                actorInstanceId = reflectedEnemy.instanceId,
+                targetInstanceId = target.instanceId
+            )
+        }
         if (reflected > 0) {
             val reflectItem = loadout.equipment.firstOrNull { it.effect.reflectDamagePercent > 0 }
             logs += AdventureGateBattleLogEntry(
@@ -1079,129 +1235,43 @@ object AdventureGateCombatEngine {
         )
     }
 
-    private fun runEnemyTurn(
+    /** Heal (20% max HP) or guard (damage x0.6 until its next action) chosen by the enemy AI. */
+    private fun applyEnemySelfAction(
         snapshot: AdventureGateBattleSnapshot,
-        phase: AdventureGatePhaseDefinition,
-        profile: AdventureGateProfile
+        enemy: AdventureGateCombatantState,
+        action: AdventureGateEnemyActionDefinition,
+        logs: MutableList<AdventureGateBattleLogEntry>
     ): AdventureGateBattleSnapshot {
-        val loadout = AdventureGateCatalog.loadoutForProfile(profile)
-        val turnSnapshot = snapshot.copy(actionSequence = snapshot.actionSequence + 1)
-        val rng = roundRandom(turnSnapshot)
-        var pet = turnSnapshot.pet
-        var usedReviveEquipmentIds = turnSnapshot.usedReviveEquipmentIds
-        val logs = mutableListOf<AdventureGateBattleLogEntry>()
-        val enemiesAfterStatus = turnSnapshot.enemies.map { enemy ->
-            applyStatusTick(enemy, logs)
-        }.toMutableList()
-        if (enemiesAfterStatus.none { it.isAlive }) {
-            return advanceWaveOrVictory(
-                turnSnapshot.copy(
-                    enemies = enemiesAfterStatus,
-                    log = appendLog(turnSnapshot, logs),
-                    updatedAt = System.currentTimeMillis()
-                ),
-                phase,
-                profile
-            )
-        }
-        for (enemy in enemiesAfterStatus.filter { it.isAlive }) {
-            if (enemy.statuses.any { it.skipTurnChancePercent > 0 } &&
-                rng.nextInt(100) < enemy.statuses.maxOf { it.skipTurnChancePercent }
-            ) {
-                logs += AdventureGateBattleLogEntry(
-                    messageKey = AdventureGateLogMessage.STATUS_SKIP,
-                    actorInstanceId = enemy.instanceId,
-                    statusId = enemy.statuses.maxByOrNull { it.skipTurnChancePercent }?.id,
-                    actorNameRes = AdventureGateCatalog.monster(enemy.definitionId).nameRes
-                )
-                continue
-            }
-            val enragedEnemy = if (enemy.boss && !enemy.enraged && enemy.hp <= enemy.maxHp / 2) {
-                enemy.copy(enraged = true)
-            } else enemy
-            val enragedIndex = enemiesAfterStatus.indexOfFirst { it.instanceId == enragedEnemy.instanceId }
-            if (enragedIndex >= 0) {
-                enemiesAfterStatus[enragedIndex] = enragedEnemy
-            }
-            val damage = calculateEnemyDamage(enragedEnemy, pet, loadout)
-            val reflectPercent = loadout.equipment.sumOf { it.effect.reflectDamagePercent }
-            val reflected = if (reflectPercent > 0) {
-                (damage * reflectPercent / 100f).roundToInt().coerceAtLeast(1)
-            } else {
-                0
-            }
-            pet = pet.copy(hp = (pet.hp - damage).coerceAtLeast(0))
-            val reflectedEnemy = if (reflected > 0) {
-                enragedEnemy.copy(hp = (enragedEnemy.hp - reflected).coerceAtLeast(0))
-            } else {
-                enragedEnemy
-            }
-            if (enragedIndex >= 0) {
-                enemiesAfterStatus[enragedIndex] = reflectedEnemy
-            }
+        val nameRes = AdventureGateCatalog.monster(enemy.definitionId).nameRes
+        val reacted = if (action.kind == AdventureGateSkillKind.HEAL) {
+            val healed = (enemy.maxHp * AdventureGateEnemyAi.HEAL_PERCENT / 100f).roundToInt().coerceAtLeast(1)
+            val hp = (enemy.hp + healed).coerceAtMost(enemy.maxHp)
             logs += AdventureGateBattleLogEntry(
-                messageKey = AdventureGateLogMessage.ENEMY_USED_ATTACK,
-                actorInstanceId = reflectedEnemy.instanceId,
-                targetInstanceId = pet.instanceId,
-                skillId = "enemy_${reflectedEnemy.elements.firstOrNull()?.name?.lowercase() ?: "strike"}",
-                actorNameRes = AdventureGateCatalog.monster(enemy.definitionId).nameRes,
-                amount = damage,
-                element = reflectedEnemy.elements.firstOrNull()
+                messageKey = AdventureGateLogMessage.ENEMY_HEALED,
+                actorInstanceId = enemy.instanceId,
+                skillId = action.id,
+                actorNameRes = nameRes,
+                skillNameRes = action.nameRes,
+                amount = hp - enemy.hp
             )
-            if (reflected > 0) {
-                val reflectItem = loadout.equipment.firstOrNull { it.effect.reflectDamagePercent > 0 }
-                logs += AdventureGateBattleLogEntry(
-                    messageKey = AdventureGateLogMessage.EQUIPMENT_TRIGGERED,
-                    actorInstanceId = pet.instanceId,
-                    targetInstanceId = reflectedEnemy.instanceId,
-                    equipmentId = reflectItem?.id,
-                    amount = reflected
-                )
-                if (enragedEnemy.isAlive && !reflectedEnemy.isAlive) {
-                    logs += AdventureGateBattleLogEntry(
-                        messageKey = AdventureGateLogMessage.ENEMY_DEFEATED,
-                        targetInstanceId = reflectedEnemy.instanceId,
-                        targetNameRes = AdventureGateCatalog.monster(reflectedEnemy.definitionId).nameRes
-                    )
-                }
-            }
-            if (!pet.isAlive) {
-                val reviveItem = loadout.equipment.firstOrNull {
-                    it.effect.reviveOncePercent > 0 && it.id !in usedReviveEquipmentIds
-                }
-                if (reviveItem != null) {
-                    usedReviveEquipmentIds = usedReviveEquipmentIds + reviveItem.id
-                    val revivedHp = (pet.maxHp * reviveItem.effect.reviveOncePercent / 100f).roundToInt().coerceAtLeast(1)
-                    pet = pet.copy(hp = revivedHp.coerceAtMost(pet.maxHp))
-                    logs += AdventureGateBattleLogEntry(
-                        messageKey = AdventureGateLogMessage.EQUIPMENT_TRIGGERED,
-                        actorInstanceId = pet.instanceId,
-                        equipmentId = reviveItem.id,
-                        amount = pet.hp
-                    )
-                    continue
-                }
-                logs += AdventureGateBattleLogEntry(AdventureGateLogMessage.PET_DEFEATED)
-                return turnSnapshot.copy(
-                    pet = pet,
-                    enemies = enemiesAfterStatus,
-                    log = appendLog(turnSnapshot, logs),
-                    usedReviveEquipmentIds = usedReviveEquipmentIds,
-                    turn = AdventureGateTurn.COMPLETE,
-                    isCompleted = true,
-                    isVictory = false,
-                    updatedAt = System.currentTimeMillis()
-                )
-            }
+            enemy.copy(hp = hp)
+        } else {
+            logs += AdventureGateBattleLogEntry(
+                messageKey = AdventureGateLogMessage.ENEMY_GUARDED,
+                actorInstanceId = enemy.instanceId,
+                skillId = action.id,
+                actorNameRes = nameRes,
+                skillNameRes = action.nameRes
+            )
+            enemy.copy(guarding = true)
         }
-        val resolved = turnSnapshot.copy(
-            pet = pet.copy(guarding = false),
-            enemies = enemiesAfterStatus,
-            log = appendLog(turnSnapshot, logs),
-            usedReviveEquipmentIds = usedReviveEquipmentIds,
+        val acted = reacted.copy(intent = null, lastHitTaken = 0)
+        return snapshot.copy(
+            enemies = snapshot.enemies.map { if (it.instanceId == acted.instanceId) acted else it },
+            actorCooldowns = nextActorCooldowns(snapshot.actorCooldowns, acted.instanceId, action),
+            log = appendLog(snapshot, logs),
             updatedAt = System.currentTimeMillis()
         )
-        return advanceWaveOrVictory(resolved, phase, profile)
     }
 
     private fun roundRandom(snapshot: AdventureGateBattleSnapshot): Random =
@@ -1280,7 +1350,7 @@ object AdventureGateCombatEngine {
         if (snapshot.enemies.any { it.isAlive }) return snapshot
         val nextWaveIndex = snapshot.waveIndex + 1
         if (nextWaveIndex < phase.waveMonsterIds.size) {
-            val nextEnemies = createWave(phase, nextWaveIndex)
+            val nextEnemies = createWave(phase, nextWaveIndex, snapshot.rngSeed)
             return snapshot.copy(
                 waveIndex = nextWaveIndex,
                 enemies = nextEnemies,
@@ -1426,16 +1496,46 @@ object AdventureGateCombatEngine {
     fun phaseXpReward(phase: AdventureGatePhaseDefinition): Int =
         phase.xpRewardOverride ?: phase.waveMonsterIds.flatten().sumOf { AdventureGateCatalog.monster(it).xpReward }
 
+    /**
+     * In campaign phases 10-14 a wave has a 25% chance (seeded) to swap its first monster that has an
+     * elite variant for that variant. Bosses and the Night Arena never roll elites.
+     */
+    private fun withEliteVariant(
+        phase: AdventureGatePhaseDefinition,
+        ids: List<String>,
+        waveIndex: Int,
+        seed: Long
+    ): List<String> {
+        if (phase.isBoss || phase.worldId == AdventureGateCatalog.NIGHT_ARENA_WORLD_ID ||
+            phase.phaseNumber !in AdventureGateCatalog.ELITE_FIRST_PHASE..AdventureGateCatalog.ELITE_LAST_PHASE
+        ) return ids
+        val roll = Random(seed * 131L + phase.phaseNumber * 7_919L + waveIndex * 104_729L + 17L).nextInt(100)
+        if (roll >= AdventureGateCatalog.ELITE_CHANCE_PERCENT) return ids
+        val index = ids.indexOfFirst { AdventureGateCatalog.eliteVariantIdFor(it) != null }
+        if (index < 0) return ids
+        val eliteId = AdventureGateCatalog.eliteVariantIdFor(ids[index]) ?: return ids
+        return ids.toMutableList().also { it[index] = eliteId }
+    }
+
     private fun createWave(
         phase: AdventureGatePhaseDefinition,
-        waveIndex: Int
+        waveIndex: Int,
+        seed: Long
     ): List<AdventureGateCombatantState> {
-        val ids = phase.waveMonsterIds.getOrElse(waveIndex) { emptyList() }
-            .take(AdventureGateCatalog.MAX_ENEMIES_PER_WAVE)
+        val ids = withEliteVariant(
+            phase,
+            phase.waveMonsterIds.getOrElse(waveIndex) { emptyList() }.take(AdventureGateCatalog.MAX_ENEMIES_PER_WAVE),
+            waveIndex,
+            seed
+        )
         return ids.mapIndexed { index, monsterId ->
             val definition = AdventureGateCatalog.monster(monsterId)
             val level = phase.enemyLevelOverride ?: enemyLevelFor(phase.worldId, phase.phaseNumber, definition.isBoss)
             val scaled = scaleStats(definition.stats, level, definition.isBoss)
+            val traits = listOfNotNull(definition.eliteTrait)
+            val speed = if (AdventureGateEliteTrait.HASTE in traits) {
+                (scaled.speed * ELITE_HASTE_PERCENT / 100f).roundToInt()
+            } else scaled.speed
             AdventureGateCombatantState(
                 instanceId = "w${waveIndex}_${index}_$monsterId",
                 definitionId = monsterId,
@@ -1447,14 +1547,18 @@ object AdventureGateCombatEngine {
                 attack = scaled.attack,
                 magic = scaled.magic,
                 defense = scaled.defense,
-                speed = scaled.speed,
+                speed = speed,
                 level = level,
                 accuracy = scaled.accuracy,
                 evasion = scaled.evasion,
                 elements = listOfNotNull(definition.primaryElement, definition.secondaryElement),
                 weaknesses = definition.weaknesses.toList(),
                 resistances = definition.resistances.toList(),
-                boss = definition.isBoss
+                boss = definition.isBoss,
+                traits = traits,
+                shieldHp = if (AdventureGateEliteTrait.SHIELD in traits) {
+                    (scaled.maxHp * ELITE_SHIELD_PERCENT / 100f).roundToInt().coerceAtLeast(1)
+                } else 0
             )
         }
     }
@@ -1483,7 +1587,8 @@ object AdventureGateCombatEngine {
         skillPower: Int,
         element: AdventureGateElement,
         magic: Boolean,
-        loadout: AdventureGateEffectiveLoadout
+        loadout: AdventureGateEffectiveLoadout,
+        modifier: AdventureGateBattleModifier? = null
     ): Int {
         val offense = if (magic) attacker.effectiveMagic() else attacker.effectiveAttack()
         val mitigation = if (magic) magicMitigation(target, 0.28f, 0.24f) else target.effectiveDefense() * 0.42f
@@ -1501,7 +1606,9 @@ object AdventureGateCombatEngine {
                 if (!magic) target.statuses.sumOf { it.physicalDamageTakenBonusPercent } else 0
             ) / 100f
         val wardMultiplier = 1f - target.statuses.sumOf { it.incomingReductionPercent } / 100f
-        return max(1, (base * elementMultiplier * equipmentMultiplier * statusIncomingMultiplier * wardMultiplier.coerceAtLeast(0.25f)).roundToInt())
+        val guard = if (target.guarding) GUARD_DAMAGE_MULTIPLIER else 1f
+        val modifierMultiplier = modifier.damageFactor(element, magic)
+        return max(1, (base * elementMultiplier * equipmentMultiplier * statusIncomingMultiplier * wardMultiplier.coerceAtLeast(0.25f) * guard * modifierMultiplier).roundToInt())
     }
 
     private fun AdventureGateBattleSnapshot.phaseDefinition(): AdventureGatePhaseDefinition =
@@ -1512,10 +1619,12 @@ object AdventureGateCombatEngine {
         defender: AdventureGateCombatantState,
         skillAccuracy: Int,
         rng: Random,
-        guaranteed: Boolean = false
+        guaranteed: Boolean = false,
+        modifier: AdventureGateBattleModifier? = null
     ): Boolean {
         if (guaranteed) return true
-        val chance = (skillAccuracy + (attacker.effectiveAccuracy() - 100) - defender.effectiveEvasion()).coerceIn(15, 99)
+        val raw = skillAccuracy + (attacker.effectiveAccuracy() - 100) - defender.effectiveEvasion()
+        val chance = (raw * modifier.accuracyFactor()).roundToInt().coerceIn(15, 99)
         return rng.nextInt(100) < chance
     }
 
@@ -1523,7 +1632,8 @@ object AdventureGateCombatEngine {
         enemy: AdventureGateCombatantState,
         target: AdventureGateCombatantState,
         loadout: AdventureGateEffectiveLoadout,
-        action: AdventureGateEnemyActionDefinition? = null
+        action: AdventureGateEnemyActionDefinition? = null,
+        modifier: AdventureGateBattleModifier? = null
     ): Int {
         val useMagic = action?.kind == AdventureGateSkillKind.MAGIC || (action == null && enemy.magic > enemy.attack)
         val offense = if (useMagic) enemy.effectiveMagic() else enemy.effectiveAttack()
@@ -1544,7 +1654,8 @@ object AdventureGateCombatEngine {
         val wardMultiplier = 1f - target.statuses.sumOf { it.incomingReductionPercent } / 100f
         val mitigation = if (useMagic) magicMitigation(target, 0.25f, 0.25f) else target.effectiveDefense() * 0.35f
         val base = max(1f, (offense * (action?.power ?: 100) / 100f * rage) - mitigation)
-        return max(1, (base * guard * elementMultiplier * incomingMultiplier * statusIncomingMultiplier * wardMultiplier.coerceAtLeast(0.25f)).roundToInt())
+        val modifierMultiplier = element?.let { modifier.damageFactor(it, useMagic) } ?: 1f
+        return max(1, (base * guard * elementMultiplier * incomingMultiplier * statusIncomingMultiplier * wardMultiplier.coerceAtLeast(0.25f) * modifierMultiplier).roundToInt())
     }
 
     private fun magicMitigation(
@@ -1553,16 +1664,6 @@ object AdventureGateCombatEngine {
         magicWeight: Float
     ): Float =
         (target.effectiveDefense() * defenseWeight) + (target.effectiveMagic() * magicWeight)
-
-    private fun firstTurnForWave(
-        pet: AdventureGateCombatantState,
-        enemies: List<AdventureGateCombatantState>,
-        profile: AdventureGateProfile
-    ): AdventureGateTurn {
-        val forcePet = AdventureGateCatalog.loadoutForProfile(profile).equipment.any { it.effect.forceFirstTurn }
-        val fastestEnemy = enemies.maxOfOrNull { it.speed } ?: 0
-        return if (forcePet || pet.speed >= fastestEnemy) AdventureGateTurn.PET else AdventureGateTurn.ENEMY
-    }
 
     private fun appendLog(
         snapshot: AdventureGateBattleSnapshot,

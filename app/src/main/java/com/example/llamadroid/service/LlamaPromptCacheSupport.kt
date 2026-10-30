@@ -2,7 +2,6 @@ package com.example.llamadroid.service
 
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import org.json.JSONObject
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 
@@ -10,10 +9,20 @@ data class LlamaSlotOwnerKey(
     val endpointGeneration: String,
     val modelConfiguration: String,
     val conversationId: String,
-    val agentSessionId: String
+    val agentSessionId: String,
+    /**
+     * Normalized base URL of the llama-server this owner talks to (see
+     * [normalizePhysicalEndpoint]). When set, every owner of the same physical server shares one
+     * slot pool regardless of its generation string; null keeps the per-generation pool.
+     */
+    val physicalEndpoint: String? = null
 ) {
     val endpointKey: String
         get() = endpointGeneration.substringBefore('|')
+
+    /** Key of the slot pool this owner allocates from. */
+    val allocationKey: String
+        get() = physicalEndpoint ?: endpointGeneration
 }
 
 data class LlamaSlotAssignment(
@@ -22,6 +31,32 @@ data class LlamaSlotAssignment(
     val lastUsedAt: Long,
     val promptFingerprint: String?
 )
+
+/**
+ * A slot held for one owner for the length of a turn. No lock is held while a reservation is
+ * open; [LlamaSlotManager.withSlotRequest] takes the per-slot lock for one request.
+ */
+class LlamaSlotReservation internal constructor(
+    val owner: LlamaSlotOwnerKey,
+    val slotId: Int
+) {
+    val allocationKey: String get() = owner.allocationKey
+}
+
+/** Lowercases scheme/host, unifies loopback spellings and drops trailing slashes and paths. */
+fun normalizePhysicalEndpoint(baseUrl: String): String {
+    val trimmed = baseUrl.trim()
+    val uri = runCatching { java.net.URI(trimmed) }.getOrNull()
+    val scheme = uri?.scheme?.lowercase()
+    val rawHost = uri?.host
+    if (uri == null || scheme == null || rawHost == null) return trimmed.trimEnd('/').lowercase()
+    val host = rawHost.lowercase().trim('[', ']').let {
+        if (it == "localhost" || it == "0.0.0.0" || it == "::1") "127.0.0.1" else it
+    }
+    val hostText = if (host.contains(':')) "[$host]" else host
+    val port = if (uri.port >= 0) ":${uri.port}" else ""
+    return "$scheme://$hostText$port"
+}
 
 /**
  * In-memory ownership is deliberate: a numeric slot is unsafe to restore after
@@ -33,6 +68,7 @@ object LlamaSlotManager {
     private val stateLock = Any()
     private val assignments = mutableMapOf<LlamaSlotOwnerKey, LlamaSlotAssignment>()
     private val activeOwners = mutableSetOf<LlamaSlotOwnerKey>()
+    private val reservedOwners = mutableMapOf<LlamaSlotOwnerKey, Int>()
     private val unsupportedEndpointGenerations = mutableSetOf<String>()
     private val slotMutexes = ConcurrentHashMap<String, Mutex>()
 
@@ -43,31 +79,68 @@ object LlamaSlotManager {
         promptFingerprint: String? = null,
         block: suspend (Int?) -> T
     ): T {
-        if (owner == null || affinityMode == LlamaSlotAffinityMode.DISABLED) {
-            return block(null)
+        val reservation = reserve(owner, slotCount, affinityMode, promptFingerprint)
+            ?: return block(null)
+        try {
+            return withSlotRequest(reservation, promptFingerprint) { block(reservation.slotId) }
+        } finally {
+            release(reservation)
         }
+    }
+
+    /**
+     * Turn-level affinity without a lock. Returns null when affinity is disabled, unsupported or
+     * no slot is available. With a [LlamaSlotOwnerKey.physicalEndpoint] and every slot reserved,
+     * the least recently used slot is shared instead of returning null.
+     */
+    fun reserve(
+        owner: LlamaSlotOwnerKey?,
+        slotCount: Int?,
+        affinityMode: LlamaSlotAffinityMode,
+        promptFingerprint: String? = null
+    ): LlamaSlotReservation? {
+        if (owner == null || affinityMode == LlamaSlotAffinityMode.DISABLED) return null
         val usableSlotCount = slotCount?.takeIf { it > 0 }
             ?: if (affinityMode == LlamaSlotAffinityMode.ENABLED) 1 else null
-            ?: return block(null)
-        if (isUnsupported(owner.endpointGeneration)) return block(null)
-
-        val assignment = synchronized(stateLock) {
-            assignments[owner]?.takeIf { it.slotId in 0 until usableSlotCount }
+            ?: return null
+        if (isUnsupported(owner.endpointGeneration)) return null
+        return synchronized(stateLock) {
+            val assignment = assignments[owner]?.takeIf { it.slotId in 0 until usableSlotCount }
                 ?: allocateLocked(owner, usableSlotCount, promptFingerprint)
-        } ?: return block(null)
+                ?: return@synchronized null
+            reservedOwners[owner] = (reservedOwners[owner] ?: 0) + 1
+            LlamaSlotReservation(owner, assignment.slotId)
+        }
+    }
 
-        val mutexKey = "${owner.endpointGeneration}|${assignment.slotId}"
-        val mutex = slotMutexes.getOrPut(mutexKey) { Mutex() }
-        return mutex.withLock {
+    /** Ends a [reserve]; the assignment itself stays for later turns. */
+    fun release(reservation: LlamaSlotReservation) {
+        synchronized(stateLock) {
+            val left = (reservedOwners[reservation.owner] ?: 0) - 1
+            if (left > 0) reservedOwners[reservation.owner] = left else reservedOwners.remove(reservation.owner)
+        }
+    }
+
+    /** Runs one request under the per-slot lock of [reservation]. */
+    suspend fun <T> withSlotRequest(
+        reservation: LlamaSlotReservation,
+        promptFingerprint: String? = null,
+        block: suspend () -> T
+    ): T {
+        val owner = reservation.owner
+        return withSlotRequest(reservation.allocationKey, reservation.slotId) {
             synchronized(stateLock) {
                 activeOwners += owner
-                assignments[owner] = assignment.copy(
-                    lastUsedAt = System.currentTimeMillis(),
-                    promptFingerprint = promptFingerprint ?: assignment.promptFingerprint
-                )
+                val current = assignments[owner]
+                if (current != null) {
+                    assignments[owner] = current.copy(
+                        lastUsedAt = System.currentTimeMillis(),
+                        promptFingerprint = promptFingerprint ?: current.promptFingerprint
+                    )
+                }
             }
             try {
-                block(assignment.slotId)
+                block()
             } finally {
                 synchronized(stateLock) {
                     activeOwners -= owner
@@ -77,6 +150,12 @@ object LlamaSlotManager {
                 }
             }
         }
+    }
+
+    /** Per-slot lock only (no ownership bookkeeping); used for saves outside a request. */
+    suspend fun <T> withSlotRequest(allocationKey: String, slotId: Int, block: suspend () -> T): T {
+        val mutex = slotMutexes.getOrPut("$allocationKey|$slotId") { Mutex() }
+        return mutex.withLock { block() }
     }
 
     fun markSlotSelectionUnsupported(endpointGeneration: String) {
@@ -89,6 +168,7 @@ object LlamaSlotManager {
     fun isUnsupported(endpointGeneration: String): Boolean =
         synchronized(stateLock) { endpointGeneration in unsupportedEndpointGenerations }
 
+    /** Drops assignments grouped by generation string or by physical endpoint. */
     fun invalidateEndpointGeneration(endpointGeneration: String) {
         synchronized(stateLock) {
             invalidateEndpointGenerationLocked(endpointGeneration)
@@ -102,6 +182,7 @@ object LlamaSlotManager {
         synchronized(stateLock) {
             assignments.clear()
             activeOwners.clear()
+            reservedOwners.clear()
             unsupportedEndpointGenerations.clear()
         }
         slotMutexes.clear()
@@ -110,44 +191,66 @@ object LlamaSlotManager {
     internal fun snapshotAssignments(): List<LlamaSlotAssignment> =
         synchronized(stateLock) { assignments.values.sortedBy { it.slotId } }
 
+    private fun isBusyLocked(owner: LlamaSlotOwnerKey): Boolean =
+        owner in activeOwners || owner in reservedOwners
+
     private fun allocateLocked(
         owner: LlamaSlotOwnerKey,
         slotCount: Int,
         promptFingerprint: String?
     ): LlamaSlotAssignment? {
-        val sameGeneration = assignments.values.filter {
-            it.owner.endpointGeneration == owner.endpointGeneration
+        val allocationKey = owner.allocationKey
+        val physical = owner.physicalEndpoint != null
+        val pool = assignments.values.filter { it.owner.allocationKey == allocationKey }
+        // Affinity: the same conversation under a new owner key (for example a new attempt id)
+        // takes over the slot its previous key used, so its prompt cache stays warm.
+        if (physical) {
+            pool.filter {
+                it.owner != owner && it.owner.conversationId == owner.conversationId &&
+                    it.slotId in 0 until slotCount && !isBusyLocked(it.owner)
+            }.maxByOrNull { it.lastUsedAt }?.let { previous ->
+                assignments.remove(previous.owner)
+                return assign(owner, previous.slotId, promptFingerprint)
+            }
         }
-        val occupied = sameGeneration.mapTo(mutableSetOf()) { it.slotId }
+        val occupied = pool.mapTo(mutableSetOf()) { it.slotId }
         val freeSlot = (0 until slotCount).firstOrNull { it !in occupied }
-        val slotId = freeSlot ?: sameGeneration
-            .filterNot { it.owner in activeOwners }
+        val evictedSlot = if (freeSlot != null) null else pool
+            .filterNot { isBusyLocked(it.owner) }
             .minByOrNull { it.lastUsedAt }
             ?.also { assignments.remove(it.owner) }
             ?.slotId
-            ?: return null
-        return LlamaSlotAssignment(
+        // Every slot is busy: a physical pool shares its least recently used slot.
+        val sharedSlot = if (freeSlot == null && evictedSlot == null && physical) {
+            pool.filter { it.slotId in 0 until slotCount }.minByOrNull { it.lastUsedAt }?.slotId
+        } else null
+        val slotId = freeSlot ?: evictedSlot ?: sharedSlot ?: return null
+        return assign(owner, slotId, promptFingerprint)
+    }
+
+    private fun assign(owner: LlamaSlotOwnerKey, slotId: Int, promptFingerprint: String?) =
+        LlamaSlotAssignment(
             owner = owner,
             slotId = slotId,
             lastUsedAt = System.currentTimeMillis(),
             promptFingerprint = promptFingerprint
         ).also { assignments[owner] = it }
-    }
 
     private fun invalidateEndpointGenerationLocked(endpointGeneration: String) {
-        assignments.keys.removeAll { it.endpointGeneration == endpointGeneration }
-        activeOwners.removeAll { it.endpointGeneration == endpointGeneration }
+        assignments.keys.removeAll {
+            it.endpointGeneration == endpointGeneration || it.physicalEndpoint == endpointGeneration
+        }
+        activeOwners.removeAll {
+            it.endpointGeneration == endpointGeneration || it.physicalEndpoint == endpointGeneration
+        }
+        reservedOwners.keys.removeAll {
+            it.endpointGeneration == endpointGeneration || it.physicalEndpoint == endpointGeneration
+        }
     }
 }
 
-internal fun canonicalToolArguments(toolCall: OllamaService.ToolCall): String {
-    toolCall.rawArgumentsJson?.trim()?.takeIf { it.isNotBlank() }?.let { raw ->
-        if (runCatching { JSONObject(raw) }.isSuccess) return raw
-    }
-    return JSONObject().apply {
-        toolCall.arguments.toSortedMap().forEach { (key, value) -> put(key, value) }
-    }.toString()
-}
+internal fun canonicalToolArguments(toolCall: OllamaService.ToolCall): String =
+    ToolArgumentsJson.canonical(toolCall.rawArgumentsJson, toolCall.arguments.toSortedMap())
 
 internal fun stableToolCallId(name: String, rawArgumentsJson: String): String {
     val hash = sha256Hex("$name\u0000$rawArgumentsJson")

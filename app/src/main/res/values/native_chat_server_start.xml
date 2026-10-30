@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="native_chat_server_start_blocked_other_port">Another llama-server is already running on port %1$d (%2$s). Stop it from Servers or change this profile\'s port before chatting.</string>
+    <string name="native_chat_server_start_missing_model_file">A file needed to start the local server is missing or unreadable: %1$s</string>
+    <string name="native_chat_server_start_still_starting">Server is still starting… your message will be sent when you try again.</string>
+    <string name="native_chat_server_start_failed_with_reason">The local server could not start: %1$s</string>
+    <string name="native_chat_server_start_unknown_model">unknown model</string>
+</resources>

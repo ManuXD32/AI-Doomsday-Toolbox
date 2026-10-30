@@ -37,7 +37,25 @@ data class LlamaChatRequest(
     @SerializedName("return_progress") val returnProgress: Boolean = true,
     @SerializedName("sse_ping_interval") val ssePingInterval: Int = 2,
     @SerializedName("stop") val stop: List<String>? = null,
-    @SerializedName("chat_template_kwargs") val chat_template_kwargs: Map<String, Any>? = null
+    @SerializedName("chat_template_kwargs") val chat_template_kwargs: Map<String, Any>? = null,
+    /** Pinned llama-server slot for per-chat KV persistence; omitted when null. */
+    @SerializedName("id_slot") val idSlot: Int? = null,
+    @SerializedName("cache_prompt") val cachePrompt: Boolean? = null,
+    // Extended llama.cpp samplers (LlamaSamplerKeys.EXTENDED_KEYS); null = Auto, omitted by Gson.
+    @SerializedName("repeat_last_n") val repeat_last_n: Int? = null,
+    @SerializedName("typical_p") val typical_p: Float? = null,
+    @SerializedName("top_n_sigma") val top_n_sigma: Float? = null,
+    @SerializedName("xtc_probability") val xtc_probability: Float? = null,
+    @SerializedName("xtc_threshold") val xtc_threshold: Float? = null,
+    @SerializedName("dry_multiplier") val dry_multiplier: Float? = null,
+    @SerializedName("dry_base") val dry_base: Float? = null,
+    @SerializedName("dry_allowed_length") val dry_allowed_length: Int? = null,
+    @SerializedName("dry_penalty_last_n") val dry_penalty_last_n: Int? = null,
+    @SerializedName("dynatemp_range") val dynatemp_range: Float? = null,
+    @SerializedName("dynatemp_exponent") val dynatemp_exponent: Float? = null,
+    @SerializedName("mirostat") val mirostat: Int? = null,
+    @SerializedName("mirostat_tau") val mirostat_tau: Float? = null,
+    @SerializedName("mirostat_eta") val mirostat_eta: Float? = null
 )
 
 @Keep
@@ -55,7 +73,17 @@ data class LlamaChatMessage(
 data class LlamaChatResponse(
     @SerializedName("choices") val choices: List<LlamaChatChoice>,
     @SerializedName("usage") val usage: LlamaChatUsage? = null,
-    @SerializedName("prompt_progress") val promptProgress: LlamaPromptProgress? = null
+    @SerializedName("prompt_progress") val promptProgress: LlamaPromptProgress? = null,
+    @SerializedName("timings") val timings: LlamaChatTimings? = null
+)
+
+/** llama-server per-call timings: decode (`predicted_*`) and processed prompt (`prompt_n`, cache hits excluded). */
+@Keep
+data class LlamaChatTimings(
+    @SerializedName("prompt_n") val promptN: Int = 0,
+    @SerializedName("prompt_ms") val promptMs: Double = 0.0,
+    @SerializedName("predicted_n") val predictedN: Int = 0,
+    @SerializedName("predicted_ms") val predictedMs: Double = 0.0
 )
 
 @Keep

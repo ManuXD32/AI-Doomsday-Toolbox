@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_steps_thought">Thought process</string>
+    <string name="chat_steps_message_title">Full message</string>
+    <string name="chat_steps_show_more_text">Show more</string>
+    <plurals name="chat_steps_show_more_steps">
+        <item quantity="one">Show %1$d more step</item>
+        <item quantity="other">Show %1$d more steps</item>
+    </plurals>
+    <string name="chat_steps_hide_steps">Hide steps</string>
+    <string name="chat_steps_tool_running">Running</string>
+    <string name="chat_steps_tool_done">Done</string>
+    <string name="chat_steps_tool_failed">Failed</string>
+    <string name="chat_steps_tool_skipped">Skipped</string>
+    <string name="chat_steps_tool_interrupted">Interrupted</string>
+    <string name="chat_steps_tool_card_description">Tool %1$s, %2$s. Tap for details.</string>
+    <string name="chat_steps_details_arguments">Arguments</string>
+    <string name="chat_steps_details_result">Result</string>
+    <string name="chat_steps_details_no_arguments">No arguments.</string>
+    <string name="chat_steps_details_no_result">No result yet.</string>
+    <string name="chat_steps_details_shortened">Shortened result. Original length: %1$s characters.</string>
+    <string name="chat_steps_export_tool_used">Used tool %1$s (%2$s)</string>
+    <string name="chat_steps_export_status_ok">done</string>
+    <string name="chat_steps_export_status_error">error</string>
+    <string name="chat_steps_export_status_skipped">skipped</string>
+    <string name="chat_steps_export_status_running">interrupted</string>
+    <string name="chat_thinking_show_all">Show all</string>
+    <string name="chat_thinking_earlier_chars">… %1$s earlier characters</string>
+    <string name="chat_message_role_user">You</string>
+    <string name="chat_message_role_assistant">Assistant</string>
+    <string name="chat_message_role_system">System</string>
+</resources>

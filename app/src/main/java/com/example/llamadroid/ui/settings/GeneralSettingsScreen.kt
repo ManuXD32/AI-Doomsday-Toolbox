@@ -30,9 +30,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import androidx.compose.ui.res.stringResource
+import com.example.llamadroid.ui.theme.sprites.PixelVariantSpritePreview
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.AppThemeMode
+import com.example.llamadroid.data.AppVisualStyle
 import com.example.llamadroid.data.backup.NativeChatNotesBackupManager
 import com.example.llamadroid.data.binary.BinaryAvailability
 import com.example.llamadroid.data.binary.BinaryRepository
@@ -200,6 +202,26 @@ fun GeneralSettingsScreen(navController: NavController) {
                 }
             }
 
+            // Prompt disk caches (all KV caches: chats, subagents, harness agents)
+            item {
+                ChatKvCacheStorageCard(
+                    titleRes = R.string.general_prompt_caches_title,
+                    deleteAllLabelRes = R.string.general_prompt_caches_erase_all,
+                    deleteAllTitleRes = R.string.general_prompt_caches_erase_title,
+                    deleteAllMessageRes = R.string.general_prompt_caches_erase_message
+                )
+            }
+
+            // Title generation and the vision helper live in the chats home "Helper models" sheet.
+            item {
+                Text(
+                    stringResource(R.string.general_helper_models_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
+                )
+            }
+
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -249,10 +271,26 @@ fun GeneralSettingsScreen(navController: NavController) {
                 }
             }
             
+            // Easy mode switch (the same app-wide flow the top-bar toggle uses)
+            item {
+                val easySettings = remember { com.example.llamadroid.data.easy.EasyModeSettings(context) }
+                val easyEnabled by easySettings.enabledFlow.collectAsState()
+                com.example.llamadroid.ui.components.SettingSwitchCard(
+                    label = stringResource(R.string.easy_mode_shell_setting_title),
+                    description = stringResource(R.string.easy_mode_shell_setting_desc),
+                    checked = easyEnabled,
+                    onCheckedChange = { easySettings.enabled = it }
+                )
+            }
+
             // Soft Studio appearance
             item {
                 val themeMode by settingsRepo.themeMode.collectAsState()
                 val dynamicColor by settingsRepo.dynamicColor.collectAsState()
+                val visualStyle by settingsRepo.visualStyle.collectAsState()
+                val pixelVariant by settingsRepo.pixelVariant.collectAsState()
+                val pixelFont by settingsRepo.pixelFontEnabled.collectAsState()
+                val pixelActive = visualStyle == AppVisualStyle.PIXEL
                 var themeMenuExpanded by remember { mutableStateOf(false) }
                 val themeOptions = listOf(
                     AppThemeMode.SYSTEM to stringResource(R.string.soft_studio_theme_system),
@@ -330,6 +368,19 @@ fun GeneralSettingsScreen(navController: NavController) {
                             }
                         }
                         Spacer(modifier = Modifier.height(12.dp))
+                        AppearanceStyleSection(
+                            visualStyle = visualStyle,
+                            pixelVariant = pixelVariant,
+                            onVisualStyleChange = settingsRepo::setVisualStyle,
+                            onPixelVariantChange = settingsRepo::setPixelVariant,
+                            pixelFontEnabled = pixelFont,
+                            onPixelFontChange = settingsRepo::setPixelFontEnabled,
+                            onInteraction = { walkthroughTargets?.recordEvent("settings.appearance") },
+                            variantPreview = { variant, previewModifier ->
+                                PixelVariantSpritePreview(variant, previewModifier)
+                            }
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically
@@ -341,15 +392,18 @@ fun GeneralSettingsScreen(navController: NavController) {
                                     fontWeight = FontWeight.Medium
                                 )
                                 Text(
-                                    stringResource(R.string.soft_studio_dynamic_color_desc),
+                                    stringResource(
+                                        if (pixelActive) R.string.pixel_theme_dynamic_color_disabled
+                                        else R.string.soft_studio_dynamic_color_desc
+                                    ),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                             Switch(
-                                checked = dynamicColor,
+                                checked = dynamicColor && !pixelActive,
                                 onCheckedChange = settingsRepo::setDynamicColor,
-                                enabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                                enabled = !pixelActive && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
                             )
                         }
                     }

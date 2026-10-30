@@ -1,5 +1,4 @@
 <resources>
-    <string name="harness_app_tools_open">Herramientas de la app</string>
     <string name="harness_app_tools_description">Elige qué capacidades de la app pueden usar los modelos de Harness. Los cambios también se aplican al chat nativo y a la WebUI.</string>
     <string name="harness_app_tool_image_title">Generación de imágenes</string>
     <string name="harness_app_tool_image_description">Permite que el modelo cree una imagen con el motor configurado y la guarde en el espacio de trabajo actual.</string>

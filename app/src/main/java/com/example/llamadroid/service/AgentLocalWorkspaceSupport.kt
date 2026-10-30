@@ -160,13 +160,13 @@ object AgentLocalWorkspaceSupport {
     private const val STORAGE_ROOT = "agent_local_workspaces"
 
     fun rootPathForProject(context: Context, projectFolder: String): File =
-        File(context.filesDir, "$STORAGE_ROOT/${sanitizeProjectFolder(projectFolder)}")
+        File(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.projects(context), sanitizeProjectFolder(projectFolder))
 
     fun rootForProject(context: Context, projectFolder: String): File =
         rootPathForProject(context, projectFolder).apply { mkdirs() }
 
     fun deleteProjectRoot(context: Context, projectFolder: String): Boolean {
-        val storageRoot = File(context.filesDir, STORAGE_ROOT).canonicalFile
+        val storageRoot = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.projects(context)
         val projectRoot = rootPathForProject(context, projectFolder).canonicalFile
         require(projectRoot == storageRoot || projectRoot.path.startsWith(storageRoot.path + File.separator)) {
             "Local project root must stay inside agent local workspaces."

@@ -228,6 +228,7 @@ class HarnessRuntimeJournal(
             "environment_preparing", "environment_ready", "payload_preparing", "payload_ready",
             "bridge_preparing", "bridge_ready", "process_launching", "process_launched",
             "process_identity_ready", "readiness_waiting", "readiness_ready",
+            "catalog_updating", "client_connecting", "client_connected",
         )
         private val OUTCOMES = setOf("success", "failure", "opening", "open", "closed", "retrying",
             "cancelled", "ready", "waiting", "started", "completed", "interrupted", "recovered")

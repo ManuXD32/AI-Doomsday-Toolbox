@@ -7,6 +7,7 @@ import com.example.llamadroid.harness.client.HarnessRpcResult
 import com.example.llamadroid.harness.client.HarnessStreamPolicy
 import com.example.llamadroid.harness.HarnessSessionEventSequencer
 import com.example.llamadroid.harness.HarnessLiveCommandOutput
+import com.example.llamadroid.service.ManagedLlamaServerException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -44,6 +45,11 @@ import java.util.concurrent.ConcurrentHashMap
 
 private const val MAX_PENDING_ATTACHMENTS = 12
 
+private data class PendingHarnessModelSelection(
+    val providerId: String,
+    val modelId: String,
+)
+
 /**
  * App-owned adapter between the generic Harness client and the native surface.
  * Every mutation is serialized here; stream events only update presentation
@@ -59,6 +65,11 @@ class NativeHarnessController(
         { _, _ -> capabilityUnavailableResult("CAPABILITY_UNAVAILABLE", "Capability is not connected") },
     /** Android-owned model rows (LiteRT and managed endpoints) for the native catalog. */
     private val localModelCatalog: suspend () -> JsonObject? = { null },
+    /**
+     * Prepares an Android-owned local model before a session selects it. The
+     * returned row may contain runtime-discovered context/output limits.
+     */
+    private val prepareLocalModel: suspend (String) -> JsonObject? = { null },
     private val interactions: NativeHarnessInteractionHooks? = null,
     private val jobs: NativeHarnessJobHooks = NativeHarnessJobHooks(),
     private val providerAuth: NativeHarnessProviderAuthHooks = NativeHarnessProviderAuthHooks(),
@@ -103,6 +114,9 @@ class NativeHarnessController(
     private var followJob: Job? = null
     private var controlJob: Job? = null
     private var activeClient: HarnessClient? = null
+    /** Invalidates slow managed-model preparations when a newer selection wins. */
+    private var modelSelectionGeneration = 0L
+    private var pendingModelSelection: PendingHarnessModelSelection? = null
     /** Session-scoped cursor shared by reconnects and native/WebUI follow frames. */
     private val eventSequencer = HarnessSessionEventSequencer()
     private var lastConnectionAvailable: Boolean? = null
@@ -316,8 +330,7 @@ class NativeHarnessController(
         NativeHarnessManagementLoader(scope, clientProvider, { state.value }, { mutableState.update(it) }) { area ->
             when (area) {
                 HarnessManagementArea.SETTINGS -> {
-                    refreshSettings(reportFailure = true)
-                    refreshModelCatalog(reportFailure = true)
+                    refreshSettingsThenCatalog(reportFailure = true)
                     permissionActions.refresh(report = true)
                     parityActions.dispatch(NativeHarnessUiAction.RefreshAgentPresets)
                 }
@@ -412,6 +425,7 @@ class NativeHarnessController(
         connectionLock.withLock {
             refreshRuntime(reportFailure = false)
             refreshSessions(reportFailure = false)
+            refreshSettingsThenCatalog(reportFailure = false)
             management.invalidate()
             parityActions.refreshAfterWebView()
             startControlStream()
@@ -526,7 +540,7 @@ class NativeHarnessController(
         }
         parityActions.initialize()
         startControlStream()
-        scope.launch { refreshModelCatalog(reportFailure = false) }
+        scope.launch { refreshSettingsThenCatalog(reportFailure = false) }
     }
     private suspend fun dispatchInternal(action: NativeHarnessUiAction) {
         when (action) {
@@ -539,15 +553,19 @@ class NativeHarnessController(
             NativeHarnessUiAction.RefreshRuntimeDiagnostics,
             NativeHarnessUiAction.CopyRuntimeDiagnostics -> handleExternalAction(action)
             NativeHarnessUiAction.Continue -> {
+                pendingModelSelection = null
                 mutate { it.copy(notice = null) }
                 refreshRuntime(reportFailure = false)
                 refreshSessions(reportFailure = false)
+                refreshSettingsThenCatalog(reportFailure = false)
                 parityActions.refreshWorkspaceStreamOnly()
                 restartSelectedSubscriptions()
             }
+            NativeHarnessUiAction.RetryModelSelection -> retryPendingModelSelection()
             NativeHarnessUiAction.OpenWorkspace -> workspace.openWorkspace(state.value.workspace)
             NativeHarnessUiAction.OpenProjectIntegration -> handleExternalAction(action)
             NativeHarnessUiAction.OpenOriginalWebUi -> navigation.openOriginalWebUi()
+            NativeHarnessUiAction.OpenManagedLocalServers -> navigation.openManagedLocalServers()
             NativeHarnessUiAction.OpenModelManager -> mutate {
                 it.copy(provider = it.provider.copy(modelEditorOpen = true))
             }
@@ -670,7 +688,7 @@ class NativeHarnessController(
             )
             is NativeHarnessUiAction.CancelProviderLogin -> providerAuthActions.cancel(action.providerId, action.requestId)
             is NativeHarnessUiAction.LogoutProvider -> providerAuthActions.logout(action.providerId)
-            NativeHarnessUiAction.RefreshModelCatalog -> refreshModelCatalog(reportFailure = true)
+            NativeHarnessUiAction.RefreshModelCatalog -> refreshSettingsThenCatalog(reportFailure = true)
             is NativeHarnessUiAction.SelectReasoningEffort -> selectReasoningEffort(action.effortId)
             NativeHarnessUiAction.RefreshPermissionCatalog -> permissionActions.refresh(report = true)
             is NativeHarnessUiAction.SelectPermissionPreset -> permissionActions.select(action.value)
@@ -1321,59 +1339,223 @@ class NativeHarnessController(
     }
 
     private suspend fun selectProvider(providerId: String) {
-        val provider = state.value.provider.providers.firstOrNull { it.id == providerId } ?: return
-        val firstSelectableModel = provider.models.firstOrNull { harnessModelContextKnown(provider, it) }
-        mutate { it.copy(provider = it.provider.copy(
-            selectedProviderId = providerId,
-            selectedModel = firstSelectableModel,
-            selectedReasoningEffort = null,
-            supportsThinking = firstSelectableModel?.let(provider.reasoningModels::contains) == true
-        )) }
-        firstSelectableModel?.let { selectModel(it) }
+        val selectionGeneration = beginModelSelectionRequest()
+        val provider = state.value.provider.providers.firstOrNull { it.id == providerId } ?: run {
+            pendingModelSelection = null
+            return
+        }
+        val firstSelectableModel = harnessSelectableModelIds(provider).firstOrNull()
+        if (firstSelectableModel == null) {
+            pendingModelSelection = null
+            mutate { current ->
+                if (modelSelectionGeneration != selectionGeneration) current else current.copy(provider = current.provider.copy(
+                    selectedProviderId = providerId,
+                    selectedModel = null,
+                    selectedReasoningEffort = null,
+                    supportsThinking = false,
+                ))
+            }
+            return
+        }
+        // selectModel commits provider/model state only after any managed-model
+        // preparation and session RPC succeed. A failed preparation therefore
+        // leaves the user's previous provider selection intact.
+        selectModel(firstSelectableModel, providerId, selectionGeneration)
     }
 
-    private suspend fun selectModel(modelName: String, requestedProviderId: String? = state.value.provider.selectedProviderId) {
+    private suspend fun retryPendingModelSelection() {
+        val pending = pendingModelSelection ?: return
+        selectModel(pending.modelId, pending.providerId)
+    }
+
+    private fun beginModelSelectionRequest(): Long {
+        modelSelectionGeneration += 1L
+        return modelSelectionGeneration
+    }
+
+    private fun isCurrentModelSelection(
+        generation: Long,
+        sessionId: String?,
+        client: HarnessClient?,
+    ): Boolean = modelSelectionGeneration == generation &&
+        state.value.selectedSessionId == sessionId &&
+        clientProvider() === client
+
+    private suspend fun reportModelPreparationFailure(code: String, message: String) {
+        reportFailure(code, message)
+        mutate { current ->
+            current.copy(notice = current.notice?.copy(
+                action = NativeHarnessUiAction.RetryModelSelection,
+                actionLabelRes = R.string.harness_retry_model_selection,
+            ))
+        }
+    }
+
+    private suspend fun reportModelPreparationFailure(error: Throwable) {
+        val managed = generateSequence(error) { it.cause }
+            .filterIsInstance<ManagedLlamaServerException>()
+            .firstOrNull()
+        reportModelPreparationFailure(
+            code = managed?.code ?: "MODEL_PREPARE_FAILED",
+            message = managed?.message?.take(500)
+                ?: error.message?.take(500)
+                ?: "Could not prepare the selected local model",
+        )
+    }
+
+    private suspend fun selectModel(
+        modelName: String,
+        requestedProviderId: String? = state.value.provider.selectedProviderId,
+        selectionGeneration: Long = beginModelSelectionRequest(),
+    ) {
         val providerId = requestedProviderId ?: return
-        val selectedProvider = state.value.provider.providers.firstOrNull { it.id == providerId }
-        if (modelName !in selectedProvider?.models.orEmpty()) return
-        if (selectedProvider == null || !harnessModelContextKnown(selectedProvider, modelName)) {
-            reportFailure(
-                "MODEL_CONTEXT_UNKNOWN",
-                "Set an explicit context window for this model before selecting it"
-            )
-            return
-        }
         val sessionId = state.value.selectedSessionId
-        if (sessionId == null) {
-            mutate { it.copy(provider = it.provider.copy(selectedProviderId = providerId, selectedModel = modelName,
-                selectedReasoningEffort = null, supportsThinking = modelName in selectedProvider?.reasoningModels.orEmpty())) }
-            return
+        val capturedClient = clientProvider()
+        pendingModelSelection = PendingHarnessModelSelection(providerId, modelName)
+        val preparing = modelName.startsWith("llama:")
+        if (preparing) {
+            mutate { current ->
+                if (modelSelectionGeneration != selectionGeneration ||
+                    current.selectedSessionId != sessionId ||
+                    clientProvider() !== capturedClient
+                ) {
+                    current
+                } else current.copy(provider = current.provider.copy(
+                        isPreparingModel = true,
+                        preparingModelId = modelName,
+                    ))
+            }
         }
-        val client = clientOrNull() ?: return
-        val reasoningEffort = if (state.value.provider.thinkingEnabled) {
-            state.value.provider.selectedReasoningEffort
-                ?.takeIf { effort -> selectedProvider?.reasoningEfforts?.get(modelName)?.any { it.id == effort } == true }
-                ?: selectedProvider?.reasoningDefaults?.get(modelName)
-        } else {
-            null
-        }
-        when (val result = client.selectSessionModel(buildJsonObject {
-            put("sessionId", sessionId)
-            put("provider", providerId)
-            put("model", modelName)
-            reasoningEffort?.let { put("reasoningEffort", it) }
-        })) {
-            is HarnessRpcResult.Failure -> reportFailure(result.error.code, result.error.message)
-            is HarnessRpcResult.Success -> mutate { current ->
-                current.copy(provider = current.provider.copy(
-                    selectedProviderId = providerId,
-                    selectedModel = modelName,
-                    selectedReasoningEffort = reasoningEffort,
-                    supportsThinking = current.provider.providers
-                        .firstOrNull { it.id == providerId }
-                        ?.reasoningModels
-                        ?.contains(modelName) == true
-                ))
+        try {
+            if (preparing) {
+                val prepared = try {
+                    prepareLocalModel(modelName)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    if (isCurrentModelSelection(selectionGeneration, sessionId, capturedClient)) {
+                        reportModelPreparationFailure(error)
+                    }
+                    return
+                }
+                // A reconnect or a WebUI event may replace the client while a
+                // managed server is starting. Ignore that completion instead
+                // of applying metadata to the new session/catalog.
+                if (!isCurrentModelSelection(selectionGeneration, sessionId, capturedClient)) return
+                if (prepared != null) {
+                    if (!harnessPreparedLocalModelIsReady(prepared)) {
+                        reportModelPreparationFailure(
+                            code = harnessPreparedLocalModelErrorCode(prepared) ?: "MODEL_PREPARE_FAILED",
+                            message = "Could not prepare the selected local model",
+                        )
+                        return
+                    }
+                    mutate { current ->
+                        if (modelSelectionGeneration != selectionGeneration ||
+                            current.selectedSessionId != sessionId ||
+                            clientProvider() !== capturedClient
+                        ) {
+                            current
+                        } else current.copy(provider = current.provider.copy(
+                                providers = updateHarnessPreparedLocalModel(
+                                    providers = current.provider.providers,
+                                    modelId = modelName,
+                                    row = prepared,
+                                    configs = current.provider.configs,
+                                )
+                            ))
+                    }
+                }
+            }
+
+            if (!isCurrentModelSelection(selectionGeneration, sessionId, capturedClient)) return
+            val selectedProvider = state.value.provider.providers.firstOrNull { it.id == providerId }
+            if (modelName !in selectedProvider?.models.orEmpty()) return
+            if (selectedProvider == null || !harnessModelContextKnown(selectedProvider, modelName)) {
+                reportFailure(
+                    "MODEL_CONTEXT_UNKNOWN",
+                    "Set an explicit context window for this model before selecting it"
+                )
+                return
+            }
+            val reasoningEffort = if (state.value.provider.thinkingEnabled) {
+                state.value.provider.selectedReasoningEffort
+                    ?.takeIf { effort -> selectedProvider.reasoningEfforts[modelName]?.any { it.id == effort } == true }
+                    ?: selectedProvider.reasoningDefaults[modelName]
+            } else {
+                null
+            }
+            if (sessionId == null) {
+                var committed = false
+                mutate { current ->
+                    if (modelSelectionGeneration != selectionGeneration ||
+                        current.selectedSessionId != sessionId ||
+                        clientProvider() !== capturedClient
+                    ) {
+                        current
+                    } else {
+                        committed = true
+                        current.copy(provider = current.provider.copy(
+                            selectedProviderId = providerId,
+                            selectedModel = modelName,
+                            selectedReasoningEffort = reasoningEffort,
+                            supportsThinking = modelName in selectedProvider.reasoningModels,
+                        ))
+                    }
+                }
+                if (committed) pendingModelSelection = null
+                return
+            }
+            val client = clientOrNull() ?: return
+            if (!isCurrentModelSelection(selectionGeneration, sessionId, capturedClient) || client !== capturedClient) return
+            when (val result = client.selectSessionModel(buildJsonObject {
+                put("sessionId", sessionId)
+                put("provider", providerId)
+                put("model", modelName)
+                reasoningEffort?.let { put("reasoningEffort", it) }
+            })) {
+                is HarnessRpcResult.Failure -> {
+                    if (isCurrentModelSelection(selectionGeneration, sessionId, capturedClient)) {
+                        reportFailure(result.error.code, result.error.message)
+                    }
+                }
+                is HarnessRpcResult.Success -> {
+                    var committed = false
+                    mutate { current ->
+                        if (modelSelectionGeneration != selectionGeneration ||
+                            current.selectedSessionId != sessionId ||
+                            clientProvider() !== capturedClient
+                        ) {
+                            current
+                        } else {
+                            committed = true
+                            current.copy(provider = current.provider.copy(
+                                selectedProviderId = providerId,
+                                selectedModel = modelName,
+                                selectedReasoningEffort = reasoningEffort,
+                                supportsThinking = current.provider.providers
+                                    .firstOrNull { it.id == providerId }
+                                    ?.reasoningModels
+                                    ?.contains(modelName) == true
+                            ))
+                        }
+                    }
+                    if (committed) pendingModelSelection = null
+                }
+            }
+        } finally {
+            if (preparing) {
+                mutate { current ->
+                    if (modelSelectionGeneration == selectionGeneration &&
+                        current.provider.preparingModelId == modelName &&
+                        clientProvider() === capturedClient
+                    ) {
+                        current.copy(provider = current.provider.copy(
+                            isPreparingModel = false,
+                            preparingModelId = null,
+                        ))
+                    } else current
+                }
             }
         }
     }
@@ -1655,6 +1837,8 @@ class NativeHarnessController(
         pluginActions.refresh(reportFailure)
 
     private suspend fun refreshSettings(reportFailure: Boolean): Unit = settingsReader.refreshSettings(reportFailure)
+    private suspend fun refreshSettingsThenCatalog(reportFailure: Boolean): Unit =
+        settingsReader.refreshSettingsThenCatalog(reportFailure)
     private suspend fun refreshModelCatalog(reportFailure: Boolean): Unit = settingsReader.refreshModelCatalog(reportFailure)
 
     private suspend fun refreshSkills(reportFailure: Boolean) = referenceCatalogs.skills(reportFailure)

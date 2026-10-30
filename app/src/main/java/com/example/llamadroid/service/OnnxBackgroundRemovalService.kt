@@ -99,13 +99,16 @@ class OnnxBackgroundRemovalService : Service() {
                         OnnxBackgroundRemovalState.Error(getString(R.string.bgr_error_already_running))
                     )
                 } else {
-                    ensureForeground(config.modelName)
-                    startRemoval(config)
+                    if (ensureForeground(config.modelName)) startRemoval(config)
                 }
             }
             ACTION_CANCEL -> cancelRemoval()
         }
         return START_NOT_STICKY
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        ForegroundTimeoutSupport.handle(this, fgsType)
     }
 
     override fun onDestroy() {
@@ -115,13 +118,22 @@ class OnnxBackgroundRemovalService : Service() {
         notificationTaskId?.let { UnifiedNotificationManager.dismissTask(it) }
     }
 
-    private fun ensureForeground(modelName: String) {
+    private fun ensureForeground(modelName: String): Boolean {
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.BACKGROUND_REMOVAL,
             modelName
         )
+        val started = ForegroundStart.start(this, taskId, notification, ForegroundServiceTypes.MEDIA_PROCESSING)
+        if (started is ForegroundStart.Result.Failed) {
+            UnifiedNotificationManager.failTask(taskId, ForegroundStart.failureMessage(this, started.reason, modelName))
+            OnnxBackgroundRemovalStateStore.updateState(
+                OnnxBackgroundRemovalState.Error(ForegroundStart.failureMessage(this, started.reason, modelName))
+            )
+            stopSelf()
+            return false
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
+        return true
     }
 
     private fun startRemoval(config: OnnxBackgroundRemovalConfig) {

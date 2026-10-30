@@ -67,7 +67,7 @@ class HarnessWorkspaceRepository(
     private val database: AppDatabase,
     private val credentials: HarnessCredentialStore
 ) {
-    private val dao = database.harnessDao()
+    private val dao = database.harnessDao(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context))
     private val chats = database.agentChatDao()
 
     suspend fun importLegacyWorkspaces() {
@@ -80,12 +80,14 @@ class HarnessWorkspaceRepository(
     }
 
     private suspend fun ensureLegacyWorkspace(conversation: AgentConversationEntity): HarnessWorkspaceEntity {
+        require(conversation.runtimeId == com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context)) { "HARNESS_RUNTIME_MISMATCH" }
         require(!harnessProjectSuppressed(context, conversation.workspaceBackend, conversation.projectFolder)) {
             "PROJECT_REMOVED"
         }
         return dao.workspaceForRoot(conversation.workspaceBackend, conversation.projectFolder) ?: run {
                 val folder = AgentLocalWorkspaceSupport.sanitizeProjectFolder(conversation.projectFolder)
                 HarnessWorkspaceEntity(
+                    runtimeId = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context),
                     id = "legacy-${conversation.id}", backend = conversation.workspaceBackend,
                     projectFolder = conversation.projectFolder, title = conversation.title,
                     guestPath = if (conversation.workspaceBackend == "REMOTE_SSH") "/workspace/remote/legacy-${conversation.id}" else "/workspace/projects/$folder",
@@ -104,6 +106,7 @@ class HarnessWorkspaceRepository(
         }
         val id = UUID.randomUUID().toString()
         return HarnessWorkspaceEntity(
+            runtimeId = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context),
             id = id, backend = if (remote) "REMOTE_SSH" else "LOCAL_PROOT", projectFolder = folder,
             connectionKey = if (remote) id else "",
             title = title, guestPath = if (remote) "/workspace/remote/$id" else "/workspace/projects/$folder"
@@ -193,6 +196,7 @@ class HarnessWorkspaceRepository(
             it.projectFolder == workspace.projectFolder && it.workspaceBackend == workspace.backend
         }
         val conversationId = chats.insertConversation(AgentConversationEntity(
+            runtimeId = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context),
             title = title, projectFolder = workspace.projectFolder, workspaceBackend = workspace.backend,
             prootEnvironmentId = workspace.prootEnvironmentId, runtimeSource = AgentRuntimeSource.DEEPSEEK,
             projectFolderId = legacy?.projectFolderId, knowledgeBaseIds = legacy?.knowledgeBaseIds.orEmpty(),
@@ -200,7 +204,8 @@ class HarnessWorkspaceRepository(
             lastRunProfileJson = legacy?.lastRunProfileJson.orEmpty(), previewUrlOverride = legacy?.previewUrlOverride,
             directReanchorState = "COMPLETE"
         ))
-        HarnessSessionEntity(sessionId, conversationId, workspace.id, archived = archived)
+        HarnessSessionEntity(sessionId, conversationId, workspace.id, archived = archived,
+            runtimeId = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context))
             .also { dao.saveSession(it) }
     }
 
@@ -234,10 +239,9 @@ class HarnessWorkspaceRepository(
 
     private fun requireManagedLocalProjectRoot(projectFolder: String) {
         val entry = AgentLocalWorkspaceSupport.rootPathForProject(context, projectFolder)
-        val appFiles = context.filesDir.canonicalFile
         val managedRoot = requireNotNull(entry.parentFile).canonicalFile
         val physical = entry.canonicalFile
-        require(managedRoot.name == "agent_local_workspaces" && managedRoot.parentFile == appFiles &&
+        require(managedRoot == com.example.llamadroid.harness.runtime.HarnessRuntimeScope.projects(context) &&
             physical.parentFile == managedRoot && !Files.isSymbolicLink(entry.toPath())) {
             "WORKSPACE_NOT_MANAGED"
         }
@@ -430,6 +434,7 @@ class HarnessWorkspaceRepository(
     suspend fun fileScopeForConversation(conversationId: Long, allowPendingDeletion: Boolean = false): HarnessWorkspaceScope {
         dao.sessionForConversation(conversationId)?.let { return scope(it.harnessSessionId) }
         val conversation = requireNotNull(chats.getConversation(conversationId)) { "WORKSPACE_NOT_FOUND" }
+        require(conversation.runtimeId == com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context)) { "HARNESS_RUNTIME_MISMATCH" }
         val workspace = if (conversation.runtimeSource == AgentRuntimeSource.WORKSPACE_ONLY) dao.workspace(conversation.title)
         else dao.workspaces().firstOrNull {
             it.projectFolder == conversation.projectFolder && it.backend == conversation.workspaceBackend
@@ -455,6 +460,7 @@ class HarnessWorkspaceRepository(
             it.runtimeSource == AgentRuntimeSource.LEGACY_ARCHIVE && it.projectFolder == workspace.projectFolder && it.workspaceBackend == workspace.backend
         }
         val conversation = bound ?: anchor ?: AgentConversationEntity(
+            runtimeId = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context),
             title = workspace.id, projectFolder = workspace.projectFolder, workspaceBackend = workspace.backend,
             prootEnvironmentId = workspace.prootEnvironmentId, runtimeSource = AgentRuntimeSource.WORKSPACE_ONLY,
             projectFolderId = template?.projectFolderId, knowledgeBaseIds = template?.knowledgeBaseIds.orEmpty(),
@@ -480,7 +486,7 @@ class HarnessWorkspaceRepository(
 
     private fun requireProjectAvailable(workspace: HarnessWorkspaceEntity) {
         require(!harnessProjectSuppressed(context, workspace)) { "PROJECT_REMOVED" }
-        val pending = File(context.filesDir, "agent_harness/project-deletions").listFiles().orEmpty().any { receipt ->
+        val pending = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.dataFile(context, "agent_harness/project-deletions").listFiles().orEmpty().any { receipt ->
             receipt.name.matches(Regex("[0-9]+\\.json")) && runCatching {
                 val row = JSONObject(receipt.readText())
                 val remote = row.getString("backend") == "REMOTE_SSH"
@@ -506,6 +512,7 @@ class HarnessWorkspaceRepository(
         dao.workspaceForRoot("LOCAL_PROOT", folder)?.let { return it }
         AgentLocalWorkspaceSupport.rootForProject(context, folder)
         return HarnessWorkspaceEntity(
+            runtimeId = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context),
             id = UUID.randomUUID().toString(), backend = "LOCAL_PROOT", projectFolder = folder,
             title = title, guestPath = "/workspace/projects/$folder"
         ).also { dao.saveWorkspace(it) }

@@ -82,7 +82,13 @@ fun buildVideoCommandArgs(
                 code = SdVideoWorkflowErrorCode.UNSUPPORTED_WORKFLOW
             )
         }
-        val prerequisites = profile.validate(paths, inputs, workflow)
+        // Validate only the decoder that will be emitted below: a saved but unused TAE is ignored.
+        val taeEmitted = !paths.taePath.isNullOrBlank() && (config.useTae || paths.vaePath.isNullOrBlank())
+        val prerequisites = profile.validate(
+            if (taeEmitted) paths else paths.copy(taePath = null, taeLatentChannels = null),
+            inputs,
+            workflow
+        )
         if (!prerequisites.isSatisfied) {
             throw SdVideoPrerequisiteException(profile, prerequisites)
         }
@@ -284,16 +290,26 @@ fun buildVideoCommandArgs(
         throw SdVideoInputException(SdVideoInputException.Code.REFERENCE_AUDIO_MISMATCH)
     }
     referenceVideoAudios.forEach { addPath("--ref-video-audio", it) }
-    if (config.refImageArgs.isNotBlank()) {
-        addValue("--ref-image-args", validateNativeKeyValueList(config.refImageArgs, "refImageArgs"))
-    }
+    // stable-diffusion.cpp 2988060 removed --disable-auto-resize-ref-image. The
+    // equivalent key=value pair has been accepted by --ref-image-args since the
+    // previous pinned build, so it is merged here for old and new binaries alike.
+    val refImageArgs = buildList {
+        if (config.refImageArgs.isNotBlank()) {
+            add(validateNativeKeyValueList(config.refImageArgs, "refImageArgs"))
+        }
+        val userSetsResize = config.refImageArgs.split(',')
+            .any { it.trim().startsWith("resize_before_vae=") }
+        if (config.disableAutoResizeRefImage && !userSetsResize) add("resize_before_vae=off")
+    }.joinToString(",")
+    if (refImageArgs.isNotEmpty()) addValue("--ref-image-args", refImageArgs)
     if (config.increaseRefIndex) addBare("--increase-ref-index")
-    if (config.disableAutoResizeRefImage) addBare("--disable-auto-resize-ref-image")
 
     if (config.vaeTiling) {
         addBare("--vae-tiling")
         addValue("--vae-tile-overlap", config.vaeTileOverlap.toString())
-        if (config.vaeTileSize.isNotBlank()) addValue("--vae-tile-size", config.vaeTileSize)
+        if (config.vaeTileSize.isNotBlank()) {
+            addValue("--vae-tile-size", sdVaeTileSizeForBinary(config.vaeTileSize, binaryCapabilities))
+        }
         if (config.vaeRelativeTileSize.isNotBlank()) {
             addValue("--vae-relative-tile-size", config.vaeRelativeTileSize)
         }
@@ -311,13 +327,18 @@ fun buildVideoCommandArgs(
 
     appendHiresArgs(args, config.hires, paths.hiresUpscalersDir, paths.hiresUpscaler, ::requireFlag)
 
-    if (config.diffusionFa) {
-        addBare("--diffusion-fa")
+    val moduleAcceleration = sdUsesModuleAccelerationFlags(binaryCapabilities)
+    if (moduleAcceleration) {
+        args.addAll(sdModuleAccelerationArgs(config.diffusionFa, config.diffusionConvDirect, config.vaeConvDirect))
+    } else {
+        if (config.diffusionFa) {
+            addBare("--diffusion-fa")
+        }
+        if (config.diffusionConvDirect) {
+            addBare("--diffusion-conv-direct")
+        }
     }
-    if (config.diffusionConvDirect) {
-        addBare("--diffusion-conv-direct")
-    }
-    if (config.vaeConvDirect) {
+    if (config.vaeConvDirect && !moduleAcceleration) {
         addBare("--vae-conv-direct")
     }
     if (config.mmap) {

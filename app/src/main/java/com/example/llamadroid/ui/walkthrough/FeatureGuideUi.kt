@@ -39,6 +39,24 @@ internal fun FeatureGuideAction(modifier: Modifier = Modifier) {
     }
 }
 
+/** Overflow-menu variant of [FeatureGuideAction]; keeps the same feature-guide tag and walkthrough target. */
+@Composable
+internal fun FeatureGuideMenuItem(modifier: Modifier = Modifier, onClick: () -> Unit = {}) {
+    val entry = LocalFeatureGuideEntry.current ?: return
+    DropdownMenuItem(
+        text = {
+            Text(
+                stringResource(R.string.feature_guide_title),
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+        },
+        leadingIcon = { Icon(Icons.Default.Explore, contentDescription = null) },
+        onClick = { onClick(); entry.open(entry.guideId) },
+        modifier = modifier.testTag("feature_guide_open").walkthroughTarget("feature.explore")
+    )
+}
+
 /** The chooser is bounded, scrollable and dismissible without changing the underlying destination. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable

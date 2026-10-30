@@ -107,6 +107,7 @@ import com.example.llamadroid.ui.components.SliderWithInput
 import com.example.llamadroid.ui.components.IntSliderWithInput
 import com.example.llamadroid.ui.components.SdSchedulerPicker
 import com.example.llamadroid.ui.components.AppScrollableTabRow
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppAdvancedSection
 import com.example.llamadroid.ui.components.AppStateKind
 import com.example.llamadroid.ui.components.AppStatePanel
@@ -184,6 +185,7 @@ fun ImageGenScreen(
     val scope = rememberCoroutineScope()
     val queueRepository = remember(context) { GenerationQueueRepository(context) }
     val queueRunning by GenerationQueueRuntime.active.collectAsState()
+    val queuePendingCount by queueRepository.pendingCountFlow.collectAsState(initial = 0)
 
     // Available SD models - Classic checkpoints (SD1.5/SDXL)
     val sdCheckpoints by db.modelDao().getModelsByType(ModelType.SD_CHECKPOINT)
@@ -1516,7 +1518,10 @@ fun ImageGenScreen(
     val adetailerModeHolder = remember { SDModeStateHolder.adetailer }
     val upscaleModeHolder = remember { SDModeStateHolder.upscale }
 
-    val txt2imgGenerationState by txt2imgModeHolder.state.collectAsState()
+    val rawTxt2imgGenerationState by txt2imgModeHolder.state.collectAsState()
+    val txt2imgEasyOrigin by txt2imgModeHolder.easyOrigin.collectAsState()
+    // Easy-mode runs share this holder; the advanced screen must not show them.
+    val txt2imgGenerationState = if (txt2imgEasyOrigin) SDGenerationState.Idle else rawTxt2imgGenerationState
     val img2imgGenerationState by img2imgModeHolder.state.collectAsState()
     val adetailerGenerationState by adetailerModeHolder.state.collectAsState()
     val upscaleGenerationState by upscaleModeHolder.state.collectAsState()
@@ -1684,13 +1689,15 @@ fun ImageGenScreen(
 
     // Load existing images from disk (including subfolders)
     LaunchedEffect(Unit) {
-        val allImages = mutableListOf<File>()
-        galleryDirs.forEach { dir ->
+        diskImages = withContext(Dispatchers.IO) {
+            val allImages = mutableListOf<File>()
+            galleryDirs.forEach { dir ->
                 dir.listFiles()
                     ?.filter { it.extension.lowercase() in listOf("png", "jpg", "jpeg") }
                     ?.let { allImages.addAll(it) }
+            }
+            allImages.sortedByDescending { it.lastModified() }
         }
-        diskImages = allImages.sortedByDescending { it.lastModified() }
     }
 
     LaunchedEffect(txt2imgGenerationState, img2imgGenerationState, adetailerGenerationState, upscaleGenerationState, selectedMode, adetailerInputMode) {
@@ -1704,13 +1711,15 @@ fun ImageGenScreen(
             is SDGenerationState.Error -> errorMessage = state.message
             is SDGenerationState.Complete -> {
                 errorMessage = null
-                val allImages = mutableListOf<File>()
-                galleryDirs.forEach { dir ->
-                    dir.listFiles()
-                        ?.filter { it.extension.lowercase() in listOf("png", "jpg", "jpeg") }
-                        ?.let { allImages.addAll(it) }
+                diskImages = withContext(Dispatchers.IO) {
+                    val allImages = mutableListOf<File>()
+                    galleryDirs.forEach { dir ->
+                        dir.listFiles()
+                            ?.filter { it.extension.lowercase() in listOf("png", "jpg", "jpeg") }
+                            ?.let { allImages.addAll(it) }
+                    }
+                    allImages.sortedByDescending { it.lastModified() }
                 }
-                diskImages = allImages.sortedByDescending { it.lastModified() }
             }
             else -> Unit
         }
@@ -2472,6 +2481,166 @@ fun ImageGenScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
         }
+        if (selectedMode != IMAGE_GEN_MODE_UPSCALE) item(key = "workflow-preset") {
+            val selectedWorkflowPreset = SdWorkflowPresetCatalog.byId(selectedWorkflowPresetId.orEmpty())
+            var workflowExpanded by remember { mutableStateOf(false) }
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        stringResource(R.string.sd_workflow_preset_label),
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        stringResource(R.string.sd_workflow_preset_help),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (selectedWorkflowPreset != null && !workflowHashVerificationFinished) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            stringResource(R.string.sd_workflow_hash_verifying),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    ExposedDropdownMenuBox(
+                        expanded = workflowExpanded,
+                        onExpandedChange = { workflowExpanded = !workflowExpanded }
+                    ) {
+                        OutlinedTextField(
+                            value = selectedWorkflowPreset?.let { stringResource(it.bundle.titleRes) }
+                                ?: stringResource(R.string.sd_workflow_preset_none),
+                            onValueChange = {},
+                            readOnly = true,
+                            modifier = Modifier.fillMaxWidth().menuAnchor(),
+                            maxLines = 1,
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = workflowExpanded) }
+                        )
+                        ExposedDropdownMenu(
+                            expanded = workflowExpanded,
+                            onDismissRequest = { workflowExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.sd_workflow_preset_none)) },
+                                onClick = {
+                                    selectedWorkflowPresetId = null
+                                    workflowExpanded = false
+                                }
+                            )
+                            SdWorkflowPresetCatalog.presets.forEach { preset ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            stringResource(preset.bundle.titleRes),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    },
+                                    onClick = {
+                                        applyWorkflowPreset(preset)
+                                        workflowExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    selectedWorkflowPreset?.let { preset ->
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            stringResource(preset.bundle.descriptionRes),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+        item(key = "model") { Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    if (selectedMode == 2) {
+                        stringResource(R.string.imagegen_component_upscaler)
+                    } else {
+                        stringResource(R.string.sd_type_diffusion)
+                    },
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                val modelsToShow = modelsForSelectedMode
+
+                if (modelsToShow.isEmpty()) {
+                    Text(
+                        if (selectedMode == 2) stringResource(R.string.imagegen_no_upscalers_installed) else stringResource(R.string.imagegen_no_models_installed),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { navController.navigate(Screen.SDModels.route) }
+                    ) {
+                        Icon(Icons.Default.Add, null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(if (selectedMode == 2) stringResource(R.string.imagegen_get_upscaler_models) else stringResource(R.string.imagegen_get_sd_models))
+                    }
+                } else {
+                    var expanded by remember { mutableStateOf(false) }
+                    ExposedDropdownMenuBox(
+                        expanded = expanded,
+                        onExpandedChange = { expanded = !expanded }
+                    ) {
+                        OutlinedTextField(
+                            value = selectedActiveModel?.filename ?: stringResource(R.string.imagegen_select_model),
+                            onValueChange = {},
+                            readOnly = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .menuAnchor(),
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) }
+                        )
+                        ExposedDropdownMenu(
+                            expanded = expanded,
+                            onDismissRequest = { expanded = false }
+                        ) {
+                            modelsToShow.forEach { model ->
+                                DropdownMenuItem(
+                                    text = { Text(model.filename) },
+                                    onClick = {
+                                        expanded = false
+
+                                        if (selectedMode == 2) {
+                                            selectedUpscalerModelPath = model.path
+                                            val factorRegex = Regex("(\\d+)[xX]|[xX](\\d+)")
+                                            val match = factorRegex.find(model.filename)
+                                            if (match != null) {
+                                                val detected = (match.groupValues[1].takeIf { it.isNotBlank() }
+                                                    ?: match.groupValues[2]).toIntOrNull()
+                                                if (detected != null && detected in listOf(2, 4, 8)) {
+                                                    upscaleFactor = detected
+                                                }
+                                            }
+                                        } else {
+                                            selectedGenerationModelPath = model.path
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        } }
+
         if (selectedMode != 2) item(key = "prompts-and-parameters") {
             Spacer(modifier = Modifier.height(12.dp))
             Card(
@@ -2933,320 +3102,9 @@ fun ImageGenScreen(
                 onLoraStackChange = { adetailerLoraStack = it }
             )
         }
-        if (selectedMode != IMAGE_GEN_MODE_UPSCALE) item(key = "workflow-preset") {
-            val selectedWorkflowPreset = SdWorkflowPresetCatalog.byId(selectedWorkflowPresetId.orEmpty())
-            var workflowExpanded by remember { mutableStateOf(false) }
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        stringResource(R.string.sd_workflow_preset_label),
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        stringResource(R.string.sd_workflow_preset_help),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    if (selectedWorkflowPreset != null && !workflowHashVerificationFinished) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            stringResource(R.string.sd_workflow_hash_verifying),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    ExposedDropdownMenuBox(
-                        expanded = workflowExpanded,
-                        onExpandedChange = { workflowExpanded = !workflowExpanded }
-                    ) {
-                        OutlinedTextField(
-                            value = selectedWorkflowPreset?.let { stringResource(it.bundle.titleRes) }
-                                ?: stringResource(R.string.sd_workflow_preset_none),
-                            onValueChange = {},
-                            readOnly = true,
-                            modifier = Modifier.fillMaxWidth().menuAnchor(),
-                            maxLines = 1,
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = workflowExpanded) }
-                        )
-                        ExposedDropdownMenu(
-                            expanded = workflowExpanded,
-                            onDismissRequest = { workflowExpanded = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.sd_workflow_preset_none)) },
-                                onClick = {
-                                    selectedWorkflowPresetId = null
-                                    workflowExpanded = false
-                                }
-                            )
-                            SdWorkflowPresetCatalog.presets.forEach { preset ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            stringResource(preset.bundle.titleRes),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    },
-                                    onClick = {
-                                        applyWorkflowPreset(preset)
-                                        workflowExpanded = false
-                                    }
-                                )
-                            }
-                        }
-                    }
-                    selectedWorkflowPreset?.let { preset ->
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            stringResource(preset.bundle.descriptionRes),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
-        item(key = "model") { Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    if (selectedMode == 2) {
-                        stringResource(R.string.imagegen_component_upscaler)
-                    } else {
-                        stringResource(R.string.sd_type_diffusion)
-                    },
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-
-                val modelsToShow = modelsForSelectedMode
-
-                if (modelsToShow.isEmpty()) {
-                    Text(
-                        if (selectedMode == 2) stringResource(R.string.imagegen_no_upscalers_installed) else stringResource(R.string.imagegen_no_models_installed),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = { navController.navigate(Screen.SDModels.route) }
-                    ) {
-                        Icon(Icons.Default.Add, null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(if (selectedMode == 2) stringResource(R.string.imagegen_get_upscaler_models) else stringResource(R.string.imagegen_get_sd_models))
-                    }
-                } else {
-                    var expanded by remember { mutableStateOf(false) }
-                    ExposedDropdownMenuBox(
-                        expanded = expanded,
-                        onExpandedChange = { expanded = !expanded }
-                    ) {
-                        OutlinedTextField(
-                            value = selectedActiveModel?.filename ?: stringResource(R.string.imagegen_select_model),
-                            onValueChange = {},
-                            readOnly = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .menuAnchor(),
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) }
-                        )
-                        ExposedDropdownMenu(
-                            expanded = expanded,
-                            onDismissRequest = { expanded = false }
-                        ) {
-                            modelsToShow.forEach { model ->
-                                DropdownMenuItem(
-                                    text = { Text(model.filename) },
-                                    onClick = {
-                                        expanded = false
-
-                                        if (selectedMode == 2) {
-                                            selectedUpscalerModelPath = model.path
-                                            val factorRegex = Regex("(\\d+)[xX]|[xX](\\d+)")
-                                            val match = factorRegex.find(model.filename)
-                                            if (match != null) {
-                                                val detected = (match.groupValues[1].takeIf { it.isNotBlank() }
-                                                    ?: match.groupValues[2]).toIntOrNull()
-                                                if (detected != null && detected in listOf(2, 4, 8)) {
-                                                    upscaleFactor = detected
-                                                }
-                                            }
-                                        } else {
-                                            selectedGenerationModelPath = model.path
-                                        }
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        } }
-
-        if (selectedModelPath != null && selectedMode != 2 && selectedInspection != null) item(key = "artifact-inspection") {
-            SdGenerationInspectionCard(
-                inspection = selectedInspection,
-                selectedFamily = selectedFamily,
-                isManualOverride = selectedMainModel?.let { model ->
-                    model.sdFamily != null && model.sdFamily != model.sdDetectedFamily
-                } == true
-            )
-        }
-        if (selectedModelPath != null && selectedMode != 2 && componentRoles.isNotEmpty()) item(key = "components") {
-            Spacer(modifier = Modifier.height(12.dp))
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        stringResource(R.string.imagegen_components_title),
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                    )
-                    Text(
-                        stringResource(
-                            R.string.imagegen_components_desc,
-                            selectedFamily?.storedValue ?: stringResource(R.string.imagegen_select_model)
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    if (missingRequiredComponents.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Card(
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
-                            ),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Text(
-                                stringResource(
-                                    R.string.imagegen_missing_components_message,
-                                    missingRequiredComponents.joinToString(", ") {
-                                        componentRoleLabel(context, it)
-                                    }
-                                ),
-                                modifier = Modifier.padding(12.dp),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onErrorContainer
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    componentRoles.forEachIndexed { index, role ->
-                        when (role) {
-                            SdComponentRole.VAE -> SdComponentPickerField(
-                                label = componentRoleLabel(role),
-                                models = compatibleVaeModels,
-                                selectedPath = selectedVaePath,
-                                onSelectionChange = { selectedVaePath = it },
-                                allowNone = role !in requiredComponentRoles,
-                                emptyMessage = stringResource(R.string.imagegen_no_vae_installed)
-                            )
-                            SdComponentRole.TAE -> SdComponentPickerField(
-                                label = componentRoleLabel(role),
-                                models = compatibleTaeModels,
-                                selectedPath = selectedTaePath,
-                                onSelectionChange = { selectedTaePath = it },
-                                allowNone = role !in requiredComponentRoles,
-                                emptyMessage = stringResource(R.string.imagegen_no_tae_installed)
-                            )
-                            SdComponentRole.CLIP_L -> SdComponentPickerField(
-                                label = componentRoleLabel(role),
-                                models = compatibleClipLModels,
-                                selectedPath = selectedClipLPath,
-                                onSelectionChange = { selectedClipLPath = it },
-                                allowNone = role !in requiredComponentRoles,
-                                emptyMessage = stringResource(R.string.imagegen_no_clip_l)
-                            )
-                            SdComponentRole.CLIP_G -> SdComponentPickerField(
-                                label = componentRoleLabel(role),
-                                models = compatibleClipGModels,
-                                selectedPath = selectedClipGPath,
-                                onSelectionChange = { selectedClipGPath = it },
-                                allowNone = role !in requiredComponentRoles,
-                                emptyMessage = stringResource(R.string.imagegen_no_clip_g)
-                            )
-                            SdComponentRole.T5XXL -> SdComponentPickerField(
-                                label = componentRoleLabel(role),
-                                models = compatibleT5xxlModels,
-                                selectedPath = selectedT5xxlPath,
-                                onSelectionChange = { selectedT5xxlPath = it },
-                                allowNone = role !in requiredComponentRoles,
-                                emptyMessage = stringResource(R.string.imagegen_no_t5xxl)
-                            )
-                            SdComponentRole.LLM -> SdComponentPickerField(
-                                label = componentRoleLabel(role),
-                                models = compatibleLlmModels,
-                                selectedPath = selectedLlmPath,
-                                onSelectionChange = { selectedLlmPath = it },
-                                allowNone = role !in requiredComponentRoles,
-                                emptyMessage = stringResource(R.string.imagegen_no_llm)
-                            )
-                            SdComponentRole.LLM_VISION -> SdComponentPickerField(
-                                label = componentRoleLabel(role),
-                                models = compatibleLlmVisionModels,
-                                selectedPath = selectedLlmVisionPath,
-                                onSelectionChange = { selectedLlmVisionPath = it },
-                                allowNone = role !in requiredComponentRoles,
-                                emptyMessage = stringResource(R.string.imagegen_no_llm_vision)
-                            )
-                            SdComponentRole.PHOTOMAKER -> SdComponentPickerField(
-                                label = componentRoleLabel(role),
-                                models = compatiblePhotoMakerModels,
-                                selectedPath = selectedPhotoMakerPath,
-                                onSelectionChange = { selectedPhotoMakerPath = it },
-                                allowNone = role !in requiredComponentRoles,
-                                emptyMessage = stringResource(R.string.imagegen_no_photomaker)
-                            )
-                            else -> Unit
-                        }
-                        if (index != componentRoles.lastIndex) {
-                            Spacer(modifier = Modifier.height(12.dp))
-                        }
-                    }
-
-                    val anyRequiredRoleMissingModel = selectedFamilySpec?.requiredRoles?.any { role ->
-                        when (role) {
-                            SdComponentRole.VAE -> compatibleVaeModels.isEmpty()
-                            SdComponentRole.TAE -> compatibleTaeModels.isEmpty()
-                            SdComponentRole.CLIP_L -> compatibleClipLModels.isEmpty()
-                            SdComponentRole.CLIP_G -> compatibleClipGModels.isEmpty()
-                            SdComponentRole.T5XXL -> compatibleT5xxlModels.isEmpty()
-                            SdComponentRole.LLM -> compatibleLlmModels.isEmpty()
-                            SdComponentRole.LLM_VISION -> compatibleLlmVisionModels.isEmpty()
-                            SdComponentRole.PHOTOMAKER -> compatiblePhotoMakerModels.isEmpty()
-                            else -> false
-                        }
-                    } == true
-                    if (anyRequiredRoleMissingModel) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        OutlinedButton(onClick = { navController.navigate(Screen.SDModels.route) }) {
-                            Icon(Icons.Default.Add, null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(stringResource(R.string.imagegen_get_family_components))
-                        }
-                    }
-                }
-            }
-        }
-
-        if (selectedMode != 2 && (compatibleControlNetModels.isNotEmpty() || supportsLora)) item(key = "adapters") {
-            Spacer(modifier = Modifier.height(12.dp))
+        if (selectedMode != 2) item(key = "style-adapters-group") {
+            AppAdvancedSection(title = stringResource(R.string.ui_redesign_gen_group_style)) {
+                if (selectedMode != 2 && (compatibleControlNetModels.isNotEmpty() || supportsLora)) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
@@ -3532,10 +3390,8 @@ fun ImageGenScreen(
                     }
                 }
             }
-        }
-
+                }
                 if (selectedMode !in setOf(IMAGE_GEN_MODE_UPSCALE, IMAGE_GEN_MODE_INPAINT, IMAGE_GEN_MODE_ADETAILER)) {
-                    item(key = "ip-adapter") {
                         SdIpAdapterCard(
                             supported = supportsIpAdapter,
                             enabled = ipAdapterEnabled,
@@ -3561,10 +3417,168 @@ fun ImageGenScreen(
                                 navController.navigate(Screen.SDModels.route)
                             }
                         )
+                }
+            }
+        }
+
+        if (selectedModelPath != null && selectedMode != 2 && (selectedInspection != null || componentRoles.isNotEmpty())) item(key = "model-components-group") {
+            AppAdvancedSection(title = stringResource(R.string.ui_redesign_gen_group_components)) {
+                if (selectedInspection != null) {
+                SdGenerationInspectionCard(
+                    inspection = selectedInspection,
+                    selectedFamily = selectedFamily,
+                    isManualOverride = selectedMainModel?.let { model ->
+                        model.sdFamily != null && model.sdFamily != model.sdDetectedFamily
+                    } == true
+                )
+                }
+                if (componentRoles.isNotEmpty()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        stringResource(R.string.imagegen_components_title),
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                    )
+                    Text(
+                        stringResource(
+                            R.string.imagegen_components_desc,
+                            selectedFamily?.storedValue ?: stringResource(R.string.imagegen_select_model)
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    if (missingRequiredComponents.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(
+                                stringResource(
+                                    R.string.imagegen_missing_components_message,
+                                    missingRequiredComponents.joinToString(", ") {
+                                        componentRoleLabel(context, it)
+                                    }
+                                ),
+                                modifier = Modifier.padding(12.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    componentRoles.forEachIndexed { index, role ->
+                        when (role) {
+                            SdComponentRole.VAE -> SdComponentPickerField(
+                                label = componentRoleLabel(role),
+                                models = compatibleVaeModels,
+                                selectedPath = selectedVaePath,
+                                onSelectionChange = { selectedVaePath = it },
+                                allowNone = role !in requiredComponentRoles,
+                                emptyMessage = stringResource(R.string.imagegen_no_vae_installed)
+                            )
+                            SdComponentRole.TAE -> SdComponentPickerField(
+                                label = componentRoleLabel(role),
+                                models = compatibleTaeModels,
+                                selectedPath = selectedTaePath,
+                                onSelectionChange = { selectedTaePath = it },
+                                allowNone = role !in requiredComponentRoles,
+                                emptyMessage = stringResource(R.string.imagegen_no_tae_installed)
+                            )
+                            SdComponentRole.CLIP_L -> SdComponentPickerField(
+                                label = componentRoleLabel(role),
+                                models = compatibleClipLModels,
+                                selectedPath = selectedClipLPath,
+                                onSelectionChange = { selectedClipLPath = it },
+                                allowNone = role !in requiredComponentRoles,
+                                emptyMessage = stringResource(R.string.imagegen_no_clip_l)
+                            )
+                            SdComponentRole.CLIP_G -> SdComponentPickerField(
+                                label = componentRoleLabel(role),
+                                models = compatibleClipGModels,
+                                selectedPath = selectedClipGPath,
+                                onSelectionChange = { selectedClipGPath = it },
+                                allowNone = role !in requiredComponentRoles,
+                                emptyMessage = stringResource(R.string.imagegen_no_clip_g)
+                            )
+                            SdComponentRole.T5XXL -> SdComponentPickerField(
+                                label = componentRoleLabel(role),
+                                models = compatibleT5xxlModels,
+                                selectedPath = selectedT5xxlPath,
+                                onSelectionChange = { selectedT5xxlPath = it },
+                                allowNone = role !in requiredComponentRoles,
+                                emptyMessage = stringResource(R.string.imagegen_no_t5xxl)
+                            )
+                            SdComponentRole.LLM -> SdComponentPickerField(
+                                label = componentRoleLabel(role),
+                                models = compatibleLlmModels,
+                                selectedPath = selectedLlmPath,
+                                onSelectionChange = { selectedLlmPath = it },
+                                allowNone = role !in requiredComponentRoles,
+                                emptyMessage = stringResource(R.string.imagegen_no_llm)
+                            )
+                            SdComponentRole.LLM_VISION -> SdComponentPickerField(
+                                label = componentRoleLabel(role),
+                                models = compatibleLlmVisionModels,
+                                selectedPath = selectedLlmVisionPath,
+                                onSelectionChange = { selectedLlmVisionPath = it },
+                                allowNone = role !in requiredComponentRoles,
+                                emptyMessage = stringResource(R.string.imagegen_no_llm_vision)
+                            )
+                            SdComponentRole.PHOTOMAKER -> SdComponentPickerField(
+                                label = componentRoleLabel(role),
+                                models = compatiblePhotoMakerModels,
+                                selectedPath = selectedPhotoMakerPath,
+                                onSelectionChange = { selectedPhotoMakerPath = it },
+                                allowNone = role !in requiredComponentRoles,
+                                emptyMessage = stringResource(R.string.imagegen_no_photomaker)
+                            )
+                            else -> Unit
+                        }
+                        if (index != componentRoles.lastIndex) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                        }
+                    }
+
+                    val anyRequiredRoleMissingModel = selectedFamilySpec?.requiredRoles?.any { role ->
+                        when (role) {
+                            SdComponentRole.VAE -> compatibleVaeModels.isEmpty()
+                            SdComponentRole.TAE -> compatibleTaeModels.isEmpty()
+                            SdComponentRole.CLIP_L -> compatibleClipLModels.isEmpty()
+                            SdComponentRole.CLIP_G -> compatibleClipGModels.isEmpty()
+                            SdComponentRole.T5XXL -> compatibleT5xxlModels.isEmpty()
+                            SdComponentRole.LLM -> compatibleLlmModels.isEmpty()
+                            SdComponentRole.LLM_VISION -> compatibleLlmVisionModels.isEmpty()
+                            SdComponentRole.PHOTOMAKER -> compatiblePhotoMakerModels.isEmpty()
+                            else -> false
+                        }
+                    } == true
+                    if (anyRequiredRoleMissingModel) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedButton(onClick = { navController.navigate(Screen.SDModels.route) }) {
+                            Icon(Icons.Default.Add, null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(stringResource(R.string.imagegen_get_family_components))
+                        }
                     }
                 }
+            }
+                }
+            }
+        }
 
-        if (selectedMode != 2 && selectedModelPath != null && selectedPipeline?.mainLayout == SdMainLayout.FULL_MODEL) item(key = "tensor-types") {
+        item(key = "performance-group") {
+            AppAdvancedSection(title = stringResource(R.string.ui_redesign_gen_group_performance)) {
+        if (selectedMode != 2 && selectedModelPath != null && selectedPipeline?.mainLayout == SdMainLayout.FULL_MODEL) {
             Spacer(modifier = Modifier.height(12.dp))
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -3601,8 +3615,7 @@ fun ImageGenScreen(
                 }
             }
         }
-
-        if (selectedMode != 2 && selectedFamilySpec != null) item(key = "runtime") {
+        if (selectedMode != 2 && selectedFamilySpec != null) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
@@ -3749,8 +3762,7 @@ fun ImageGenScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
         }
-
-        item(key = "cache") { GenerationCachingCard(
+        GenerationCachingCard(
             title = stringResource(R.string.gen_cache_title),
             cacheMode = if (selectedMode == 2) null else cacheMode,
             onCacheModeChange = { cacheMode = it },
@@ -3767,10 +3779,7 @@ fun ImageGenScreen(
             },
             enabled = selectedMode != 2,
             disabledMessage = stringResource(R.string.gen_cache_disabled_for_upscale)
-        ) }
-
-        item(key = "manual-flags") {
-            AppAdvancedSection(title = stringResource(R.string.soft_studio_advanced)) {
+        )
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
@@ -4136,34 +4145,18 @@ fun ImageGenScreen(
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-    ) {
-        // Header
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = { navController.popBackStack() }, modifier = Modifier.walkthroughTarget("back")) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
-            }
-            Text(
-                stringResource(R.string.imagegen_title),
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
-            GenerationQueueHeaderAction(navController)
+    AppScreenScaffold(
+        title = stringResource(R.string.imagegen_title),
+        onBack = { navController.popBackStack() },
+        actions = {
+            GenerationQueueHeaderAction(navController, pendingCount = queuePendingCount)
+            GenerationSettingsHeaderAction(navController)
             IconButton(onClick = { showInfoDialog = true }) {
                 Icon(Icons.Default.Info, stringResource(R.string.gen_help_open))
             }
         }
+    ) { _ ->
+    Column(modifier = Modifier.fillMaxSize()) {
 
         // Main Tab Selector: Generate vs Gallery
         val mainTabs = listOf(
@@ -4351,6 +4344,29 @@ fun ImageGenScreen(
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                     ) { Text(stringResource(R.string.generation_queue_add)) }
                 } else {
+                    imageGenReadiness.issues.firstOrNull()?.takeIf { !imageGenReadiness.isReady }?.let { issue ->
+                        Text(
+                            text = stringResource(
+                                R.string.ui_redesign_gen_blocked_reason,
+                                stringResource(
+                                    when (issue) {
+                                        ImageGenReadinessIssue.MODEL -> R.string.imagegen_readiness_model
+                                        ImageGenReadinessIssue.PROMPT -> R.string.imagegen_readiness_prompt
+                                        ImageGenReadinessIssue.SOURCE_IMAGE -> R.string.imagegen_readiness_source
+                                        ImageGenReadinessIssue.MASK -> R.string.imagegen_readiness_mask
+                                        ImageGenReadinessIssue.DETECTOR -> R.string.imagegen_readiness_detector
+                                        ImageGenReadinessIssue.FAMILY_SUPPORT -> R.string.imagegen_readiness_family
+                                        ImageGenReadinessIssue.REQUIRED_COMPONENTS -> R.string.imagegen_readiness_components
+                                    }
+                                )
+                            ),
+                            modifier = Modifier.fillMaxWidth(),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     GenerationStartAndQueueButtons(
                         startLabel = if (selectedMode == 2) stringResource(R.string.imagegen_upscale_btn)
                             else stringResource(R.string.soft_studio_generate),
@@ -4362,6 +4378,7 @@ fun ImageGenScreen(
                 }
             }
         }
+    }
     }
 
     if (showInfoDialog) {

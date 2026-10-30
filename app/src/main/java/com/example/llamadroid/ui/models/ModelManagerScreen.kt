@@ -1000,7 +1000,7 @@ private suspend fun importModel(
 }
 
 // Helper function to import model with progress tracking
-private suspend fun importModelWithProgress(
+internal suspend fun importModelWithProgress(
     context: android.content.Context,
     viewModel: ModelManagerViewModel,
     uri: android.net.Uri,

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Notificación única mientras varios chats de Chat Llama Native generan. -->
+    <plurals name="native_chat_notification_generating_count">
+        <item quantity="one">%1$d chat generando</item>
+        <item quantity="many">%1$d chats generando</item>
+        <item quantity="other">%1$d chats generando</item>
+    </plurals>
+</resources>

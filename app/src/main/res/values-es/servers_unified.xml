@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="srv_status_remote">Remoto</string>
+    <string name="srv_status_error">Requiere atención</string>
+    <string name="srv_kind_managed">Local</string>
+    <string name="srv_kind_legacy">Local (antiguo)</string>
+    <string name="srv_kind_remote">Remoto</string>
+    <string name="srv_action_failed">No se pudo completar la acción. Inténtalo de nuevo.</string>
+    <string name="srv_save_failed">No se pudo guardar el servidor. Revisa los campos e inténtalo de nuevo.</string>
+    <string name="srv_restart">Reiniciar</string>
+    <string name="srv_edit">Editar servidor</string>
+    <string name="srv_delete">Eliminar servidor</string>
+    <string name="srv_delete_title">¿Eliminar este servidor?</string>
+    <string name="srv_delete_body">Se eliminarán %1$s, sus ajustes guardados y sus registros.</string>
+    <plurals name="srv_more_chats">
+        <item quantity="one">y %1$d más</item>
+        <item quantity="many">y %1$d más</item>
+        <item quantity="other">y %1$d más</item>
+    </plurals>
+    <string name="srv_upgrade">Convertir en servidor gestionado</string>
+    <string name="srv_upgrade_title">¿Convertir en servidor gestionado?</string>
+    <string name="srv_upgrade_body">La app creará un servidor gestionado con sus propios ajustes guardados a partir de esta conexión. Tus chats siguen vinculados a él. Si hay un servidor en marcha con esta conexión, se detendrá y no cambiará nada hasta que lo inicies de nuevo.</string>
+    <string name="srv_upgrade_confirm">Convertir</string>
+    <string name="srv_bound_chats_title">Chats en este servidor</string>
+    <string name="srv_no_bound_chats">Ningún chat usa este servidor todavía.</string>
+    <string name="srv_untitled_chat">Chat sin título</string>
+    <string name="srv_editor_new_remote_title">Añadir un servidor remoto</string>
+    <string name="srv_editor_edit_title">Editar servidor</string>
+    <string name="srv_save_and_start">Guardar e iniciar</string>
+    <string name="srv_port_auto">Automático</string>
+    <string name="srv_port_hint">Déjalo vacío para elegir un puerto libre automáticamente.</string>
+    <string name="srv_error_name_blank">Introduce un nombre.</string>
+    <string name="srv_error_host_blank">Introduce la dirección del host.</string>
+    <string name="srv_error_port_invalid">El puerto debe ser un número entre 1 y 65535.</string>
+    <string name="srv_error_port_in_use">Ese puerto ya lo usa otro servidor local.</string>
+    <string name="srv_error_remote_model_blank">Elige o introduce un nombre de modelo.</string>
+    <string name="srv_error_litert_model">Elige un modelo LiteRT.</string>
+    <string name="srv_error_model_not_selected">Elige un modelo.</string>
+    <string name="srv_error_model_file_missing">Falta el archivo del modelo o no se puede leer. Elígelo de nuevo.</string>
+    <string name="srv_error_mmproj_missing">Falta el archivo del proyector de visión. Desactiva la visión o reinstala el modelo.</string>
+    <string name="srv_error_draft_missing">Falta el archivo del modelo borrador. Quítalo o elige otro.</string>
+    <string name="srv_error_flags_invalid">Las opciones personalizadas o la plantilla de comando no son válidas.</string>
+    <string name="srv_picker_title">Elige un servidor</string>
+    <string name="srv_picker_empty">Aún no hay servidores. Añade uno para continuar.</string>
+    <string name="srv_picker_new_local">Nuevo servidor local desde un modelo</string>
+    <plurals name="srv_bound_chats">
+        <item quantity="one">%1$d chat</item>
+        <item quantity="many">%1$d chats</item>
+        <item quantity="other">%1$d chats</item>
+    </plurals>
+    <plurals name="srv_delete_chats_warning">
+        <item quantity="one">%1$d chat usa este servidor y te pedirá elegir otro:</item>
+        <item quantity="many">%1$d chats usan este servidor y te pedirán elegir otro:</item>
+        <item quantity="other">%1$d chats usan este servidor y te pedirán elegir otro:</item>
+    </plurals>
+</resources>

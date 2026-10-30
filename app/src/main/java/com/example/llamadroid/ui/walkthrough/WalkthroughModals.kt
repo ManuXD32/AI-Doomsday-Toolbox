@@ -1,7 +1,11 @@
 package com.example.llamadroid.ui.walkthrough
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialogDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Alignment
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -19,6 +23,53 @@ internal data class WalkthroughPresentation(
     val open: (String) -> Unit
 ) {
     val featureActive: Boolean get() = state.session?.chapterId?.startsWith("feature:") == true
+}
+
+/**
+ * Test hook for the JVM screenshot renderer (docs/screenshot-renderer.md): PixelCopy only reads the activity
+ * window, so when this is true the dialog wrappers below compose their content inline (centred in the
+ * parent box) instead of opening a dialog window. Always false in the app.
+ */
+internal val LocalInlineModalHost = staticCompositionLocalOf { false }
+
+/** Inline stand-in for a Material alert dialog: container surface, icon, title, text and buttons. */
+@Composable
+private fun InlineAlertDialogBody(
+    confirmButton: @Composable () -> Unit,
+    modifier: Modifier,
+    dismissButton: (@Composable () -> Unit)?,
+    icon: (@Composable () -> Unit)?,
+    title: (@Composable () -> Unit)?,
+    text: (@Composable () -> Unit)?,
+    shape: Shape,
+    containerColor: Color,
+    iconContentColor: Color,
+    titleContentColor: Color,
+    textContentColor: Color,
+    tonalElevation: Dp
+) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Surface(
+            modifier = modifier.fillMaxWidth(0.92f).widthIn(max = 560.dp),
+            shape = shape, color = containerColor, tonalElevation = tonalElevation
+        ) {
+            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                if (icon != null) androidx.compose.runtime.CompositionLocalProvider(
+                    androidx.compose.material3.LocalContentColor provides iconContentColor
+                ) { Box(Modifier.align(Alignment.CenterHorizontally)) { icon() } }
+                if (title != null) androidx.compose.runtime.CompositionLocalProvider(
+                    androidx.compose.material3.LocalContentColor provides titleContentColor
+                ) { title() }
+                if (text != null) androidx.compose.runtime.CompositionLocalProvider(
+                    androidx.compose.material3.LocalContentColor provides textContentColor
+                ) { Box(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) { text() } }
+                Row(Modifier.align(Alignment.End), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    dismissButton?.invoke()
+                    confirmButton()
+                }
+            }
+        }
+    }
 }
 internal val LocalWalkthroughPresentation = staticCompositionLocalOf<WalkthroughPresentation?> { null }
 
@@ -62,6 +113,10 @@ internal fun WalkthroughDialog(
     properties: DialogProperties = DialogProperties(),
     content: @Composable () -> Unit
 ) {
+    if (LocalInlineModalHost.current) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { content() }
+        return
+    }
     val presentation = rememberModalPresentation()
     val parentHeight = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() }
     androidx.compose.ui.window.Dialog(onDismissRequest, properties) {
@@ -87,6 +142,13 @@ internal fun WalkthroughAlertDialog(
     tonalElevation: Dp = AlertDialogDefaults.TonalElevation,
     properties: DialogProperties = DialogProperties()
 ) {
+    if (LocalInlineModalHost.current) {
+        InlineAlertDialogBody(
+            confirmButton, modifier, dismissButton, icon, title, text, shape, containerColor,
+            iconContentColor, titleContentColor, textContentColor, tonalElevation
+        )
+        return
+    }
     val presentation = rememberModalPresentation()
     val parentHeight = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() }
     androidx.compose.material3.AlertDialog(

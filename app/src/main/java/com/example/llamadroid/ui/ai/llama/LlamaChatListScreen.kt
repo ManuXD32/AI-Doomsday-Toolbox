@@ -2,7 +2,6 @@ package com.example.llamadroid.ui.ai.llama
 
 import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 
-import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -10,6 +9,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -37,8 +38,21 @@ import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.model.LlamaChatEntity
 import com.example.llamadroid.data.model.LlamaChatFolderEntity
 import com.example.llamadroid.data.model.LlamaChatPromptProfileEntity
-import com.example.llamadroid.data.model.LlamaServerEntity
 import com.example.llamadroid.data.repository.LlamaRepository
+import com.example.llamadroid.data.repository.UnifiedServer
+import com.example.llamadroid.ui.ai.llama.chatlist.ChatListServerSheetState
+import com.example.llamadroid.ui.ai.llama.chatlist.ChatListServerSheets
+import com.example.llamadroid.service.LlamaClientService
+import com.example.llamadroid.service.NativeChatGenerationStates
+import com.example.llamadroid.ui.ai.llama.chatlist.ChatRowServerChip
+import com.example.llamadroid.ui.ai.llama.chatlist.ChatsServerStrip
+import com.example.llamadroid.ui.ai.llama.chatlist.NewChatSheet
+import com.example.llamadroid.ui.ai.llama.chatlist.WearQuickChatSettingsDialog
+import com.example.llamadroid.ui.ai.llama.servers.ServerActionState
+import com.example.llamadroid.ui.ai.llama.servers.LocalServerProfileEditorOpener
+import com.example.llamadroid.ui.ai.llama.servers.PendingServerChatRequest
+import com.example.llamadroid.ui.ai.llama.servers.ServerRegistryViewModel
+import com.example.llamadroid.ui.ai.llama.servers.key
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
@@ -47,24 +61,13 @@ import java.util.*
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import com.google.gson.Gson
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 private const val LLAMA_FOLDER_FILTER_ALL = Long.MIN_VALUE
 private const val LLAMA_FOLDER_FILTER_UNFILED = 0L
-private const val WEAR_QUICK_CHAT_PREFS = "adt_wear_quick_chat_v1"
-private const val WEAR_QUICK_CHAT_SELECTED_SERVER_ID = "selected_server_id"
-private const val WEAR_QUICK_CHAT_SYSTEM_PROMPT = "system_prompt"
-private const val WEAR_QUICK_CHAT_ALLOWED_TOOLS = "allowed_tools"
-private const val WEAR_QUICK_CHAT_AUTO_START = "auto_start_server"
-private const val WEAR_QUICK_CHAT_AUTO_TTS = "auto_play_tts"
-private const val WEAR_TOOL_CALENDAR = "calendar"
-private const val WEAR_TOOL_ALARMS = "alarms"
-private const val WEAR_TOOL_NOTES = "notes"
-private const val WEAR_TOOL_PINNED_NOTE = "pinned_note"
-private const val WEAR_TOOL_WEB = "web_search"
-private const val WEAR_TOOL_IMAGES = "image_generation"
-
 private fun formatLlamaChatListString(template: String, vararg args: Any?): String =
     String.format(Locale.getDefault(), template, *args)
 
@@ -74,6 +77,25 @@ fun LlamaChatListScreen(
     navController: NavController,
     initialFolderId: Long? = null
 ) {
+    LlamaChatListContent(navController = navController, folderId = initialFolderId)
+}
+
+/**
+ * Native chat history body (list, folders, search-free pinned ordering, dialogs). With
+ * [embedded] = false it owns its own Scaffold/top bar (legacy routes); with [embedded] = true it
+ * renders only the body plus a compact action row so the Chats root can host it under its own
+ * header. Incrementing [newChatSignal] opens the new-chat sheet.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LlamaChatListContent(
+    navController: NavController,
+    folderId: Long?,
+    modifier: Modifier = Modifier,
+    embedded: Boolean = false,
+    newChatSignal: Int = 0
+) {
+    val initialFolderId = folderId
     val context = LocalContext.current
     val walkthroughTargets = LocalWalkthroughTargets.current
     val importedChatTitleText = stringResource(R.string.llama_imported_chat_title)
@@ -96,13 +118,20 @@ fun LlamaChatListScreen(
             database.llamaChatPromptProfileDao()
         ) 
     }
+    val serversViewModel: ServerRegistryViewModel = viewModel()
+    val openLocalServerEditor = LocalServerProfileEditorOpener.current
     val viewModel: LlamaChatViewModel = viewModel(factory = LlamaChatViewModelFactory(repository))
     val chats by viewModel.chats.collectAsState()
     val folders by viewModel.folders.collectAsState()
     val promptProfiles by viewModel.promptProfiles.collectAsState()
-    val servers by repository.allServers.collectAsState(initial = emptyList())
+    val servers by serversViewModel.servers.collectAsState()
+    val serverActions by serversViewModel.actions.collectAsState()
+    val serverSheets = remember { ChatListServerSheetState() }
+    val serversByRowId = remember(servers) { servers.filter { it.rowId != null }.associateBy { it.rowId } }
 
-    var showNewChatDialog by remember { mutableStateOf(false) }
+    var showNewChatSheet by remember { mutableStateOf(false) }
+    var showQuickSetupSheet by remember { mutableStateOf(false) }
+    var showTitleGenerationSheet by remember { mutableStateOf(false) }
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var showManageFoldersDialog by remember { mutableStateOf(false) }
     var showPromptProfilesDialog by remember { mutableStateOf(false) }
@@ -110,7 +139,7 @@ fun LlamaChatListScreen(
     var chatToEdit by remember { mutableStateOf<LlamaChatEntity?>(null) }
     var chatToMove by remember { mutableStateOf<LlamaChatEntity?>(null) }
     var folderToDelete by remember { mutableStateOf<LlamaChatFolderEntity?>(null) }
-    var showFabMenu by remember { mutableStateOf(false) }
+    var showMoreMenu by remember { mutableStateOf(false) }
     var selectedFolderFilter by remember(initialFolderId) {
         mutableLongStateOf(initialFolderId?.takeIf { it > 0 } ?: LLAMA_FOLDER_FILTER_ALL)
     }
@@ -144,10 +173,11 @@ fun LlamaChatListScreen(
         if (uri != null) {
             scope.launch {
                 try {
+                    val (title, systemPrompt, messages) = withContext(Dispatchers.IO) {
                     val json = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }.orEmpty()
                     val gson = Gson()
                     val obj = JSONObject(json)
-                    val (title, systemPrompt, messages) = when {
+                    when {
                         obj.has("messages") -> {
                             val payload = gson.fromJson(json, LlamaChatExportPayload::class.java)
                             Triple(
@@ -187,6 +217,7 @@ fun LlamaChatListScreen(
                         }
                         else -> error(importErrorUnknownFormatText)
                     }
+                    }
                     viewModel.importChat(title, systemPrompt, messages) { newId ->
                         navController.navigate(Screen.LlamaChat.createRoute(newId, -1))
                     }
@@ -198,29 +229,92 @@ fun LlamaChatListScreen(
         }
     }
 
-    // Ideally we should pass the selected server ID from previous screen
-    // But since paths in navigation are strings, we'd need to parse arguments.
-    // For simplicity, let's pick the LAST USED server automatically in the Chat Screen, 
-    // or ask user to select if ambiguous. 
-    // Wait, the route says `llama_chat/{chatId}/{serverId}`.
-    // So we need a server ID to navigate to Chat Screen. 
-    // We can get the last used server from Repo.
-    
-    // Let's Fetch last used server ID
-    var lastUsedServerId by remember { mutableLongStateOf(-1L) }
-    
-    LaunchedEffect(Unit) {
-        // A bit of a hack to get it in Composable, ideally ViewModel provides this
-        kotlinx.coroutines.Dispatchers.IO.let {
-             // In a real app, use a proper scope/VM
+    // The signal is saved by Chats home, so keep a saved high-water mark: returning from a chat
+    // recomposes this list with the same signal and must not reopen the sheet.
+    var handledNewChatSignal by rememberSaveable { mutableIntStateOf(0) }
+    LaunchedEffect(newChatSignal) {
+        if (newChatSignal > handledNewChatSignal) {
+            handledNewChatSignal = newChatSignal
+            showNewChatSheet = true
         }
-        // Actually, let's just use the server list VM or add a method to Chat VM
-        // For now, let's assume we pass -1 and Chat Screen handles "Active Server" resolution 
-        // OR we just use the most recent one.
     }
 
-    Scaffold(
-        topBar = {
+    val chatActionsMenu: @Composable () -> Unit = {
+        Box {
+            IconButton(onClick = { showMoreMenu = !showMoreMenu }) {
+                Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.ui_chats_more))
+            }
+            DropdownMenu(
+                expanded = showMoreMenu,
+                onDismissRequest = { showMoreMenu = false }
+            ) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.llama_folder_create)) },
+                    onClick = {
+                        showMoreMenu = false
+                        showNewFolderDialog = true
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.llama_folder_manage)) },
+                    onClick = {
+                        showMoreMenu = false
+                        showManageFoldersDialog = true
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.llama_prompt_profiles_manage)) },
+                    onClick = {
+                        showMoreMenu = false
+                        showPromptProfilesDialog = true
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.llama_import_chat)) },
+                    onClick = {
+                        showMoreMenu = false
+                        importLauncher.launch(arrayOf("application/json"))
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.wear_quick_chat_settings)) },
+                    leadingIcon = {
+                        Icon(Icons.Default.Settings, contentDescription = null)
+                    },
+                    onClick = {
+                        showMoreMenu = false
+                        showWearQuickChatSettings = true
+                    }
+                )
+                if (!embedded) {
+                    // The embedded Chats root keeps Servers/Scheduler in its own header menu.
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.ui_chats_scheduled_prompts)) },
+                        onClick = {
+                            showMoreMenu = false
+                            navController.navigate(Screen.LlamaScheduler.route)
+                        }
+                    )
+                }
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.title_generation_menu_item)) },
+                    onClick = {
+                        showMoreMenu = false
+                        showTitleGenerationSheet = true
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.quick_setup_button)) },
+                    onClick = {
+                        showMoreMenu = false
+                        showQuickSetupSheet = true
+                    }
+                )
+            }
+        }
+    }
+
+    val chatListTopBar: @Composable () -> Unit = {
             TopAppBar(
                 title = {
                     Column {
@@ -288,73 +382,19 @@ fun LlamaChatListScreen(
                             )
                         }
                     }
-                    Box {
-                        IconButton(onClick = { showFabMenu = !showFabMenu }) {
-                            Icon(Icons.Default.Add, contentDescription = stringResource(R.string.llama_new_chat))
-                        }
-                        DropdownMenu(
-                            expanded = showFabMenu,
-                            onDismissRequest = { showFabMenu = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.llama_new_chat)) },
-                                onClick = {
-                                    showFabMenu = false
-                                    showNewChatDialog = true
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.llama_folder_create)) },
-                                onClick = {
-                                    showFabMenu = false
-                                    showNewFolderDialog = true
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.llama_folder_manage)) },
-                                onClick = {
-                                    showFabMenu = false
-                                    showManageFoldersDialog = true
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.llama_prompt_profiles_manage)) },
-                                onClick = {
-                                    showFabMenu = false
-                                    showPromptProfilesDialog = true
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.wear_quick_chat_settings)) },
-                                leadingIcon = {
-                                    Icon(Icons.Default.Settings, contentDescription = null)
-                                },
-                                onClick = {
-                                    showFabMenu = false
-                                    showWearQuickChatSettings = true
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.llama_import_chat)) },
-                                onClick = {
-                                    showFabMenu = false
-                                    importLauncher.launch(arrayOf("application/json"))
-                                }
-                            )
-                        }
-                    }
+                    chatActionsMenu()
                 }
             )
-        }
-    ) { padding ->
+    }
+
+    val chatListBody: @Composable (PaddingValues) -> Unit = { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            val rootIsEmpty = false
             val folderIsEmpty = selectedFolderFilter != LLAMA_FOLDER_FILTER_ALL && displayedChats.isEmpty()
-            if (rootIsEmpty || folderIsEmpty) {
+            if (folderIsEmpty) {
                 Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Text(
                         text = if (chats.isEmpty()) {
@@ -370,20 +410,38 @@ fun LlamaChatListScreen(
                     modifier = Modifier
                         .weight(1f)
                         .walkthroughTarget("llama.history"),
-                    contentPadding = PaddingValues(16.dp),
+                    // Embedded in the Chats root, leave room for its floating New button.
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        top = 16.dp,
+                        end = 16.dp,
+                        bottom = if (embedded) 88.dp else 16.dp
+                    ),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     if (selectedFolderFilter == LLAMA_FOLDER_FILTER_ALL) {
-                        item(key = "wear_quick_chat_settings") {
-                            WearQuickChatSettingsEntryCard(
+                        item(key = "servers_strip") {
+                            ChatsServerStrip(
                                 servers = servers,
-                                onClick = { showWearQuickChatSettings = true }
+                                actions = serverActions,
+                                onOpen = { server -> serverSheets.detailKey = server.key },
+                                onStart = serversViewModel::start,
+                                onStop = serversViewModel::stop,
+                                onAddServer = { openLocalServerEditor(null, null) },
+                                onAddRemote = { serverSheets.openEditor() },
+                                onGetModel = { navController.navigate(Screen.LLMModels.route) },
+                                onOpenWebUi = { server -> navController.navigate("${Screen.Chat.route}?port=${server.port}") }
                             )
                         }
-                        item(key = "scheduler_folder") {
-                            LlamaSchedulerFolderCard(
-                                onClick = { navController.navigate(Screen.LlamaScheduler.route) }
-                            )
+                        if (chats.isEmpty()) {
+                            item(key = "no_chats") {
+                                Text(
+                                    text = stringResource(R.string.llama_no_chats),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.secondary,
+                                    modifier = Modifier.padding(8.dp)
+                                )
+                            }
                         }
                         if (folders.isNotEmpty()) {
                             item(key = "folders_header") {
@@ -424,10 +482,12 @@ fun LlamaChatListScreen(
                             chat = chat,
                             folderName = chat.folderId?.let { folderNamesById[it] },
                             showFolderName = selectedFolderFilter == LLAMA_FOLDER_FILTER_ALL,
+                            server = serversByRowId[chat.serverId],
+                            serverAction = serversByRowId[chat.serverId]?.let { serverActions[it.key] },
                             onClick = {
-                                // If we pass -1, LlamaChatScreen can look up "Last Used Server"
+                                // Unbound legacy chats pass -1 and fall back to the last-used server.
                                 walkthroughTargets?.recordEvent("llama.history")
-                                navController.navigate(Screen.LlamaChat.createRoute(chat.id, -1))
+                                navController.navigate(Screen.LlamaChat.createRoute(chat.id, chat.serverId ?: -1L))
                             },
                             onEdit = { chatToEdit = chat },
                             onMove = { chatToMove = chat },
@@ -440,10 +500,96 @@ fun LlamaChatListScreen(
         }
     }
 
+    if (embedded) {
+        Column(modifier = modifier.fillMaxSize()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (selectedFolderFilter > 0) {
+                    IconButton(onClick = { selectedFolderFilter = LLAMA_FOLDER_FILTER_ALL }) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.llama_folder_back_to_root)
+                        )
+                    }
+                }
+                Text(
+                    text = currentFolder?.name ?: stringResource(R.string.llama_chats_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(start = 12.dp)
+                )
+                chatActionsMenu()
+            }
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                chatListBody(PaddingValues(0.dp))
+            }
+        }
+    } else {
+        Scaffold(
+            modifier = modifier,
+            topBar = chatListTopBar,
+            floatingActionButton = {
+                ExtendedFloatingActionButton(
+                    onClick = { showNewChatSheet = true },
+                    icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                    text = {
+                        Text(
+                            stringResource(R.string.chats_rework_fab_new_chat),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                )
+            },
+            content = chatListBody
+        )
+    }
+
     if (showWearQuickChatSettings) {
         WearQuickChatSettingsDialog(
-            servers = servers,
+            serversViewModel = serversViewModel,
             onDismiss = { showWearQuickChatSettings = false }
+        )
+    }
+
+    ChatListServerSheets(state = serverSheets, viewModel = serversViewModel, navController = navController)
+
+    if (showTitleGenerationSheet) {
+        com.example.llamadroid.ui.settings.TitleGenerationSheet(onDismiss = { showTitleGenerationSheet = false })
+    }
+
+    if (showQuickSetupSheet) {
+        com.example.llamadroid.ui.quicksetup.QuickSetupSheet(onDismiss = { showQuickSetupSheet = false })
+    }
+
+    if (showNewChatSheet) {
+        NewChatSheet(
+            serversViewModel = serversViewModel,
+            repository = repository,
+            promptProfiles = promptProfiles,
+            folderId = selectedFolderFilter.takeIf { it > 0 },
+            onDismiss = { showNewChatSheet = false },
+            onChatReady = { chatId, serverId ->
+                showNewChatSheet = false
+                navController.navigate(Screen.LlamaChat.createRoute(chatId, serverId))
+            },
+            onAddServer = {
+                showNewChatSheet = false
+                openLocalServerEditor(null, null)
+            },
+            onManageModels = {
+                showNewChatSheet = false
+                navController.navigate(Screen.LLMModels.route)
+            },
+            onNewLocalFromModel = { model ->
+                showNewChatSheet = false
+                PendingServerChatRequest.request()
+                openLocalServerEditor(null, model.path)
+            }
         )
     }
 
@@ -666,258 +812,6 @@ fun LlamaChatListScreen(
             }
         )
     }
-
-    // New Chat Dialog
-    if (showNewChatDialog) {
-        var title by remember { mutableStateOf("") }
-        var systemPrompt by remember { mutableStateOf("") }
-        var newChatFolderId by remember(showNewChatDialog, selectedFolderFilter) {
-            mutableStateOf(selectedFolderFilter.takeIf { it > 0 })
-        }
-
-        AlertDialog(
-            onDismissRequest = { showNewChatDialog = false },
-            title = { Text(stringResource(R.string.llama_new_chat)) },
-            text = {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 560.dp)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedTextField(
-                        value = title,
-                        onValueChange = { title = it },
-                        label = { Text(stringResource(R.string.llama_chat_title_hint)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = systemPrompt,
-                        onValueChange = { systemPrompt = it },
-                        label = { Text(stringResource(R.string.llama_system_prompt)) },
-                        placeholder = { Text(stringResource(R.string.llama_system_prompt_placeholder)) },
-                        minLines = 2,
-                        maxLines = 5,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    LlamaPromptProfilePickerField(
-                        customProfiles = promptProfiles,
-                        onSelected = { selectedProfile ->
-                            systemPrompt = selectedProfile.content
-                        }
-                    )
-                    LlamaPromptProfileActionsRow(
-                        currentPrompt = systemPrompt,
-                        onManageProfiles = { showPromptProfilesDialog = true },
-                        onSaveProfile = { name, content ->
-                            viewModel.createPromptProfile(name, content) { success ->
-                                if (!success) {
-                                    Toast.makeText(
-                                        context,
-                                        promptProfileSaveErrorText,
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                }
-                            }
-                        }
-                    )
-                    LlamaFolderPickerField(
-                        folders = folders,
-                        selectedFolderId = newChatFolderId,
-                        onSelected = { newChatFolderId = it }
-                    )
-                    Text(
-                        text = stringResource(R.string.llama_context_legacy_notice),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        if (title.isNotBlank()) {
-                            viewModel.createChat(
-                                title = title,
-                                contextSize = 0,
-                                systemPrompt = systemPrompt.ifBlank { null },
-                                apiParams = servers.firstOrNull()?.defaultApiParams?.takeIf { it.isNotBlank() },
-                                folderId = newChatFolderId
-                            ) { newId ->
-                                showNewChatDialog = false
-                                navController.navigate(Screen.LlamaChat.createRoute(newId, -1))
-                            }
-                        }
-                    }
-                ) {
-                    Text(stringResource(R.string.action_confirm))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showNewChatDialog = false }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            }
-        )
-    }
-}
-
-@Composable
-private fun WearQuickChatSettingsDialog(
-    servers: List<LlamaServerEntity>,
-    onDismiss: () -> Unit
-) {
-    val context = LocalContext.current
-    val prefs = remember(context) {
-        context.getSharedPreferences(WEAR_QUICK_CHAT_PREFS, Context.MODE_PRIVATE)
-    }
-    val defaultPrompt = stringResource(R.string.wear_quick_chat_default_prompt)
-    var selectedServerId by remember {
-        mutableLongStateOf(prefs.getLong(WEAR_QUICK_CHAT_SELECTED_SERVER_ID, -1L))
-    }
-    var systemPrompt by remember {
-        mutableStateOf(prefs.getString(WEAR_QUICK_CHAT_SYSTEM_PROMPT, defaultPrompt) ?: defaultPrompt)
-    }
-    var autoStartServer by remember {
-        mutableStateOf(prefs.getBoolean(WEAR_QUICK_CHAT_AUTO_START, true))
-    }
-    var autoPlayTts by remember {
-        mutableStateOf(prefs.getBoolean(WEAR_QUICK_CHAT_AUTO_TTS, false))
-    }
-    var allowedTools by remember {
-        mutableStateOf(
-            prefs.getStringSet(
-                WEAR_QUICK_CHAT_ALLOWED_TOOLS,
-                setOf(WEAR_TOOL_CALENDAR, WEAR_TOOL_ALARMS, WEAR_TOOL_NOTES)
-            )?.toSet() ?: setOf(WEAR_TOOL_CALENDAR, WEAR_TOOL_ALARMS, WEAR_TOOL_NOTES)
-        )
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.wear_quick_chat_settings)) },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 520.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text(
-                    text = stringResource(R.string.llama_server_label),
-                    style = MaterialTheme.typography.labelLarge
-                )
-                if (servers.isEmpty()) {
-                    Text(
-                        text = stringResource(R.string.llama_no_servers),
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                } else {
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        servers.take(8).forEach { server ->
-                            FilterChip(
-                                selected = selectedServerId == server.id,
-                                onClick = {
-                                    selectedServerId = server.id
-                                    prefs.edit().putLong(WEAR_QUICK_CHAT_SELECTED_SERVER_ID, server.id).apply()
-                                },
-                                label = {
-                                    Text(server.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
-                            )
-                        }
-                    }
-                }
-                OutlinedTextField(
-                    value = systemPrompt,
-                    onValueChange = {
-                        systemPrompt = it
-                        prefs.edit().putString(WEAR_QUICK_CHAT_SYSTEM_PROMPT, it).apply()
-                    },
-                    label = { Text(stringResource(R.string.llama_system_prompt)) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 96.dp),
-                    minLines = 3
-                )
-                WearQuickChatSettingsSwitchRow(
-                    label = stringResource(R.string.wear_quick_chat_auto_start),
-                    checked = autoStartServer,
-                    onCheckedChange = {
-                        autoStartServer = it
-                        prefs.edit().putBoolean(WEAR_QUICK_CHAT_AUTO_START, it).apply()
-                    }
-                )
-                WearQuickChatSettingsSwitchRow(
-                    label = stringResource(R.string.llama_tool_assistant_tts),
-                    checked = autoPlayTts,
-                    onCheckedChange = {
-                        autoPlayTts = it
-                        prefs.edit().putBoolean(WEAR_QUICK_CHAT_AUTO_TTS, it).apply()
-                    }
-                )
-                Text(
-                    text = stringResource(R.string.llama_tools_title),
-                    style = MaterialTheme.typography.labelLarge
-                )
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    listOf(
-                        WEAR_TOOL_CALENDAR to stringResource(R.string.llama_tool_calendar),
-                        WEAR_TOOL_ALARMS to stringResource(R.string.llama_tool_alarms),
-                        WEAR_TOOL_NOTES to stringResource(R.string.llama_tool_notes),
-                        WEAR_TOOL_PINNED_NOTE to stringResource(R.string.wear_quick_chat_modify_pinned_note),
-                        WEAR_TOOL_WEB to stringResource(R.string.llama_tool_web_search),
-                        WEAR_TOOL_IMAGES to stringResource(R.string.llama_tool_image_generation)
-                    ).forEach { (tool, label) ->
-                        FilterChip(
-                            selected = tool in allowedTools,
-                            onClick = {
-                                val enabled = tool !in allowedTools
-                                allowedTools = if (enabled) allowedTools + tool else allowedTools - tool
-                                prefs.edit().putStringSet(WEAR_QUICK_CHAT_ALLOWED_TOOLS, allowedTools).apply()
-                            },
-                            label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.action_close))
-            }
-        }
-    )
-}
-
-@Composable
-private fun WearQuickChatSettingsSwitchRow(
-    label: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = label,
-            modifier = Modifier.weight(1f),
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
-        )
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
-    }
 }
 
 @Composable
@@ -925,6 +819,8 @@ fun LlamaChatCard(
     chat: LlamaChatEntity,
     folderName: String?,
     showFolderName: Boolean = true,
+    server: UnifiedServer? = null,
+    serverAction: ServerActionState? = null,
     onClick: () -> Unit,
     onEdit: () -> Unit,
     onMove: () -> Unit,
@@ -933,6 +829,8 @@ fun LlamaChatCard(
 ) {
     val dateFormat = SimpleDateFormat("MMM dd, HH:mm", Locale.getDefault())
     var menuExpanded by remember { mutableStateOf(false) }
+    val generationState by remember(chat.id) { NativeChatGenerationStates.flowFor(chat.id) }
+        .collectAsState(initial = NativeChatGenerationStates.stateFor(chat.id))
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -958,6 +856,27 @@ fun LlamaChatCard(
                         text = folderName ?: stringResource(R.string.llama_folder_none),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (server != null) {
+                    ChatRowServerChip(
+                        server = server,
+                        action = serverAction,
+                        modifier = Modifier.padding(vertical = 2.dp)
+                    )
+                }
+                val busyLabel = when (generationState) {
+                    is LlamaClientService.GenerationState.Generating -> R.string.chat_row_generating
+                    is LlamaClientService.GenerationState.Queued -> R.string.chat_row_queued
+                    else -> null
+                }
+                if (busyLabel != null) {
+                    Text(
+                        text = stringResource(busyLabel),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -1009,126 +928,6 @@ fun LlamaChatCard(
                     )
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun LlamaSchedulerFolderCard(
-    onClick: () -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        onClick = onClick,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Default.Settings,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(36.dp)
-            )
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.llama_scheduler_title),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = stringResource(R.string.llama_scheduler_folder_subtitle),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            Icon(
-                imageVector = Icons.Default.FolderOpen,
-                contentDescription = stringResource(R.string.llama_scheduler_open_desc),
-                tint = MaterialTheme.colorScheme.onPrimaryContainer
-            )
-        }
-    }
-}
-
-@Composable
-private fun WearQuickChatSettingsEntryCard(
-    servers: List<LlamaServerEntity>,
-    onClick: () -> Unit
-) {
-    val context = LocalContext.current
-    val selectedServerId = context
-        .getSharedPreferences(WEAR_QUICK_CHAT_PREFS, Context.MODE_PRIVATE)
-        .getLong(WEAR_QUICK_CHAT_SELECTED_SERVER_ID, -1L)
-    val selectedServer = servers.firstOrNull { it.id == selectedServerId }
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        onClick = onClick,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.tertiaryContainer
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Default.Settings,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onTertiaryContainer,
-                modifier = Modifier.size(36.dp)
-            )
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.wear_quick_chat_settings),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onTertiaryContainer,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = stringResource(R.string.wear_quick_chat_settings_summary),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onTertiaryContainer,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = if (selectedServer == null) {
-                        stringResource(R.string.wear_quick_chat_settings_no_server)
-                    } else {
-                        stringResource(R.string.wear_quick_chat_settings_server, selectedServer.name)
-                    },
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onTertiaryContainer,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            Icon(
-                imageVector = Icons.Default.Edit,
-                contentDescription = stringResource(R.string.wear_quick_chat_settings),
-                tint = MaterialTheme.colorScheme.onTertiaryContainer
-            )
         }
     }
 }
@@ -1297,7 +1096,7 @@ private fun LlamaFolderManagerDialog(
     )
 }
 
-private data class LlamaPromptProfileChoice(
+internal data class LlamaPromptProfileChoice(
     val key: String,
     val name: String,
     val content: String,
@@ -1331,7 +1130,7 @@ private fun llamaPromptProfileChoices(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun LlamaPromptProfilePickerField(
+internal fun LlamaPromptProfilePickerField(
     customProfiles: List<LlamaChatPromptProfileEntity>,
     onSelected: (LlamaPromptProfileChoice) -> Unit
 ) {

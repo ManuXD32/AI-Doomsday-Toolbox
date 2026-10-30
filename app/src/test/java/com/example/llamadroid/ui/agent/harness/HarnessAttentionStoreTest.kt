@@ -52,4 +52,26 @@ class HarnessAttentionStoreTest {
         assertEquals("/models/Qwen.gguf", next.selectedModel)
         assertNull(next.selectedReasoningEffort)
     }
+
+    @Test fun legacyAdtLlamaSelectionUsesTheCanonicalManagedServerProvider() {
+        val previous = HarnessProviderUiState(
+            providers = listOf(
+                HarnessProviderOption(
+                    id = "adt-llama-server",
+                    name = "ADT-llamacpp",
+                    models = listOf("llama:7"),
+                    modelContextWindows = mapOf("llama:7" to 32768L),
+                    modelCapabilitySources = mapOf("llama:7" to "server"),
+                )
+            )
+        )
+
+        val next = previous.withSessionSelection(
+            Json.parseToJsonElement("""{"provider":"adt-managed","model":"llama:7"}""")
+        )
+
+        assertEquals("adt-llama-server", next.selectedProviderId)
+        assertEquals("llama:7", next.selectedModel)
+        assertEquals(32768L, next.providers.single().modelContextWindows["llama:7"])
+    }
 }

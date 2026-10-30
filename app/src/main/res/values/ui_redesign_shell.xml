@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="studio_nav_chats">Chats</string>
+    <string name="settings_section_app">App</string>
+    <string name="settings_section_ai">AI engines</string>
+    <string name="settings_section_agent">Agent &amp; prompts</string>
+    <string name="settings_section_system">System</string>
+    <string name="settings_hub_imagegen">Image &amp; video</string>
+    <string name="settings_hub_whisper">Speech (Whisper)</string>
+    <string name="settings_hub_pdf">PDF</string>
+    <string name="settings_hub_agent">Agent settings</string>
+    <string name="settings_hub_agent_desc">Open Agent projects, environments and their settings.</string>
+    <string name="settings_hub_logs">Logs &amp; binaries</string>
+</resources>

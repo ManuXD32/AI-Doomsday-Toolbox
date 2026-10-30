@@ -21,15 +21,15 @@ class WalkthroughCatalogTest {
     }
 
     @Test
-    fun `every ToolCatalog tool appears in exactly one tool lesson`() {
+    fun `every grid ToolCatalog tool appears in exactly one tool lesson`() {
         val lessons = WalkthroughCatalog.chapters
             .flatMap { it.lessons }
             .filter { it.toolId != null }
-        val toolIds = ToolCatalog.tools.map { it.id }
+        val lessonToolIds = lessons.mapNotNull { it.toolId }
+        val gridIds = ToolCatalog.gridTools.map { it.id }
 
-        assertEquals(30, toolIds.size)
-        assertEquals(toolIds.sorted(), lessons.mapNotNull { it.toolId }.sorted())
-        assertEquals(lessons.size, lessons.mapNotNull { it.toolId }.toSet().size)
+        assertTrue("Missing grid lessons: ${gridIds - lessonToolIds.toSet()}", lessonToolIds.containsAll(gridIds))
+        assertEquals(lessons.size, lessonToolIds.toSet().size)
         lessons.forEach { lesson ->
             val tool = ToolCatalog.tools.single { it.id == lesson.toolId }
             assertEquals("Title must follow ToolCatalog for ${lesson.id}", tool.titleRes, lesson.titleRes)
@@ -79,7 +79,7 @@ class WalkthroughCatalogTest {
     fun `every lesson id has an actual screenshot preview`() {
         val lessons = WalkthroughCatalog.chapters.flatMap { it.lessons }
 
-        assertEquals(40, lessons.size)
+        assertEquals(41, lessons.size)
         assertEquals(lessons.size, lessons.map { it.id }.toSet().size)
         lessons.forEach { lesson ->
             assertNotNull("Missing screenshot preview for ${lesson.id}", lessonPreviewResource(lesson.id))

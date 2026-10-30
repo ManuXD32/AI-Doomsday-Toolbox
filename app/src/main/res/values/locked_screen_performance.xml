@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="locked_screen_title">Locked-screen speed</string>
+    <string name="locked_screen_speed_off">Screen off: %1$s</string>
+    <string name="locked_screen_speed_on">Screen on: %1$s</string>
+    <string name="locked_screen_speed_value">%1$.1f t/s on CPUs %2$s</string>
+    <string name="locked_screen_speed_value_no_cpus">%1$.1f t/s</string>
+    <string name="locked_screen_no_data">no data yet</string>
+    <string name="locked_screen_core_prime">prime %1$d</string>
+    <string name="locked_screen_core_big">big %1$d</string>
+    <string name="locked_screen_core_little">little %1$d</string>
+    <string name="locked_screen_core_mix">(%1$s)</string>
+
+</resources>

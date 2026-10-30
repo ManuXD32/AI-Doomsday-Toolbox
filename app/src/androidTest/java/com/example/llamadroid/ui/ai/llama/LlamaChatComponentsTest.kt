@@ -10,6 +10,8 @@ import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.llamadroid.R
 import com.example.llamadroid.data.model.LlamaMessageEntity
+import com.example.llamadroid.ui.ai.llama.chat.LlamaDeleteMessageDialog
+import com.example.llamadroid.ui.ai.llama.chat.LlamaMessageItem
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

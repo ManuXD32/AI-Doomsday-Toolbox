@@ -136,7 +136,7 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
             }
         }
         val intent = Intent(context, VideoInterpolationService::class.java)
-        context.startForegroundService(intent)
+        // Bind only: the service goes foreground (and starts) when a job begins.
         context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
         onDispose {
             context.unbindService(connection)
@@ -382,6 +382,9 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
                         return@StartInterpolationCard
                     }
                     walkthroughTargets?.recordEvent("video.interpolation.options")
+                    if (interpolationService != null) {
+                        context.startForegroundService(VideoInterpolationService.createBeginJobIntent(context))
+                    }
                     scope.launch {
                         interpolationService?.interpolate(config)?.fold(
                             onSuccess = { generatedPath ->

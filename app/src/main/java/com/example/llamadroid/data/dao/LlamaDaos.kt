@@ -13,11 +13,28 @@ import com.example.llamadroid.data.model.LlamaSpeculativeRunEntity
 
 @Dao
 interface LlamaServerDao {
-    @Query("SELECT * FROM llama_servers ORDER BY lastUsed DESC")
+    /** Advanced-mode connections only; rows bound to Easy-mode cards (`easy:` ids) are excluded. */
+    @Query("SELECT * FROM llama_servers WHERE (managedServerCardId IS NULL OR managedServerCardId NOT IN (SELECT id FROM llama_server_cards WHERE easyModelId LIKE 'easy:%')) ORDER BY lastUsed DESC")
     fun getAllServers(): Flow<List<LlamaServerEntity>>
+
+    /** Every connection including Easy-mode ones; only the Easy UI and its coordinator should use this. */
+    @Query("SELECT * FROM llama_servers ORDER BY lastUsed DESC")
+    fun getAllServersIncludingEasy(): Flow<List<LlamaServerEntity>>
 
     @Query("SELECT * FROM llama_servers WHERE id = :id")
     suspend fun getServerById(id: Long): LlamaServerEntity?
+
+    @Query("SELECT * FROM llama_servers WHERE managedServerCardId = :cardId LIMIT 1")
+    suspend fun getManagedServer(cardId: Long): LlamaServerEntity?
+
+    @Query("UPDATE llama_servers SET host = :host, port = :port WHERE managedServerCardId = :cardId")
+    suspend fun updateManagedEndpoint(cardId: Long, host: String, port: Int)
+
+    @Query("DELETE FROM llama_servers WHERE id = :id")
+    suspend fun deleteServerById(id: Long)
+
+    @Query("UPDATE llama_servers SET managedServerCardId = :cardId WHERE id = :id")
+    suspend fun linkManagedCard(id: Long, cardId: Long?)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertServer(server: LlamaServerEntity): Long
@@ -28,7 +45,7 @@ interface LlamaServerDao {
     @Query("UPDATE llama_servers SET lastUsed = :timestamp WHERE id = :id")
     suspend fun updateLastUsed(id: Long, timestamp: Long = System.currentTimeMillis())
 
-    @Query("SELECT * FROM llama_servers ORDER BY lastUsed DESC LIMIT 1")
+    @Query("SELECT * FROM llama_servers WHERE (managedServerCardId IS NULL OR managedServerCardId NOT IN (SELECT id FROM llama_server_cards WHERE easyModelId LIKE 'easy:%')) ORDER BY lastUsed DESC LIMIT 1")
     suspend fun getLastUsedServer(): LlamaServerEntity?
 
     @Query("UPDATE llama_servers SET supportsVision = :supportsVision WHERE id = :id")
@@ -93,16 +110,28 @@ interface LlamaChatPromptProfileDao {
     suspend fun deleteProfileById(id: Long)
 }
 
+/** Number of chats bound to one connection row. */
+data class ServerChatCount(val serverId: Long, val chatCount: Int)
+
 @Dao
 interface LlamaChatDao {
-    @Query("SELECT * FROM llama_chats ORDER BY lastModified DESC")
+    /** Advanced-mode chats only; Easy chats (`easyMode = 1`) are listed through [getEasyChats]. */
+    @Query("SELECT * FROM llama_chats WHERE easyMode = 0 ORDER BY lastModified DESC")
     fun getAllChats(): Flow<List<LlamaChatEntity>>
 
-    @Query("SELECT * FROM llama_chats WHERE pinnedToAiHub = 1 ORDER BY pinnedAt DESC, lastModified DESC")
+    /** Easy-mode chats only, newest first. */
+    @Query("SELECT * FROM llama_chats WHERE easyMode = 1 ORDER BY lastModified DESC")
+    fun getEasyChats(): Flow<List<LlamaChatEntity>>
+
+    @Query("SELECT * FROM llama_chats WHERE pinnedToAiHub = 1 AND easyMode = 0 ORDER BY pinnedAt DESC, lastModified DESC")
     fun getPinnedAiHubChats(): Flow<List<LlamaChatEntity>>
 
     @Query("SELECT * FROM llama_chats WHERE id = :id")
     suspend fun getChatById(id: Long): LlamaChatEntity?
+
+    /** One chat by id in either mode; the chat screen uses it because [getAllChats] excludes Easy chats. */
+    @Query("SELECT * FROM llama_chats WHERE id = :id")
+    fun observeChatById(id: Long): Flow<LlamaChatEntity?>
 
     @Query("SELECT * FROM llama_chats WHERE isEphemeral = 1 AND deleteAfterSession = 1 AND expiresAtMillis IS NOT NULL AND expiresAtMillis <= :now")
     suspend fun getExpiredEphemeralChats(now: Long = System.currentTimeMillis()): List<LlamaChatEntity>
@@ -112,6 +141,25 @@ interface LlamaChatDao {
 
     @Delete
     suspend fun deleteChat(chat: LlamaChatEntity)
+
+    @Query("UPDATE llama_chats SET serverId = :serverId WHERE id = :chatId")
+    suspend fun bindChatServer(chatId: Long, serverId: Long?)
+
+    /** Binds only legacy chats; returns the number of updated rows (0 when already bound). */
+    @Query("UPDATE llama_chats SET serverId = :serverId WHERE id = :chatId AND serverId IS NULL")
+    suspend fun bindChatServerIfUnbound(chatId: Long, serverId: Long): Int
+
+    @Query("UPDATE llama_chats SET serverId = NULL WHERE serverId = :serverId")
+    suspend fun clearChatServerBinding(serverId: Long)
+
+    @Query("UPDATE llama_chats SET persistKvCache = :enabled WHERE id = :chatId")
+    suspend fun setPersistKvCache(chatId: Long, enabled: Boolean)
+
+    @Query("SELECT * FROM llama_chats WHERE serverId = :serverId ORDER BY lastModified DESC")
+    suspend fun getChatsBoundToServer(serverId: Long): List<LlamaChatEntity>
+
+    @Query("SELECT serverId AS serverId, COUNT(*) AS chatCount FROM llama_chats WHERE serverId IS NOT NULL GROUP BY serverId")
+    fun observeBoundChatCounts(): Flow<List<ServerChatCount>>
 
     @Query("UPDATE llama_chats SET title = :title WHERE id = :id")
     suspend fun updateTitle(id: Long, title: String)
@@ -241,6 +289,26 @@ interface LlamaMessageDao {
         tps: Double,
         generationTimeMs: Long
     )
+
+    /** Same flush as [updateMessageThinkingAndContent] plus the reply's steps, in one write. */
+    @Query("UPDATE llama_messages SET content = :content, thinking = :thinking, promptTokens = :promptTokens, completionTokens = :completionTokens, tps = :tps, generationTimeMs = :generationTimeMs, stepsJson = :stepsJson WHERE id = :id")
+    suspend fun updateMessageThinkingContentAndSteps(
+        id: Long,
+        content: String,
+        thinking: String?,
+        promptTokens: Int,
+        completionTokens: Int,
+        tps: Double,
+        generationTimeMs: Long,
+        stepsJson: String?
+    )
+
+    @Query("UPDATE llama_messages SET stepsJson = :stepsJson WHERE id = :id")
+    suspend fun updateMessageSteps(id: Long, stepsJson: String?)
+
+    /** Round end: stores the finished steps and the (cleared) live text of the next round together. */
+    @Query("UPDATE llama_messages SET content = :content, thinking = :thinking, stepsJson = :stepsJson WHERE id = :id")
+    suspend fun updateMessageStepsAndText(id: Long, content: String, thinking: String?, stepsJson: String?)
 
     @Query("UPDATE llama_messages SET isTruncated = :isTruncated WHERE id = :id")
     suspend fun updateMessageTruncatedStatus(id: Long, isTruncated: Boolean)

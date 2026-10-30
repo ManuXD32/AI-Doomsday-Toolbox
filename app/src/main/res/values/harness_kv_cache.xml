@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_kv_cache_title">Agent KV cache on disk</string>
+    <string name="harness_kv_cache_description">Keeps each Harness session\'s llama-server KV state on disk so agents that switch on a shared server do not reprocess their prompts. Only applies to phone-local managed llama servers; custom and remote routes are not covered.</string>
+    <string name="harness_kv_cache_size">Used by this runtime: %1$s</string>
+    <string name="harness_kv_cache_budget">Disk budget</string>
+    <string name="harness_kv_cache_budget_option">%1$d GiB</string>
+    <string name="harness_kv_cache_clear">Clear this runtime\'s caches</string>
+    <string name="harness_kv_cache_clear_title">Clear this runtime\'s caches?</string>
+    <string name="harness_kv_cache_clear_body">All saved KV caches of this Harness runtime are deleted. Sessions keep working but must reprocess their prompts once.</string>
+    <string name="harness_kv_cache_cleared">Caches cleared</string>
+</resources>

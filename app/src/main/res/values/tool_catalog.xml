@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tool_catalog_category_assistants">Assistants</string>
+    <string name="tool_catalog_servers_title">Servers</string>
+    <string name="tool_catalog_servers_desc">Model servers, sharing, distributed inference, Termux and Ollama in one place.</string>
+    <string name="tool_catalog_web_servers_title">Web UI servers</string>
+    <string name="tool_catalog_web_servers_desc">Run chat, image generation and workflow web apps you open in a browser</string>
+    <string name="tool_catalog_global_search_title">Search everything</string>
+    <string name="tool_catalog_global_search_desc">Find tools, settings, chats, projects, models and notes.</string>
+    <string name="tool_catalog_recipe_manga_title">Translate manga</string>
+    <string name="tool_catalog_recipe_manga_desc">Workflows recipe: read, translate and typeset manga pages.</string>
+    <string name="tool_catalog_recipe_subtitles_title">Translate subtitles</string>
+    <string name="tool_catalog_recipe_subtitles_desc">Workflows recipe: translate a subtitle file into another language.</string>
+    <string name="tool_catalog_recipe_dubbing_title">Dub a video</string>
+    <string name="tool_catalog_recipe_dubbing_desc">Workflows recipe: transcribe, translate and voice media in another language.</string>
+    <string name="tool_catalog_recipe_transcribe_title">Transcribe and summarize</string>
+    <string name="tool_catalog_recipe_transcribe_desc">Workflows recipe: turn audio into text and a short summary.</string>
+    <string name="tool_catalog_recipe_upscale_title">Generate and enlarge an image</string>
+    <string name="tool_catalog_recipe_upscale_desc">Workflows recipe: create an image from text, then upscale it.</string>
+    <string name="tool_badge_new">New</string>
+    <string name="tool_badge_not_tried">Not tried</string>
+</resources>

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_sampler_auto">Auto</string>
+    <string name="chat_sampler_auto_hint">Auto omite el ajuste de la solicitud, así se usa el valor predeterminado del servidor o del modelo.</string>
+    <string name="chat_sampler_advanced_title">Muestreo avanzado (llama.cpp)</string>
+    <string name="chat_sampler_reset_all">Restablecer todo a Auto</string>
+    <string name="chat_sampler_presence_penalty">Penalización de presencia</string>
+    <string name="chat_sampler_presence_penalty_desc">Penaliza los tokens que ya aparecieron para favorecer temas nuevos.</string>
+    <string name="chat_sampler_frequency_penalty">Penalización de frecuencia</string>
+    <string name="chat_sampler_frequency_penalty_desc">Penaliza los tokens según cuántas veces aparecieron.</string>
+    <string name="chat_sampler_repeat_last_n">Ventana de repetición</string>
+    <string name="chat_sampler_repeat_last_n_desc">Cuántos tokens recientes revisa la penalización de repetición (-1 = todo el contexto, 0 = desactivada).</string>
+    <string name="chat_sampler_typical_p">Typical P</string>
+    <string name="chat_sampler_typical_p_desc">Conserva los tokens con contenido de información típico; 1 lo desactiva.</string>
+    <string name="chat_sampler_top_n_sigma">Top-N sigma</string>
+    <string name="chat_sampler_top_n_sigma_desc">Conserva los tokens a N desviaciones estándar del mejor logit; -1 lo desactiva.</string>
+    <string name="chat_sampler_xtc_probability">Probabilidad XTC</string>
+    <string name="chat_sampler_xtc_probability_desc">Probabilidad de quitar los tokens más probables para dar variedad; 0 lo desactiva.</string>
+    <string name="chat_sampler_xtc_threshold">Umbral XTC</string>
+    <string name="chat_sampler_xtc_threshold_desc">Probabilidad por encima de la cual XTC puede quitar tokens.</string>
+    <string name="chat_sampler_dry_multiplier">Multiplicador DRY</string>
+    <string name="chat_sampler_dry_multiplier_desc">Fuerza de la penalización de secuencias repetidas; 0 desactiva DRY.</string>
+    <string name="chat_sampler_dry_base">Base DRY</string>
+    <string name="chat_sampler_dry_base_desc">Qué tan rápido crece la penalización DRY con la longitud de la secuencia.</string>
+    <string name="chat_sampler_dry_allowed_length">Longitud permitida DRY</string>
+    <string name="chat_sampler_dry_allowed_length_desc">Las repeticiones de hasta esta longitud no se penalizan.</string>
+    <string name="chat_sampler_dry_penalty_last_n">Ventana DRY</string>
+    <string name="chat_sampler_dry_penalty_last_n_desc">Cuántos tokens recientes analiza DRY (-1 = todo el contexto, 0 = desactivado).</string>
+    <string name="chat_sampler_dynatemp_range">Rango de temperatura dinámica</string>
+    <string name="chat_sampler_dynatemp_range_desc">Permite que la temperatura varíe esta cantidad alrededor del valor base; 0 lo desactiva.</string>
+    <string name="chat_sampler_dynatemp_exponent">Exponente de temperatura dinámica</string>
+    <string name="chat_sampler_dynatemp_exponent_desc">Define cómo la temperatura dinámica sigue la confianza del token.</string>
+    <string name="chat_sampler_mirostat">Mirostat</string>
+    <string name="chat_sampler_mirostat_desc">Muestreo adaptativo que busca una perplejidad constante.</string>
+    <string name="chat_sampler_mirostat_off">Desactivado</string>
+    <string name="chat_sampler_mirostat_v1">Mirostat 1</string>
+    <string name="chat_sampler_mirostat_v2">Mirostat 2</string>
+    <string name="chat_sampler_mirostat_tau">Objetivo Mirostat (tau)</string>
+    <string name="chat_sampler_mirostat_tau_desc">Entropía objetivo; más baja es más enfocada. Solo se usa con Mirostat activo.</string>
+    <string name="chat_sampler_mirostat_eta">Tasa de aprendizaje Mirostat (eta)</string>
+    <string name="chat_sampler_mirostat_eta_desc">Qué tan rápido se adapta Mirostat. Solo se usa con Mirostat activo.</string>
+</resources>

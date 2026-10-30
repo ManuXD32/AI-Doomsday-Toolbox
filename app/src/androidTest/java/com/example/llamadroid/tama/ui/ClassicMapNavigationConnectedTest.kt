@@ -8,13 +8,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
-import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
 import androidx.navigation.compose.rememberNavController
 import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -30,8 +28,7 @@ import com.example.llamadroid.tama.game.FarmRepository
 import com.example.llamadroid.tama.game.TamaAgentService
 import com.example.llamadroid.tama.game.TamaGameEngine
 import com.example.llamadroid.tama.game.PetMapper
-import com.example.llamadroid.tama.world.core.LegacyLocationAliases
-import com.example.llamadroid.tama.world.ui.WORLD_HOME_EXIT_TEST_TAG
+import com.example.llamadroid.tama.data.LegacyLocationAliases
 import com.example.llamadroid.ui.theme.LlamaDroidTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -41,14 +38,12 @@ import kotlinx.coroutines.runBlocking
 import java.io.File
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** One real TamaScreen route walk, kept bounded and free of physical-arrival polling. */
+/** One real TamaScreen room/map/menu walk, kept bounded. */
 @RunWith(AndroidJUnit4::class)
 class ClassicMapNavigationConnectedTest {
     @get:Rule
@@ -110,10 +105,11 @@ class ClassicMapNavigationConnectedTest {
     }
 
     @Test
-    fun roomClassicMapDevelopmentExitAndBrainBackStayClassic() {
+    fun roomMapRoomAndMenuStayClassic() {
         val roomMapLabel = compose.activity.getString(R.string.soft_studio_tama_map)
+        val roomLabel = compose.activity.getString(R.string.soft_studio_tama_room)
         val menuLabel = compose.activity.getString(R.string.tama_btn_menu)
-        val brainLabel = compose.activity.getString(R.string.tama_world_shortcut_brain)
+        val statusLabel = compose.activity.getString(R.string.tama_menu_status)
 
         compose.setContent {
             LlamaDroidTheme(dynamicColor = false) {
@@ -122,90 +118,39 @@ class ClassicMapNavigationConnectedTest {
                         navController = rememberNavController(),
                         gameEngine = engine,
                         settingsRepo = settings,
-                        agentService = agentService,
-                        farmRepository = farmRepository
+                        agentService = agentService
                     )
                 }
             }
         }
 
-        // Normal room -> classic map -> development tile.
-        compose.onNodeWithContentDescription(roomMapLabel).performClick()
-        compose.onNodeWithTag(CLASSIC_MAP_SIMULATION_TILE_TAG)
-            .performScrollTo()
-            .assertIsDisplayed()
-        captureQaScreenshot("classic-map.png")
+        // The authored room is the landing surface; the toggle shows the classic map.
+        // The room animates continuously, so keep a controlled clock.
         compose.mainClock.autoAdvance = false
-        compose.onNodeWithTag(CLASSIC_MAP_SIMULATION_TILE_TAG)
-            .performClick()
-        compose.waitUntil(timeoutMillis = ROUTE_TIMEOUT_MS) {
-            compose.mainClock.advanceTimeByFrame()
-            engine.isSimulatedWorldActive &&
-                compose.onAllNodesWithTag(WORLD_HOME_EXIT_TEST_TAG)
-                    .fetchSemanticsNodes()
-                    .isNotEmpty()
-        }
-        scrollClassicWorldExitIntoView(compose)
-        captureQaScreenshot("world-loaded.png")
-        assertTrue("Entering through the tile must not be a no-op", engine.isSimulatedWorldActive)
+        compose.onNodeWithContentDescription(roomMapLabel).performClick()
+        compose.mainClock.advanceTimeBy(400L)
+        compose.onNodeWithContentDescription(
+            classicMapLocations(compose.activity).first().name
+        ).assertIsDisplayed()
+        captureQaScreenshot("classic-map.png")
 
-        // Hardware Back is the immediate route-level return-home escape; it
-        // does not wait for a physical WORLD arrival or autonomous command.
-        compose.runOnIdle {
-            compose.activity.onBackPressedDispatcher.onBackPressed()
-        }
-        compose.waitUntil(timeoutMillis = ROUTE_TIMEOUT_MS) {
-            compose.mainClock.advanceTimeByFrame()
-            !engine.isSimulatedWorldActive &&
-                compose.onAllNodesWithTag("soft_studio_tama_room_viewport")
-                    .fetchSemanticsNodes()
-                    .isNotEmpty()
-        }
+        compose.onNodeWithContentDescription(roomLabel).performClick()
+        compose.mainClock.advanceTimeBy(400L)
         compose.onNodeWithTag("soft_studio_tama_room_viewport").assertIsDisplayed()
-        // The authored room also animates continuously. Keep a controlled
-        // clock throughout the journey instead of waiting for animation idle.
-        compose.mainClock.advanceTimeByFrame()
         captureQaScreenshot("returned-room.png")
-        assertFalse(engine.isSimulatedWorldActive)
         assertEquals(
             LegacyLocationAliases.HOME,
             runBlocking { database.tamaDao().getActivePet()?.currentLocationId }
         )
 
-        // Brain opened from the classic room stays outside the simulation and
-        // its Back action closes directly to that room.
+        // The menu lists only classic entries.
         compose.onAllNodesWithContentDescription(menuLabel).onFirst().performClick()
         compose.mainClock.advanceTimeBy(400L)
-        compose.onNodeWithText(brainLabel).performScrollTo()
-        compose.mainClock.advanceTimeBy(400L)
-        compose.onNodeWithText(brainLabel).assertIsDisplayed().performClick()
-        compose.waitUntil(timeoutMillis = ROUTE_TIMEOUT_MS) {
-            compose.mainClock.advanceTimeByFrame()
-            compose.onAllNodesWithTag("brain_active_policy")
-                .fetchSemanticsNodes()
-                .isNotEmpty()
-        }
-        compose.onNodeWithTag("brain_header").assertIsDisplayed()
-        compose.onNodeWithTag("brain_active_policy").assertIsDisplayed()
-        captureQaScreenshot("brain-loaded.png")
-        compose.runOnIdle {
-            compose.activity.onBackPressedDispatcher.onBackPressed()
-        }
-        compose.waitUntil(timeoutMillis = ROUTE_TIMEOUT_MS) {
-            compose.mainClock.advanceTimeByFrame()
-            compose.onAllNodesWithTag("soft_studio_tama_room_viewport")
-                .fetchSemanticsNodes()
-                .isNotEmpty()
-        }
-        compose.onNodeWithTag("soft_studio_tama_room_viewport").assertIsDisplayed()
-        assertFalse(engine.isSimulatedWorldActive)
+        compose.onNodeWithText(statusLabel).assertIsDisplayed()
         assertEquals(
             LegacyLocationAliases.HOME,
             runBlocking { database.tamaDao().getActivePet()?.currentLocationId }
         )
-        // The room is visible again; this assertion also guards against Back
-        // reopening the map or remounting the world route.
-        compose.onNodeWithContentDescription(roomMapLabel).assertIsDisplayed()
     }
 
     private fun captureQaScreenshot(fileName: String) {
@@ -228,9 +173,5 @@ class ClassicMapNavigationConnectedTest {
         } finally {
             bitmap.recycle()
         }
-    }
-
-    private companion object {
-        const val ROUTE_TIMEOUT_MS = 15_000L
     }
 }

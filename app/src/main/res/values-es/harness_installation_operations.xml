@@ -1,0 +1,17 @@
+<resources>
+    <string name="harness_installation_default_name">Entorno predeterminado</string>
+    <string name="harness_installation_working">Gestionando los entornos del agente de IA…</string>
+    <string name="harness_installation_phase_stopping">Deteniendo los servicios del entorno…</string>
+    <string name="harness_installation_phase_preparing">Preparando los archivos del entorno…</string>
+    <string name="harness_installation_phase_validating">Comprobando la integridad del archivo…</string>
+    <string name="harness_installation_phase_saving">Guardando los cambios del entorno…</string>
+    <string name="harness_installation_phase_complete">Completado</string>
+    <string name="harness_installation_phase_cancelled">Cancelado. Recupera las instalaciones interrumpidas con Reintentar.</string>
+    <string name="harness_installation_not_installed">Se instalará al iniciarlo</string>
+    <string name="harness_installation_phase_rootfs_check">Leyendo y verificando Debian…</string>
+    <string name="harness_installation_phase_rootfs_extract">Instalando los archivos de Debian. Puede tardar varios minutos…</string>
+    <string name="harness_installation_phase_payload_check">Leyendo y verificando el agente…</string>
+    <string name="harness_installation_phase_payload_extract">Instalando los archivos del agente…</string>
+    <string name="harness_installation_phase_failed">La operación ha fallado. Reintenta para continuar.</string>
+    <string name="harness_installation_phase_catalog">Actualizando el catálogo de entornos…</string>
+</resources>

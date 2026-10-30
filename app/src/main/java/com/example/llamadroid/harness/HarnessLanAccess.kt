@@ -9,6 +9,7 @@ import com.example.llamadroid.service.AiServerNetwork
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -181,10 +182,30 @@ class HarnessLanAccessManager private constructor(context: Context) {
         private const val PREFERENCES = "harness_lan_access"
         private const val KEY_ENABLED = "enabled"
 
-        @Volatile private var instance: HarnessLanAccessManager? = null
-
-        fun get(context: Context): HarnessLanAccessManager = instance ?: synchronized(this) {
-            instance ?: HarnessLanAccessManager(context).also { instance = it }
+        private val instances = java.util.concurrent.ConcurrentHashMap<String, HarnessLanAccessManager>()
+        fun get(context: Context): HarnessLanAccessManager {
+            val captured = HarnessInstallationManager.capture(context)
+            return instances.getOrPut(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(captured)) {
+                HarnessLanAccessManager(captured)
+            }
+        }
+        /** Stops only the named runtime's LAN proxy; other runtimes keep serving. */
+        internal suspend fun stopForMaintenance(runtimeId: String) {
+            instances.remove(runtimeId)?.let {
+                it.endpointWatcher.cancel()
+                it.runtimeWatcher.cancel()
+                it.stopProxy()
+                it.scope.cancel()
+            }
+        }
+        internal suspend fun stopAllForMaintenance() {
+            instances.values.toList().forEach {
+                it.endpointWatcher.cancel()
+                it.runtimeWatcher.cancel()
+                it.stopProxy()
+                it.scope.cancel()
+            }
+            instances.clear()
         }
     }
 }

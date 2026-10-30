@@ -9,16 +9,14 @@
     <string name="harness_projects_empty_title">No projects yet</string>
     <string name="harness_projects_empty_description">Create a project to keep its conversations and files together.</string>
     <string name="harness_project_threads">Threads: %1$d</string>
-    <string name="harness_tab_conversation">Conversation</string>
+    <string name="harness_tab_conversation">Chat</string>
     <string name="harness_tab_plan">Plan</string>
     <string name="harness_tab_requests">Requests</string>
     <string name="harness_tab_changes">Changes</string>
-    <string name="harness_tab_tools">Tools</string>
     <string name="harness_tab_files">Files</string>
     <string name="harness_tab_commands">Commands</string>
     <string name="harness_tab_terminal">Terminal</string>
     <string name="harness_more_destinations">More destinations</string>
-    <string name="harness_back_to_projects">Back to projects</string>
     <string name="harness_plan_empty_title">No plan for this thread</string>
     <string name="harness_plan_empty_description">A plan appears here when the agent creates one.</string>
     <string name="harness_requests_empty_title">No pending requests</string>

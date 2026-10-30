@@ -126,7 +126,7 @@ class OllamaService(context: Context) {
                             put("thinking", msg.thinking)
                         }
                         msg.toolCallId?.let { put("tool_call_id", it) }
-                        msg.images?.takeIf { it.isNotEmpty() }?.let { imgs ->
+                        msg.ollamaImagePayloads().takeIf { it.isNotEmpty() }?.let { imgs ->
                             put("images", JSONArray(imgs.map(::normalizeImagePayloadForRequest)))
                         }
                         msg.toolCalls?.takeIf { it.isNotEmpty() }?.let { calls ->
@@ -270,8 +270,23 @@ class OllamaService(context: Context) {
         val toolName: String? = null,      // Name of tool for approval messages
         val needsApproval: Boolean = false, // Flag for tool call approval
         var isPlanApproved: Boolean = false, // Flag for propose_plan approval
-        var timestamp: Long? = null        // Creation time for persistence
-    )
+        var timestamp: Long? = null,       // Creation time for persistence
+        /** Further image files (after [imagePath]) for vision models; `images` already holds base64 payloads. */
+        val imagePaths: List<String> = emptyList()
+    ) {
+        /** [imagePath] first, then [imagePaths], blanks and duplicates removed. */
+        fun allImagePaths(): List<String> =
+            (listOfNotNull(imagePath) + imagePaths).filter { it.isNotBlank() }.distinct()
+
+        /** Base64 payloads for Ollama: pre-encoded [images] plus every file of [allImagePaths] not already covered. */
+        fun ollamaImagePayloads(): List<String> {
+            val encoded = images.orEmpty()
+            if (imagePaths.isEmpty()) return encoded
+            return encoded + imagePaths.filter { it.isNotBlank() }.distinct().mapNotNull { path ->
+                runCatching { fileToBase64(path) }.getOrNull()
+            }
+        }
+    }
     
     data class ChatResponse(
         val message: ChatMessage,
@@ -287,7 +302,12 @@ class OllamaService(context: Context) {
         val totalTokens: Int? = null,
         val totalDurationNs: Long? = null,
         val evalDurationNs: Long? = null,
-        val backend: String? = null
+        val backend: String? = null,
+        /** Decode-only counters of one call (llama-server `timings`); see [com.example.llamadroid.service.chat.GenerationSpeedTracker]. */
+        val predictedTokens: Int? = null,
+        val predictedMs: Double? = null,
+        /** Prompt tokens actually processed by the call (cache hits excluded), when the server reports it. */
+        val promptProcessedTokens: Int? = null
     )
 
     private fun normalizeOllamaImagePayload(image: String): String {
@@ -720,7 +740,7 @@ class OllamaService(context: Context) {
                                 put("tool_calls", callsArray)
                             }
 
-                            msg.images?.let { imgs ->
+                            msg.ollamaImagePayloads().takeIf { it.isNotEmpty() }?.let { imgs ->
                                 val imgsArray = JSONArray()
                                 imgs.forEach { imgsArray.put(normalizeOllamaImagePayload(it)) }
                                 put("images", imgsArray)

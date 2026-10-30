@@ -5,7 +5,8 @@ import androidx.annotation.StringRes
 import com.example.llamadroid.R
 
 /**
- * Types of dungeons available for text adventures.
+ * Types of dungeons available for text adventures (Dream Chronicle runs). Names follow docs/adventure-story-bible.md;
+ * the enum constants stay stable for saved sessions.
  * Dungeons unlock sequentially (1-6), with Chaos Realm always available.
  */
 enum class DungeonType(
@@ -16,7 +17,7 @@ enum class DungeonType(
     val stylePrompt: String
 ) {
     SHADOW_CRYPTS(
-        displayName = "Shadow Crypts",
+        displayName = "Hushed Crypts of Forgotten Lullabies",
         displayNameRes = R.string.adventure_dungeon_shadow_crypts,
         emoji = "💀",
         unlockOrder = 1,
@@ -29,7 +30,7 @@ enum class DungeonType(
     ),
     
     ARCANE_DEPTHS(
-        displayName = "Arcane Depths",
+        displayName = "Lantern Deeps of the Sleeping Sea",
         displayNameRes = R.string.adventure_dungeon_arcane_depths,
         emoji = "🔮",
         unlockOrder = 2,
@@ -42,7 +43,7 @@ enum class DungeonType(
     ),
     
     INFERNAL_SPIRE(
-        displayName = "Infernal Spire",
+        displayName = "Spire of Fair Bargains",
         displayNameRes = R.string.adventure_dungeon_infernal_spire,
         emoji = "🔥",
         unlockOrder = 3,
@@ -55,7 +56,7 @@ enum class DungeonType(
     ),
     
     FROSTBOUND_HALLS(
-        displayName = "Frostbound Halls",
+        displayName = "Halls of the Unfinished Winter",
         displayNameRes = R.string.adventure_dungeon_frostbound_halls,
         emoji = "❄️",
         unlockOrder = 4,
@@ -68,7 +69,7 @@ enum class DungeonType(
     ),
     
     VERDANT_MAW(
-        displayName = "Verdant Maw",
+        displayName = "The Verdant Yawn",
         displayNameRes = R.string.adventure_dungeon_verdant_maw,
         emoji = "🌿",
         unlockOrder = 5,
@@ -81,7 +82,7 @@ enum class DungeonType(
     ),
     
     VOID_SANCTUM(
-        displayName = "Void Sanctum",
+        displayName = "Sanctum Between the Stars",
         displayNameRes = R.string.adventure_dungeon_void_sanctum,
         emoji = "🌑",
         unlockOrder = 6,

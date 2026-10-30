@@ -3,55 +3,80 @@ package com.example.llamadroid.tama.game
 import android.content.Context
 import com.example.llamadroid.R
 import com.example.llamadroid.tama.data.*
-import com.example.llamadroid.tama.world.core.ActionId
-import com.example.llamadroid.tama.world.core.LegacyLocationAliases
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.CancellationException
 import com.example.llamadroid.tama.notifications.TamaNotificationScheduler
 
-/** Shared maintenance rules; only an active development adventure requires travel. */
+/** Shared maintenance rules; classic farm transaction. */
 object WorldFarmMaintenance {
     suspend fun request(context: Context, engine: TamaGameEngine, operation: String,
                         arguments: Map<String, String> = emptyMap()): TamaGameEngine.ActionResult {
-        if (!engine.isSimulatedWorldActive) {
-            return try {
-                engine.runClassicTransaction { _, farm ->
-                    val result = complete(context, engine, farm, arguments + ("operation" to operation))
-                    engine.pet.value?.id?.let { petId ->
-                        TamaCommitEffects.deferOrRun("notifications:$petId") {
-                            TamaNotificationScheduler.scheduleForPet(context.applicationContext, petId)
-                        }
+        return try {
+            engine.runClassicTransaction { _, farm ->
+                val result = complete(context, engine, farm, arguments + ("operation" to operation))
+                engine.pet.value?.id?.let { petId ->
+                    TamaCommitEffects.deferOrRun("notifications:$petId") {
+                        TamaNotificationScheduler.scheduleForPet(context.applicationContext, petId)
                     }
-                    result
                 }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                TamaGameEngine.ActionResult(false, context.getString(R.string.tama_world_runtime_action_unavailable))
+                result
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            TamaGameEngine.ActionResult(false, FarmActionMessages.describe(context, error),
+                if (error is FarmMissingMaterialsException) FARM_MATERIALS_REQUIRED else "")
         }
-        val action = if (operation == "harvester_collect") ActionId.STORE_PRODUCE else ActionId.USE
-        val result = engine.world.queueAction(action, LegacyLocationAliases.FARM,
-            arguments + mapOf("canonicalAction" to "farmMaintenance", "operation" to operation), LegacyLocationAliases.FARM)
-        return TamaGameEngine.ActionResult(result.acceptedCommand, context.getString(if (result.acceptedCommand)
-            R.string.tama_world_runtime_action_queued else R.string.tama_world_runtime_action_unavailable))
     }
 
     internal suspend fun complete(context: Context, engine: TamaGameEngine, farm: FarmRepository,
                                   arguments: Map<String, String>): TamaGameEngine.ActionResult {
         val pet = requireNotNull(engine.pet.value)
         val now = System.currentTimeMillis()
-        check(!pet.cycleFrozen)
+        check(!pet.cycleFrozen) { "cycle_frozen" }
         suspend fun spend(cost: Int) {
-            check(cost > 0 && engine.spendMoney(cost.toLong())) { context.getString(R.string.tama_action_not_enough_coins, cost.toLong(), pet.money) }
+            if (cost <= 0 || !engine.spendMoney(cost.toLong())) {
+                throw FarmUserMessageException(context.getString(R.string.tama_action_not_enough_coins, cost.toLong(), pet.money))
+            }
         }
-        suspend fun log(resource: Int, vararg values: Any) = engine.logEvent(pet.id, EventType.OTHER, context.getString(resource, *values))
+        // Coins plus wood/stone. Materials are checked first so the player sees what is missing before any spending;
+        // everything runs in one Room transaction, so a failure rolls the whole purchase back.
+        suspend fun spendWithMaterials(coins: Int, materials: FarmMaterialCost) {
+            val current = engine.pet.value ?: pet
+            val haveWood = FarmMaterialCosts.owned(current.inventory, FARM_WOOD_ID)
+            val haveStone = FarmMaterialCosts.owned(current.inventory, FARM_STONE_ID)
+            if (materials.wood > haveWood || materials.stone > haveStone) {
+                throw FarmMissingMaterialsException(materials, haveWood, haveStone)
+            }
+            spend(coins)
+            listOf(FARM_WOOD_ID to materials.wood, FARM_STONE_ID to materials.stone).forEach { (id, qty) ->
+                if (qty > 0) {
+                    val stack = engine.pet.value?.inventory?.firstOrNull { it.id == id } ?: error("item_required")
+                    check(engine.consumeItem(stack, qty)) { "item_required" }
+                }
+            }
+        }
+        // The last logged line doubles as the result shown to the player (e.g. "Collected 2 water!").
+        var resultMessage: String? = null
+        suspend fun log(resource: Int, vararg values: Any) {
+            val text = context.getString(resource, *values)
+            resultMessage = text
+            engine.logEvent(pet.id, EventType.OTHER, text)
+        }
+        suspend fun buyBuilding(type: String) {
+            check(farm.getUpgrade(pet.id, type)?.isPurchased != true) { "already_purchased" }
+            spendWithMaterials(
+                if (type == "well") FARM_WELL_COST else FARM_COMPOSTER_COST,
+                if (type == "well") FarmMaterialCosts.WELL_BUILD else FarmMaterialCosts.COMPOSTER_BUILD
+            )
+            farm.buyUpgrade(pet.id, type, rescheduleNotifications = false)
+        }
         fun item(): InventoryItem = pet.inventory.firstOrNull { it.id == arguments["itemId"] && it.quantity > 0 }
             ?: error("item_required")
         val operation = arguments.getValue("operation")
-        if (operation.startsWith("planting_")) check(farm.getUpgrade(pet.id, FARM_PLANTING_DRONE_ID)?.isPurchased == true)
-        if (operation.startsWith("harvester_")) check(farm.getUpgrade(pet.id, FARM_HARVESTING_DRONE_ID)?.isPurchased == true)
+        if (operation.startsWith("planting_")) check(farm.getUpgrade(pet.id, FARM_PLANTING_DRONE_ID)?.isPurchased == true) { "drone_required" }
+        if (operation.startsWith("harvester_")) check(farm.getUpgrade(pet.id, FARM_HARVESTING_DRONE_ID)?.isPurchased == true) { "drone_required" }
         when (operation) {
             "buy_upgrade" -> {
                 val type = arguments.getValue("type")
@@ -59,7 +84,7 @@ object WorldFarmMaintenance {
                 when {
                     type == FARMLAND_UPGRADE_ID -> {
                         val level = farm.getUpgrade(pet.id, type)?.takeIf { it.isPurchased }?.level ?: 0
-                        spend(farmlandUpgradeCostForLevel(level) ?: error("upgrade_maxed"))
+                        spendWithMaterials(farmlandUpgradeCostForLevel(level) ?: error("upgrade_maxed"), FarmMaterialCosts.farmland(level))
                         check(farm.upgradeFarmland(pet.id, rescheduleNotifications = false))
                     }
                     droneId != null -> {
@@ -74,12 +99,7 @@ object WorldFarmMaintenance {
                             farm.saveHarvesterDroneState(pet.id, current.copy(fuelUpgradeLevel = current.fuelUpgradeLevel + 1, lastUpdatedAt = now), rescheduleNotifications = false)
                         }
                     }
-                    type in setOf("well", "composter") -> {
-                        check(farm.getUpgrade(pet.id, type)?.isPurchased != true)
-                        val price = if (type == "well") FARM_WELL_COST else 800
-                        spend(price)
-                        farm.buyUpgrade(pet.id, type, price, rescheduleNotifications = false)
-                    }
+                    type == "well" || type == "composter" -> buyBuilding(type)
                     else -> error("unknown_farm_upgrade")
                 }
                 log(R.string.event_purchased_upgrade, upgradeName(context, type))
@@ -87,24 +107,24 @@ object WorldFarmMaintenance {
             "buy_drone" -> {
                 val type = arguments.getValue("type")
                 check(type in setOf(FARM_PLANTING_DRONE_ID, FARM_HARVESTING_DRONE_ID))
-                check(farm.getUpgrade(pet.id, type)?.isPurchased != true && pet.inventory.none { it.id == type })
+                check(farm.getUpgrade(pet.id, type)?.isPurchased != true && pet.inventory.none { it.id == type }) { "already_purchased" }
                 spend(FARM_DRONE_BUY_PRICE)
                 check(engine.grantItem(InventoryItem(type, upgradeName(context, type), ItemType.TOOL)))
-                farm.buyUpgrade(pet.id, type, FARM_DRONE_BUY_PRICE, rescheduleNotifications = false)
+                farm.buyUpgrade(pet.id, type, rescheduleNotifications = false)
                 log(R.string.event_purchased_upgrade, upgradeName(context, type))
             }
             "buy_livestock" -> {
                 val type = livestockType(arguments)
                 val occupied = farm.decodeLivestockSlots(farm.getLivestock(pet.id, type.id), type).count { it.occupied }
-                check(occupied < type.maxAnimals)
-                spend(type.buyPrice)
+                check(occupied < type.maxAnimals) { "livestock_full" }
+                spendWithMaterials(type.buyPrice, FarmMaterialCosts.livestock(type))
                 check(farm.buyLivestockAnimal(pet.id, type, rescheduleNotifications = false))
                 log(if (type == FarmLivestockType.BARN) R.string.tama_event_bought_cow else R.string.tama_event_bought_chicken)
             }
             "collect_livestock" -> {
                 val type = livestockType(arguments)
                 val count = farm.collectLivestockOutput(pet.id, type, rescheduleNotifications = false)
-                check(count > 0)
+                check(count > 0) { "output_not_ready" }
                 val name = context.getString(if (type == FarmLivestockType.BARN) R.string.tama_item_milk_bottle else R.string.tama_item_egg)
                 check(engine.grantItem(InventoryItem(type.productInventoryId, name, ItemType.CROP), count))
                 log(if (type == FarmLivestockType.BARN) R.string.tama_event_collected_milk else R.string.tama_event_collected_eggs, count)
@@ -121,10 +141,7 @@ object WorldFarmMaintenance {
             }
             "buy_well", "buy_composter" -> {
                 val type = if (operation == "buy_well") "well" else "composter"
-                check(farm.getUpgrade(pet.id, type)?.isPurchased != true) { "already_purchased" }
-                val cost = if (type == "well") FARM_WELL_COST else 800
-                spend(cost)
-                farm.buyUpgrade(pet.id, type, cost, rescheduleNotifications = false)
+                buyBuilding(type)
                 log(if (type == "well") R.string.tama_event_well_upgrade else R.string.tama_event_composter_upgrade)
             }
             "collect_water" -> {
@@ -135,15 +152,15 @@ object WorldFarmMaintenance {
             }
             "well_capacity" -> {
                 val level = farm.getUpgrade(pet.id, "well")?.takeIf { it.isPurchased }?.level ?: error("well_required")
-                check(level < FARM_WELL_MAX_LEVEL)
-                spend(wellCapacityUpgradeCostForLevel(level))
+                check(level < FARM_WELL_MAX_LEVEL) { "upgrade_maxed" }
+                spendWithMaterials(wellCapacityUpgradeCostForLevel(level), FarmMaterialCosts.wellCapacity(level))
                 check(farm.upgradeWellCapacity(pet.id, rescheduleNotifications = false))
                 log(R.string.tama_event_well_capacity_upgrade, level + 1)
             }
             "well_speed" -> {
                 val upgrade = farm.getUpgrade(pet.id, "well")?.takeIf { it.isPurchased } ?: error("well_required")
                 val level = farm.decodeWellState(upgrade, now).speedLevel
-                spend(wellSpeedUpgradeCostForLevel(level) ?: error("upgrade_maxed"))
+                spendWithMaterials(wellSpeedUpgradeCostForLevel(level) ?: error("upgrade_maxed"), FarmMaterialCosts.wellSpeed(level))
                 check(farm.upgradeWellSpeed(pet.id, rescheduleNotifications = false))
                 log(R.string.tama_event_well_speed_upgrade, wellIntervalHoursForSpeedLevel(level + 1))
             }
@@ -155,8 +172,8 @@ object WorldFarmMaintenance {
             }
             "composter_capacity" -> {
                 val level = farm.getUpgrade(pet.id, "composter")?.takeIf { it.isPurchased }?.level ?: error("composter_required")
-                check(level < FARM_COMPOSTER_MAX_LEVEL)
-                spend(composterCapacityUpgradeCostForLevel(level))
+                check(level < FARM_COMPOSTER_MAX_LEVEL) { "upgrade_maxed" }
+                spendWithMaterials(composterCapacityUpgradeCostForLevel(level), FarmMaterialCosts.composterCapacity(level))
                 check(farm.upgradeComposterCapacity(pet.id, rescheduleNotifications = false))
                 log(R.string.tama_event_composter_capacity_upgrade, level + 1)
             }
@@ -229,7 +246,7 @@ object WorldFarmMaintenance {
             "harvester_collect" -> check(engine.collectHarvesterDroneStorage()) { "storage_empty" }
             else -> error("unknown_farm_operation")
         }
-        return TamaGameEngine.ActionResult(true, context.getString(R.string.wear_tama_action_done))
+        return TamaGameEngine.ActionResult(true, resultMessage ?: context.getString(R.string.wear_tama_action_done))
     }
 
     private fun livestockType(arguments: Map<String, String>): FarmLivestockType =

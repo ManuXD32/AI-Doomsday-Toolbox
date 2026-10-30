@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
@@ -34,6 +35,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -53,6 +55,7 @@ internal fun updateNativeHarnessModelRows(
     contextText: String,
     outputText: String,
 ): String? {
+    if (wireId.startsWith("llama:")) return null
     val rows = runCatching { parseHarnessJsonValue(existingText)?.jsonArrayOrNull() }.getOrNull() ?: return null
     var found = false
     val updated = buildJsonArray {
@@ -86,6 +89,9 @@ private data class EditableHarnessModel(
     val advertisedContextWindow: Long? = null,
     val maxTokens: Long?,
     val backendLimits: HarnessModelBackendLimitsUi? = null,
+    val available: Boolean? = null,
+    val status: String? = null,
+    val errorCode: String? = null,
     val isAndroidManaged: Boolean = false,
 ) {
     val isLiteRt: Boolean
@@ -113,6 +119,9 @@ private fun editableHarnessModels(provider: HarnessProviderUiState): List<Editab
                         ?: harnessFriendlyModelLabel(id),
                     contextWindow = row.long("contextWindow")?.takeIf { it > 0L },
                     maxTokens = row.long("maxTokens")?.takeIf { it > 0L },
+                    available = row.boolean("available"),
+                    status = row.string("status"),
+                    errorCode = row.string("errorCode") ?: row.string("error_code"),
                 )
             }
         }.orEmpty()
@@ -142,12 +151,26 @@ private fun editableHarnessModels(provider: HarnessProviderUiState): List<Editab
                         ?: option.modelContextWindows[wireId]?.takeIf { it > 0L },
                     maxTokens = option.modelMaxOutputTokens[wireId]?.takeIf { it > 0L },
                     backendLimits = option.modelBackendLimits[wireId],
+                    available = option.modelAvailability[wireId],
+                    status = option.modelStatuses[wireId],
+                    errorCode = option.modelErrorCodes[wireId],
                     isAndroidManaged = true,
                 )
             }
         }
     return settingsModels + androidModels
 }
+
+/** Keeps configured providers selectable even when their model row list is empty. */
+internal fun harnessModelEditorProviderOptions(
+    provider: HarnessProviderUiState,
+    modelProviders: List<Pair<String, String>>,
+): List<Pair<String, String>> = (
+    provider.providers.map { it.id to it.name } +
+        provider.configs.map { it.id to it.name } +
+        modelProviders
+    ).distinctBy { it.first }
+    .sortedWith(compareBy<Pair<String, String>> { it.second.lowercase() }.thenBy { it.first })
 
 @Composable
 internal fun HarnessModelEditor(
@@ -156,8 +179,20 @@ internal fun HarnessModelEditor(
     modifier: Modifier = Modifier,
 ) {
     val models = remember(provider.configs, provider.providers) { editableHarnessModels(provider) }
-    val groupedModels = remember(models) {
-        models.groupBy { it.providerId to it.providerName }
+    val providerOptions = remember(models, provider.providers, provider.configs) {
+        harnessModelEditorProviderOptions(
+            provider = provider,
+            modelProviders = models.map { it.providerId to it.providerName },
+        )
+    }
+    var editorProviderId by rememberSaveable(provider.selectedProviderId) {
+        mutableStateOf(provider.selectedProviderId)
+    }
+    val selectedProviderId = editorProviderId
+        ?.takeIf { id -> providerOptions.any { it.first == id } }
+        ?: providerOptions.firstOrNull()?.first
+    val selectedModels = remember(models, selectedProviderId) {
+        models.filter { it.providerId == selectedProviderId }
     }
     Column(
         modifier = modifier
@@ -178,21 +213,59 @@ internal fun HarnessModelEditor(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        if (models.isEmpty()) {
+        if (providerOptions.isNotEmpty()) {
+            Text(
+                stringResource(R.string.harness_model_editor_provider),
+                style = MaterialTheme.typography.labelLarge,
+            )
+            Text(
+                stringResource(R.string.harness_model_editor_provider_description),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                providerOptions.forEach { (id, name) ->
+                    FilterChip(
+                        selected = selectedProviderId == id,
+                        onClick = { editorProviderId = id },
+                        label = { Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    )
+                }
+            }
+            if (selectedProviderId == "adt-llama-server") {
+                OutlinedButton(
+                    onClick = { onAction(NativeHarnessUiAction.OpenManagedLocalServers) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.harness_manage_local_servers))
+                }
+            }
+        }
+        if (providerOptions.isEmpty()) {
             Text(
                 stringResource(R.string.harness_model_editor_empty),
                 style = MaterialTheme.typography.bodyMedium,
             )
         } else {
-            groupedModels.forEach { (providerKey, providerModels) ->
+            if (selectedModels.isEmpty()) {
+                Text(
+                    stringResource(R.string.harness_model_editor_provider_empty),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            } else {
                 AppSectionCard(shape = com.example.llamadroid.ui.components.AppChromeDefaults.InnerCardShape) {
-                    Text(providerKey.second, style = MaterialTheme.typography.titleSmall)
                     Text(
-                        providerKey.first,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        providerOptions.firstOrNull { it.first == selectedProviderId }?.second.orEmpty(),
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
-                    providerModels.forEach { model ->
+                    selectedModels.forEach { model ->
                         HarnessEditableModelRow(model = model, onAction = onAction)
                     }
                 }
@@ -237,6 +310,42 @@ private fun HarnessEditableModelRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+        if (model.isAndroidManaged && (model.available != null || model.status != null || model.errorCode != null)) {
+            val normalizedStatus = model.status?.trim()?.lowercase()
+            val unavailable = model.available == false || !model.errorCode.isNullOrBlank() ||
+                normalizedStatus in setOf("error", "failed", "unavailable")
+            val statusResource = when {
+                unavailable -> R.string.harness_model_editor_local_unavailable
+                normalizedStatus == "running" -> R.string.harness_model_editor_local_running
+                normalizedStatus == "starting" -> R.string.harness_model_editor_local_starting
+                normalizedStatus == "loading" -> R.string.harness_model_editor_local_loading
+                normalizedStatus == "stopped" -> R.string.harness_model_editor_local_stopped
+                else -> R.string.harness_model_editor_local_status_unknown
+            }
+            Text(
+                stringResource(statusResource),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (unavailable) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (model.wireId.startsWith("llama:")) {
+            model.errorCode?.let(::localizedHarnessNoticeMessage)?.let { messageRes ->
+                Text(
+                    text = stringResource(messageRes),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            Text(
+                text = model.contextWindow?.let {
+                    pluralStringResource(R.plurals.harness_model_editor_inherited_context,
+                        it.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(), it)
+                } ?: stringResource(R.string.harness_model_editor_runtime_context),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            return@AppSectionCard
+        }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
                 value = contextText,
@@ -253,7 +362,15 @@ private fun HarnessEditableModelRow(
                             )
                         )
                     } else if (model.contextWindow == null) {
-                        Text(stringResource(R.string.harness_model_editor_unknown))
+                        Text(
+                            stringResource(
+                                if (model.wireId.startsWith("llama:")) {
+                                    R.string.harness_model_editor_runtime_context
+                                } else {
+                                    R.string.harness_model_editor_unknown
+                                }
+                            )
+                        )
                     }
                 },
                 singleLine = true,

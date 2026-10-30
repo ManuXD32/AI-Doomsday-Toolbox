@@ -182,6 +182,7 @@ class LlamaScheduledTaskBootReceiver : BroadcastReceiver() {
                 if (resolveLlamaScheduledTaskBootRoute(intent?.action) == LlamaScheduledTaskBroadcastRoute.RESCHEDULE_ALL) {
                     LlamaScheduledTaskScheduler.rescheduleAll(appContext)
                     AgentSleepWakeScheduler.rescheduleAll(appContext)
+                    com.example.llamadroid.service.delegation.DelegationAlarmScheduler.rescheduleAll(appContext)
                     GenerationQueueScheduler.restoreFutureSchedule(appContext)
                 }
             } finally {
@@ -209,6 +210,10 @@ class LlamaScheduledTaskReceiver : BroadcastReceiver() {
                     LlamaScheduledTaskBroadcastRoute.RESCHEDULE_ALL,
                     LlamaScheduledTaskBroadcastRoute.IGNORE -> Unit
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                DebugLog.log("LlamaScheduledTaskReceiver failed: ${e.javaClass.simpleName}: ${e.message}")
             } finally {
                 pendingResult.finish()
             }

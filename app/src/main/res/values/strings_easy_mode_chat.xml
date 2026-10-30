@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="easy_chat_opts_button">Chat options</string>
+    <string name="easy_chat_opts_title">Chat options</string>
+    <string name="easy_chat_opts_web_search">Web search</string>
+    <string name="easy_chat_opts_web_search_hint">Let the assistant look things up online when it needs to.</string>
+    <string name="easy_chat_opts_remember">Remember this chat</string>
+    <string name="easy_chat_opts_remember_hint">Saves the conversation on this phone so it reopens faster.</string>
+    <string name="easy_chat_opts_memory">Conversation memory</string>
+    <string name="easy_chat_opts_memory_hint">How much of the conversation the assistant can keep in mind. More memory uses more of the phone\'s RAM.</string>
+    <string name="easy_chat_opts_memory_auto">Auto (%1$s)</string>
+    <string name="easy_chat_opts_memory_warning">This is more than the recommended %1$s for this phone. It may be slow or the app may run out of memory.</string>
+    <string name="easy_chat_opts_memory_apply">Apply and restart model</string>
+    <string name="easy_chat_opts_memory_applying">Restarting model…</string>
+    <string name="easy_chat_opts_memory_busy">Wait for the current reply to finish before changing the memory.</string>
+    <string name="easy_chat_opts_memory_failed">Could not restart the model with this setting. Try again.</string>
+    <string name="easy_chat_opts_rename">Rename chat</string>
+    <string name="easy_chat_opts_delete">Delete chat</string>
+    <string name="easy_chat_opts_delete_title">Delete this chat?</string>
+    <string name="easy_chat_opts_delete_body">The conversation and its attachments will be removed from this phone.</string>
+    <string name="easy_server_running">Running</string>
+    <string name="easy_server_stopped">Stopped</string>
+    <string name="easy_server_stop">Stop</string>
+    <string name="easy_chat_switch_title">Change model</string>
+    <string name="easy_chat_switch_hint">This chat will continue with the model you pick. Its saved memory is cleared.</string>
+    <string name="easy_chat_switch_busy">Wait for the current reply to finish before changing the model.</string>
+    <string name="easy_chat_switch_failed">Could not start that model. Try again.</string>
+    <string name="easy_chat_switch_none">No downloaded chat models yet. Download one from Models.</string>
+    <string name="easy_chat_switch_current">Current model</string>
+    <string name="easy_chat_orphan_pick_model">Choose a model first, then open this chat again.</string>
+    <string name="easy_chat_model_missing_choose">That model is no longer on this phone. Choose another model.</string>
+    <string name="easy_chat_saved_servers_section">Saved servers</string>
+    <string name="easy_chat_models_section">Easy models</string>
+    <string name="easy_chat_saved_server_current">Current server</string>
+    <string name="easy_chat_saved_server_title">Chat with a saved server</string>
+    <string name="easy_chat_saved_server_hint">Starts a new chat on a server you configured in Servers. It keeps its own settings and starts if needed.</string>
+    <string name="easy_chat_saved_server_none">No saved local servers yet. Create one in Servers.</string>
+</resources>

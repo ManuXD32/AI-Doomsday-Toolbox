@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="global_search_hint">Search tools, chats, models, notes</string>
+    <string name="global_search_recent_title">Recent searches</string>
+    <string name="global_search_clear_recent">Clear recent searches</string>
+    <string name="global_search_empty_title">Nothing found</string>
+    <string name="global_search_empty_desc">Try another word. English and Spanish names both work.</string>
+    <string name="global_search_prompt">Type to search across the whole app.</string>
+    <string name="global_search_group_chats">Chats</string>
+    <string name="global_search_group_projects">Agent projects</string>
+    <string name="global_search_group_models">Installed models</string>
+    <string name="global_search_group_notes">Notes</string>
+    <string name="global_search_show_all">Show all</string>
+    <string name="global_search_show_fewer">Show fewer</string>
+    <string name="home_not_tried_title">Not tried yet</string>
+    <string name="home_not_tried_action">Try</string>
+    <string name="home_new_in_version_title">New in this version</string>
+</resources>

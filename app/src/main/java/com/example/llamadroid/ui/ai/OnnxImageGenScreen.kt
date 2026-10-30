@@ -73,6 +73,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -160,7 +161,10 @@ fun OnnxImageGenScreen(navController: NavController) {
     val serverImagePathSet = remember(serverImagePaths) { serverImagePaths.toSet() }
     val onnxModels = remember(installedModels) { installedModels.filter { it.isOnnxTxt2ImgBundle() } }
     val holder = remember { OnnxImageGenerationStateStore.txt2img }
-    val generationState by holder.state.collectAsState()
+    val rawGenerationState by holder.state.collectAsState()
+    val easyOriginState by holder.easyOrigin.collectAsState()
+    // Easy-mode runs share this holder; the advanced screen must not show them.
+    val generationState = if (easyOriginState) OnnxImageGenerationState.Idle else rawGenerationState
     val generatedImages by holder.generatedImages.collectAsState()
     val scope = rememberCoroutineScope()
 
@@ -307,17 +311,18 @@ fun OnnxImageGenScreen(navController: NavController) {
         }
     }
 
-    fun refreshGallery() {
-        val outputDir = OnnxStorage.txt2ImgOutputDir(context).apply { mkdirs() }
-        val files = outputDir.listFiles()
-            ?.filter { it.isFile && it.extension.lowercase(Locale.US) in setOf("png", "jpg", "jpeg") }
-            ?.sortedByDescending { it.lastModified() }
-            ?: emptyList()
+    suspend fun refreshGallery() {
+        val (files, metadata) = withContext(Dispatchers.IO) {
+            val outputDir = OnnxStorage.txt2ImgOutputDir(context).apply { mkdirs() }
+            val listed = outputDir.listFiles()
+                ?.filter { it.isFile && it.extension.lowercase(Locale.US) in setOf("png", "jpg", "jpeg") }
+                ?.sortedByDescending { it.lastModified() }
+                ?: emptyList()
+            listed to listed.map { it.absolutePath to OnnxStorage.readMetadata(it) }
+        }
         diskImages = files
         holder.setImages(files)
-        files.forEach { imageFile ->
-            metadataCache[imageFile.absolutePath] = OnnxStorage.readMetadata(imageFile)
-        }
+        metadata.forEach { (path, meta) -> metadataCache[path] = meta }
     }
 
     fun parseAndValidateConfig(): OnnxImageGenConfig? {
@@ -409,6 +414,7 @@ fun OnnxImageGenScreen(navController: NavController) {
             return
         }
         walkthroughTargets?.recordEvent("image.onnx.input")
+        holder.easyOrigin.value = false
         holder.updateState(OnnxImageGenerationState.Preparing(resources.getString(R.string.onnx_image_gen_status_preparing)))
         startupGuard.run("onnx_image_generation_start") {
             context.startForegroundService(OnnxImageGenerationService.createStartIntent(context, config))
@@ -1815,8 +1821,25 @@ private fun OnnxFullscreenImageDialog(
     onShare: () -> Unit,
     onDelete: () -> Unit
 ) {
-    val bitmap = remember(imageFile.absolutePath) {
-        runCatching { BitmapFactory.decodeFile(imageFile.absolutePath)?.asImageBitmap() }.getOrNull()
+    val bitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, imageFile.absolutePath) {
+        value = withContext(Dispatchers.IO) {
+            try {
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(imageFile.absolutePath, bounds)
+                var sample = 1
+                var longest = maxOf(bounds.outWidth, bounds.outHeight)
+                while (longest > 2048) {
+                    sample *= 2
+                    longest /= 2
+                }
+                BitmapFactory.decodeFile(
+                    imageFile.absolutePath,
+                    BitmapFactory.Options().apply { inSampleSize = sample }
+                )?.asImageBitmap()
+            } catch (_: Throwable) {
+                null
+            }
+        }
     }
 
     Dialog(

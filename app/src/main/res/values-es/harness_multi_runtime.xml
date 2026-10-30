@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_multi_runtime_header_note">Varios runtimes pueden ejecutarse a la vez, cada uno en su propio puerto. Cada runtime en ejecución consume memoria (Node y PRoot) y comparte el presupuesto de procesos del teléfono. Los servidores de desarrollo iniciados en distintos runtimes comparten los puertos de red del teléfono. \"Abrir\" solo cambia el runtime que ves; nunca detiene a los demás.</string>
+    <string name="harness_multi_runtime_start">Iniciar</string>
+    <string name="harness_multi_runtime_stop">Detener</string>
+    <string name="harness_multi_runtime_force_stop">Forzar detención</string>
+    <string name="harness_multi_runtime_running_port">En ejecución · puerto %1$d</string>
+</resources>

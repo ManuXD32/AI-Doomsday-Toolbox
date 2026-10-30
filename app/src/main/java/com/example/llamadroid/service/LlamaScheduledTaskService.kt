@@ -80,7 +80,21 @@ class LlamaScheduledTaskService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        ensureForeground()
+        if (intent?.action == ACTION_CANCEL_RUNNING_TASK) {
+            // Cancel arrives via startService(): never promote it to foreground, and drop an idle service.
+            if (processor?.isActive != true) {
+                stopSelf(startId)
+                return START_NOT_STICKY
+            }
+            val taskId = intent.getLongExtra(EXTRA_TASK_ID, -1L).takeIf { it > 0L }
+            val logId = intent.getLongExtra(EXTRA_LOG_ID, -1L).takeIf { it > 0L }
+            cancelActiveRun(taskId = taskId, logId = logId)
+            return START_NOT_STICKY
+        }
+        if (!ensureForeground()) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         when (intent?.action) {
             ACTION_RUN_TASK -> {
                 val taskId = intent.getLongExtra(EXTRA_TASK_ID, -1L)
@@ -98,13 +112,16 @@ class LlamaScheduledTaskService : Service() {
                     startProcessorIfNeeded()
                 }
             }
-            ACTION_CANCEL_RUNNING_TASK -> {
-                val taskId = intent.getLongExtra(EXTRA_TASK_ID, -1L).takeIf { it > 0L }
-                val logId = intent.getLongExtra(EXTRA_LOG_ID, -1L).takeIf { it > 0L }
-                cancelActiveRun(taskId = taskId, logId = logId)
-            }
+        }
+        if (processor?.isActive != true) {
+            // Invalid/unknown start that queued nothing: release the foreground we just took.
+            stopSelf(startId)
         }
         return START_NOT_STICKY
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        ForegroundTimeoutSupport.handle(this, fgsType)
     }
 
     override fun onDestroy() {
@@ -114,16 +131,30 @@ class LlamaScheduledTaskService : Service() {
         super.onDestroy()
     }
 
-    private fun ensureForeground() {
-        if (notificationTaskId != null) return
+    private fun ensureForeground(): Boolean {
+        if (notificationTaskId != null) return true
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.LLAMA_SCHEDULED_TASK,
             getString(R.string.llama_scheduler_notification_running_title)
         )
+        val title = getString(R.string.llama_scheduler_notification_running_title)
+        val startResult = ForegroundStart.start(
+            this,
+            taskId,
+            notification,
+            ForegroundServiceTypes.SPECIAL_USE
+        )
+        if (startResult is ForegroundStart.Result.Failed) {
+            UnifiedNotificationManager.failTask(
+                taskId,
+                ForegroundStart.failureMessage(this, startResult.reason, title)
+            )
+            return false
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
         WakeLockManager.acquire(applicationContext, "LlamaScheduledTaskService")
         WakeLockManager.acquireWifiLock(applicationContext, "LlamaScheduledTaskService")
+        return true
     }
 
     private fun startProcessorIfNeeded() {

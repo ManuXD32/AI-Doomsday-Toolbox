@@ -1,8 +1,10 @@
 package com.example.llamadroid.ui.pdf
 
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -216,30 +218,26 @@ fun PDFToolboxScreen(navController: NavController) {
         }
     }
     
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
-                title = { Text(stringResource(R.string.pdf_toolbox_title)) },
-                navigationIcon = {
-                    IconButton(
-                        onClick = {
-                            if (selectedTool != null) {
-                                selectedTool = null
-                                selectedPdfStrings = emptyList()
-                                selectedImageStrings = emptyList()
-                                ocrResult = ""
-                                ocrProgressMessage = ""
-                            } else {
-                                navController.popBackStack()
-                            }
-                        },
-                        modifier = Modifier.walkthroughTarget("back")
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
-                    }
-                }
-            )
+    BackHandler(enabled = selectedTool != null) {
+        selectedTool = null
+        selectedPdfStrings = emptyList()
+        selectedImageStrings = emptyList()
+        ocrResult = ""
+        ocrProgressMessage = ""
+    }
+
+    AppScreenScaffold(
+        title = stringResource(R.string.pdf_toolbox_title),
+        onBack = {
+            if (selectedTool != null) {
+                selectedTool = null
+                selectedPdfStrings = emptyList()
+                selectedImageStrings = emptyList()
+                ocrResult = ""
+                ocrProgressMessage = ""
+            } else {
+                navController.popBackStack()
+            }
         }
     ) { padding ->
         if (selectedTool == null) {
@@ -251,15 +249,6 @@ fun PDFToolboxScreen(navController: NavController) {
                     .padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                item {
-                    Text(
-                        stringResource(R.string.pdf_tools_header),
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-
                 sharedPdfImportError?.let { message ->
                     item {
                         Card(

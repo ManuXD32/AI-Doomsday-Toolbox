@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.annotation.StringRes
 import com.example.llamadroid.R
 import com.example.llamadroid.tama.data.LocationType
-import com.example.llamadroid.tama.world.core.LegacyLocationAliases
+import com.example.llamadroid.tama.data.LegacyLocationAliases
 
 /**
  * Stable location presentation shared by the phone-to-Wear bridges. Legacy
@@ -23,93 +23,69 @@ internal data class TamaWearLocationUi(
 internal object TamaWearLocationCatalog {
     private val fixed = mapOf(
         LegacyLocationAliases.HOME to TamaWearLocationUi(
-            LocationType.HOME, R.string.tama_world_structure_home,
+            LocationType.HOME, R.string.tama_place_home,
             "tama/backgrounds/bedroom.png", usesHomeRoom = true
         ),
         LegacyLocationAliases.SHOP to TamaWearLocationUi(
-            LocationType.SHOP, R.string.tama_world_structure_shop,
+            LocationType.SHOP, R.string.tama_place_shop,
             "tama/backgrounds/shop.png"
         ),
         LegacyLocationAliases.PARK to TamaWearLocationUi(
-            LocationType.PARK, R.string.tama_world_structure_park,
+            LocationType.PARK, R.string.tama_place_park,
             "tama/backgrounds/park.png"
         ),
         LegacyLocationAliases.HOSPITAL to TamaWearLocationUi(
-            LocationType.HOSPITAL, R.string.tama_world_structure_hospital,
+            LocationType.HOSPITAL, R.string.tama_place_hospital,
             "tama/backgrounds/hospital.png"
         ),
         LegacyLocationAliases.ARCADE to TamaWearLocationUi(
-            LocationType.ARCADE, R.string.tama_world_structure_arcade,
+            LocationType.ARCADE, R.string.tama_place_arcade,
             "tama/backgrounds/arcade_location.png"
         ),
         LegacyLocationAliases.ALCHEMIST to TamaWearLocationUi(
-            LocationType.ALCHEMIST, R.string.tama_world_structure_alchemist,
+            LocationType.ALCHEMIST, R.string.tama_place_alchemist,
             "tama/backgrounds/alchemist.png"
         ),
         LegacyLocationAliases.SCHOOL to TamaWearLocationUi(
-            LocationType.SCHOOL, R.string.tama_world_structure_school,
+            LocationType.SCHOOL, R.string.tama_place_school,
             "tama/backgrounds/classroom.png"
         ),
         LegacyLocationAliases.WORKPLACE to TamaWearLocationUi(
-            LocationType.WORKPLACE, R.string.tama_world_structure_workplace,
+            LocationType.WORKPLACE, R.string.tama_place_workplace,
             "tama/backgrounds/workplace.png"
         ),
         LegacyLocationAliases.FARM to TamaWearLocationUi(
-            LocationType.FARM, R.string.tama_world_structure_farm,
+            LocationType.FARM, R.string.tama_place_farm,
             "tama/backgrounds/farm.png"
         ),
         LegacyLocationAliases.BOXING_RING to TamaWearLocationUi(
-            LocationType.BOXING_RING, R.string.tama_world_structure_boxing_gym,
+            LocationType.BOXING_RING, R.string.tama_place_boxing_gym,
             "tama/backgrounds/boxing_ring.png"
         ),
         LegacyLocationAliases.DUNGEON_A to TamaWearLocationUi(
-            LocationType.DUNGEON, R.string.tama_world_structure_dungeon,
+            LocationType.DUNGEON, R.string.tama_place_dungeon,
             "tama/backgrounds/dungeon.png"
         ),
         LegacyLocationAliases.DUNGEON_B to TamaWearLocationUi(
-            LocationType.DUNGEON, R.string.tama_world_structure_dungeon,
+            LocationType.DUNGEON, R.string.tama_place_dungeon,
             "tama/backgrounds/dungeon.png"
         ),
         LegacyLocationAliases.ADVENTURE_GATE to TamaWearLocationUi(
-            LocationType.ADVENTURE_GATE, R.string.tama_world_structure_adventure_gate,
+            LocationType.ADVENTURE_GATE, R.string.tama_place_adventure_gate,
             "tama/backgrounds/adventure_gate.png"
         )
     )
 
     private val generated = mapOf(
         "farm_barn" to TamaWearLocationUi(
-            LocationType.FARM, R.string.tama_world_structure_farm_barn,
+            LocationType.FARM, R.string.tama_place_farm_barn,
             "tama/backgrounds/farm.png"
-        ),
-        "market_stall" to TamaWearLocationUi(
-            LocationType.SHOP, R.string.tama_world_structure_market_stall,
-            "tama/backgrounds/street_market.png"
-        ),
-        "npc_home_a" to TamaWearLocationUi(
-            LocationType.HOME, R.string.tama_world_structure_npc_home_a,
-            "tama/backgrounds/bedroom.png"
-        ),
-        "npc_home_b" to TamaWearLocationUi(
-            LocationType.HOME, R.string.tama_world_structure_npc_home_b,
-            "tama/backgrounds/bedroom.png"
-        ),
-        "npc_home_c" to TamaWearLocationUi(
-            LocationType.HOME, R.string.tama_world_structure_npc_home_c,
-            "tama/backgrounds/bedroom.png"
-        ),
-        "world" to TamaWearLocationUi(
-            LocationType.PARK, R.string.tama_world_source_living,
-            "tama/backgrounds/park.png"
-        ),
-        "hometown" to TamaWearLocationUi(
-            LocationType.PARK, R.string.tama_world_source_living,
-            "tama/backgrounds/park.png"
         )
     )
 
     private val unknown = TamaWearLocationUi(
         LocationType.PARK,
-        R.string.tama_world_structure_landmark,
+        R.string.tama_place_landmark,
         "tama/backgrounds/park.png",
         canonical = false
     )
@@ -120,10 +96,6 @@ internal object TamaWearLocationCatalog {
         generated[raw]?.let { return it }
         when {
             raw.endsWith("farm_barn") -> return generated.getValue("farm_barn")
-            raw.endsWith("market_stall") -> return generated.getValue("market_stall")
-            raw.endsWith("npc_home_a") -> return generated.getValue("npc_home_a")
-            raw.endsWith("npc_home_b") -> return generated.getValue("npc_home_b")
-            raw.endsWith("npc_home_c") -> return generated.getValue("npc_home_c")
             raw == "home" || raw == "house" -> return fixed.getValue(LegacyLocationAliases.HOME)
         }
         return unknown

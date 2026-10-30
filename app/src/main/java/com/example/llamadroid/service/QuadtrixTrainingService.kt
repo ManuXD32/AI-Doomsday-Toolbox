@@ -118,7 +118,7 @@ class QuadtrixTrainingService : Service() {
 
     private fun startProfile(profileId: Long, workerOnly: Boolean, tokenizeOnly: Boolean = false) {
         val initialStatus = if (workerOnly) "worker_running" else if (tokenizeOnly) "tokenizing" else "running"
-        startForegroundTask(if (workerOnly) "Quadtrix Worker" else if (tokenizeOnly) "Quadtrix Token Cache" else "Quadtrix Training")
+        if (!startForegroundTask(if (workerOnly) "Quadtrix Worker" else if (tokenizeOnly) "Quadtrix Token Cache" else "Quadtrix Training")) return
         stopRequested.set(false)
         mode = if (workerOnly) "worker" else if (tokenizeOnly) "tokenize" else "training"
         _state.value = _state.value.copy(
@@ -181,7 +181,7 @@ class QuadtrixTrainingService : Service() {
     }
 
     private fun startWebUi(profileId: Long) {
-        startForegroundTask("Quadtrix WebUI")
+        if (!startForegroundTask("Quadtrix WebUI")) return
         stopRequested.set(false)
         scope.launch {
             val db = AppDatabase.getDatabase(applicationContext)
@@ -216,7 +216,7 @@ class QuadtrixTrainingService : Service() {
     }
 
     private fun runChat(profileId: Long, modelPath: String, prompt: String, tokens: Int) {
-        startForegroundTask("Quadtrix Generation")
+        if (!startForegroundTask("Quadtrix Generation")) return
         stopRequested.set(false)
         scope.launch {
             var proc: Process? = null
@@ -272,7 +272,7 @@ class QuadtrixTrainingService : Service() {
     }
 
     private fun convertToGguf(profileId: Long, checkpointPath: String) {
-        startForegroundTask("Quadtrix GGUF Conversion")
+        if (!startForegroundTask("Quadtrix GGUF Conversion")) return
         stopRequested.set(false)
         scope.launch {
             val db = AppDatabase.getDatabase(applicationContext)
@@ -556,19 +556,27 @@ class QuadtrixTrainingService : Service() {
         }
     }
 
-    private fun startForegroundTask(title: String) {
-        if (notificationTaskId != null) return
+    private fun startForegroundTask(title: String): Boolean {
+        if (notificationTaskId != null) return true
         activeStartedAtMillis = System.currentTimeMillis()
         notificationLogLines.clear()
         val (id, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.QUADTRIX,
             title
         )
+        val started = ForegroundStart.start(this, id, notification, ForegroundServiceTypes.DATA_SYNC)
+        if (started is ForegroundStart.Result.Failed) {
+            val message = ForegroundStart.failureMessage(this, started.reason, title)
+            UnifiedNotificationManager.failTask(id, message)
+            publishError(message)
+            stopSelf()
+            return false
+        }
         notificationTaskId = id
-        startForeground(id, notification)
         UnifiedNotificationManager.updateProgressWithDetails(id, -1f, title, emptyList())
         WakeLockManager.acquire(applicationContext, "QuadtrixTrainingService")
         WakeLockManager.acquireWifiLock(applicationContext, "QuadtrixTrainingService")
+        return true
     }
 
     private fun startTelemetry() {
@@ -917,6 +925,10 @@ class QuadtrixTrainingService : Service() {
         WakeLockManager.release("QuadtrixTrainingService")
         WakeLockManager.releaseWifiLock("QuadtrixTrainingService")
         notificationTaskId = null
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        ForegroundTimeoutSupport.handle(this, fgsType)
     }
 
     override fun onDestroy() {

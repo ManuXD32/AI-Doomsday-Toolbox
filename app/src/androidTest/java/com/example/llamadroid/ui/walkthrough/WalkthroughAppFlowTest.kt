@@ -279,7 +279,7 @@ class WalkthroughAppFlowTest {
     }
 
     private fun expectedLessonRoute(lesson: WalkthroughLesson): String =
-        if (lesson.id == "chat") "llama_servers" else routeBase(lesson.route)
+        if (lesson.id == "chat") "chats" else routeBase(lesson.route)
 
     private fun returnToDashboard() {
         dismissTamaCreationDialogIfPresent()

@@ -55,6 +55,81 @@ class NativeHarnessConnectionLoadingTest {
         } finally { controller.close(); job.cancel() }
     }
 
+    @Test fun initialAndWebViewRefreshReadProviderSettingsBeforeTheModelCatalog() = runBlocking {
+        val fake = Client()
+        val job = SupervisorJob()
+        val controller = NativeHarnessController(CoroutineScope(job + Dispatchers.Unconfined), { fake }, callbacks())
+        try {
+            eventually { controller.state.value.provider.providers.isNotEmpty() }
+            assertSettingsPrecedeLatestCatalog(fake.callOrder)
+
+            controller.refreshAfterWebView()
+            eventually { fake.callOrder.count { it == "session/modelCatalog" } >= 2 }
+            assertSettingsPrecedeLatestCatalog(fake.callOrder)
+        } finally { controller.close(); job.cancel() }
+    }
+
+    @Test fun coldControllerRecreationHydratesSettingsBeforeItsCatalogRead() = runBlocking {
+        val fake = Client()
+        val firstJob = SupervisorJob()
+        val first = NativeHarnessController(CoroutineScope(firstJob + Dispatchers.Unconfined), { fake }, callbacks())
+        eventually { fake.callOrder.count { it == "session/modelCatalog" } >= 1 }
+        first.close()
+        firstJob.cancel()
+
+        val secondJob = SupervisorJob()
+        val second = NativeHarnessController(CoroutineScope(secondJob + Dispatchers.Unconfined), { fake }, callbacks())
+        try {
+            eventually { fake.callOrder.count { it == "session/modelCatalog" } >= 2 }
+            assertSettingsPrecedeLatestCatalog(fake.callOrder)
+        } finally { second.close(); secondJob.cancel() }
+    }
+
+    @Test fun failedProviderGroupsRetainTheLastGoodRows() = runBlocking {
+        val fake = Client()
+        val job = SupervisorJob()
+        val controller = NativeHarnessController(CoroutineScope(job + Dispatchers.Unconfined), { fake }, callbacks())
+        try {
+            eventually { controller.state.value.provider.providers.singleOrNull()?.models?.isNotEmpty() == true }
+            fake.catalogJson = """
+                {"groups":[{"id":"deepseek-official","name":"DeepSeek","models":[]}],
+                 "failures":[{"id":"deepseek-official","name":"DeepSeek","message":"temporarily unavailable"}]}
+            """.trimIndent()
+            controller.dispatch(NativeHarnessUiAction.RefreshModelCatalog)
+            eventually { controller.state.value.provider.catalogFailures.isNotEmpty() }
+
+            assertEquals(
+                listOf("deepseek-flash", "deepseek-v4-pro"),
+                controller.state.value.provider.providers.single { it.id == "deepseek-official" }.models,
+            )
+        } finally { controller.close(); job.cancel() }
+    }
+
+    @Test fun failedAndroidCatalogProjectionRetainsLastGoodManagedRows() = runBlocking {
+        val fake = Client()
+        var localReadFails = false
+        val localCatalog = Json.parseToJsonElement(
+            """{"data":[{"id":"llama:7","owned_by":"adt-llama-server","name":"Q4.gguf"}]}"""
+        ).jsonObject
+        val job = SupervisorJob()
+        val controller = NativeHarnessController(
+            CoroutineScope(job + Dispatchers.Unconfined),
+            { fake },
+            callbacks(),
+            localModelCatalog = { if (localReadFails) error("bridge unavailable") else localCatalog },
+        )
+        try {
+            eventually { controller.state.value.provider.providers.any { it.id == "adt-llama-server" } }
+            localReadFails = true
+            controller.dispatch(NativeHarnessUiAction.RefreshModelCatalog)
+            eventually { fake.callOrder.count { it == "session/modelCatalog" } >= 2 }
+            assertEquals(
+                listOf("llama:7"),
+                controller.state.value.provider.providers.single { it.id == "adt-llama-server" }.models,
+            )
+        } finally { controller.close(); job.cancel() }
+    }
+
     @Test fun composerUpdatesImmediatelyWhileAReadHoldsTheActionQueue() = runBlocking {
         val fake = Client()
         val job = SupervisorJob()
@@ -110,6 +185,14 @@ class NativeHarnessConnectionLoadingTest {
         while (!condition()) delay(1)
     }
 
+    private fun assertSettingsPrecedeLatestCatalog(calls: List<String>) {
+        val snapshot = synchronized(calls) { calls.toList() }
+        val catalogIndex = snapshot.indexOfLast { it == "session/modelCatalog" }
+        assertTrue(catalogIndex >= 0)
+        assertTrue(snapshot.subList(0, catalogIndex).contains("settings/describe"))
+        assertTrue(snapshot.subList(0, catalogIndex).contains("llm/listConfigurableProviders"))
+    }
+
     private fun callbacks() = NativeHarnessRuntimeCallbacks(
         current = { HarnessRuntimeUiState(status = HarnessRuntimeStatus.RUNNING) },
         start = { HarnessRuntimeUiState(status = HarnessRuntimeStatus.RUNNING) },
@@ -121,6 +204,8 @@ class NativeHarnessConnectionLoadingTest {
         override val state = MutableStateFlow(HarnessConnectionState.READY)
         var catalogGate: CompletableDeferred<Unit>? = null
         var catalogWaiting = false
+        var catalogJson = """{"groups":[{"id":"deepseek-official","name":"DeepSeek","models":[{"id":"deepseek-flash"},{"id":"deepseek-v4-pro"}]}],"default":{"provider":"deepseek-official","model":"deepseek-flash"}}"""
+        val callOrder = mutableListOf<String>()
         var savedReference: String? = null
         var savedValue: String? = null
         var savedSetting: JsonObject? = null
@@ -129,6 +214,7 @@ class NativeHarnessConnectionLoadingTest {
         override fun close() = Unit
         override fun stream(namespace: String, method: String, args: JsonObject, policy: HarnessStreamPolicy): Flow<JsonElement> = emptyFlow()
         override suspend fun call(namespace: String, method: String, args: JsonObject, policy: HarnessCallPolicy, requestId: String): HarnessRpcResult {
+            synchronized(callOrder) { callOrder += "$namespace/$method" }
             val response = when ("$namespace/$method") {
                 "settings/describe" -> """{"writable":true,"hasDocument":true,"namespaces":[{"ns":"llm-deepseek","revision":1,"value":{"apiKeyEnv":"DEEPSEEK_API_KEY","baseUrl":"https://api.deepseek.com"},"schema":{"type":"object","properties":{"baseUrl":{"type":"string"}}}}]}"""
                 "settings/mutate" -> { savedSetting = args; "{}" }
@@ -141,7 +227,7 @@ class NativeHarnessConnectionLoadingTest {
                 }
                 "session/modelCatalog" -> {
                     catalogGate?.let { catalogWaiting = true; it.await() }
-                    """{"groups":[{"id":"deepseek-official","name":"DeepSeek","models":[{"id":"deepseek-flash"},{"id":"deepseek-v4-pro"}]}],"default":{"provider":"deepseek-official","model":"deepseek-flash"}}"""
+                    catalogJson
                 }
                 "session/list" -> """{"items":[]}"""
                 else -> "{}"

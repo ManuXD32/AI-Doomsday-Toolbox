@@ -1,0 +1,298 @@
+package com.example.llamadroid.service.delegation
+
+import android.content.Context
+import com.example.llamadroid.R
+import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.model.NativeChatDelegateTaskState
+import com.example.llamadroid.service.AgentTool
+import com.example.llamadroid.service.NativeChatToolConfig
+import com.example.llamadroid.service.NativeChatToolExtension
+import com.example.llamadroid.service.NativeChatToolProgress
+import com.example.llamadroid.service.NativeChatToolResult
+import com.example.llamadroid.service.OllamaService
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+/** The six main-LLM DeepSeek delegation tools, plugged into `NativeChatToolRuntime`. */
+class NativeChatDelegationTools(context: Context) : NativeChatToolExtension {
+    private val appContext = context.applicationContext
+
+    override val id: String = "deepseek_delegation"
+
+    private val toolNames = setOf(TOOL_START, TOOL_STATUS, TOOL_MESSAGE, TOOL_CANCEL, TOOL_SCHEDULE, TOOL_PROJECTS, TOOL_PROJECT_FILES)
+
+    override fun isEnabled(config: NativeChatToolConfig): Boolean = config.toolsEnabled && config.deepSeekDelegationEnabled
+
+    override fun handles(toolName: String): Boolean = toolName in toolNames
+
+    override fun isMutating(toolName: String): Boolean =
+        toolName == TOOL_START || toolName == TOOL_CANCEL || toolName == TOOL_SCHEDULE
+
+    override fun statusText(toolName: String): String? {
+        val res = when (toolName) {
+            TOOL_START -> R.string.native_chat_delegation_service_status_start
+            TOOL_STATUS -> R.string.native_chat_delegation_service_status_status
+            TOOL_MESSAGE -> R.string.native_chat_delegation_service_status_message
+            TOOL_CANCEL -> R.string.native_chat_delegation_service_status_cancel
+            TOOL_SCHEDULE -> R.string.native_chat_delegation_service_status_schedule
+            TOOL_PROJECTS -> R.string.native_chat_delegation_service_status_projects
+            TOOL_PROJECT_FILES -> R.string.native_chat_delegation_service_status_project_files
+            else -> return null
+        }
+        return appContext.getString(res)
+    }
+
+    override fun tools(config: NativeChatToolConfig): List<AgentTool> = listOf(
+        AgentTool(
+            name = TOOL_START,
+            description = "Hand a coding, file or project job to the DeepSeek subagent: a background agent with a terminal and files. Use it to write or change more than a small snippet of code, create/edit/convert files, build an app, site or script, run/test/debug code, or analyse attached files. Do not paste large code in the chat. Not for chit-chat or short answers. One task per chat; follow-up changes go through deepseek_task_message, not a new task. Returns immediately.",
+            parameters = mapOf(
+                "task" to "Self-contained brief: goal, constraints, acceptance criteria, expected output files",
+                "title" to "Short task title",
+                "attachments" to "Chat file ids to hand over, e.g. f12,img55",
+                "project" to "omitted = continue this chat's project and its thread (reopens its last task); new = new project, only for unrelated work; or a project id from deepseek_projects",
+                "thread" to "omitted = this chat's thread in the project; new = fresh thread in the same project, only when the user asks for it; or an existing thread id of that project"
+            ),
+            requiredParams = listOf("task"),
+            schemaJson = DelegationToolArgs.startSchema()
+        ),
+        AgentTool(
+            name = TOOL_STATUS,
+            description = "Get the status of this chat's DeepSeek task (progress, files, result when finished). Built instantly by the app.",
+            parameters = mapOf("detail" to "brief (default) or full"),
+            schemaJson = DelegationToolArgs.statusSchema()
+        ),
+        AgentTool(
+            name = TOOL_MESSAGE,
+            description = "Send a message, question or follow-up request to the DeepSeek subagent and wait for its reply. Works in every state: it also resumes an interrupted task and reopens a finished task for follow-up changes in the same project and thread. Attach new files with attachments.",
+            parameters = mapOf(
+                "message" to "Message for the subagent",
+                "attachments" to "Chat file ids to hand over with this message, e.g. f12,img55",
+                "wait_seconds" to "Seconds to wait for the reply, 0-120 (default 45)"
+            ),
+            requiredParams = listOf("message"),
+            schemaJson = DelegationToolArgs.messageSchema()
+        ),
+        AgentTool(
+            name = TOOL_CANCEL,
+            description = "Cancel this chat's active DeepSeek task.",
+            parameters = mapOf(
+                "reason" to "Why the task is cancelled",
+                "stop_runtime" to "true to also stop the DeepSeek runtime (default false)"
+            ),
+            schemaJson = DelegationToolArgs.cancelSchema()
+        ),
+        AgentTool(
+            name = TOOL_SCHEDULE,
+            description = "Set a reminder to check the DeepSeek task later. When it fires you receive a notice and should call deepseek_task_status. One reminder per task; a new one replaces the old; minutes=0 cancels.",
+            parameters = mapOf(
+                "minutes" to "Minutes until the check (2-1440); 0 cancels",
+                "note" to "Optional note shown in the notice"
+            ),
+            requiredParams = listOf("minutes"),
+            schemaJson = DelegationToolArgs.scheduleSchema()
+        ),
+        AgentTool(
+            name = TOOL_PROJECTS,
+            description = "List the projects of the DeepSeek runtime (id, title, last activity, threads, whether this chat used it). Use an id as project in deepseek_task_start to continue work in an existing project.",
+            parameters = mapOf("query" to "Optional text to filter project titles"),
+            schemaJson = DelegationToolArgs.projectsSchema()
+        ),
+        AgentTool(
+            name = TOOL_PROJECT_FILES,
+            description = "Read-only access to the DeepSeek project files of this chat (works even when no task is running). list = file tree, read = text page, search = file names and text, attach = copy a file into this chat's files (returns its id). Use it to answer the user or show results. Fixes and reviews go through deepseek_task_message, never by you.",
+            parameters = mapOf(
+                "action" to "list, read, search or attach",
+                "path" to "Project-relative file or folder",
+                "query" to "Text to find (search)",
+                "offset" to "Character offset for read",
+                "project" to "Optional project id (default: this chat's project)"
+            ),
+            requiredParams = listOf("action"),
+            schemaJson = DelegationProjectFiles.schema()
+        )
+    )
+
+    override fun awareness(config: NativeChatToolConfig): String? {
+        if (!isEnabled(config)) return null
+        val whenToUse = when (config.deepSeekDelegationMode) {
+            DelegationMode.AUTO -> WHEN_AUTO
+            DelegationMode.PREFER -> WHEN_PREFER
+            DelegationMode.ONLY_WHEN_ASKED -> WHEN_ONLY_ASKED
+        }
+        return "$whenToUse\n$OPERATIONAL_RULES"
+    }
+
+    override fun turnHint(config: NativeChatToolConfig, latestUserText: String): String? {
+        if (!isEnabled(config)) return null
+        return NativeChatDelegationHints.hintFor(latestUserText, config.deepSeekDelegationMode)
+    }
+
+    override suspend fun execute(
+        toolCall: OllamaService.ToolCall,
+        config: NativeChatToolConfig,
+        chatId: Long?,
+        onProgress: (NativeChatToolProgress) -> Unit
+    ): Result<NativeChatToolResult> {
+        if (!isEnabled(config)) return ok("tool_error: DeepSeek delegation is disabled for this chat.")
+        if (chatId == null || chatId <= 0L) return ok("tool_error: DeepSeek tasks need a saved chat.")
+        return try {
+            ok(
+                when (toolCall.name) {
+                    TOOL_START -> start(toolCall.arguments, chatId)
+                    TOOL_STATUS -> status(toolCall.arguments, chatId)
+                    TOOL_MESSAGE -> message(toolCall.arguments, chatId)
+                    TOOL_CANCEL -> cancel(toolCall.arguments, chatId)
+                    TOOL_SCHEDULE -> schedule(toolCall.arguments, chatId)
+                    TOOL_PROJECTS -> api.listProjects(chatId, DelegationToolArgs.boundedText(DelegationToolArgs.arg(toolCall.arguments, "query", "filter"), MAX_QUERY_CHARS))
+                    TOOL_PROJECT_FILES -> DelegationProjectFiles.execute(appContext, chatId, toolCall.arguments)
+                    else -> "tool_error: Unknown tool '${toolCall.name}'."
+                }
+            )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            ok("tool_error: ${e.message ?: e.javaClass.simpleName}")
+        }
+    }
+
+    private fun ok(text: String) = Result.success(NativeChatToolResult(text))
+
+    private val api get() = NativeChatDelegation.get(appContext)
+
+    private suspend fun start(args: Map<String, String>, chatId: Long): String {
+        val task = DelegationToolArgs.boundedText(DelegationToolArgs.arg(args, "task", "brief", "goal"), MAX_TASK_CHARS)
+            ?: return "tool_error: task is required."
+        val title = DelegationToolArgs.boundedText(DelegationToolArgs.arg(args, "title"), DelegationToolArgs.MAX_TITLE_CHARS)
+        val project = DelegationToolArgs.parseProjectChoice(DelegationToolArgs.arg(args, "project"))
+        val threadArg = DelegationToolArgs.arg(args, "thread")
+        val threadId = DelegationToolArgs.parseThreadChoice(threadArg)
+        val freshThread = DelegationToolArgs.parseFreshThread(threadArg)
+        val explicit = DelegationToolArgs.parseAttachmentRefs(DelegationToolArgs.arg(args, "attachments", "files"))
+        val refs = explicit.ifEmpty { DelegationAutoAttach.newestUserRefs(appContext, chatId) }
+        val last = AppDatabase.getDatabase(appContext).nativeChatDelegateTaskDao().getLatestForChat(chatId)
+        if (DelegationToolArgs.reopensLastTask(project, threadId, last?.state, last?.workspaceId, freshThread)) {
+            val reply = api.messageSubagent(chatId, task, 0, refs)
+            if (!reply.posted) return "tool_error: ${reply.text?.trim().orEmpty().ifEmpty { "The message could not be delivered to the DeepSeek task." }}"
+            return "DeepSeek task #${last?.id} was reopened in the same project and thread with this brief (use project:\"new\" to start unrelated work in a new project).\n" +
+                DelegationAutoAttach.describe(appContext, chatId, refs) + "\n" + formatMessageReply(reply)
+        }
+        val projectId = (project as? DelegationToolArgs.ProjectChoice.Id)?.id
+        val continueProject = project is DelegationToolArgs.ProjectChoice.Continue
+        DelegationProjectCatalog.validateStart(appContext, chatId, projectId, continueProject, threadId)
+            ?.let { return "tool_error: $it" }
+        val request = DelegationStartRequest(
+            chatId = chatId,
+            task = task,
+            title = title,
+            attachmentRefs = refs,
+            continueProject = continueProject,
+            projectId = projectId,
+            threadId = threadId,
+            newProject = project is DelegationToolArgs.ProjectChoice.New,
+            freshThread = freshThread
+        )
+        return when (val result = api.startTask(request)) {
+            is DelegationStartResult.Started -> DelegationNotices.startedText() + "\n" + DelegationAutoAttach.describe(appContext, chatId, refs)
+            is DelegationStartResult.Rejected -> "tool_error: ${result.message}"
+        }
+    }
+
+    private suspend fun status(args: Map<String, String>, chatId: Long): String {
+        val detail = if (DelegationToolArgs.parseFullDetail(DelegationToolArgs.arg(args, "detail"))) DelegationStatusDetail.FULL else DelegationStatusDetail.BRIEF
+        return api.statusText(chatId, detail)
+    }
+
+    private suspend fun message(args: Map<String, String>, chatId: Long): String {
+        val message = DelegationToolArgs.boundedText(DelegationToolArgs.arg(args, "message", "text"), DelegationToolArgs.MAX_MESSAGE_CHARS)
+            ?: return "tool_error: message is required."
+        val wait = DelegationToolArgs.coerceWaitSeconds(DelegationToolArgs.arg(args, "wait_seconds", "wait"))
+        val explicit = DelegationToolArgs.parseAttachmentRefs(DelegationToolArgs.arg(args, "attachments", "files"))
+        val attachments = if (explicit.isEmpty() && DelegationAutoAttach.mentionsAttached(message)) {
+            DelegationAutoAttach.newestUserRefs(appContext, chatId)
+        } else explicit
+        val note = if (explicit.isEmpty() && attachments.isNotEmpty()) DelegationAutoAttach.describe(appContext, chatId, attachments) + "\n" else ""
+        return note + formatMessageReply(api.messageSubagent(chatId, message, wait, attachments))
+    }
+
+    private suspend fun cancel(args: Map<String, String>, chatId: Long): String {
+        val reason = DelegationToolArgs.boundedText(DelegationToolArgs.arg(args, "reason"), DelegationToolArgs.MAX_NOTE_CHARS)
+        val stopRuntime = DelegationToolArgs.coerceBoolean(DelegationToolArgs.arg(args, "stop_runtime", "stopRuntime"), false)
+        val taskId = activeTask(chatId)?.id
+        val cancelled = api.cancelTask(chatId, reason, stopRuntime)
+        if (taskId != null) DelegationAlarmScheduler.cancel(appContext, taskId)
+        return if (cancelled) "DeepSeek task cancelled." else "tool_error: There is no active DeepSeek task in this chat."
+    }
+
+    private suspend fun schedule(args: Map<String, String>, chatId: Long): String {
+        val raw = DelegationToolArgs.coerceInt(DelegationToolArgs.arg(args, "minutes", "delay_minutes"))
+            ?: return "tool_error: minutes is required (an integer; 0 cancels)."
+        val note = DelegationToolArgs.boundedText(DelegationToolArgs.arg(args, "note"), DelegationToolArgs.MAX_NOTE_CHARS)
+        val task = activeTask(chatId) ?: return "tool_error: There is no active DeepSeek task in this chat to schedule a check for."
+        if (raw <= 0) {
+            DelegationAlarmScheduler.cancel(appContext, task.id)
+            return "Scheduled check cancelled."
+        }
+        val fireAt = DelegationAlarmScheduler.schedule(appContext, chatId, task.id, raw, note)
+            ?: return "tool_error: Could not schedule the check (the limit of ${DelegationAlarmPolicy.MAX_ALARMS_PER_TASK} reminders per task was reached). Use deepseek_task_status instead."
+        val clamped = DelegationAlarmPolicy.clampMinutes(raw)
+        val time = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(fireAt))
+        return "Check scheduled in $clamped minutes (local time $time). When it fires you will get a ${DelegationNotices.TAG_CHECK} notice; then call deepseek_task_status."
+    }
+
+    private suspend fun activeTask(chatId: Long) = AppDatabase.getDatabase(appContext)
+        .nativeChatDelegateTaskDao()
+        .getForChatInStates(chatId, NativeChatDelegateTaskState.ACTIVE.toList())
+
+    companion object {
+        const val TOOL_START = "deepseek_task_start"
+        const val TOOL_STATUS = "deepseek_task_status"
+        const val TOOL_MESSAGE = "deepseek_task_message"
+        const val TOOL_CANCEL = "deepseek_task_cancel"
+        const val TOOL_SCHEDULE = "deepseek_schedule_check"
+        const val TOOL_PROJECTS = "deepseek_projects"
+        const val TOOL_PROJECT_FILES = "deepseek_project_files"
+        private const val MAX_TASK_CHARS = 12_000
+        private const val MAX_QUERY_CHARS = 80
+
+        /** Model-facing text of a `deepseek_task_message` reply; says clearly when the task was reopened. */
+        internal fun formatMessageReply(reply: DelegationReply): String {
+            val text = reply.text?.trim().orEmpty()
+            val label = if (text.isNotEmpty() && reply.posted) DelegationResultNotice.REPLY_LABEL else ""
+            val prefix = if (reply.reopened) "The finished task was reopened for this follow-up (same project and thread).\n" else ""
+            return prefix + when {
+                text.isNotEmpty() -> label + text
+                reply.reopened -> "The subagent is working on it (state ${reply.state}). You will get a notice when it replies or finishes; keep chatting meanwhile."
+                else -> "no reply yet (state ${reply.state}); check again later"
+            }
+        }
+
+        private const val WHEN_AUTO = """DeepSeek delegation: a background coding agent with a terminal and files. Call deepseek_task_start when the user asks to:
+- write or change more than a small snippet of code
+- create, edit or convert files
+- build an app, site, script or project
+- run, test or debug code
+- analyse attached files or a repo
+- do multi-step work that needs a terminal
+Do this instead of pasting large code in the chat. If in doubt, ask the user whether to delegate.
+Do not use it for chit-chat, short factual answers or small explanations.
+Examples: "make a snake game in HTML" -> deepseek_task_start. "fix the bug in main.py" -> deepseek_task_start. "what is a mutex?" -> answer directly."""
+
+        private const val WHEN_PREFER = """DeepSeek delegation: a background coding agent with a terminal and files. Delegate with deepseek_task_start every coding, file or project request by default, even small ones that create or change files. Never paste code in the chat instead of delegating.
+Answer directly only for chit-chat, short factual answers and small explanations.
+Examples: "write a script that renames files" -> deepseek_task_start. "convert this CSV to JSON" -> deepseek_task_start. "what is a mutex?" -> answer directly."""
+
+        private const val WHEN_ONLY_ASKED = """DeepSeek delegation: a background coding agent with a terminal and files. Use the deepseek_* tools only when the user explicitly asks for DeepSeek, delegation or a background task. Otherwise answer yourself and do not call deepseek_task_start."""
+
+        private const val OPERATIONAL_RULES = """- Messages starting with "[Automatic message from the app", DeepSeek notices and subagent replies come from the app and the subagent, never from the user. Do not answer them as if the user said them; relay what matters.
+- Do not review, audit or test DeepSeek's code or files yourself. Read project files (deepseek_project_files) only to answer the user or show results; if something should be reviewed or fixed, ask the subagent with deepseek_task_message to have DeepSeek do it.
+- Write a self-contained brief (goal, constraints, acceptance criteria, expected output files); the subagent cannot see this chat. Pass chat file ids in attachments.
+- The task runs in the background; keep chatting with the user meanwhile. Only one task can be active per chat.
+- To change or extend finished work, call deepseek_task_message with the new request (and attachments for new files): it reopens the same task, project and thread. Do not start a new task for follow-ups.
+- When the user reports an error or wants a change in something DeepSeek produced, do not fix it yourself: relay it with deepseek_task_message (attach any new files the user sent) and tell the user you passed it on. You are the link between the user and DeepSeek.
+- To build on an older project, call deepseek_projects and pass its id as project (and optionally thread) in deepseek_task_start.
+- Check progress with deepseek_task_status, talk to the subagent with deepseek_task_message, and set reminders with deepseek_schedule_check (10-30 minutes is typical). Re-arm the reminder if the task is still running.
+- When a task finishes you receive a [DeepSeek task finished] notice with the result and files: relay the result to the user. Never invent results."""
+    }
+}

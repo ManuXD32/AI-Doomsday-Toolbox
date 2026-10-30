@@ -24,6 +24,7 @@ import com.example.llamadroid.tama.game.PetMapper
 import com.example.llamadroid.tama.game.TamaDeepDreamRunCoordinator
 import com.example.llamadroid.tama.game.TamaStudySessionSupport
 import com.example.llamadroid.widget.TamaPetWidgetProvider
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -36,6 +37,10 @@ class TamaNotificationReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 handleAlarm(context.applicationContext, intent)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.w("TamaNotificationReceiver", "Alarm handling failed: ${e.javaClass.simpleName}")
             } finally {
                 pendingResult.finish()
             }
@@ -59,7 +64,7 @@ class TamaNotificationReceiver : BroadcastReceiver() {
         }
         val farmRepository = FarmRepository(database.farmDao(), context)
         val farmEngine = FarmEngine(farmRepository)
-        farmEngine.updateFarm(pet.id)
+        farmEngine.updateFarm(pet.id, cycleFrozen = pet.cycleFrozen)
 
         when (kind) {
             TamaNotificationScheduler.AlertKind.PET_NEED -> {

@@ -4,6 +4,9 @@ import com.example.llamadroid.tama.adventure.StorySchematic
 import com.example.llamadroid.tama.data.TamaPet
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -352,6 +355,26 @@ class TamaTransferBundleTest {
     }
 
     @Test
+    fun `v21 export with removed livingWorld section still parses and is dropped on re-encode`() {
+        val v21 = """
+            {
+              "version": 21,
+              "exportDate": 1000,
+              "pet": {"id": "pet-v21", "name": "Old"},
+              "livingWorld": {"worlds": [], "actors": [{"id": "a"}]}
+            }
+        """.trimIndent()
+
+        val parsed = parseTamaTransferBundle(v21, json)
+        val reencoded = json.encodeToString(parsed)
+
+        assertEquals(21, parsed.version)
+        assertEquals("pet-v21", parsed.pet.id)
+        assertTrue(!reencoded.contains("livingWorld"))
+        assertEquals(23, TamaTransferBundle(pet = parsed.pet).version)
+    }
+
+    @Test
     fun `replacement pet ids clears all existing pets plus imported pet`() {
         val ids = replacementPetIds(
             existingPetIds = listOf("pet-a", "pet-b", " ", "pet-a"),
@@ -389,5 +412,51 @@ class TamaTransferBundleTest {
         val entity = transfer.toEntity("/restored/session-1.png")
 
         assertEquals("/restored/session-1.png", decodeSchematicWorldImagePath(entity.schematicJson))
+    }
+
+    private class FakeExtra(override val key: String, val store: MutableMap<String, JsonElement>) : TamaPetPrefsExtra {
+        override fun export(petId: String): JsonElement? = store[petId]
+        override fun import(petId: String, element: JsonElement) {
+            store[petId] = element
+        }
+    }
+
+    @Test
+    fun `extras round trip through bundle json and restore only the imported pet`() {
+        val source = mutableMapOf<String, JsonElement>("pet-x" to JsonArray(listOf(JsonPrimitive("scene_1"))), "other" to JsonPrimitive("no"))
+        val extras = TamaPetPrefsExtras.exportAll(listOf(FakeExtra("story", source)), "pet-x")
+        val bundle = TamaTransferBundle(pet = TamaPet(id = "pet-x", name = "X"), extras = extras)
+
+        val parsed = parseTamaTransferBundle(json.encodeToString(bundle), json)
+        assertEquals(23, parsed.version)
+
+        val target = mutableMapOf<String, JsonElement>()
+        val unknown = parsed.extras + ("future_key" to JsonPrimitive(1))
+        TamaPetPrefsExtras.importAll(listOf(FakeExtra("story", target)), unknown, "pet-x")
+        assertEquals(setOf("pet-x"), target.keys)
+        assertEquals(source["pet-x"], target["pet-x"])
+    }
+
+    @Test
+    fun `v22 bundle without extras imports unchanged and leaves local state alone`() {
+        val v22 = """{"version": 22, "pet": {"id": "pet-v22", "name": "Old"}, "futureField": 1}"""
+        val parsed = parseTamaTransferBundle(v22, json)
+        assertEquals(22, parsed.version)
+        assertTrue(parsed.extras.isEmpty())
+
+        val target = mutableMapOf<String, JsonElement>("pet-v22" to JsonPrimitive("keep"))
+        TamaPetPrefsExtras.importAll(listOf(FakeExtra("story", target)), parsed.extras, "pet-v22")
+        assertEquals(JsonPrimitive("keep"), target["pet-v22"])
+    }
+
+    @Test
+    fun `failing provider does not break export or import`() {
+        val bad = object : TamaPetPrefsExtra {
+            override val key = "bad"
+            override fun export(petId: String): JsonElement? = error("boom")
+            override fun import(petId: String, element: JsonElement) = error("boom")
+        }
+        assertTrue(TamaPetPrefsExtras.exportAll(listOf(bad), "p").isEmpty())
+        TamaPetPrefsExtras.importAll(listOf(bad), mapOf("bad" to JsonPrimitive(1)), "p")
     }
 }

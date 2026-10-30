@@ -179,8 +179,18 @@ data class LlamaOcrSettingsSnapshot(
     val baseUrl: String get() = "http://127.0.0.1:$port"
 }
 
-class SettingsRepository(private val context: Context) {
-    private val prefs: SharedPreferences = context.getSharedPreferences("llamadroid_settings", Context.MODE_PRIVATE)
+/**
+ * @param prefsName SharedPreferences file backing this instance. A non-default file is an isolated copy.
+ * @param isProfileDraft true for a throwaway launch-profile draft (per-server editor): skips the
+ *        legacy migrations, visual-style resolution and every reload of the app-wide shared theme
+ *        flows, so building a draft can never disturb global state.
+ */
+class SettingsRepository(
+    private val context: Context,
+    prefsName: String = DEFAULT_PREFS_NAME,
+    private val isProfileDraft: Boolean = false
+) {
+    private val prefs: SharedPreferences = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
     val walkthrough: WalkthroughPreferences = WalkthroughPreferences(prefs)
     @Suppress("unused")
     private val llamaManagedSettingsMigration = migrateLegacyLlamaManagedPreferences()
@@ -188,6 +198,7 @@ class SettingsRepository(private val context: Context) {
     private val directAgentSettingsMigration = migrateDirectAgentSettingsPreferences()
 
     private fun migrateLegacyLlamaManagedPreferences() {
+        if (isProfileDraft) return
         if (prefs.getInt(PREF_LLAMA_MANAGED_SCHEMA, 0) >= LLAMA_MANAGED_SCHEMA) return
 
         val configuredLoadMode = if (prefs.contains(PREF_LLAMA_LOAD_MODE)) {
@@ -232,6 +243,7 @@ class SettingsRepository(private val context: Context) {
      * Orchestrator while Direct tuning starts at the documented recommendations.
      */
     private fun migrateDirectAgentSettingsPreferences() {
+        if (isProfileDraft) return
         if (prefs.getInt(PREF_AGENT_DIRECT_SETTINGS_SCHEMA, 0) >= AGENT_DIRECT_SETTINGS_SCHEMA) return
         prefs.edit().apply {
             if (!prefs.contains(PREF_AGENT_DIRECT_BACKEND)) {
@@ -325,6 +337,13 @@ class SettingsRepository(private val context: Context) {
     }.getOrDefault(emptyList())
 
     init {
+        if (!isProfileDraft) initSharedAppState()
+    }
+
+    private fun initSharedAppState() {
+        // Defensive: Application.onCreate resolves this first, but widgets or tests
+        // may build a repository without it. Idempotent once the key exists.
+        AppVisualStyleSettings.ensureResolved(prefs)
         if (prefs.contains("model_storage_uri")) {
             prefs.edit().remove("model_storage_uri").apply()
         }
@@ -335,6 +354,13 @@ class SettingsRepository(private val context: Context) {
             prefs.getString(PREF_THEME_MODE, null)
         )
         sharedDynamicColor.value = prefs.getBoolean(PREF_DYNAMIC_COLOR, false)
+        sharedVisualStyle.value = AppVisualStyle.fromStorage(
+            prefs.getString(AppVisualStyleSettings.PREF_VISUAL_STYLE, null)
+        )
+        sharedPixelVariant.value = PixelThemeVariant.fromStorage(
+            prefs.getString(AppVisualStyleSettings.PREF_PIXEL_VARIANT, null)
+        )
+        sharedPixelFontEnabled.value = prefs.getBoolean(AppVisualStyleSettings.PREF_PIXEL_FONT_ENABLED, false)
     }
 
     private inline fun <reified T : Enum<T>> enumPref(key: String, defaultValue: T): T {
@@ -2483,6 +2509,9 @@ class SettingsRepository(private val context: Context) {
     // Defaults intentionally keep the device theme and the app's own palette.
     val themeMode: StateFlow<AppThemeMode> = sharedThemeMode.asStateFlow()
     val dynamicColor: StateFlow<Boolean> = sharedDynamicColor.asStateFlow()
+    val visualStyle: StateFlow<AppVisualStyle> = sharedVisualStyle.asStateFlow()
+    val pixelVariant: StateFlow<PixelThemeVariant> = sharedPixelVariant.asStateFlow()
+    val pixelFontEnabled: StateFlow<Boolean> = sharedPixelFontEnabled.asStateFlow()
 
     /** Claim once per local calendar day; callers must use an IO dispatcher for the durable write. */
     @SuppressLint("ApplySharedPref") // Return durable commit success; callers dispatch this claim to IO.
@@ -2499,6 +2528,21 @@ class SettingsRepository(private val context: Context) {
     fun setThemeMode(mode: AppThemeMode) {
         prefs.edit().putString(PREF_THEME_MODE, mode.storageValue).apply()
         sharedThemeMode.value = mode
+    }
+
+    fun setVisualStyle(style: AppVisualStyle) {
+        prefs.edit { putString(AppVisualStyleSettings.PREF_VISUAL_STYLE, style.storageValue) }
+        sharedVisualStyle.value = style
+    }
+
+    fun setPixelVariant(variant: PixelThemeVariant) {
+        prefs.edit { putString(AppVisualStyleSettings.PREF_PIXEL_VARIANT, variant.storageValue) }
+        sharedPixelVariant.value = variant
+    }
+
+    fun setPixelFontEnabled(enabled: Boolean) {
+        prefs.edit { putBoolean(AppVisualStyleSettings.PREF_PIXEL_FONT_ENABLED, enabled) }
+        sharedPixelFontEnabled.value = enabled
     }
 
     fun setDynamicColor(enabled: Boolean) {
@@ -2876,21 +2920,6 @@ class SettingsRepository(private val context: Context) {
         _videoKvCacheTypeV.value = type
     }
     
-    // File Server settings
-    private val _fileServerFolderUri = MutableStateFlow(prefs.getString("file_server_folder_uri", null))
-    val fileServerFolderUri = _fileServerFolderUri.asStateFlow()
-    fun setFileServerFolderUri(uri: String?) {
-        prefs.edit().putString("file_server_folder_uri", uri).apply()
-        _fileServerFolderUri.value = uri
-    }
-    
-    private val _fileServerPort = MutableStateFlow(prefs.getInt("file_server_port", AIConstants.Ports.FILE_SERVER))
-    val fileServerPort = _fileServerPort.asStateFlow()
-    fun setFileServerPort(port: Int) {
-        prefs.edit().putInt("file_server_port", port).apply()
-        _fileServerPort.value = port
-    }
-
     // ========== Stable Diffusion Memory Settings ==========
 
     private val _sdMaxCpuRamEnabled = MutableStateFlow(prefs.getBoolean("sd_max_cpu_ram_enabled", false))
@@ -5134,12 +5163,16 @@ class SettingsRepository(private val context: Context) {
     // ========== AI Agent Per-Role System Prompts ==========
     
     companion object {
+        const val DEFAULT_PREFS_NAME = "llamadroid_settings"
         private const val PREF_SUPPORT_LAST_SHOWN_DAY = "support_last_shown_epoch_day"
         private val dailySupportPromptLock = Any()
         private const val PREF_THEME_MODE = "theme_mode"
         private const val PREF_DYNAMIC_COLOR = "dynamic_color"
         private val sharedThemeMode = MutableStateFlow(AppThemeMode.SYSTEM)
         private val sharedDynamicColor = MutableStateFlow(false)
+        private val sharedVisualStyle = MutableStateFlow(AppVisualStyle.SOFT_STUDIO)
+        private val sharedPixelVariant = MutableStateFlow(PixelThemeVariant.CANDY_POP)
+        private val sharedPixelFontEnabled = MutableStateFlow(false)
 
         private const val MANGA_TRANSLATION_CONFIG_KEY = "manga_translation_run_config_v4"
         private const val LLAMA_MANAGED_SCHEMA = 1
@@ -5251,6 +5284,12 @@ class SettingsRepository(private val context: Context) {
 
         fun knowledgeEmbeddingTokenBudgetForBatchSize(batchSize: Int): Int =
             (normalizeKnowledgeEmbeddingBatchSize(batchSize) - 32).coerceAtLeast(256)
+
+        const val TAMA_SERVER_SOURCE_CUSTOM = "CUSTOM"
+        const val TAMA_SERVER_SOURCE_CARD = "CARD"
+
+        fun normalizeTamaServerSource(source: String?): String =
+            if (source == TAMA_SERVER_SOURCE_CARD) TAMA_SERVER_SOURCE_CARD else TAMA_SERVER_SOURCE_CUSTOM
 
         fun normalizeOllamaOrLlamaBackend(backend: String?): String {
             val normalized = backend
@@ -5560,26 +5599,18 @@ Voice:
 - stage-appropriate and personality-aware
 - funny in small bursts, not long monologues"""
         const val FALLBACK_TAMA_SUMMARIZER_PROMPT = "You are the Tama Summarizer. Your job is to summarize the recent conversation and events into a concise memory that helps the pet remember its owner and life."
-        const val FALLBACK_ADVENTURE_SYSTEM_PROMPT = """You are a master storyteller for dark fantasy text adventures.
+        /** Stored adventure language meaning "follow the app language" (see AdventurePrompts.resolveLanguage). */
+        const val ADVENTURE_LANGUAGE_AUTO = "Auto"
+        const val FALLBACK_ADVENTURE_SYSTEM_PROMPT = """You are the narrator of the Dream Chronicle, a cozy and magical dream adventure in the Gate Nexum.
+The player's own pet is the hero; Lumo, a small dream lantern, is its cheerful and slightly dramatic companion who comments and cheers but never decides.
 
-When generating a story schematic at the START of an adventure, mark these parameters clearly:
-- TOTAL_STAGES: (a number between 5 and 30)
-- STORY_THREAD: (the main narrative arc)
-- KEY_EVENTS: (major plot points)
-- POSSIBLE_ENDINGS: (ways the story could conclude)
-- TONE: (horror/mystery/action/etc)
-- DIFFICULTY: (how harsh consequences are)
+While this text is left at its default, the app replaces it with the full narrator prompt (world premise, Lumo's voice, tone guide, dungeon theme and the pet's name, species, personality and mood) in the story language.
+If you edit this text, your version is used instead of the built-in narrator prompt. The app always adds the hero card, the hidden run state (hope, items, flags) and the SCENE / CHOICES / STATE output format.
 
-For each story stage:
-- Present the situation vividly and immersively
-- Describe the environment, atmosphere, and any characters
-- Create tension, mystery, and engagement
-- At the END of each stage, ALWAYS give the player 2-4 clear options to choose from
-- Example: "What do you do? A) Attack the creature B) Try to negotiate C) Flee into the darkness D) Search for another path"
-- The player can pick one of your options OR describe their own creative action
-
-The player's choices shape the story and its outcome. React meaningfully to their decisions.
-Be descriptive and immersive. Do not rush the story."""
+Guidelines:
+- Narrate in second person, 120-220 words per scene, with sound, smell, texture and light.
+- Offer 2-4 clearly different choices with real consequences; the player may also write their own action.
+- Warm humor, real stakes (goodbyes, memory, courage, friendship). No gore, no cruelty. Defeat means being gently carried back, never death."""
         const val FALLBACK_ADVENTURE_SUMMARIZER_PROMPT = """Summarize the adventure stage concisely. Include:
 - Key events that happened
 - Player's choice and its consequences
@@ -5661,6 +5692,57 @@ Keep it brief but capture essential details."""
         val normalized = normalizeOllamaOrLlamaBackend(backend)
         prefs.edit().putString("tama_backend", normalized).apply()
         _tamaBackend.value = normalized
+    }
+
+    /** Where the pet chat talks to: [TAMA_SERVER_SOURCE_CUSTOM] (backend + URL below) or a server card. */
+    private val _tamaServerSource = MutableStateFlow(
+        normalizeTamaServerSource(prefs.getString("tama_server_source", TAMA_SERVER_SOURCE_CUSTOM))
+    )
+    val tamaServerSource = _tamaServerSource.asStateFlow()
+    fun setTamaServerSource(source: String) {
+        val normalized = normalizeTamaServerSource(source)
+        prefs.edit { putString("tama_server_source", normalized) }
+        _tamaServerSource.value = normalized
+    }
+
+    /** Server row id (`llama_servers.id`) picked for the pet chat; -1 when none. */
+    private val _tamaServerCardId = MutableStateFlow(prefs.getLong("tama_server_card_id", -1L))
+    val tamaServerCardId = _tamaServerCardId.asStateFlow()
+    fun setTamaServerCardId(rowId: Long) {
+        prefs.edit { putLong("tama_server_card_id", rowId) }
+        _tamaServerCardId.value = rowId
+    }
+
+    /** Pet ids whose "Keep chat cache on disk" switch was turned off (default is on for every pet). */
+    private val _tamaPetKvCacheDisabledIds = MutableStateFlow(
+        prefs.getStringSet("tama_pet_kv_cache_disabled", emptySet())?.toSet().orEmpty()
+    )
+    val tamaPetKvCacheDisabledIds = _tamaPetKvCacheDisabledIds.asStateFlow()
+    fun isTamaPetKvCacheEnabled(petId: String): Boolean = petId !in _tamaPetKvCacheDisabledIds.value
+    fun setTamaPetKvCacheEnabled(petId: String, enabled: Boolean) {
+        val next = if (enabled) _tamaPetKvCacheDisabledIds.value - petId else _tamaPetKvCacheDisabledIds.value + petId
+        prefs.edit { putStringSet("tama_pet_kv_cache_disabled", next) }
+        _tamaPetKvCacheDisabledIds.value = next
+    }
+
+    /** Pet ids whose "Auto-compact" chat switch was turned off (default is on for every pet). */
+    private val _tamaPetAutoCompactDisabledIds = MutableStateFlow(
+        prefs.getStringSet("tama_pet_auto_compact_disabled", emptySet())?.toSet().orEmpty()
+    )
+    val tamaPetAutoCompactDisabledIds = _tamaPetAutoCompactDisabledIds.asStateFlow()
+    fun isTamaPetAutoCompactEnabled(petId: String): Boolean = petId !in _tamaPetAutoCompactDisabledIds.value
+    fun setTamaPetAutoCompactEnabled(petId: String, enabled: Boolean) {
+        val next = if (enabled) _tamaPetAutoCompactDisabledIds.value - petId else _tamaPetAutoCompactDisabledIds.value + petId
+        prefs.edit { putStringSet("tama_pet_auto_compact_disabled", next) }
+        _tamaPetAutoCompactDisabledIds.value = next
+    }
+
+    /** Custom-URL pet chat: the server cannot see images, so the vision helper describes them (default off). */
+    private val _tamaServerCantSeeImages = MutableStateFlow(prefs.getBoolean("tama_server_cant_see_images", false))
+    val tamaServerCantSeeImages = _tamaServerCantSeeImages.asStateFlow()
+    fun setTamaServerCantSeeImages(enabled: Boolean) {
+        prefs.edit { putBoolean("tama_server_cant_see_images", enabled) }
+        _tamaServerCantSeeImages.value = enabled
     }
 
     private val _tamaThinkingEnabled = MutableStateFlow(prefs.getBoolean("tama_thinking_enabled", true))
@@ -5815,19 +5897,22 @@ Keep it brief but capture essential details."""
     }
 
     // Adventure System Prompt (editable by user)
-    private val _adventureSystemPrompt = MutableStateFlow(prefs.getString("adventure_system_prompt", null) ?: FALLBACK_ADVENTURE_SYSTEM_PROMPT)
+    private val _adventureSystemPrompt = MutableStateFlow(prefs.getString("adventure_system_prompt", null)?.takeIf { it.isNotBlank() } ?: FALLBACK_ADVENTURE_SYSTEM_PROMPT)
     val adventureSystemPrompt = _adventureSystemPrompt.asStateFlow()
     fun setAdventureSystemPrompt(prompt: String) {
-        prefs.edit().putString("adventure_system_prompt", prompt).apply()
-        _adventureSystemPrompt.value = prompt
+        // A blank prompt means "use the default" instead of sending an empty system prompt.
+        val effective = prompt.ifBlank { FALLBACK_ADVENTURE_SYSTEM_PROMPT }
+        prefs.edit { putString("adventure_system_prompt", effective) }
+        _adventureSystemPrompt.value = effective
     }
 
     // Adventure Summarizer Prompt (editable by user)
-    private val _adventureSummarizerPrompt = MutableStateFlow(prefs.getString("adventure_summarizer_prompt", null) ?: FALLBACK_ADVENTURE_SUMMARIZER_PROMPT)
+    private val _adventureSummarizerPrompt = MutableStateFlow(prefs.getString("adventure_summarizer_prompt", null)?.takeIf { it.isNotBlank() } ?: FALLBACK_ADVENTURE_SUMMARIZER_PROMPT)
     val adventureSummarizerPrompt = _adventureSummarizerPrompt.asStateFlow()
     fun setAdventureSummarizerPrompt(prompt: String) {
-        prefs.edit().putString("adventure_summarizer_prompt", prompt).apply()
-        _adventureSummarizerPrompt.value = prompt
+        val effective = prompt.ifBlank { FALLBACK_ADVENTURE_SUMMARIZER_PROMPT }
+        prefs.edit { putString("adventure_summarizer_prompt", effective) }
+        _adventureSummarizerPrompt.value = effective
     }
 
     // Adventure Ollama URL (independent from Tama and Agent)
@@ -5863,7 +5948,7 @@ Keep it brief but capture essential details."""
     }
 
     // Adventure Story Language
-    private val _adventureLanguage = MutableStateFlow(prefs.getString("adventure_language", "English") ?: "English")
+    private val _adventureLanguage = MutableStateFlow(prefs.getString("adventure_language", ADVENTURE_LANGUAGE_AUTO) ?: ADVENTURE_LANGUAGE_AUTO)
     val adventureLanguage = _adventureLanguage.asStateFlow()
     fun setAdventureLanguage(language: String) {
         prefs.edit { putString("adventure_language", language) }

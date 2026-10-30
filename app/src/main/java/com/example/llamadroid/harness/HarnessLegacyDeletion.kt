@@ -28,13 +28,13 @@ class HarnessLegacyDeletion(
     private val workspaces: HarnessWorkspaceRepository,
     private val files: HarnessWorkspaceAccess,
 ) {
-    private val receipts = File(context.filesDir, "agent_harness/project-deletions")
-    private val quarantine = File(context.filesDir, "agent_harness/deleted-projects")
+    private val receipts = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.dataFile(context, "agent_harness/project-deletions")
+    private val quarantine = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.dataFile(context, "agent_harness/deleted-projects")
 
     suspend fun preview(id: Long): HarnessLegacyDeletePreview = withContext(Dispatchers.IO) {
         val conversation = requireNotNull(database.agentChatDao().getConversation(id))
         require(conversation.runtimeSource == AgentRuntimeSource.LEGACY_ARCHIVE)
-        HarnessLegacyDeletePreview(conversation, database.harnessDao().conversations().count {
+        HarnessLegacyDeletePreview(conversation, database.harnessDao(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context)).conversations().count {
             it.id != id && it.runtimeSource != AgentRuntimeSource.WORKSPACE_ONLY && sharesFiles(conversation, it)
         })
     }
@@ -81,7 +81,7 @@ class HarnessLegacyDeletion(
                 if (backend == "REMOTE_SSH") {
                     files.deleteArchivedProject(workspaces.fileScopeForConversation(id, allowPendingDeletion = true))
                 } else {
-                    val managed = File(context.filesDir, "agent_local_workspaces").canonicalFile
+                    val managed = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.projects(context)
                     val root = File(managed, AgentLocalWorkspaceSupport.sanitizeProjectFolder(folder))
                     require(root.canonicalFile.parentFile == managed && !Files.isSymbolicLink(root.toPath())) { "WORKSPACE_PATH_OUTSIDE_SCOPE" }
                     if (root.exists()) {
@@ -90,7 +90,7 @@ class HarnessLegacyDeletion(
                         Files.move(root.toPath(), trash.toPath())
                     }
                 }
-                val dao = database.harnessDao()
+                val dao = database.harnessDao(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context))
                 val related = dao.workspaces().filter {
                     if (backend == "REMOTE_SSH") it.projectFolder == folder && it.backend == backend
                     else it.backend != "REMOTE_SSH" && AgentLocalWorkspaceSupport.sanitizeProjectFolder(it.projectFolder) ==

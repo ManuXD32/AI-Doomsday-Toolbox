@@ -108,13 +108,16 @@ class OnnxTtsGenerationService : Service() {
                         OnnxTtsGenerationState.Error(getString(R.string.onnx_tts_error_already_running))
                     )
                 } else {
-                    ensureForeground(spec.sourceName ?: spec.modelName)
-                    startGeneration(spec, startId)
+                    if (ensureForeground(spec.sourceName ?: spec.modelName, startId)) startGeneration(spec, startId)
                 }
             }
             ACTION_CANCEL -> cancelGeneration()
         }
         return START_NOT_STICKY
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        ForegroundTimeoutSupport.handle(this, fgsType)
     }
 
     override fun onDestroy() {
@@ -124,13 +127,23 @@ class OnnxTtsGenerationService : Service() {
         notificationTaskId?.let { UnifiedNotificationManager.dismissTask(it) }
     }
 
-    private fun ensureForeground(title: String) {
+    private fun ensureForeground(title: String, startId: Int): Boolean {
+        val displayTitle = title.ifBlank { getString(R.string.onnx_tts_title) }
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.ONNX_TTS,
-            title.ifBlank { getString(R.string.onnx_tts_title) }
+            displayTitle
         )
+        val started = ForegroundStart.start(this, taskId, notification, ForegroundServiceTypes.MEDIA_PROCESSING)
+        if (started is ForegroundStart.Result.Failed) {
+            UnifiedNotificationManager.failTask(taskId, ForegroundStart.failureMessage(this, started.reason, displayTitle))
+            OnnxTtsGenerationStateStore.update(
+                OnnxTtsGenerationState.Error(ForegroundStart.failureMessage(this, started.reason, displayTitle))
+            )
+            stopSelf(startId)
+            return false
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
+        return true
     }
 
     private fun startGeneration(spec: OnnxTtsGenerationJobSpec, startId: Int) {

@@ -15,6 +15,7 @@ import com.example.llamadroid.util.DebugLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -25,13 +26,31 @@ class KnowledgeBaseIndexingService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        serviceScope.cancel()
+        ForegroundTimeoutSupport.handle(this, fgsType)
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val taskTitle = getString(R.string.kb_notification_title)
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.KNOWLEDGE_BASE,
             taskTitle
         )
-        startForeground(taskId, notification)
+        val startResult = ForegroundStart.start(
+            this,
+            taskId,
+            notification,
+            ForegroundServiceTypes.DATA_SYNC
+        )
+        if (startResult is ForegroundStart.Result.Failed) {
+            UnifiedNotificationManager.failTask(
+                taskId,
+                ForegroundStart.failureMessage(this, startResult.reason, taskTitle)
+            )
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         UnifiedNotificationManager.updateProgress(taskId, 0f, getString(R.string.kb_notification_starting))
         // Register the start before launching work so back-to-back queued intents cannot
         // briefly look idle and stop the shared embedding server between jobs.

@@ -90,7 +90,7 @@ class VideoUpscalerService : Service() {
     }
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForegroundWithNotification()
+        if (!startForegroundWithNotification()) return START_NOT_STICKY
         when (intent?.action) {
             ACTION_START_UPSCALE -> {
                 val config = intent.toUpscalerConfig()
@@ -107,6 +107,10 @@ class VideoUpscalerService : Service() {
         return START_NOT_STICKY
     }
     
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        ForegroundTimeoutSupport.handle(this, fgsType)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         scope.cancel()
@@ -151,14 +155,22 @@ class VideoUpscalerService : Service() {
         VideoUpscalerStateHolder.setError(error)
     }
     
-    private fun startForegroundWithNotification() {
+    private fun startForegroundWithNotification(): Boolean {
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.VIDEO_UPSCALE,
             "Video Upscaling"
         )
+        val started = ForegroundStart.start(this, taskId, notification, ForegroundServiceTypes.DATA_SYNC)
+        if (started is ForegroundStart.Result.Failed) {
+            val message = ForegroundStart.failureMessage(this, started.reason, "Video Upscaling")
+            UnifiedNotificationManager.failTask(taskId, message)
+            _state.value = VideoUpscalerState.Error(message)
+            stopSelf()
+            return false
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
         WakeLockManager.acquire(applicationContext, "VideoUpscalerService")
+        return true
     }
     
     /**
@@ -373,7 +385,7 @@ class VideoUpscalerService : Service() {
                     "-y",
                     "-i", inputPath,
                     "-qscale:v", "2",  // JPG quality
-                    "-vsync", "0",
+                    "-fps_mode", "passthrough",  // -vsync was removed in FFmpeg 9
                     "${outputDir.absolutePath}/frame%08d.jpg"  // Use JPG instead of PNG (zlib not available)
                 )
                 

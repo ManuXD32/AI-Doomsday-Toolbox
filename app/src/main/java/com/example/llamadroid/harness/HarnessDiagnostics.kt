@@ -20,6 +20,7 @@ class HarnessDiagnostics(
     private val database: AppDatabase,
     private val scope: CoroutineScope,
     private val runtimeJournal: HarnessRuntimeJournal? = null,
+    private val runtimeId: String = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.LEGACY_RUNTIME_ID,
 ) : HarnessRuntimeMetadataLogger {
     private val sequence = AtomicInteger()
     private var lastWebBoot: HarnessWebViewBootDiagnostic? = null
@@ -50,6 +51,12 @@ class HarnessDiagnostics(
             httpStatus = event.httpStatus ?: event.webSocketStatus?.takeIf { it in 100..599 },
             closeCode = event.webSocketStatus?.takeIf { it >= 1000 },
         )
+    }
+
+    /** Metadata-only journal line for a failed model request (code and duration; no text). */
+    fun modelFailure(failure: HarnessModelFailure) {
+        writeSafely { runtimeJournal?.recordConnection("native_failure", transport = "native",
+            operation = "connection", outcome = "failure", durationMs = failure.elapsedMs, errorCode = failure.code) }
     }
 
     fun webView(outcome: String, code: String? = null, httpStatus: Int? = null) {
@@ -86,8 +93,8 @@ class HarnessDiagnostics(
                     durationMs = durationMs, errorCode = errorCode,
                 )
             }
-            val mapping = sessionId?.let { database.harnessDao().session(it) } ?: return@writeSafely
-            val workspace = database.harnessDao().workspace(mapping.workspaceId) ?: return@writeSafely
+            val mapping = sessionId?.let { database.harnessDao(runtimeId).session(it) } ?: return@writeSafely
+            val workspace = database.harnessDao(runtimeId).workspace(mapping.workspaceId) ?: return@writeSafely
             database.agentChatDao().insertProjectEvent(AgentProjectEventEntity(
                 conversationId = mapping.conversationId, projectFolder = workspace.projectFolder,
                 sequenceNumber = sequence.incrementAndGet(), category = "HARNESS",
@@ -101,6 +108,7 @@ class HarnessDiagnostics(
     fun eventForConversation(conversationId: Long, event: String, status: String, durationMs: Long? = null, errorCode: String? = null) {
         writeSafely {
             val conversation = database.agentChatDao().getConversation(conversationId) ?: return@writeSafely
+            if (conversation.runtimeId != runtimeId) return@writeSafely
             database.agentChatDao().insertProjectEvent(AgentProjectEventEntity(
                 conversationId = conversationId, projectFolder = conversation.projectFolder,
                 sequenceNumber = sequence.incrementAndGet(), category = "HARNESS",
@@ -115,8 +123,8 @@ class HarnessDiagnostics(
         // A first launch has no mapped conversation yet. Persist it before session fan-out.
         runtimeJournal?.record(event)
         writeSafely {
-            database.harnessDao().conversations().filter { it.runtimeSource == "DEEPSEEK" }.forEach { conversation ->
-                val session = database.harnessDao().sessionForConversation(conversation.id)
+            database.harnessDao(runtimeId).conversations().filter { it.runtimeSource == "DEEPSEEK" }.forEach { conversation ->
+                val session = database.harnessDao(runtimeId).sessionForConversation(conversation.id)
                 event(session?.harnessSessionId, event.event, event.state?.name ?: "UNKNOWN", event.durationMs, event.errorCode)
             }
         }

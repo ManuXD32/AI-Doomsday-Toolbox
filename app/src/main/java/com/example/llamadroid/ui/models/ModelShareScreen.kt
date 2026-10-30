@@ -1,5 +1,6 @@
 package com.example.llamadroid.ui.models
 
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -151,19 +152,9 @@ fun ModelShareScreen(navController: NavController) {
         }
     }
     
-    Scaffold(
-        containerColor = Color.Transparent,
-        topBar = {
-            TopAppBar(
-                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
-                title = { Text(stringResource(R.string.model_share_title)) },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.kiwix_back))
-                    }
-                }
-            )
-        }
+    AppScreenScaffold(
+        title = stringResource(R.string.model_share_title),
+        onBack = { navController.popBackStack() }
     ) { padding ->
         AppPageBackground(modifier = Modifier.padding(padding)) {
             LazyColumn(

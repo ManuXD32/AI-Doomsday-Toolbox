@@ -158,9 +158,7 @@ data class HarnessStartRequest(
     val readinessTimeoutMs: Long = 60_000L
 ) {
     init {
-        require(environmentId == HarnessRuntimeRecord.DEFAULT_ENVIRONMENT_ID) {
-            "DeepSeek Harness uses one shared environment"
-        }
+        com.example.llamadroid.data.proot.AgentProotEnvironmentPaths.requireSafeEnvironmentId(environmentId)
         require(preferredPort == null || preferredPort in 1024..65535) {
             "Harness preferred port is invalid"
         }

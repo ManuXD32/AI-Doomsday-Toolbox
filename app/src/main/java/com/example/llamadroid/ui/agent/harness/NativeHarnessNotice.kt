@@ -72,6 +72,16 @@ internal fun localizedHarnessNoticeMessage(code: String): Int? = when (code) {
     "PLUGIN_INSTALL_INVALID_RESULT" -> R.string.harness_notice_plugin_invalid_result
     "PLUGIN_INSTALL_CANCELLED" -> R.string.harness_notice_plugin_install_cancelled
     "MODEL_CATALOG_INVALID" -> R.string.harness_notice_model_catalog_invalid
+    "MODEL_PREPARE_FAILED" -> R.string.harness_notice_model_prepare_failed
+    "MANAGED_CARD_MISSING" -> R.string.managed_llama_card_missing
+    "MANAGED_PRESET_MISSING" -> R.string.managed_llama_preset_missing
+    "MANAGED_MODEL_MISSING", "MANAGED_MODEL_NOT_FOUND" -> R.string.managed_llama_model_missing
+    "MANAGED_PORT_BUSY", "MANAGED_NO_FREE_PORT" -> R.string.managed_llama_port_busy
+    "MANAGED_START_TIMEOUT" -> R.string.managed_llama_timeout
+    "MANAGED_CONTEXT_UNKNOWN" -> R.string.managed_llama_context_unknown
+    "MANAGED_OWNER_UNAVAILABLE" -> R.string.managed_llama_owner_unavailable
+    "MANAGED_START_FAILED", "MANAGED_ENDPOINT_INVALID", "MANAGED_MODEL_NOT_RUNNING" ->
+        R.string.managed_llama_start_failed
     "MODEL_REASONING_EFFORT_INVALID" -> R.string.harness_notice_model_reasoning_invalid
     "MODEL_CONTEXT_UNKNOWN" -> R.string.harness_notice_model_context_unknown
     "LITERT_PROMPT_OVER_LIMIT" -> R.string.harness_litert_0984_prompt_over_limit_generic

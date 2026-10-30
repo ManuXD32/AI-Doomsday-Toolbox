@@ -70,6 +70,23 @@ fun normalizeManagedLlamaServerPortArgs(args: List<String>, port: Int): List<Str
     return result
 }
 
+/** Easy servers keep their loopback and activity probes even after advanced template edits. */
+internal fun normalizeEasyLlamaServerArgs(args: List<String>): List<String> {
+    val result = mutableListOf<String>()
+    var index = 0
+    while (index < args.size) {
+        val token = args[index++]
+        when {
+            token == "--host" || token == "-H" ->
+                if (index < args.size && !args[index].startsWith("-")) index++
+            token.startsWith("--host=") || token.startsWith("-H=") -> Unit
+            token in setOf("--slots", "--no-slots", "--metrics", "--no-metrics") -> Unit
+            else -> result += token
+        }
+    }
+    return result + listOf("--host", "127.0.0.1", "--slots", "--metrics")
+}
+
 /**
  * Owns independent native children keyed by a stable session id. The runtime is deliberately
  * independent of Room: card/preset persistence is supplied by the repository layer, while this
@@ -90,6 +107,7 @@ class LlamaServerSessionRuntime(private val context: Context) {
     private val mutex = Mutex()
     private val active = ConcurrentHashMap<String, ActiveSession>()
     private val removing = mutableSetOf<String>()
+    private val idlePolicies = ConcurrentHashMap<String, LlamaServerIdlePolicy>()
     private val stateStore = LlamaServerSessionStateStore(appContext)
     private val ownerStore = LlamaServerSessionOwnerStore(appContext)
     private val _snapshots = MutableStateFlow(
@@ -157,7 +175,8 @@ class LlamaServerSessionRuntime(private val context: Context) {
     suspend fun start(
         sessionId: String,
         profile: LlamaServerLaunchProfile,
-        portOverride: Int? = null
+        portOverride: Int? = null,
+        ensureRunning: Boolean = false
     ): Result<Unit> {
         return try {
             require(sessionId.isNotBlank()) { "sessionId is required" }
@@ -167,6 +186,24 @@ class LlamaServerSessionRuntime(private val context: Context) {
 
             mutex.withLock {
                 check(sessionId !in removing) { "The server card is being removed." }
+                // Automatic consumers join the existing start; explicit restart keeps its semantics.
+                if (ensureRunning && active[sessionId]?.stopRequested == false) return Result.success(Unit)
+                val currentOwner = ownerStore.get(sessionId)
+                if (ensureRunning && currentOwner != null &&
+                    NativeProcessCleanup.recordedLlamaOwnerIsAliveSync(currentOwner.pid,
+                        currentOwner.processStartTimeTicks, currentOwner.port)) {
+                    if (snapshot(sessionId)?.stopReason == "idle_retry") {
+                        val launched = LlamaServerLaunchProfile.decode(currentOwner.launchProfileJson) ?: profile
+                        val url = com.example.llamadroid.data.HttpEndpointUrlSupport.fromHostPort(
+                            managedLlamaConnectHost(launched.host), currentOwner.port)
+                        if (url != null && ManagedLlamaServerHttp.healthy(url)) {
+                            snapshot(sessionId)?.let { publish(it.copy(status = LlamaServerSessionStatus.RUNNING,
+                                stopReason = null, error = null)) }
+                        }
+                    }
+                    return Result.success(Unit)
+                }
+                idlePolicies.remove(sessionId)
                 active[sessionId]?.let { old ->
                     old.stopRequested = true
                     old.controller.stop()
@@ -238,6 +275,7 @@ class LlamaServerSessionRuntime(private val context: Context) {
     }
 
     suspend fun stop(sessionId: String) {
+        idlePolicies.remove(sessionId)
         val runtime = mutex.withLock {
             active[sessionId]?.also { it.stopRequested = true }
         }
@@ -278,6 +316,45 @@ class LlamaServerSessionRuntime(private val context: Context) {
             val existing = snapshot(sessionId)
             if (existing != null && existing.status != LlamaServerSessionStatus.STOPPED) {
                 publish(existing.copy(status = LlamaServerSessionStatus.STOPPED, pid = null))
+            }
+        }
+    }
+
+    /** Runs only in the owning service. Catalog and health reads never renew usage leases. */
+    suspend fun stopIdleSessions() {
+        for (snapshot in snapshots.value.values.toList()) {
+            if (snapshot.status != LlamaServerSessionStatus.RUNNING && snapshot.stopReason != "idle_retry") continue
+            val profile = LlamaServerLaunchProfile.decode(ownerStore.get(snapshot.sessionId)?.launchProfileJson) ?: continue
+            val timeout = profile.idleStopSeconds?.takeIf { it > 0 } ?: continue
+            if (LlamaOcrExclusiveLeaseStore.rejectsSessionCommand(appContext, snapshot.sessionId, null)) continue
+            val baseUrl = com.example.llamadroid.data.HttpEndpointUrlSupport.fromHostPort(
+                managedLlamaConnectHost(profile.host), snapshot.port ?: profile.serverPort) ?: continue
+            val now = android.os.SystemClock.elapsedRealtime()
+            val policy = idlePolicies.getOrPut(snapshot.sessionId) {
+                LlamaServerIdlePolicy(timeout * 1000L,
+                    restoredLlamaIdleActivityAt(snapshot.idleActivityAtElapsedMs, now),
+                    snapshot.idleActivityFingerprint)
+            }
+            val usage = LlamaServerUsageStore(appContext, snapshot.sessionId)
+            val shouldStop = policy.shouldStop(now, usage.read(now), ManagedLlamaServerHttp.idleObservation(baseUrl))
+            persistIdleCheckpoint(snapshot.sessionId, policy)
+            if (!shouldStop) continue
+            usage.guardIdleStop {
+                val checkedAt = android.os.SystemClock.elapsedRealtime()
+                val stillIdle = policy.shouldStop(checkedAt, usage.read(checkedAt), ManagedLlamaServerHttp.idleObservation(baseUrl))
+                persistIdleCheckpoint(snapshot.sessionId, policy)
+                if (stillIdle) {
+                    stop(snapshot.sessionId)
+                    val stopped = this.snapshot(snapshot.sessionId)
+                    if (stopped?.status == LlamaServerSessionStatus.STOPPED) {
+                        publish(stopped.copy(stopReason = "idle"))
+                    } else if (stopped != null) {
+                        // Keep retrying a failed owned cleanup, still checking leases and slots each time.
+                        idlePolicies[snapshot.sessionId] = policy
+                        publish(stopped.copy(stopReason = "idle_retry",
+                            error = appContext.getString(com.example.llamadroid.R.string.managed_llama_idle_retry)))
+                    }
+                }
             }
         }
     }
@@ -353,7 +430,8 @@ class LlamaServerSessionRuntime(private val context: Context) {
             } else {
                 runtime.controller.renderCommandTemplate(profile.commandTemplate, binary.absolutePath, config)
             }
-            val args = normalizeManagedLlamaServerPortArgs(rawArgs, profile.serverPort)
+            val portArgs = normalizeManagedLlamaServerPortArgs(rawArgs, profile.serverPort)
+            val args = if (profile.idleStopSeconds != null) normalizeEasyLlamaServerArgs(portArgs) else portArgs
             val command = runtime.controller.buildCommandString(args)
             if (isCurrent(sessionId, runtime)) {
                 publish(snapshot(sessionId)?.copy(command = command) ?: LlamaServerSessionSnapshot(
@@ -371,6 +449,13 @@ class LlamaServerSessionRuntime(private val context: Context) {
                 customArgs = args,
                 onState = { state ->
                     if (isCurrent(sessionId, runtime)) {
+                        if (state is ServerState.Running && ownerStore.get(sessionId) == null) {
+                            val pid = runtime.controller.refreshOwnedChildPid(binary.absolutePath, profile.serverPort)
+                            NativeProcessCleanup.processStartTimeTicks(pid)?.let { ticks ->
+                                ownerStore.write(LlamaServerSessionOwner(sessionId, pid, ticks,
+                                    profile.serverPort, LlamaServerLaunchProfile.encodeForPersistence(profile)))
+                            }
+                        }
                         publishFromState(sessionId, state, profile.serverPort, runtime.controller.ownedChildPid())
                     }
                 },
@@ -464,12 +549,40 @@ class LlamaServerSessionRuntime(private val context: Context) {
         if (batch.isNotEmpty()) logs.appendBatch(sessionId, batch)
     }
 
-    fun isIdle(): Boolean = active.isEmpty()
+    fun isIdle(): Boolean = active.isEmpty() && ownerStore.readAll().none {
+        NativeProcessCleanup.recordedLlamaOwnerIsAliveSync(it.pid, it.processStartTimeTicks, it.port)
+    }
 
-    private fun publish(snapshot: LlamaServerSessionSnapshot) {
-        val updated = snapshot.copy(updatedAt = System.currentTimeMillis())
+    @Synchronized private fun publish(snapshot: LlamaServerSessionSnapshot) {
+        var persisted = snapshot
+        if (snapshot.status == LlamaServerSessionStatus.RUNNING) {
+            val timeout = LlamaServerLaunchProfile.decode(ownerStore.get(snapshot.sessionId)?.launchProfileJson)
+                ?.idleStopSeconds?.takeIf { it > 0 }
+            if (timeout != null) {
+                val now = android.os.SystemClock.elapsedRealtime()
+                val policy = idlePolicies.getOrPut(snapshot.sessionId) {
+                    LlamaServerIdlePolicy(timeout * 1000L,
+                        restoredLlamaIdleActivityAt(snapshot.idleActivityAtElapsedMs, now),
+                        snapshot.idleActivityFingerprint)
+                }
+                val checkpoint = policy.checkpoint()
+                persisted = snapshot.copy(idleActivityAtElapsedMs = checkpoint.activityAtMs,
+                    idleActivityFingerprint = checkpoint.fingerprint)
+            }
+        }
+        val updated = persisted.copy(updatedAt = System.currentTimeMillis())
         _snapshots.update { it + (updated.sessionId to updated) }
         stateStore.write(updated)
+    }
+
+    @Synchronized private fun persistIdleCheckpoint(sessionId: String, policy: LlamaServerIdlePolicy) {
+        val current = snapshot(sessionId) ?: return
+        val checkpoint = policy.checkpoint()
+        if (current.idleActivityAtElapsedMs != checkpoint.activityAtMs ||
+            current.idleActivityFingerprint != checkpoint.fingerprint) {
+            publish(current.copy(idleActivityAtElapsedMs = checkpoint.activityAtMs,
+                idleActivityFingerprint = checkpoint.fingerprint))
+        }
     }
 
     private companion object {

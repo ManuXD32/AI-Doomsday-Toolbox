@@ -2,6 +2,7 @@ package com.example.llamadroid.data.repository
 
 import android.content.Context
 import com.example.llamadroid.data.dao.LlamaServerCardDao
+import com.example.llamadroid.data.easy.isEasyModeCard
 import com.example.llamadroid.data.db.SavedCommand
 import com.example.llamadroid.data.db.SavedCommandScopes
 import com.example.llamadroid.data.db.launchProfile
@@ -14,6 +15,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 
 /** A saved command lookup deliberately abstracted for the central Room integration. */
 fun interface GeneralSavedCommandProvider {
@@ -38,7 +40,7 @@ data class LlamaServerCardSnapshot(
     /** Resolve the profile at start time; never cache a stale copy in the card. */
     fun resolveProfile(): LlamaServerLaunchProfile? = preset
         ?.takeIf { it.scope == SavedCommandScopes.GENERAL }
-        ?.launchProfileForCardPort(card.port)
+        ?.launchProfileForCard(card)
 }
 
 /**
@@ -50,7 +52,9 @@ class LlamaServerCardRepository(
     private val cardDao: LlamaServerCardDao,
     private val generalSavedCommandProvider: GeneralSavedCommandProvider
 ) {
-    val cards: Flow<List<LlamaServerCardEntity>> = cardDao.observeCards()
+    /** Advanced-mode cards only: Easy-mode cards (`easy:` ids) never appear in advanced lists or pickers. */
+    val cards: Flow<List<LlamaServerCardEntity>> =
+        cardDao.observeCards().map { list -> list.filterNot(::isEasyModeCard) }
 
     fun observeCardsWithPresets(): Flow<List<LlamaServerCardSnapshot>> = flow {
         cards.collect { entities ->
@@ -102,6 +106,17 @@ class LlamaServerCardRepository(
 /** Map a saved GENERAL command to a card launch, overriding only the card port. */
 fun SavedCommand.launchProfileForCardPort(port: Int): LlamaServerLaunchProfile =
     launchProfile().copy(serverPort = port)
+
+/** Easy-mode lifecycle stays attached to its card when the shared preset is edited or reused. */
+fun SavedCommand.launchProfileForCard(card: LlamaServerCardEntity): LlamaServerLaunchProfile {
+    val profile = launchProfileForCardPort(card.port)
+    return if (card.easyModelId == null) profile.copy(idleStopSeconds = null)
+    else profile.copy(
+        host = "127.0.0.1",
+        idleStopSeconds = 600,
+        customFlags = "${profile.customFlags.orEmpty()} --slots --metrics".trim()
+    )
+}
 
 /**
  * Small durable fallback used by the dashboard until the central Room database adds

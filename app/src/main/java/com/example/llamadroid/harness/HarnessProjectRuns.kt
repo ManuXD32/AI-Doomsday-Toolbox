@@ -85,8 +85,8 @@ class HarnessProjectRuns(private val runtime: HarnessAppRuntime) {
 
     private suspend fun runOwned(conversationId: Long): AgentLocalRunState = kotlin.run {
         check(runtime.client != null) { "HARNESS_NOT_RUNNING" }
-        check(runtime.database.harnessDao().runtime()?.state == "RUNNING") { "HARNESS_NOT_RUNNING" }
-        val sessionId = requireNotNull(runtime.database.harnessDao().sessionForConversation(conversationId)).harnessSessionId
+        check(runtime.dao.runtime()?.state == "RUNNING") { "HARNESS_NOT_RUNNING" }
+        val sessionId = requireNotNull(runtime.dao.sessionForConversation(conversationId)).harnessSessionId
         val captured = runtime.workspaces.scope(sessionId)
         val config = if (captured.localRoot != null) {
             val configFile = captured.localFile(".adt/run.json")
@@ -253,7 +253,7 @@ class HarnessProjectRuns(private val runtime: HarnessAppRuntime) {
     }
 
     private suspend fun backendForConversation(conversationId: Long): String? {
-        val session = runtime.database.harnessDao().sessionForConversation(conversationId) ?: return null
+        val session = runtime.dao.sessionForConversation(conversationId) ?: return null
         return runtime.workspaces.scope(session.harnessSessionId).workspace.backend
     }
 

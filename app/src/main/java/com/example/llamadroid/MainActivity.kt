@@ -15,9 +15,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.coroutineScope
@@ -25,9 +23,8 @@ import com.example.llamadroid.util.AppVersionCodeCompat
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import com.example.llamadroid.ui.theme.LlamaDroidTheme
+import com.example.llamadroid.ui.theme.AppThemeFromSettings
 import com.example.llamadroid.ui.LlamaApp
-import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.RestoreCoordinator
 import com.example.llamadroid.ui.settings.RestoreBootstrapScreen
@@ -240,13 +237,7 @@ class MainActivity : ComponentActivity() {
         }
         
         setContent {
-            val appearanceSettings = remember { SettingsRepository(applicationContext) }
-            val themeMode = appearanceSettings.themeMode.collectAsState().value
-            val dynamicColor = appearanceSettings.dynamicColor.collectAsState().value
-            LlamaDroidTheme(
-                themeMode = themeMode,
-                dynamicColor = dynamicColor
-            ) {
+            AppThemeFromSettings {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background

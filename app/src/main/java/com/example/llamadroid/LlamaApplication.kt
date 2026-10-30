@@ -9,6 +9,7 @@ import com.example.llamadroid.R
 import com.example.llamadroid.data.AppContainer
 import com.example.llamadroid.data.DefaultAppContainer
 import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.data.ensureVisualStyleResolved
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.RestoreCoordinator
 import com.example.llamadroid.data.db.RestoreAdmissionContext
@@ -62,6 +63,9 @@ class LlamaApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this  // Safe: Application lives for entire app lifecycle
+        // Must run before anything else (and before MainActivity writes last_seen_version_code)
+        // so the first-run visual style is chosen from the legacy markers.
+        ensureVisualStyleResolved(this)
         if (RestoreCoordinator.isMaintenance(this)) {
             // MainActivity owns the isolated restore phase. No settings, Room, or recovery
             // component may open live data before that phase completes.
@@ -75,6 +79,8 @@ class LlamaApplication : Application() {
             installCrashBreadcrumbHandler()
             return
         }
+        com.example.llamadroid.diagnostics.ProcessExitRecorder.recordAsync(this)
+        runCatching { com.example.llamadroid.service.perf.LockedScreenSpeedRecorder.start(this) }
         LlamaRuntimeStateProjection.registerMainProcess(this, LlamaService.mutableStateForProjection(), LlamaService.mutableServerLogsForProjection())
         PhoneWearGateway.start(this)
         installCrashBreadcrumbHandler()
@@ -96,6 +102,11 @@ class LlamaApplication : Application() {
                     }
                 )
             runRemovedLlmTrainingCleanupOnce()
+            runCatching { com.example.llamadroid.tama.game.TamaWorldRemovalCleanup.runOnce(this@LlamaApplication) }
+            // Resume an active paired visit (listener + link service) after a reboot or app kill.
+            runCatching { com.example.llamadroid.tama.ui.transfer.TamaTransferHolder.get(this@LlamaApplication).recoverOnceAsync() }
+                .onFailure { DebugLog.log("[TAMA_TRANSFER] cold-start recovery failed: ${it.message}") }
+            runCatching { com.example.llamadroid.data.repository.QuickSetupServerWatcher.ensureStarted(this@LlamaApplication) }
             pruneLegacyPortableModelRows()
             normalizeLegacyQuadtrixLoraRows()
             installAgentRuntimeProfiles()
@@ -109,6 +120,8 @@ class LlamaApplication : Application() {
             }
             runCatching { OrganizerAlarmScheduler.rescheduleAll(this@LlamaApplication) }
             runCatching { LlamaScheduledTaskScheduler.rescheduleAll(this@LlamaApplication) }
+            runCatching { com.example.llamadroid.service.delegation.NativeChatDelegation.get(this@LlamaApplication).reconcileOnStartup() }
+            runCatching { com.example.llamadroid.service.titlegen.TitleGenerationManager.onAppStart(this@LlamaApplication) }
             runCatching {
                 val tokenPreferences = getSharedPreferences("litert_model_repository", Context.MODE_PRIVATE)
                 val repository = ModelLibraryRepositoryFactory.create(this@LlamaApplication)

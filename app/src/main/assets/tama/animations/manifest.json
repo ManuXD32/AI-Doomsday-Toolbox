@@ -181,7 +181,7 @@
   },
   "hatchFx": {
     "id": "fx_hatch",
-    "path": "tama/world/effects/fx_hatch.png",
+    "path": "tama/effects/fx_hatch.png",
     "frameWidth": 64,
     "frameHeight": 64,
     "columns": 4,
@@ -295,8 +295,8 @@
         ],
         "structuralReportPath": "generated/tama-world-assets/home-interior/qa/dragon-family-structural.json",
         "postureReportPath": "generated/tama-world-assets/home-interior/qa/dragon-family-posture.json",
-        "visualContactPath": "generated/tama-world-assets/home-interior/qa/dragon-review/dragon-all-actions-colored-contact-v2.png",
-        "checkedAt": "2026-09-14T22:21:10Z",
+        "visualContactPath": "generated/tama-world-assets/home-interior/qa/dragon-r13-locomotion-contact.png",
+        "checkedAt": "2026-10-21T19:36:34Z",
         "errors": [],
         "warnings": [],
         "structural": {
@@ -320,7 +320,7 @@
           "actionsReviewed": [
             "IDLE"
           ],
-          "contactPath": "generated/tama-world-assets/home-interior/qa/dragon-review/dragon-all-actions-colored-contact-v2.png"
+          "contactPath": "generated/tama-world-assets/home-interior/qa/dragon-r13-locomotion-contact.png"
         }
       },
       "productionReady": true,
@@ -956,8 +956,8 @@
         ],
         "structuralReportPath": "generated/tama-world-assets/home-interior/qa/dragon-family-structural.json",
         "postureReportPath": "generated/tama-world-assets/home-interior/qa/dragon-family-posture.json",
-        "visualContactPath": "generated/tama-world-assets/home-interior/qa/dragon-review/dragon-all-actions-colored-contact-v2.png",
-        "checkedAt": "2026-09-14T22:21:10Z",
+        "visualContactPath": "generated/tama-world-assets/home-interior/qa/dragon-r13-locomotion-contact.png",
+        "checkedAt": "2026-10-21T19:36:34Z",
         "errors": [],
         "warnings": [],
         "structural": {
@@ -995,11 +995,11 @@
             "SIT",
             "RUN"
           ],
-          "contactPath": "generated/tama-world-assets/home-interior/qa/dragon-review/dragon-all-actions-colored-contact-v2.png"
+          "contactPath": "generated/tama-world-assets/home-interior/qa/dragon-r13-locomotion-contact.png"
         }
       },
       "productionReady": true,
-      "contentSha256": "3c35796aecdd4c22a338f0fc492ad925f6665863e11ed1aa95197b87d426eb20",
+      "contentSha256": "b4f7047616d3c771945c4ce9310ce5f7d28f325827320e2c4d4e65f977131d58",
       "sourceProvenance": {
         "generationMode": "built-in-subscription-imagegen",
         "backendIdentifier": "not exposed by the built-in tool",
@@ -1750,8 +1750,8 @@
         ],
         "structuralReportPath": "generated/tama-world-assets/home-interior/qa/dragon-family-structural.json",
         "postureReportPath": "generated/tama-world-assets/home-interior/qa/dragon-family-posture.json",
-        "visualContactPath": "generated/tama-world-assets/home-interior/qa/dragon-review/dragon-all-actions-colored-contact-v2.png",
-        "checkedAt": "2026-09-14T22:21:10Z",
+        "visualContactPath": "generated/tama-world-assets/home-interior/qa/dragon-r13-locomotion-contact.png",
+        "checkedAt": "2026-10-21T19:36:34Z",
         "errors": [],
         "warnings": [],
         "structural": {
@@ -1789,11 +1789,11 @@
             "SIT",
             "RUN"
           ],
-          "contactPath": "generated/tama-world-assets/home-interior/qa/dragon-review/dragon-all-actions-colored-contact-v2.png"
+          "contactPath": "generated/tama-world-assets/home-interior/qa/dragon-r13-locomotion-contact.png"
         }
       },
       "productionReady": true,
-      "contentSha256": "826689f8d1c3367c404ced980a5aebba4b0c82929f3a703e13042d95b0fd1675",
+      "contentSha256": "e1434239f896abccf27b82b702fd68b9c51767b366017a3b4e81f13a9237c447",
       "sourceProvenance": {
         "generationMode": "built-in-subscription-imagegen",
         "backendIdentifier": "not exposed by the built-in tool",
@@ -2452,6 +2452,23 @@
           "qaReportPath": "generated/tama-world-assets/home-interior/qa/dragon-teen-relax-patch.json"
         },
         {
+          "group": "run-patch",
+          "action": "RUN",
+          "frameCount": 4,
+          "expectedMode": "RGBA",
+          "path": "generated/tama-world-assets/home-interior/sources/dragon-teen-run-patch-v1.png",
+          "kind": "repair-patch",
+          "exists": true,
+          "sha256": "f7ff216d7bb0d17b0afa27711343dfe536699d483ea1eeecd21394df2259c6be",
+          "bytes": 633937,
+          "width": 1254,
+          "height": 1254,
+          "mode": "RGBA",
+          "hasAlpha": true,
+          "status": "applied",
+          "qaReportPath": "generated/tama-world-assets/home-interior/reports/dragon-teen-run-patch-v1.json"
+        },
+        {
           "group": "repair-patch",
           "action": "REPAIR",
           "frameCount": 0,
@@ -2483,40 +2500,6 @@
           "hasAlpha": false,
           "status": "applied",
           "qaReportPath": "generated/tama-world-assets/home-interior/qa/dragon-teen-sleep-patch.json"
-        },
-        {
-          "path": "generated/tama-world-assets/home-interior/sources/dragon-teen-run-patch-attempt-no-flame.png",
-          "kind": "repair-patch",
-          "exists": true,
-          "sha256": "c1e4ba165085a20add3261c38512a0097a33f33c5224d1b8fefba99c0e335b6f",
-          "bytes": 595556,
-          "width": 1254,
-          "height": 1254,
-          "mode": "RGBA",
-          "hasAlpha": true,
-          "status": "superseded",
-          "reason": "first successful board omitted the Teen orange tail flame; replaced by a subscription edit",
-          "group": "run-patch-attempt",
-          "action": "RUN",
-          "frameCount": 4,
-          "expectedMode": "RGBA"
-        },
-        {
-          "path": "generated/tama-world-assets/home-interior/sources/dragon-teen-run-patch-v1.png",
-          "kind": "repair-patch",
-          "exists": true,
-          "sha256": "f7ff216d7bb0d17b0afa27711343dfe536699d483ea1eeecd21394df2259c6be",
-          "bytes": 633937,
-          "width": 1254,
-          "height": 1254,
-          "mode": "RGBA",
-          "hasAlpha": true,
-          "status": "applied",
-          "group": "run-patch",
-          "action": "RUN",
-          "frameCount": 4,
-          "expectedMode": "RGBA",
-          "qaReportPath": "generated/tama-world-assets/home-interior/reports/dragon-teen-run-patch-v1.json"
         }
       ],
       "generatedSheetPath": "generated/tama-world-assets/home-interior/processed/dragon/teen/sheet.png",
@@ -2527,8 +2510,8 @@
         "generated/tama-world-assets/home-interior/sources/dragon-teen-hurt-tired-patch-v1.png",
         "generated/tama-world-assets/home-interior/sources/dragon-teen-play-patch-v2.png",
         "generated/tama-world-assets/home-interior/sources/dragon-teen-relax-patch-v1.png",
-        "generated/tama-world-assets/home-interior/sources/dragon-teen-sleep-patch-v2.png",
-        "generated/tama-world-assets/home-interior/sources/dragon-teen-run-patch-v1.png"
+        "generated/tama-world-assets/home-interior/sources/dragon-teen-run-patch-v1.png",
+        "generated/tama-world-assets/home-interior/sources/dragon-teen-sleep-patch-v2.png"
       ],
       "authoredIndependently": true,
       "allowFrameReuse": false,
@@ -2547,8 +2530,8 @@
         ],
         "structuralReportPath": "generated/tama-world-assets/home-interior/qa/dragon-family-structural.json",
         "postureReportPath": "generated/tama-world-assets/home-interior/qa/dragon-family-posture.json",
-        "visualContactPath": "generated/tama-world-assets/home-interior/qa/dragon-teen-run-identity-contact-v1.png",
-        "checkedAt": "2026-09-14T22:57:22Z",
+        "visualContactPath": "generated/tama-world-assets/home-interior/qa/dragon-r13-locomotion-contact.png",
+        "checkedAt": "2026-10-21T19:36:34Z",
         "errors": [],
         "warnings": [],
         "structural": {
@@ -2586,7 +2569,7 @@
             "SIT",
             "RUN"
           ],
-          "contactPath": "generated/tama-world-assets/home-interior/qa/dragon-teen-run-identity-contact-v1.png"
+          "contactPath": "generated/tama-world-assets/home-interior/qa/dragon-r13-locomotion-contact.png"
         },
         "sheetSha256": "61372e572875c56774f67744a2a8e325cc37ce476cab25bfdf62ef4c3193a1a1",
         "currentSheetSha256": "61372e572875c56774f67744a2a8e325cc37ce476cab25bfdf62ef4c3193a1a1",
@@ -2625,7 +2608,7 @@
         }
       },
       "productionReady": true,
-      "contentSha256": "61372e572875c56774f67744a2a8e325cc37ce476cab25bfdf62ef4c3193a1a1",
+      "contentSha256": "0353244c2e01dfa04fab2f806012fdcb4aaa975fa8e576aed747b31bd8fc1ed1",
       "sourceProvenance": {
         "generationMode": "built-in-subscription-imagegen",
         "backendIdentifier": "not exposed by the built-in tool",
@@ -2717,6 +2700,23 @@
             "qaReportPath": "generated/tama-world-assets/home-interior/qa/dragon-teen-relax-patch.json"
           },
           {
+            "group": "run-patch",
+            "action": "RUN",
+            "frameCount": 4,
+            "expectedMode": "RGBA",
+            "path": "generated/tama-world-assets/home-interior/sources/dragon-teen-run-patch-v1.png",
+            "kind": "repair-patch",
+            "exists": true,
+            "sha256": "f7ff216d7bb0d17b0afa27711343dfe536699d483ea1eeecd21394df2259c6be",
+            "bytes": 633937,
+            "width": 1254,
+            "height": 1254,
+            "mode": "RGBA",
+            "hasAlpha": true,
+            "status": "applied",
+            "qaReportPath": "generated/tama-world-assets/home-interior/reports/dragon-teen-run-patch-v1.json"
+          },
+          {
             "group": "sleep-patch",
             "action": "SLEEP",
             "frameCount": 2,
@@ -2732,23 +2732,6 @@
             "hasAlpha": false,
             "status": "applied",
             "qaReportPath": "generated/tama-world-assets/home-interior/qa/dragon-teen-sleep-patch.json"
-          },
-          {
-            "path": "generated/tama-world-assets/home-interior/sources/dragon-teen-run-patch-v1.png",
-            "kind": "repair-patch",
-            "exists": true,
-            "sha256": "f7ff216d7bb0d17b0afa27711343dfe536699d483ea1eeecd21394df2259c6be",
-            "bytes": 633937,
-            "width": 1254,
-            "height": 1254,
-            "mode": "RGBA",
-            "hasAlpha": true,
-            "status": "applied",
-            "group": "run-patch",
-            "action": "RUN",
-            "frameCount": 4,
-            "expectedMode": "RGBA",
-            "qaReportPath": "generated/tama-world-assets/home-interior/reports/dragon-teen-run-patch-v1.json"
           }
         ],
         "supersededRepairPatches": [
@@ -2799,66 +2782,10 @@
             "mode": "RGBA",
             "hasAlpha": true,
             "status": "superseded"
-          },
-          {
-            "path": "generated/tama-world-assets/home-interior/sources/dragon-teen-run-patch-attempt-no-flame.png",
-            "kind": "repair-patch",
-            "exists": true,
-            "sha256": "c1e4ba165085a20add3261c38512a0097a33f33c5224d1b8fefba99c0e335b6f",
-            "bytes": 595556,
-            "width": 1254,
-            "height": 1254,
-            "mode": "RGBA",
-            "hasAlpha": true,
-            "status": "superseded",
-            "reason": "first successful board omitted the Teen orange tail flame; replaced by a subscription edit",
-            "group": "run-patch-attempt",
-            "action": "RUN",
-            "frameCount": 4,
-            "expectedMode": "RGBA"
           }
         ],
         "noBrowserOrApiGeneration": true,
-        "noComfyUi": true,
-        "runPatch": {
-          "sourceBoard": "generated/tama-world-assets/home-interior/sources/dragon-teen-run-patch-v1.png",
-          "sourceSha256": "f7ff216d7bb0d17b0afa27711343dfe536699d483ea1eeecd21394df2259c6be",
-          "supersededSourceBoard": "generated/tama-world-assets/home-interior/sources/dragon-teen-run-patch-attempt-no-flame.png",
-          "targetFrames": [
-            44,
-            45,
-            46,
-            47
-          ],
-          "sourceGrid": {
-            "columns": 2,
-            "rows": 2
-          },
-          "camera": "home-interior-front-facing",
-          "uniformScale": {
-            "value": 0.4111232789165084,
-            "method": "geometric-mean-of-median-IDLE-width-height-ratios",
-            "perFrameScale": false,
-            "existingIdleMedian": {
-              "width": 175.5,
-              "height": 192.0
-            },
-            "patchMedian": {
-              "width": 448.5,
-              "height": 444.5
-            },
-            "widthRatio": 0.391304347826087,
-            "heightRatio": 0.43194600674915634,
-            "warnings": []
-          },
-          "footAnchor": {
-            "x": 128,
-            "y": 224
-          },
-          "authoredIndependently": true,
-          "deformationUsed": false,
-          "frameReuse": false
-        }
+        "noComfyUi": true
       },
       "status": "production_ready"
     },
@@ -3402,8 +3329,8 @@
         ],
         "structuralReportPath": "generated/tama-world-assets/home-interior/qa/dragon-family-structural.json",
         "postureReportPath": "generated/tama-world-assets/home-interior/qa/dragon-family-posture.json",
-        "visualContactPath": "generated/tama-world-assets/home-interior/qa/dragon-review/dragon-all-actions-colored-contact-v2.png",
-        "checkedAt": "2026-09-14T22:21:10Z",
+        "visualContactPath": "generated/tama-world-assets/home-interior/qa/dragon-r13-locomotion-contact.png",
+        "checkedAt": "2026-10-21T19:36:34Z",
         "errors": [],
         "warnings": [],
         "structural": {
@@ -3441,11 +3368,11 @@
             "SIT",
             "RUN"
           ],
-          "contactPath": "generated/tama-world-assets/home-interior/qa/dragon-review/dragon-all-actions-colored-contact-v2.png"
+          "contactPath": "generated/tama-world-assets/home-interior/qa/dragon-r13-locomotion-contact.png"
         }
       },
       "productionReady": true,
-      "contentSha256": "3121456b7012693bc0d6226c337b4288a9506dbbd156c26158825b4fb99552b7",
+      "contentSha256": "a113bc6aaff79c620993dad7113c4082f25e1a9a641c1521bd9a8cffde1ac5c4",
       "sourceProvenance": {
         "generationMode": "built-in-subscription-imagegen",
         "backendIdentifier": "not exposed by the built-in tool",
@@ -4132,8 +4059,8 @@
         ],
         "structuralReportPath": "generated/tama-world-assets/home-interior/qa/dragon-family-structural.json",
         "postureReportPath": "generated/tama-world-assets/home-interior/qa/dragon-family-posture.json",
-        "visualContactPath": "generated/tama-world-assets/home-interior/qa/dragon-review/dragon-all-actions-colored-contact-v2.png",
-        "checkedAt": "2026-09-14T22:21:10Z",
+        "visualContactPath": "generated/tama-world-assets/home-interior/qa/dragon-r13-locomotion-contact.png",
+        "checkedAt": "2026-10-21T19:36:34Z",
         "errors": [],
         "warnings": [],
         "structural": {
@@ -4171,11 +4098,11 @@
             "SIT",
             "RUN"
           ],
-          "contactPath": "generated/tama-world-assets/home-interior/qa/dragon-review/dragon-all-actions-colored-contact-v2.png"
+          "contactPath": "generated/tama-world-assets/home-interior/qa/dragon-r13-locomotion-contact.png"
         }
       },
       "productionReady": true,
-      "contentSha256": "a6c32c6a4360368a92dcc18af31d59939a6fe046af8254d367ac6659c84c950b",
+      "contentSha256": "8d302ef32a26fcd74fb2a94bbc7ca834863d00a7d4df5fdadbfb5d188cbd1864",
       "sourceProvenance": {
         "generationMode": "built-in-subscription-imagegen",
         "backendIdentifier": "not exposed by the built-in tool",
@@ -4421,8 +4348,8 @@
         ],
         "structuralReportPath": "generated/tama-world-assets/home-interior/qa/kitsune-family-structural.json",
         "postureReportPath": "generated/tama-world-assets/home-interior/qa/kitsune-family-posture.json",
-        "visualContactPath": "generated/tama-world-assets/home-interior/qa/kitsune-home-all-colored-v1.png",
-        "checkedAt": "2026-09-14T22:21:22Z",
+        "visualContactPath": "generated/tama-world-assets/home-interior/qa/kitsune-r13-locomotion-contact.png",
+        "checkedAt": "2026-10-21T19:36:43Z",
         "errors": [],
         "warnings": [],
         "structural": {
@@ -4446,7 +4373,7 @@
           "actionsReviewed": [
             "IDLE"
           ],
-          "contactPath": "generated/tama-world-assets/home-interior/qa/kitsune-home-all-colored-v1.png"
+          "contactPath": "generated/tama-world-assets/home-interior/qa/kitsune-r13-locomotion-contact.png"
         }
       },
       "productionReady": true,
@@ -5000,8 +4927,8 @@
         ],
         "structuralReportPath": "generated/tama-world-assets/home-interior/qa/kitsune-family-structural.json",
         "postureReportPath": "generated/tama-world-assets/home-interior/qa/kitsune-family-posture.json",
-        "visualContactPath": "generated/tama-world-assets/home-interior/qa/kitsune-home-all-colored-v1.png",
-        "checkedAt": "2026-09-14T22:21:22Z",
+        "visualContactPath": "generated/tama-world-assets/home-interior/qa/kitsune-r13-locomotion-contact.png",
+        "checkedAt": "2026-10-21T19:36:43Z",
         "errors": [],
         "warnings": [],
         "structural": {
@@ -5039,11 +4966,11 @@
             "SIT",
             "RUN"
           ],
-          "contactPath": "generated/tama-world-assets/home-interior/qa/kitsune-home-all-colored-v1.png"
+          "contactPath": "generated/tama-world-assets/home-interior/qa/kitsune-r13-locomotion-contact.png"
         }
       },
       "productionReady": true,
-      "contentSha256": "0003805855ed59531f84e31fd3f0b8f6a8dfc7bf19a539d696fd948780265702",
+      "contentSha256": "0c71d4f3299bcc0aee259fc0b051af10fdd7cf5bf90321ebe227723905f4efa5",
       "sourceProvenance": {
         "generationMode": "built-in-subscription-imagegen",
         "backendIdentifier": "not exposed by the built-in tool",
@@ -5695,8 +5622,8 @@
         ],
         "structuralReportPath": "generated/tama-world-assets/home-interior/qa/kitsune-family-structural.json",
         "postureReportPath": "generated/tama-world-assets/home-interior/qa/kitsune-family-posture.json",
-        "visualContactPath": "generated/tama-world-assets/home-interior/qa/kitsune-home-all-colored-v1.png",
-        "checkedAt": "2026-09-14T22:21:22Z",
+        "visualContactPath": "generated/tama-world-assets/home-interior/qa/kitsune-r13-locomotion-contact.png",
+        "checkedAt": "2026-10-21T19:36:43Z",
         "errors": [],
         "warnings": [],
         "structural": {
@@ -5734,11 +5661,11 @@
             "SIT",
             "RUN"
           ],
-          "contactPath": "generated/tama-world-assets/home-interior/qa/kitsune-home-all-colored-v1.png"
+          "contactPath": "generated/tama-world-assets/home-interior/qa/kitsune-r13-locomotion-contact.png"
         }
       },
       "productionReady": true,
-      "contentSha256": "8c144c2dbee5637f5952a0524bd26e8283fa06e9e4a16881b4a103386a4e93ec",
+      "contentSha256": "09414a346c92d7d70478c05220921841efb8ff071b66aca18435b08df29d4071",
       "sourceProvenance": {
         "generationMode": "built-in-subscription-imagegen",
         "backendIdentifier": "not exposed by the built-in tool",
@@ -6406,8 +6333,8 @@
         ],
         "structuralReportPath": "generated/tama-world-assets/home-interior/qa/kitsune-family-structural.json",
         "postureReportPath": "generated/tama-world-assets/home-interior/qa/kitsune-family-posture.json",
-        "visualContactPath": "generated/tama-world-assets/home-interior/qa/kitsune-home-all-colored-v1.png",
-        "checkedAt": "2026-09-14T22:21:22Z",
+        "visualContactPath": "generated/tama-world-assets/home-interior/qa/kitsune-r13-locomotion-contact.png",
+        "checkedAt": "2026-10-21T19:36:43Z",
         "errors": [],
         "warnings": [],
         "structural": {
@@ -6445,11 +6372,11 @@
             "SIT",
             "RUN"
           ],
-          "contactPath": "generated/tama-world-assets/home-interior/qa/kitsune-home-all-colored-v1.png"
+          "contactPath": "generated/tama-world-assets/home-interior/qa/kitsune-r13-locomotion-contact.png"
         }
       },
       "productionReady": true,
-      "contentSha256": "d0075c9f71338d5f77d21ba24814d908c212d4460f907e3d57158f46404b021a",
+      "contentSha256": "53965e1f3bce3aeecfe3b1c7403bcff607870d7108cc1790fe5a57c10d845d74",
       "sourceProvenance": {
         "generationMode": "built-in-subscription-imagegen",
         "backendIdentifier": "not exposed by the built-in tool",
@@ -7101,8 +7028,8 @@
         ],
         "structuralReportPath": "generated/tama-world-assets/home-interior/qa/kitsune-family-structural.json",
         "postureReportPath": "generated/tama-world-assets/home-interior/qa/kitsune-family-posture.json",
-        "visualContactPath": "generated/tama-world-assets/home-interior/qa/kitsune-home-all-colored-v1.png",
-        "checkedAt": "2026-09-14T22:21:22Z",
+        "visualContactPath": "generated/tama-world-assets/home-interior/qa/kitsune-r13-locomotion-contact.png",
+        "checkedAt": "2026-10-21T19:36:43Z",
         "errors": [],
         "warnings": [],
         "structural": {
@@ -7140,11 +7067,11 @@
             "SIT",
             "RUN"
           ],
-          "contactPath": "generated/tama-world-assets/home-interior/qa/kitsune-home-all-colored-v1.png"
+          "contactPath": "generated/tama-world-assets/home-interior/qa/kitsune-r13-locomotion-contact.png"
         }
       },
       "productionReady": true,
-      "contentSha256": "c1ed11df8d036d4fb362dce401b7e4a648515f73c18b5b963f37b02dbb6eaf59",
+      "contentSha256": "ea94e91e7d14b65f37d53e1bb8bace94f2e7e6628a83f10032c530951593811d",
       "sourceProvenance": {
         "generationMode": "built-in-subscription-imagegen",
         "backendIdentifier": "not exposed by the built-in tool",
@@ -7844,8 +7771,8 @@
         ],
         "structuralReportPath": "generated/tama-world-assets/home-interior/qa/kitsune-family-structural.json",
         "postureReportPath": "generated/tama-world-assets/home-interior/qa/kitsune-family-posture.json",
-        "visualContactPath": "generated/tama-world-assets/home-interior/qa/kitsune-home-all-colored-v1.png",
-        "checkedAt": "2026-09-14T22:21:22Z",
+        "visualContactPath": "generated/tama-world-assets/home-interior/qa/kitsune-r13-locomotion-contact.png",
+        "checkedAt": "2026-10-21T19:36:43Z",
         "errors": [],
         "warnings": [],
         "structural": {
@@ -7883,11 +7810,11 @@
             "SIT",
             "RUN"
           ],
-          "contactPath": "generated/tama-world-assets/home-interior/qa/kitsune-home-all-colored-v1.png"
+          "contactPath": "generated/tama-world-assets/home-interior/qa/kitsune-r13-locomotion-contact.png"
         }
       },
       "productionReady": true,
-      "contentSha256": "b60550b82bbda50d53ea142afbe11889172ed575a805ddedf062d41da2c77ab3",
+      "contentSha256": "d6392f941092d708555d1f68c6c47cc72312f87af44a0e2c46932b33638ca36f",
       "sourceProvenance": {
         "generationMode": "built-in-subscription-imagegen",
         "backendIdentifier": "not exposed by the built-in tool",
@@ -8164,8 +8091,8 @@
         ],
         "structuralReportPath": "generated/tama-world-assets/home-interior/qa/unicorn-family-structural.json",
         "postureReportPath": "generated/tama-world-assets/home-interior/qa/unicorn-family-posture.json",
-        "visualContactPath": "generated/tama-world-assets/home-interior/qa/unicorn-home-all-colored-v1.png",
-        "checkedAt": "2026-09-14T22:21:59Z",
+        "visualContactPath": "generated/tama-world-assets/home-interior/qa/unicorn-r13-locomotion-contact.png",
+        "checkedAt": "2026-10-21T19:36:51Z",
         "errors": [],
         "warnings": [],
         "structural": {
@@ -8189,7 +8116,7 @@
           "actionsReviewed": [
             "IDLE"
           ],
-          "contactPath": "generated/tama-world-assets/home-interior/qa/unicorn-home-all-colored-v1.png"
+          "contactPath": "generated/tama-world-assets/home-interior/qa/unicorn-r13-locomotion-contact.png"
         }
       },
       "productionReady": true,
@@ -8761,8 +8688,8 @@
         ],
         "structuralReportPath": "generated/tama-world-assets/home-interior/qa/unicorn-family-structural.json",
         "postureReportPath": "generated/tama-world-assets/home-interior/qa/unicorn-family-posture.json",
-        "visualContactPath": "generated/tama-world-assets/home-interior/qa/unicorn-home-all-colored-v1.png",
-        "checkedAt": "2026-09-14T22:21:59Z",
+        "visualContactPath": "generated/tama-world-assets/home-interior/qa/unicorn-r13-locomotion-contact.png",
+        "checkedAt": "2026-10-21T19:36:51Z",
         "errors": [],
         "warnings": [],
         "structural": {
@@ -8800,11 +8727,11 @@
             "SIT",
             "RUN"
           ],
-          "contactPath": "generated/tama-world-assets/home-interior/qa/unicorn-home-all-colored-v1.png"
+          "contactPath": "generated/tama-world-assets/home-interior/qa/unicorn-r13-locomotion-contact.png"
         }
       },
       "productionReady": true,
-      "contentSha256": "1bcfc828ae20bd9092440cc9d217a643d39d0472124ce7d5db05d985443d81ad",
+      "contentSha256": "ceeb8a2cb88954127612856fa0831e18adb37169b3e0322aec3cf1194e950768",
       "sourceProvenance": {
         "generationMode": "built-in-subscription-imagegen",
         "backendIdentifier": "not exposed by the built-in tool",
@@ -9491,8 +9418,8 @@
         ],
         "structuralReportPath": "generated/tama-world-assets/home-interior/qa/unicorn-family-structural.json",
         "postureReportPath": "generated/tama-world-assets/home-interior/qa/unicorn-family-posture.json",
-        "visualContactPath": "generated/tama-world-assets/home-interior/qa/unicorn-home-all-colored-v1.png",
-        "checkedAt": "2026-09-14T22:21:59Z",
+        "visualContactPath": "generated/tama-world-assets/home-interior/qa/unicorn-r13-locomotion-contact.png",
+        "checkedAt": "2026-10-21T19:36:51Z",
         "errors": [],
         "warnings": [],
         "structural": {
@@ -9530,11 +9457,11 @@
             "SIT",
             "RUN"
           ],
-          "contactPath": "generated/tama-world-assets/home-interior/qa/unicorn-home-all-colored-v1.png"
+          "contactPath": "generated/tama-world-assets/home-interior/qa/unicorn-r13-locomotion-contact.png"
         }
       },
       "productionReady": true,
-      "contentSha256": "d40c6b8522ac1bf7086748f3f3ef38f4e766d4a7d59fcb04aa175a7a65835318",
+      "contentSha256": "cc03a5691d625b1028e6c88e1ff7de86f045dfbec067fb8cc7f130ee8c007597",
       "sourceProvenance": {
         "generationMode": "built-in-subscription-imagegen",
         "backendIdentifier": "not exposed by the built-in tool",
@@ -10221,8 +10148,8 @@
         ],
         "structuralReportPath": "generated/tama-world-assets/home-interior/qa/unicorn-family-structural.json",
         "postureReportPath": "generated/tama-world-assets/home-interior/qa/unicorn-family-posture.json",
-        "visualContactPath": "generated/tama-world-assets/home-interior/qa/unicorn-home-all-colored-v1.png",
-        "checkedAt": "2026-09-14T22:21:59Z",
+        "visualContactPath": "generated/tama-world-assets/home-interior/qa/unicorn-r13-locomotion-contact.png",
+        "checkedAt": "2026-10-21T19:36:51Z",
         "errors": [],
         "warnings": [],
         "structural": {
@@ -10260,11 +10187,11 @@
             "SIT",
             "RUN"
           ],
-          "contactPath": "generated/tama-world-assets/home-interior/qa/unicorn-home-all-colored-v1.png"
+          "contactPath": "generated/tama-world-assets/home-interior/qa/unicorn-r13-locomotion-contact.png"
         }
       },
       "productionReady": true,
-      "contentSha256": "6cd16113fa3f72061b7836cb3bf0ef25cb723f83a13ec8bf346d26ede8829143",
+      "contentSha256": "0b3b06a2394bde7f58efa6bd9be2d2544fffa154d30f4bbe0eeab1740de830e6",
       "sourceProvenance": {
         "generationMode": "built-in-subscription-imagegen",
         "backendIdentifier": "not exposed by the built-in tool",
@@ -10951,8 +10878,8 @@
         ],
         "structuralReportPath": "generated/tama-world-assets/home-interior/qa/unicorn-family-structural.json",
         "postureReportPath": "generated/tama-world-assets/home-interior/qa/unicorn-family-posture.json",
-        "visualContactPath": "generated/tama-world-assets/home-interior/qa/unicorn-home-all-colored-v1.png",
-        "checkedAt": "2026-09-14T22:21:59Z",
+        "visualContactPath": "generated/tama-world-assets/home-interior/qa/unicorn-r13-locomotion-contact.png",
+        "checkedAt": "2026-10-21T19:36:51Z",
         "errors": [],
         "warnings": [],
         "structural": {
@@ -10990,11 +10917,11 @@
             "SIT",
             "RUN"
           ],
-          "contactPath": "generated/tama-world-assets/home-interior/qa/unicorn-home-all-colored-v1.png"
+          "contactPath": "generated/tama-world-assets/home-interior/qa/unicorn-r13-locomotion-contact.png"
         }
       },
       "productionReady": true,
-      "contentSha256": "f24b2ff70daec42f2a357adc6153dd9c45375605e3bb6211701a1c0781882539",
+      "contentSha256": "9a7be5374e9928819cfc7ad9d0c85c3b337f57802c186a1171e5551b567ae5c3",
       "sourceProvenance": {
         "generationMode": "built-in-subscription-imagegen",
         "backendIdentifier": "not exposed by the built-in tool",
@@ -11699,8 +11626,8 @@
         ],
         "structuralReportPath": "generated/tama-world-assets/home-interior/qa/unicorn-family-structural.json",
         "postureReportPath": "generated/tama-world-assets/home-interior/qa/unicorn-family-posture.json",
-        "visualContactPath": "generated/tama-world-assets/home-interior/qa/unicorn-home-all-colored-v1.png",
-        "checkedAt": "2026-09-14T22:21:59Z",
+        "visualContactPath": "generated/tama-world-assets/home-interior/qa/unicorn-r13-locomotion-contact.png",
+        "checkedAt": "2026-10-21T19:36:51Z",
         "errors": [],
         "warnings": [],
         "structural": {
@@ -11738,11 +11665,11 @@
             "SIT",
             "RUN"
           ],
-          "contactPath": "generated/tama-world-assets/home-interior/qa/unicorn-home-all-colored-v1.png"
+          "contactPath": "generated/tama-world-assets/home-interior/qa/unicorn-r13-locomotion-contact.png"
         }
       },
       "productionReady": true,
-      "contentSha256": "e535737e376f3e4c10493bfa51e561b47a25f53cef19a27070d61363784e1944",
+      "contentSha256": "337cce9b4426315e0e147f85b4904154ceb4d691ed42432b71dc117d30bf31c6",
       "sourceProvenance": {
         "generationMode": "built-in-subscription-imagegen",
         "backendIdentifier": "not exposed by the built-in tool",
@@ -11892,10 +11819,15 @@
     }
   ],
   "publication": {
-    "lastBatch": "home-dragon-teen-run",
+    "lastBatch": "home-unicorn-family",
     "status": "complete",
     "assetIds": [
-      "home_dragon_teen"
+      "home_unicorn_egg",
+      "home_unicorn_baby",
+      "home_unicorn_child",
+      "home_unicorn_teen",
+      "home_unicorn_adult",
+      "home_unicorn_senior"
     ],
     "productionReadyAssetCount": 18,
     "productionReadyAssetIds": [
@@ -11920,8 +11852,7 @@
     ],
     "structuralReportPath": "generated/tama-world-assets/home-interior/qa/unicorn-family-structural.json",
     "postureReportPath": "generated/tama-world-assets/home-interior/qa/unicorn-family-posture.json",
-    "visualReviewPath": "generated/tama-world-assets/home-interior/qa/unicorn-home-all-colored-v1.png",
-    "publishedAt": "2026-09-14T22:21:59Z",
-    "revokedAssetIds": []
+    "visualReviewPath": "generated/tama-world-assets/home-interior/qa/unicorn-r13-locomotion-contact.png",
+    "publishedAt": "2026-10-21T19:36:51Z"
   }
 }

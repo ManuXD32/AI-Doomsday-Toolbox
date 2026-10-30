@@ -16,6 +16,7 @@ import java.net.URL
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.DeviceAcceleration
 import com.example.llamadroid.util.CpuFeatures
+import com.example.llamadroid.service.perf.LockedScreenRuntime
 import com.example.llamadroid.util.NativeModuleCatalog
 import com.example.llamadroid.util.NativeProcessCleanup
 import java.security.MessageDigest
@@ -1010,9 +1011,13 @@ class ProcessController {
         } else {
             null
         }
-        val args = customArgs?.let {
-            appendVideoArgsIfNeeded(it, config, enabled = config.videoEnabled)
-        } ?: getCommand(binaryPath, config, binaryCapabilities)
+        val lockedScreen = LockedScreenRuntime.create(config, filesDir)
+        val args = NativeChatKvCacheStore.withSlotSavePath(
+            args = customArgs?.let {
+                appendVideoArgsIfNeeded(it, config, enabled = config.videoEnabled)
+            } ?: getCommand(binaryPath, config, binaryCapabilities),
+            filesDir = filesDir
+        )
         var launchedProcess: Process? = null
         
         try {
@@ -1114,7 +1119,7 @@ class ProcessController {
                 }
             }.getOrNull() ?: -1L
             val childPid = if (reflectedChildPid > 0L) reflectedChildPid else {
-                resolveNativeChildPid(binaryPath)?.toLong() ?: -1L
+                resolveNativeChildPid(binaryPath, expectedPort = config.port)?.toLong() ?: -1L
             }
             activeChildPid = childPid.coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong()).toInt()
             if (stoppedIntentionally || shouldStop?.invoke() == true || process == null) {
@@ -1125,6 +1130,7 @@ class ProcessController {
                     stoppedIntentionally = true
                 )
             }
+            lockedScreen.onProcessStarted(activeChildPid)
             onOwnedProcessStarted?.invoke(
                 activeChildPid,
                 NativeProcessCleanup.processStartTimeTicks(activeChildPid)
@@ -1275,9 +1281,19 @@ class ProcessController {
             }
             DebugLog.log("ProcessController: FAILED - ${e.message}")
             Log.e("ProcessController", "Failed to start", e)
+            // A non-intentional failure (readiness timeout, reader IOException) must not leave the
+            // llama-server child alive and orphaned. Only kill the child this launch spawned, and
+            // restore the intentional-stop flag so callers do not treat the failure as a user stop.
+            if (launchedProcess != null && process === launchedProcess) {
+                val wasIntentional = stoppedIntentionally
+                runCatching { stop() }
+                stoppedIntentionally = wasIntentional
+            }
             activeChildPid = -1
             activeBinaryWasOpenCl = false
             throw e
+        } finally {
+            lockedScreen.close()
         }
     }
 
@@ -1445,27 +1461,16 @@ class ProcessController {
     internal fun resolveNativeChildPid(
         binaryPath: String,
         procRoot: File = File("/proc"),
-        selfPid: Int = android.os.Process.myPid()
-    ): Int? {
-        val childIds = File(procRoot, "$selfPid/task").listFiles().orEmpty()
-            .asSequence()
-            .map { File(it, "children") }
-            .filter(File::isFile)
-            .flatMap { file ->
-                runCatching { file.readText() }.getOrDefault("")
-                    .trim().split(Regex("\\s+"))
-                    .asSequence()
-            }
-            .mapNotNull(String::toIntOrNull)
-            .distinct()
-            .toList()
-        val expectedName = File(binaryPath).name
-        return childIds.filter { pid ->
-            val cmdline = runCatching {
-                File(procRoot, "$pid/cmdline").readBytes().toString(Charsets.UTF_8).replace('\u0000', ' ')
-            }.getOrDefault("")
-            cmdline.contains(binaryPath) || cmdline.contains(expectedName)
-        }.maxOrNull()
+        selfPid: Int = android.os.Process.myPid(),
+        expectedPort: Int? = null
+    ): Int? = findNativeChildPid(binaryPath, procRoot, selfPid, expectedPort)
+
+    /** Retry after exec/model loading when a fork-time proc snapshot was not yet available. */
+    internal fun refreshOwnedChildPid(binaryPath: String, port: Int): Int {
+        if (activeChildPid <= 0) {
+            activeChildPid = resolveNativeChildPid(binaryPath, expectedPort = port) ?: -1
+        }
+        return activeChildPid
     }
 
     private fun nativeBinaryTier(binaryPath: String): String {

@@ -19,6 +19,8 @@ import com.example.llamadroid.service.AgentSkillRepository
 import com.example.llamadroid.service.CustomToolExecutionMode
 import com.example.llamadroid.service.CustomToolHttpExecutor
 import com.example.llamadroid.service.KiwixService
+import com.example.llamadroid.service.NativeChatOnnxBackgroundRemover
+import com.example.llamadroid.service.NativeChatUnifiedImageGenerator
 import com.example.llamadroid.service.SkillPermission
 import com.example.llamadroid.service.agentSdImageToolParams
 import com.example.llamadroid.service.resolveAgentSdImageReadiness
@@ -121,6 +123,19 @@ class HarnessBridgeOperations(
             return@withContext credential(method, args)
         }
         if (method == "provider.models") return@withContext models.models()
+        if (method == "provider.prepare") return@withContext try {
+            models.prepare(args.getString("model"))
+        } catch (error: com.example.llamadroid.service.ManagedLlamaServerException) {
+            throw IllegalStateException(error.code)
+        }
+        if (method == "provider.usage") {
+            val id = args.getString("model").takeIf { it.startsWith("llama:") }
+                ?.removePrefix("llama:")?.toLongOrNull()?.takeIf { it > 0 }
+                ?: error("MANAGED_MODEL_NOT_FOUND")
+            com.example.llamadroid.service.LlamaServerUsageStore(context, "card:$id")
+                .write(args.getString("token"), args.getBoolean("active"))
+            return@withContext JSONObject().put("ok", true)
+        }
         if (method == "provider.discover") return@withContext discoverProvider(args)
         // JSONL can publish a new/forked session before its native index exists.
         // This capability is constrained to that session's private store, not a workspace.
@@ -134,7 +149,7 @@ class HarnessBridgeOperations(
             return@withContext JSONArray(files.retryCleanup(sessionId = ownedSession))
         }
         if (method == "workspace.prepare") {
-            val workspace = requireNotNull(database.harnessDao().workspace(args.getString("workspaceId"))) { "WORKSPACE_NOT_FOUND" }
+            val workspace = requireNotNull(database.harnessDao(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context)).workspace(args.getString("workspaceId"))) { "WORKSPACE_NOT_FOUND" }
             require(workspace.guestPath == args.getString("guestPath") && workspace.backend == args.getString("backend")) { "WORKSPACE_IDENTITY_MISMATCH" }
             if (workspace.backend == "REMOTE_SSH") {
                 check(workspaces.sshSummary(workspace.id).getBoolean("configured")) { "SSH_CONFIGURATION_REQUIRED" }
@@ -206,7 +221,7 @@ class HarnessBridgeOperations(
                     JSONObject().put("written", bytes.size)
                 }
                 method in setOf("workspace.run", "workspace.runStatus", "workspace.stopRun") -> {
-                    val runs = HarnessAppRuntime.get(context).projectRuns
+                    val runs = HarnessAppRuntime.forRuntime(context, com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context)).projectRuns
                     val state = when (method) {
                         "workspace.run" -> runs.run(scope.conversation.id)
                         "workspace.runStatus" -> runs.check(scope.conversation.id)
@@ -325,6 +340,7 @@ class HarnessBridgeOperations(
         val enabled = args.getBoolean("enabled")
         when (args.optString("tool")) {
             "images_generate" -> settings.setAgentImageGenerationToolEnabled(enabled)
+            "images_remove_background" -> settings.setAgentBackgroundRemovalToolEnabled(enabled)
             "app_web_search" -> settings.setAgentWebSearchEnabled(enabled)
             else -> error("APP_TOOL_UNKNOWN")
         }
@@ -364,6 +380,7 @@ class HarnessBridgeOperations(
         }
         val imageEnabled = settings.agentImageGenerationToolEnabled.value
         val searchEnabled = settings.agentWebSearchEnabled.value
+        val bgrEnabled = settings.agentBackgroundRemovalToolEnabled.value
         return JSONObject().put("tools", JSONObject()
             .put("images_generate", JSONObject()
                 .put("enabled", imageEnabled)
@@ -374,6 +391,10 @@ class HarnessBridgeOperations(
                 })
                 .put("missingComponents", JSONArray(missingComponents))
                 .put("engine", engine))
+            .put("images_remove_background", JSONObject()
+                .put("enabled", bgrEnabled)
+                .put("ready", bgrEnabled)
+                .put("status", if (bgrEnabled) "enabled" else "off"))
             .put("app_web_search", JSONObject()
                 .put("enabled", searchEnabled)
                 .put("ready", searchEnabled)
@@ -394,12 +415,13 @@ class HarnessBridgeOperations(
 
     private suspend fun image(scope: HarnessSessionScope, method: String, args: JSONObject): JSONObject {
         val temp = File(context.cacheDir, "harness_images/${UUID.randomUUID()}").apply { mkdirs() }
+        val inputFileForPath: suspend (String) -> File = { path ->
+            if (scope.localRoot != null) scope.localFile(path) else File(temp, "input." + File(path).extension.lowercase().takeIf { it in setOf("png", "jpg", "jpeg", "webp", "bmp", "gif") }.orEmpty().ifBlank { "png" })
+                .apply { writeBytes(files.readBytes(scope, path)) }
+        }
         val operations = AgentImageOperations(
             context,
-            inputFileForPath = { path ->
-                if (scope.localRoot != null) scope.localFile(path) else File(temp, "input." + File(path).extension.lowercase().takeIf { it in setOf("png", "jpg", "jpeg", "webp", "bmp", "gif") }.orEmpty().ifBlank { "png" })
-                    .apply { writeBytes(files.readBytes(scope, path)) }
-            },
+            inputFileForPath = inputFileForPath,
             sanitizePath = { path ->
                 if (scope.localRoot != null) scope.localFile(path)
                 val relative = path.removePrefix(scope.workspace.guestPath + "/")
@@ -411,14 +433,45 @@ class HarnessBridgeOperations(
         )
         return try {
             val outputRelativePath = imageOutputRelativePath(scope, method, args)
-            val message = if (method == "images.generate") {
-                operations.generateImage(args.getString("prompt"), args.optString("negativePrompt"), outputRelativePath, settings).getOrThrow()
-            } else {
-                operations.removeImageBackground(args.getString("imagePath"), outputRelativePath, settings).getOrThrow()
+            val sessionId = scope.session.harnessSessionId
+            val delegated = HarnessDelegatedImageSettings(database)
+            val chatGenerationConfig = if (method == "images.generate") delegated.generationConfig(sessionId) else null
+            val chatBgrConfig = if (method == "images.removeBackground") delegated.backgroundRemovalConfig(sessionId) else null
+            val outputGuestPath = scope.workspace.guestPath + "/" + outputRelativePath
+            var chatMask = false
+            val message = when {
+                chatGenerationConfig != null -> {
+                    val generated = NativeChatUnifiedImageGenerator(context, database)
+                        .generateImage(args.getString("prompt").trim(), args.optString("negativePrompt").trim(), chatGenerationConfig)
+                        .getOrThrow()
+                    val out = File(generated.imagePath)
+                    files.writeBytes(scope, outputGuestPath, out.readBytes())
+                    runCatching { out.delete() }
+                    generated.content
+                }
+                chatBgrConfig != null -> {
+                    val input = inputFileForPath(args.getString("imagePath"))
+                    val removed = NativeChatOnnxBackgroundRemover(context, database)
+                        .removeBackground(input.absolutePath, chatBgrConfig).getOrThrow()
+                    val out = File(removed.imagePath)
+                    files.writeBytes(scope, outputGuestPath, out.readBytes())
+                    val mask = File(out.parentFile, out.nameWithoutExtension + "_mask.png")
+                    if (chatBgrConfig.backgroundRemovalParams.exportMask && mask.isFile) {
+                        files.writeBytes(scope, outputGuestPath.substringBeforeLast(".") + "_mask.png", mask.readBytes())
+                        chatMask = true
+                    }
+                    runCatching { out.delete() }
+                    runCatching { mask.delete() }
+                    removed.content
+                }
+                method == "images.generate" ->
+                    operations.generateImage(args.getString("prompt"), args.optString("negativePrompt"), outputRelativePath, settings).getOrThrow()
+                else ->
+                    operations.removeImageBackground(args.getString("imagePath"), outputRelativePath, settings).getOrThrow()
             }
             val artifactPaths = buildList {
                 add(outputRelativePath)
-                if (method == "images.removeBackground" && settings.agentBackgroundRemovalExportMask.value) {
+                if (method == "images.removeBackground" && (chatMask || (chatBgrConfig == null && settings.agentBackgroundRemovalExportMask.value))) {
                     add(outputRelativePath.substringBeforeLast(".") + "_mask.png")
                 }
             }.distinct()

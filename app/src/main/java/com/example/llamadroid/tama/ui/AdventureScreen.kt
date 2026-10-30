@@ -1,6 +1,5 @@
 package com.example.llamadroid.tama.ui
 
-import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -63,6 +62,7 @@ import coil.compose.AsyncImage
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.service.AdventureForegroundService
+import com.example.llamadroid.tama.adventure.AdventureSceneParser
 import com.example.llamadroid.tama.adventure.AdventureSession
 import com.example.llamadroid.tama.adventure.AdventureStage
 import com.example.llamadroid.tama.adventure.DungeonType
@@ -71,6 +71,9 @@ import com.example.llamadroid.tama.adventure.localizedName
 import com.example.llamadroid.tama.db.AdventureSessionEntity
 import com.example.llamadroid.tama.db.AdventureStageEntity
 import com.example.llamadroid.tama.db.TamaDatabase
+import com.example.llamadroid.tama.ui.adventure.AdventureChoiceChips
+import com.example.llamadroid.tama.ui.adventure.AdventureRunStateRow
+import com.example.llamadroid.tama.ui.adventure.DreamChronicleCard
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
@@ -81,11 +84,11 @@ import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import androidx.compose.ui.window.DialogProperties
 
 private val AdventureDark = Color(0xFF0D0D0D)
-private val AdventureText = Color(0xFFE0E0E0)
-private val AdventureAccent = Color(0xFFDAA520)
-private val AdventureInput = Color(0xFF1A1A2E)
+internal val AdventureText = Color(0xFFE0E0E0)
+internal val AdventureAccent = Color(0xFFDAA520)
+internal val AdventureInput = Color(0xFF1A1A2E)
 private val UserBubble = Color(0xFF2C5530)
-private val StoryBubble = Color(0xFF1C1C2E)
+internal val StoryBubble = Color(0xFF1C1C2E)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -96,6 +99,7 @@ fun AdventureScreen(
     settingsRepository: SettingsRepository
 ) {
     val context = LocalContext.current
+    val notice = rememberTamaNotice()
     val scope = rememberCoroutineScope()
     val walkthroughTargets = LocalWalkthroughTargets.current
     val tamaDao = database.tamaDao()
@@ -114,10 +118,10 @@ fun AdventureScreen(
     }
     val stageEntities by stagesFlow.collectAsState(initial = emptyList())
     val generationState by AdventureForegroundService.generationState.collectAsState()
+    val generationFailure by AdventureForegroundService.generationFailure.collectAsState()
 
     var playerInput by rememberSaveable { mutableStateOf("") }
     var showSettingsDialog by remember { mutableStateOf(false) }
-    var localErrorMessage by rememberSaveable { mutableStateOf<String?>(null) }
     var expandedImagePath by rememberSaveable { mutableStateOf<String?>(null) }
 
     val session = remember(sessionEntity, stageEntities) {
@@ -127,17 +131,65 @@ fun AdventureScreen(
     val isGenerating = generationState?.petId == activePet?.id &&
         generationState?.dungeonTypeName == dungeonType.name
     val listState = rememberLazyListState()
-
-    LaunchedEffect(activePet?.id, sessionEntity?.id, isGenerating, dungeonType.name) {
-        val petId = activePet?.id ?: return@LaunchedEffect
-        if (sessionEntity == null && !isGenerating) {
+    val failure = generationFailure?.takeIf {
+        it.petId == activePet?.id && it.dungeonTypeName == dungeonType.name
+    }
+    // The last choice is saved before the next scene is written; a stage with a response and no
+    // follow-up scene means that generation failed (or was interrupted) and can be retried.
+    val hasPendingChoice = session != null && !session.isCompleted && !isGenerating &&
+        !storyStages.lastOrNull()?.userResponse.isNullOrBlank()
+    val busyMessage = stringResource(R.string.adventure_busy_wait)
+    val languageCode = remember { java.util.Locale.getDefault().language }
+    val lastParsed = remember(storyStages.lastOrNull()?.storyContent) {
+        storyStages.lastOrNull()?.let { AdventureSceneParser.parse(it.storyContent) }
+    }
+    val currentChoices = if (
+        session != null && !session.isCompleted && !isGenerating &&
+        storyStages.lastOrNull()?.userResponse.isNullOrBlank()
+    ) lastParsed?.choices.orEmpty() else emptyList()
+    val restartAdventure: () -> Unit = {
+        scope.launch {
+            val petId = activePet?.id ?: return@launch
+            com.example.llamadroid.tama.adventure.AdventureService(
+                database = database,
+                settingsRepository = settingsRepository,
+                context = context
+            ).resetAdventure(petId, dungeonType)
             AdventureForegroundService.startWorldBuild(context, petId, dungeonType.name)
         }
     }
+    val sendChoice: (String) -> Unit = { text ->
+        val petId = activePet?.id
+        if (petId != null && text.isNotBlank()) {
+            // Keep the typed text when the service is busy so nothing the player wrote is lost.
+            if (AdventureForegroundService.submitChoice(context, petId, dungeonType.name, text.trim())) {
+                walkthroughTargets?.recordEvent("tama.adventure")
+            } else {
+                notice.show(busyMessage, isError = true)
+            }
+        }
+    }
 
-    LaunchedEffect(storyStages.size, isGenerating) {
+    // A finished run whose Chronicle grants never committed (crash, offline gate) is retried once; it is idempotent.
+    val chroniclePending = session?.isCompleted == true && session.schematic.chronicle?.grantsApplied == false
+    LaunchedEffect(session?.id, chroniclePending) {
+        val pendingId = session?.id
+        if (chroniclePending && pendingId != null) {
+            com.example.llamadroid.tama.adventure.AdventureService(
+                database = database,
+                settingsRepository = settingsRepository,
+                context = context
+            ).grantPendingChronicle(pendingId)
+        }
+    }
+
+    val hasWorldImageItem = !session?.schematic?.worldImagePath.isNullOrBlank()
+    val isRunCompleted = session?.isCompleted == true
+    LaunchedEffect(storyStages.size, isGenerating, isRunCompleted) {
         if (storyStages.isNotEmpty()) {
-            listState.animateScrollToItem(storyStages.lastIndex)
+            // Stages follow the optional world image item; the results card is one item after the last stage.
+            val lastStageItem = storyStages.lastIndex + if (hasWorldImageItem) 1 else 0
+            listState.animateScrollToItem(if (isRunCompleted) lastStageItem + 1 else lastStageItem)
         }
     }
 
@@ -178,18 +230,7 @@ fun AdventureScreen(
                 actions = {
                         com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                     IconButton(
-                        onClick = {
-                            scope.launch {
-                                val petId = activePet?.id ?: return@launch
-                                localErrorMessage = null
-                                com.example.llamadroid.tama.adventure.AdventureService(
-                                    database = database,
-                                    settingsRepository = settingsRepository,
-                                    context = context
-                                ).resetAdventure(petId, dungeonType)
-                                AdventureForegroundService.startWorldBuild(context, petId, dungeonType.name)
-                            }
-                        },
+                        onClick = restartAdventure,
                         enabled = !isGenerating && activePet != null
                     ) {
                         Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.action_reset), tint = Color.Red)
@@ -211,6 +252,9 @@ fun AdventureScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
+            if (session != null && storyStages.isNotEmpty()) {
+                AdventureRunStateRow(state = session.runState)
+            }
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -221,16 +265,43 @@ fun AdventureScreen(
                     activePet == null -> {
                         AdventureInfoMessage(stringResource(R.string.adventure_error_no_pet))
                     }
-                    localErrorMessage != null -> {
-                        AdventureInfoMessage(localErrorMessage!!)
-                    }
                     storyStages.isEmpty() && isGenerating -> {
                         AdventureLoadingMessage(
                             message = generationState?.status ?: stringResource(R.string.adventure_status_building_world)
                         )
                     }
                     storyStages.isEmpty() -> {
-                        AdventureInfoMessage(stringResource(R.string.adventure_waiting_for_world))
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                                .padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text(
+                                text = failure?.let { stringResource(R.string.adventure_generation_failed, it.message) }
+                                    ?: stringResource(R.string.adventure_start_hint),
+                                color = AdventureText,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 14.sp
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Button(
+                                onClick = {
+                                    val petId = activePet?.id ?: return@Button
+                                    if (!AdventureForegroundService.startWorldBuild(context, petId, dungeonType.name)) {
+                                        notice.show(busyMessage, isError = true)
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = AdventureAccent)
+                            ) {
+                                Text(
+                                    stringResource(if (failure != null) R.string.action_retry else R.string.adventure_start_button),
+                                    maxLines = 1
+                                )
+                            }
+                        }
                     }
                     else -> {
                         LazyColumn(
@@ -306,25 +377,36 @@ fun AdventureScreen(
 
                             if (session?.isCompleted == true) {
                                 item {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(16.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally
-                                    ) {
-                                        Text(
-                                            stringResource(R.string.adventure_complete_title),
-                                            color = AdventureAccent,
-                                            fontFamily = FontFamily.Monospace,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 16.sp
+                                    val chronicle = session.schematic.chronicle
+                                    if (chronicle != null) {
+                                        DreamChronicleCard(
+                                            page = chronicle,
+                                            languageCode = languageCode,
+                                            onContinue = { navController.popBackStack() },
+                                            onNewAdventure = restartAdventure,
+                                            modifier = Modifier.padding(vertical = 8.dp)
                                         )
-                                        Text(
-                                            stringResource(R.string.adventure_complete_body),
-                                            color = Color.Gray,
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 12.sp
-                                        )
+                                    } else {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(16.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            Text(
+                                                stringResource(R.string.adventure_complete_title),
+                                                color = AdventureAccent,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 16.sp
+                                            )
+                                            Text(
+                                                stringResource(R.string.adventure_complete_body),
+                                                color = Color.Gray,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontSize = 12.sp
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -333,6 +415,43 @@ fun AdventureScreen(
                 }
             }
 
+            if (hasPendingChoice) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(AdventureInput)
+                        .padding(start = 12.dp, end = 8.dp, top = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = failure?.let { stringResource(R.string.adventure_generation_failed, it.message) }
+                            ?: stringResource(R.string.adventure_choice_saved_retry),
+                        color = AdventureText,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        maxLines = 4,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = {
+                            val petId = activePet?.id ?: return@Button
+                            if (!AdventureForegroundService.submitChoice(context, petId, dungeonType.name, "")) {
+                                notice.show(busyMessage, isError = true)
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = AdventureAccent)
+                    ) {
+                        Text(stringResource(R.string.action_retry), maxLines = 1)
+                    }
+                }
+            }
+            AdventureChoiceChips(
+                choices = currentChoices,
+                enabled = !isGenerating,
+                onChoice = sendChoice
+            )
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -369,9 +488,13 @@ fun AdventureScreen(
                         val petId = activePet?.id ?: return@Button
                         val inputText = playerInput.trim()
                         if (inputText.isBlank()) return@Button
-                        playerInput = ""
-                        AdventureForegroundService.submitChoice(context, petId, dungeonType.name, inputText)
-                        walkthroughTargets?.recordEvent("tama.adventure")
+                        // Keep the text when the service is busy so nothing the player typed is lost.
+                        if (AdventureForegroundService.submitChoice(context, petId, dungeonType.name, inputText)) {
+                            playerInput = ""
+                            walkthroughTargets?.recordEvent("tama.adventure")
+                        } else {
+                            notice.show(busyMessage, isError = true)
+                        }
                     },
                     enabled = !isGenerating && playerInput.isNotBlank() && session != null && session.isCompleted.not(),
                     colors = ButtonDefaults.buttonColors(containerColor = AdventureAccent)
@@ -451,7 +574,7 @@ fun StageItem(stage: AdventureStage, onImageClick: (String) -> Unit = {}) {
                     )
                     AsyncImage(
                         model = imageFile,
-                        contentDescription = stage.storyContent.take(60),
+                        contentDescription = null,
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 190.dp, max = 300.dp)
@@ -480,7 +603,7 @@ fun StageItem(stage: AdventureStage, onImageClick: (String) -> Unit = {}) {
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = stage.storyContent,
+                    text = remember(stage.storyContent) { AdventureSceneParser.parse(stage.storyContent).text },
                     color = AdventureText,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 14.sp,

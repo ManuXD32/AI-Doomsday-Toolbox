@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="video_tae_mismatch">This TAE does not match the selected model (latent channels: %1$d, needed: %2$d). Pick the matching TAE or use the model\'s VAE.</string>
+    <string name="video_tae_not_supported">This video model cannot use a TAE. Remove the TAE and select the model\'s VAE.</string>
+</resources>

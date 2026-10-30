@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_chat_context_title">Context</string>
+    <string name="tama_chat_context_ring_desc">Pet chat context usage, %1$d%%</string>
+    <string name="tama_chat_context_usage">Context tokens: %1$d / %2$d (%3$d%%)</string>
+    <string name="tama_chat_context_explain">Compacting folds the older conversation into the pet\'s memory summary and keeps a shorter recent history, which frees room in the model window.</string>
+    <string name="tama_chat_auto_compact_title">Auto-compact</string>
+    <string name="tama_chat_auto_compact_desc">Compact this pet\'s chat automatically when the window is nearly full.</string>
+    <string name="tama_chat_compact_now">Compact now</string>
+    <string name="tama_chat_compact_working">Compacting…</string>
+    <string name="tama_chat_compact_done">Chat compacted.</string>
+    <string name="tama_chat_vision_helper_title">Vision helper</string>
+    <string name="tama_chat_vision_helper_note">Describes images for servers that can\'t see them. This is the same helper used by the native chat.</string>
+    <string name="tama_chat_server_cant_see_title">This server can\'t see images</string>
+    <string name="tama_chat_server_cant_see_desc">The vision helper describes pictures before they reach this custom server.</string>
+    <string name="tama_chat_pet_cache_title">This pet\'s prompt cache</string>
+    <string name="tama_chat_pet_cache_delete">Delete this pet\'s cache</string>
+    <string name="tama_chat_pet_cache_delete_title">Delete this pet\'s cache?</string>
+    <string name="tama_chat_pet_cache_delete_message">The next message will reprocess the whole prompt. The conversation is not affected.</string>
+</resources>

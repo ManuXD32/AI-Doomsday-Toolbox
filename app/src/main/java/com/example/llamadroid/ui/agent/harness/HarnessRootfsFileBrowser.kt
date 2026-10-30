@@ -60,7 +60,10 @@ import androidx.compose.ui.unit.dp
 import com.example.llamadroid.R
 import com.example.llamadroid.harness.HarnessRootfsFileEntry
 import com.example.llamadroid.harness.HarnessRootfsFileStore
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Full-screen native explorer content for the managed Debian rootfs. */
 @Composable
@@ -101,13 +104,21 @@ fun HarnessRootfsFileBrowser(
     val upload = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
-            val name = documentName(context, uri)
-            val destination = joinRootfsPath(path, name)
-            context.contentResolver.openInputStream(uri)?.let { input ->
-                rootfsStore.upload(destination, input)
-                    .onFailure { error = it.message ?: "ROOTFS_OPERATION_FAILED" }
-                    .onSuccess { refresh() }
-            } ?: run { error = "ROOTFS_UPLOAD_UNREADABLE" }
+            try {
+                withContext(Dispatchers.IO) {
+                    val name = documentName(context, uri)
+                    val destination = joinRootfsPath(path, name)
+                    context.contentResolver.openInputStream(uri)?.let { input ->
+                        input.use { rootfsStore.upload(destination, it) }
+                            .onFailure { error = it.message ?: "ROOTFS_OPERATION_FAILED" }
+                            .onSuccess { refresh() }
+                    } ?: run { error = "ROOTFS_UPLOAD_UNREADABLE" }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                error = e.message ?: "ROOTFS_OPERATION_FAILED"
+            }
         }
     }
     val download = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
@@ -115,17 +126,25 @@ fun HarnessRootfsFileBrowser(
         downloadEntry = null
         if (uri == null || entry == null) return@rememberLauncherForActivityResult
         scope.launch {
-            val result = if (entry.isDirectory) {
-                context.contentResolver.openOutputStream(uri)?.let { output ->
-                    rootfsStore.exportArchive(entry.path, output)
-                } ?: Result.failure(IllegalStateException("ROOTFS_DOWNLOAD_UNWRITABLE"))
-            } else {
-                rootfsStore.readBytes(entry.path).mapCatching { bytes ->
-                    context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
-                        ?: error("ROOTFS_DOWNLOAD_UNWRITABLE")
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    if (entry.isDirectory) {
+                        context.contentResolver.openOutputStream(uri)?.use { output ->
+                            rootfsStore.exportArchive(entry.path, output)
+                        } ?: Result.failure(IllegalStateException("ROOTFS_DOWNLOAD_UNWRITABLE"))
+                    } else {
+                        rootfsStore.readBytes(entry.path).mapCatching { bytes ->
+                            context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+                                ?: error("ROOTFS_DOWNLOAD_UNWRITABLE")
+                        }
+                    }
                 }
+                result.onFailure { error = it.message ?: "ROOTFS_OPERATION_FAILED" }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                error = e.message ?: "ROOTFS_OPERATION_FAILED"
             }
-            result.onFailure { error = it.message ?: "ROOTFS_OPERATION_FAILED" }
         }
     }
 

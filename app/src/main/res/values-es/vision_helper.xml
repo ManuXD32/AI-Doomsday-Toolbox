@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="vision_helper_title">Asistente de visión</string>
+    <string name="vision_helper_description">Cuando el modelo del chat no puede ver imágenes, nunca se le envían. Con esto activado, un modelo de visión pequeño describe primero cada imagen en texto y esa descripción se entrega al modelo del chat. La imagen permanece en el chat.</string>
+    <string name="vision_helper_switch">Describir imágenes para modelos solo de texto</string>
+    <string name="vision_helper_server_label">Servidor de visión</string>
+    <string name="vision_helper_server_none">Ningún servidor seleccionado</string>
+    <string name="vision_helper_choose_server">Elegir servidor</string>
+    <string name="vision_helper_change_server">Cambiar</string>
+    <string name="vision_helper_picker_title">Servidor de visión</string>
+    <string name="vision_helper_picker_empty">No hay ningún servidor local con modelo de visión (modelo más mmproj). Crea uno en Servidores primero.</string>
+    <string name="vision_helper_needs_server">Elige un servidor local de visión para activar el asistente.</string>
+    <string name="vision_helper_thinking">Dejar que el modelo de visión piense (más lento)</string>
+    <string name="vision_helper_ram_note">Un servidor temporal de bajo impacto se inicia solo cuando hay suficiente RAM libre, describe todas las imágenes pendientes de una vez y se detiene de nuevo.</string>
+    <string name="vision_helper_status_waiting_ram">Asistente de visión esperando RAM libre</string>
+    <string name="vision_helper_status_describing">Describiendo imagen…</string>
+</resources>

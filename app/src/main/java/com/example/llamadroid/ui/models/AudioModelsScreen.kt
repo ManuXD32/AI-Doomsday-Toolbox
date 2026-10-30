@@ -78,6 +78,7 @@ fun AudioModelsScreen(navController: NavController) {
                 .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            ModelManagerShortcutRow(navController, com.example.llamadroid.data.model.library.ModelFamily.AUDIO)
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(

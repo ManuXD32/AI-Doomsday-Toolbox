@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="title_generation_title">Títulos de chat: generar con un modelo</string>
+    <string name="title_generation_description">Solo se ejecuta cuando hay suficiente RAM libre. Inicia un servidor temporal pequeño, escribe el título tras una respuesta y lo detiene. Los chats que renombres nunca se modifican.</string>
+    <string name="title_generation_switch">Generar títulos de chat</string>
+    <string name="title_generation_model_label">Modelo de títulos</string>
+    <string name="title_generation_model_none">Ningún modelo seleccionado</string>
+    <string name="title_generation_choose_model">Elegir modelo</string>
+    <string name="title_generation_change_model">Cambiar</string>
+    <string name="title_generation_picker_title">Modelo de títulos</string>
+    <string name="title_generation_picker_empty">No hay modelos de lenguaje descargados. Descarga uno antes en el Gestor de modelos.</string>
+    <string name="title_generation_needs_model">Elige un modelo para activar la generación de títulos.</string>
+    <string name="title_generation_run_now">Titular chats sin título ahora</string>
+    <string name="title_generation_status_idle">Listo. Los chats sin título se titulan tras las respuestas.</string>
+    <string name="title_generation_status_disabled">La generación de títulos está desactivada.</string>
+    <string name="title_generation_status_no_model">No hay modelo de títulos seleccionado.</string>
+    <string name="title_generation_status_waiting">Esperando RAM libre: necesita %1$s GB, hay %2$s GB libres.</string>
+    <string name="title_generation_status_generating">Escribiendo un título de chat…</string>
+    <string name="title_generation_status_generating_chat">Escribiendo un título para \"%1$s\"…</string>
+    <string name="title_generation_status_error">El último intento falló: %1$s</string>
+    <string name="title_generation_menu_item">Modelos auxiliares…</string>
+    <string name="title_generation_sheet_close">Cerrar</string>
+</resources>

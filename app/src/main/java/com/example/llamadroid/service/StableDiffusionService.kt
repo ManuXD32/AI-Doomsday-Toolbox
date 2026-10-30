@@ -3,7 +3,6 @@ package com.example.llamadroid.service
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -186,17 +185,20 @@ class StableDiffusionService : Service() {
                 val useDistributedStateHolder = intent.getBooleanExtra(EXTRA_USE_DISTRIBUTED_STATE_HOLDER, false)
                 if (config == null) {
                     surfaceStartFailure(getString(R.string.imagegen_error_missing_config))
+                    stopIfNeverForegrounded(startId)
                 } else if (!useDistributedStateHolder && GenerationQueueRuntime.isActive) {
                     getModeStateHolder(config.mode, useWorkflowStateHolder, false).updateState(
                         SDGenerationState.Error(getString(R.string.generation_queue_manual_wait))
                     )
+                    stopIfNeverForegrounded(startId)
                 } else if (hasActiveModeJob(config.mode, useDistributedStateHolder)) {
                     val message = getString(R.string.imagegen_error_already_running)
                     getModeStateHolder(config.mode, useWorkflowStateHolder, useDistributedStateHolder)
                         .updateState(SDGenerationState.Error(message))
                     _generationState.value = SDGenerationState.Error(message)
+                    stopIfNeverForegrounded(startId)
                 } else {
-                    startGenerationSafely(config, useWorkflowStateHolder, useDistributedStateHolder)
+                    startGenerationSafely(config, useWorkflowStateHolder, useDistributedStateHolder, startId)
                 }
             }
             ACTION_START_UPSCALE -> {
@@ -204,26 +206,31 @@ class StableDiffusionService : Service() {
                 val useDistributedStateHolder = intent.getBooleanExtra(EXTRA_USE_DISTRIBUTED_STATE_HOLDER, false)
                 if (config == null) {
                     surfaceStartFailure(getString(R.string.imagegen_error_missing_config))
+                    stopIfNeverForegrounded(startId)
                 } else if (!useDistributedStateHolder && GenerationQueueRuntime.isActive) {
                     getModeStateHolder(SDMode.UPSCALE, false, false).updateState(
                         SDGenerationState.Error(getString(R.string.generation_queue_manual_wait))
                     )
+                    stopIfNeverForegrounded(startId)
                 } else if (hasActiveModeJob(SDMode.UPSCALE, useDistributedStateHolder)) {
                     val message = getString(R.string.imagegen_error_already_running)
                     getModeStateHolder(SDMode.UPSCALE, false, useDistributedStateHolder)
                         .updateState(SDGenerationState.Error(message))
                     _generationState.value = SDGenerationState.Error(message)
+                    stopIfNeverForegrounded(startId)
                 } else {
-                    startUpscaleSafely(config, useDistributedStateHolder)
+                    startUpscaleSafely(config, useDistributedStateHolder, startId)
                 }
             }
             ACTION_START_WORKFLOW -> {
                 val workflowConfig = intent.getParcelableExtraCompat<SDWorkflowConfig>(EXTRA_WORKFLOW_CONFIG)
                 if (workflowConfig == null) {
                     surfaceStartFailure(getString(R.string.imagegen_error_missing_config))
+                    stopIfNeverForegrounded(startId)
                 } else if (hasActiveWork()) {
                     val message = getString(R.string.imagegen_error_already_running)
                     SDModeStateHolder.workflowTxt2img.updateState(SDGenerationState.Error(message))
+                    stopIfNeverForegrounded(startId)
                 } else {
                     startWorkflowSafely(workflowConfig)
                 }
@@ -233,14 +240,33 @@ class StableDiffusionService : Service() {
                 intent.getStringExtra(EXTRA_MODE)
                     ?.let { runCatching { SDMode.valueOf(it) }.getOrNull() }
                     ?.let { cancelMode(it, useDistributedStateHolder) }
+                stopIfNeverForegrounded(startId)
             }
-            ACTION_CANCEL_WORKFLOW -> cancelWorkflow()
-            ACTION_CANCEL_ALL -> if (intent.matchesNotificationTask(notificationTaskId)) cancel()
+            ACTION_CANCEL_WORKFLOW -> {
+                cancelWorkflow()
+                stopIfNeverForegrounded(startId)
+            }
+            ACTION_CANCEL_ALL -> {
+                if (intent.matchesNotificationTask(notificationTaskId)) cancel()
+                stopIfNeverForegrounded(startId)
+            }
+            else -> stopIfNeverForegrounded(startId)
         }
         return START_NOT_STICKY
     }
 
-    /** Bound queue runs share the queue's foreground lifetime and notification. */
+    /**
+     * A service started with startForegroundService() must call startForeground() or stop itself,
+     * otherwise Android kills the process. Early-return start paths and cancels on an idle service
+     * call this: with no active work the fresh service stops at once.
+     */
+    private fun stopIfNeverForegrounded(startId: Int) {
+        if (hasActiveWork()) return
+        recordServiceBreadcrumb("start_rejected_stop", "startId=$startId")
+        stopSelfResult(startId)
+    }
+
+/** Bound queue runs share the queue's foreground lifetime and notification. */
     fun isGenerationWakeLockHeld(): Boolean = wakeLock?.isHeld == true
 
     fun startQueued(config: SDConfig, onResult: (QueuedGenerationOutcome) -> Unit) {
@@ -275,7 +301,8 @@ class StableDiffusionService : Service() {
     private fun startGenerationSafely(
         config: SDConfig,
         useWorkflowStateHolder: Boolean,
-        useDistributedStateHolder: Boolean
+        useDistributedStateHolder: Boolean,
+        startId: Int
     ) {
         val launchDetails = buildSdLaunchBreadcrumbDetails(config)
         recordLaunchBreadcrumb(config.mode, "service_start_requested", launchDetails)
@@ -297,6 +324,7 @@ class StableDiffusionService : Service() {
                 "$launchDetails issue=${launchIssue.name}"
             )
             surfaceStartFailure(message, config.mode, useWorkflowStateHolder, useDistributedStateHolder)
+            stopIfNeverForegrounded(startId)
             return
         }
 
@@ -348,7 +376,7 @@ class StableDiffusionService : Service() {
         }
     }
 
-    private fun startUpscaleSafely(config: SDUpscaleConfig, useDistributedStateHolder: Boolean) {
+    private fun startUpscaleSafely(config: SDUpscaleConfig, useDistributedStateHolder: Boolean, startId: Int) {
         val launchDetails = buildSdLaunchBreadcrumbDetails(config)
         recordLaunchBreadcrumb(SDMode.UPSCALE, "service_start_requested", launchDetails)
 
@@ -368,6 +396,7 @@ class StableDiffusionService : Service() {
                 "$launchDetails issue=${launchIssue.name}"
             )
             surfaceStartFailure(message, SDMode.UPSCALE, false, useDistributedStateHolder)
+            stopIfNeverForegrounded(startId)
             return
         }
 
@@ -398,6 +427,7 @@ class StableDiffusionService : Service() {
     ) {
         cancelPostRunHealthSampling()
         val modeStateHolder = getModeStateHolder(config.mode, useWorkflowStateHolder, useDistributedStateHolder)
+        modeStateHolder.easyOrigin.value = config.easyMode
         modeStateHolder.updatePrompt(config.prompt)
         ensureWakeLockHeld()
         modeSessionIds[laneFor(config.mode, useDistributedStateHolder)] = GenerationDiagnosticsStore.startSession(
@@ -1228,8 +1258,15 @@ class StableDiffusionService : Service() {
             getString(R.string.imagegen_title),
             cancellationOwner = UnifiedNotificationManager.CancellationOwner.STABLE_DIFFUSION
         )
+        val started = ForegroundStart.start(this, taskId, notification, ForegroundServiceTypes.MEDIA_PROCESSING)
+        if (started is ForegroundStart.Result.Failed) {
+            val message = ForegroundStart.failureMessage(this, started, getString(R.string.imagegen_title))
+            UnifiedNotificationManager.failTask(taskId, message)
+            recordServiceBreadcrumb("foreground_start_failed", "${started.reason.name}: ${started.detail.orEmpty()}")
+            // The caller's runCatching surfaces the message and runs the idle cleanup/stop path.
+            throw IllegalStateException(message)
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
         recordServiceBreadcrumb("foreground_started", "taskId=$taskId")
     }
 
@@ -1834,7 +1871,7 @@ class StableDiffusionService : Service() {
     override fun onTimeout(startId: Int, fgsType: Int) {
         if (!isMediaProcessingForegroundTimeout(
                 fgsType,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING
+                ForegroundServiceTypes.MEDIA_PROCESSING
             )
         ) {
             super.onTimeout(startId, fgsType)
@@ -2301,6 +2338,9 @@ class SDModeStateHolder(val mode: SDMode) {
     private val _generatedImages = kotlinx.coroutines.flow.MutableStateFlow<List<File>>(emptyList())
     val generatedImages: kotlinx.coroutines.flow.StateFlow<List<File>> = _generatedImages
 
+    /** True while the holder's current/last run was started by Easy mode (set by the service from the config). */
+    val easyOrigin = kotlinx.coroutines.flow.MutableStateFlow(false)
+
     fun updateState(newState: SDGenerationState) {
         _state.value = newState
         when (newState) {
@@ -2317,7 +2357,7 @@ class SDModeStateHolder(val mode: SDMode) {
                 _status.value = ""
                 _etaSeconds.value = null
                 val outputFile = File(newState.outputPath)
-                if (outputFile.exists()) {
+                if (outputFile.exists() && !easyOrigin.value) {
                     _generatedImages.value = _generatedImages.value + outputFile
                 }
             }

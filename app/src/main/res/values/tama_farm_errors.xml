@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_farm_err_locked_plot">That plot is still locked.</string>
+    <string name="tama_farm_err_tool">Your tool is missing or broken.</string>
+    <string name="tama_farm_err_plot_state">That plot is not ready for this action.</string>
+    <string name="tama_farm_err_seed">You have no seeds to plant.</string>
+    <string name="tama_farm_err_water">You have no water. Collect some from the well.</string>
+    <string name="tama_farm_err_crop_not_ready">This crop is not ready to harvest.</string>
+    <string name="tama_farm_err_no_crop">There is no crop here.</string>
+    <string name="tama_farm_err_fertilizer">You have no fertilizer.</string>
+    <string name="tama_farm_err_fertilizer_not_needed">This crop does not need fertilizer.</string>
+    <string name="tama_farm_err_item">You do not have that item.</string>
+    <string name="tama_farm_err_already_owned">You already own that.</string>
+    <string name="tama_farm_err_not_ready">Nothing is ready to collect yet.</string>
+    <string name="tama_farm_err_animal_not_hungry">That animal is not hungry yet.</string>
+    <string name="tama_farm_err_feed">You have no animal feed.</string>
+    <string name="tama_farm_err_livestock_full">There is no room for another animal.</string>
+    <string name="tama_farm_err_upgrade_required">Buy that upgrade first.</string>
+    <string name="tama_farm_err_storage_empty">The drone storage is empty.</string>
+    <string name="tama_farm_err_axe">Needs an axe. Buy one in the store.</string>
+    <string name="tama_farm_err_pickaxe">Needs a pickaxe. Buy one in the store.</string>
+    <string name="tama_farm_err_obstacle">Clear the obstacle on this plot first.</string>
+    <string name="tama_farm_err_materials">Missing materials. Wood needed: %1$d. Stone needed: %2$d.</string>
+    <string name="tama_farm_obstacle_cleared_stump">Stump cleared. Wood +%1$d</string>
+    <string name="tama_farm_obstacle_cleared_rock">Rock broken. Stone +%1$d</string>
+    <string name="tama_farm_obstacle_cleared_weeds">Weeds cleared.</string>
+</resources>

@@ -1,12 +1,12 @@
 package com.example.llamadroid.ui.notes
 
+import com.example.llamadroid.ui.components.rememberSampledImageBitmap
 import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import android.text.format.DateFormat
 import android.content.Intent
-import android.graphics.BitmapFactory
 import android.media.MediaPlayer
 import android.net.Uri
 import android.widget.Toast
@@ -19,6 +19,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -45,7 +46,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -101,7 +101,7 @@ import java.util.*
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NotesManagerScreen(navController: NavController) {
+fun NotesManagerScreen(navController: NavController, asRoot: Boolean = false) {
     val context = LocalContext.current
     val resources = LocalResources.current
     val walkthroughTargets = LocalWalkthroughTargets.current
@@ -245,13 +245,18 @@ fun NotesManagerScreen(navController: NavController) {
         }
     }
 
-    AppScreenScaffold(
+    if (asRoot) {
+        BackHandler(enabled = selectedOrganizerTab == 0 && selectedNoteIds.isNotEmpty()) {
+            selectedNoteIds = emptySet()
+        }
+    }
+    OrganizerFrame(
+        asRoot = asRoot,
         title = if (selectedOrganizerTab == 0 && selectedNoteIds.isNotEmpty()) {
             stringResource(R.string.notes_selected_count, selectedNoteIds.size)
         } else {
             stringResource(R.string.organizer_title)
         },
-        subtitle = null,
         onBack = {
             if (selectedOrganizerTab == 0 && selectedNoteIds.isNotEmpty()) {
                 selectedNoteIds = emptySet()
@@ -2496,9 +2501,7 @@ private fun NoteImageBlock(
     onClick: () -> Unit
 ) {
     val file = remember(imageReference.path) { File(imageReference.path.removePrefix("file://")) }
-    val bitmap = remember(imageReference.path, file.lastModified()) {
-        runCatching { BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap() }.getOrNull()
-    }
+    val bitmap = rememberSampledImageBitmap(file.absolutePath)
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -2547,9 +2550,7 @@ private fun NoteImageDialog(
     onDelete: () -> Unit
 ) {
     val file = remember(imageReference.path) { File(imageReference.path.removePrefix("file://")) }
-    val bitmap = remember(imageReference.path, file.lastModified()) {
-        runCatching { BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap() }.getOrNull()
-    }
+    val bitmap = rememberSampledImageBitmap(file.absolutePath)
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)

@@ -1,5 +1,6 @@
 package com.example.llamadroid.service
 
+import android.content.pm.ServiceInfo
 import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.app.Service
@@ -1276,6 +1277,10 @@ class DistributedService : Service() {
         return START_NOT_STICKY
     }
     
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        ForegroundTimeoutSupport.handle(this, fgsType)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         stopWorkerMode()
@@ -1347,8 +1352,27 @@ class DistributedService : Service() {
             TaskType.LLAMA_SERVER,
             getString(com.example.llamadroid.R.string.dist_worker_mode)
         )
+        val startResult = ForegroundStart.start(
+            this,
+            taskId,
+            notification,
+            ForegroundServiceTypes.DATA_SYNC
+        )
+        if (startResult is ForegroundStart.Result.Failed) {
+            UnifiedNotificationManager.failTask(
+                taskId,
+                ForegroundStart.failureMessage(
+                    this,
+                    startResult.reason,
+                    getString(com.example.llamadroid.R.string.dist_worker_mode)
+                )
+            )
+            nsdHelper?.unregisterService()
+            _mode.value = DistributedMode.NONE
+            stopSelf()
+            return
+        }
         notificationId = taskId
-        startForeground(taskId, notification)
 
         // Start notification update loop
         notificationJob?.cancel()

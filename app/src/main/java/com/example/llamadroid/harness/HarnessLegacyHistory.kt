@@ -47,7 +47,8 @@ fun HarnessLegacyHistory(
     onOpenFiles: ((Long) -> Unit)? = null,
     onClose: () -> Unit,
 ) {
-    val conversations by database.harnessDao().observeLegacyConversations().collectAsState(initial = emptyList())
+    val runtimeId = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(androidx.compose.ui.platform.LocalContext.current)
+    val conversations by database.harnessDao(runtimeId).observeLegacyConversations().collectAsState(initial = emptyList())
     var deleteId by remember { mutableStateOf<Long?>(null) }
     var cleanupRevision by remember { mutableStateOf(0) }
     var pending by remember { mutableStateOf(emptyList<HarnessPendingDeletion>()) }
@@ -60,7 +61,7 @@ fun HarnessLegacyHistory(
     var failed by remember { mutableStateOf(false) }
     suspend fun loadPage(id: Long, beforeSequence: Int = Int.MAX_VALUE, beforeId: Long = Long.MAX_VALUE) {
         try {
-            val page = database.harnessDao().legacyMessagePreviews(id, beforeSequence, beforeId, PAGE_SIZE + 1)
+            val page = database.harnessDao(runtimeId).legacyMessagePreviews(id, beforeSequence, beforeId, PAGE_SIZE + 1)
             if (selected == id) {
                 canLoadOlder = page.size > PAGE_SIZE
                 messages = page.take(PAGE_SIZE).reversed()
@@ -138,12 +139,12 @@ fun HarnessLegacyHistory(
             cleanupRevision++
         }, onClose = { deleteId = null; cleanupRevision++ })
     } }
-    expanded?.let { message -> LegacyMessageViewer(database, message) { expanded = null } }
+    expanded?.let { message -> LegacyMessageViewer(database, runtimeId, message) { expanded = null } }
 }
 
 @Composable
 @OptIn(ExperimentalLayoutApi::class)
-private fun LegacyMessageViewer(database: AppDatabase, message: HarnessLegacyMessagePreview, onClose: () -> Unit) {
+private fun LegacyMessageViewer(database: AppDatabase, runtimeId: String, message: HarnessLegacyMessagePreview, onClose: () -> Unit) {
     var part by remember(message.id) { mutableStateOf("content") }
     var offset by remember(message.id) { mutableStateOf(0) }
     var chunk by remember(message.id) { mutableStateOf<HarnessLegacyMessageChunk?>(null) }
@@ -152,7 +153,7 @@ private fun LegacyMessageViewer(database: AppDatabase, message: HarnessLegacyMes
     LaunchedEffect(message.id, part, offset, retry) {
         chunk = null
         try {
-            chunk = database.harnessDao().legacyMessageChunk(message.conversationId, message.id, part, offset + 1)
+            chunk = database.harnessDao(runtimeId).legacyMessageChunk(message.conversationId, message.id, part, offset + 1)
             failed = chunk == null
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { failed = true }

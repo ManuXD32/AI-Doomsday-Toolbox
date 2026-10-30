@@ -111,6 +111,22 @@ class HarnessUiModelTest {
             R.string.harness_litert_0985_worker_interrupted,
             localizedHarnessNoticeMessage("LITERT_WORKER_CRASHED")
         )
+        assertEquals(
+            R.string.harness_notice_model_prepare_failed,
+            localizedHarnessNoticeMessage("MODEL_PREPARE_FAILED")
+        )
+        assertEquals(
+            R.string.managed_llama_model_missing,
+            localizedHarnessNoticeMessage("MANAGED_MODEL_MISSING")
+        )
+        assertEquals(
+            R.string.managed_llama_port_busy,
+            localizedHarnessNoticeMessage("MANAGED_NO_FREE_PORT")
+        )
+        assertEquals(
+            R.string.managed_llama_timeout,
+            localizedHarnessNoticeMessage("MANAGED_START_TIMEOUT")
+        )
     }
 
     @Test

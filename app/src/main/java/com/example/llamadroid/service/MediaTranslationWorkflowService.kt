@@ -2750,6 +2750,9 @@ object MediaTranslationWorkflowService {
                 if (whisperExitCodeIndicatesMissingModel(exit)) {
                     throw IllegalStateException(context.getString(R.string.whisper_error_no_model))
                 }
+                if (whisperExitCodeIndicatesInputFailure(exit)) {
+                    throw IllegalStateException(context.getString(R.string.whisper_error_input_failed))
+                }
                 throw IllegalStateException("Process failed with exit code $exit")
             } catch (e: Exception) {
                 currentProcess = null

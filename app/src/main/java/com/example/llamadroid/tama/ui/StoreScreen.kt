@@ -3,6 +3,7 @@ package com.example.llamadroid.tama.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -16,6 +17,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
@@ -26,13 +28,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import android.widget.Toast
 import coil.compose.AsyncImage
 import com.example.llamadroid.R
 import com.example.llamadroid.tama.data.*
 import com.example.llamadroid.tama.db.FarmLivestockEntity
 import com.example.llamadroid.tama.db.FarmUpgradeEntity
 import com.example.llamadroid.tama.game.FARM_WELL_COST
+import com.example.llamadroid.tama.game.FARM_COMPOSTER_COST
 import com.example.llamadroid.tama.game.FarmRepository
 import com.example.llamadroid.tama.game.TamaGameEngine
 import com.example.llamadroid.tama.data.FarmShopCatalog
@@ -59,8 +61,16 @@ fun StoreScreen(
     onBuyUpgrade: suspend (String, Int) -> TamaGameEngine.ActionResult,
     onBuyDrone: suspend (String, Int) -> TamaGameEngine.ActionResult,
     onBuyLivestock: suspend (FarmLivestockType) -> TamaGameEngine.ActionResult,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    loadMarketBoard: (suspend () -> TamaMarketBoard)? = null
 ) {
+    // Weekly market quotes: the exact per-unit prices a farm-goods sale pays. Reloaded after every inventory change.
+    var marketPrices by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+    LaunchedEffect(pet.inventory) {
+        loadMarketBoard?.let { load ->
+            marketPrices = runCatching { load().quotes.associate { it.itemId to it.currentPrice } }.getOrDefault(marketPrices)
+        }
+    }
     var selectedTab by remember { mutableIntStateOf(0) }
     val walkthroughTargets = LocalWalkthroughTargets.current
     val tabs = listOf(
@@ -72,9 +82,9 @@ fun StoreScreen(
         stringResource(R.string.tama_farm_store_tab_sell)
     )
 
-    LaunchedEffect(pet.id) {
+    LaunchedEffect(pet.id, pet.cycleFrozen) {
         while (true) {
-            farmRepository.refreshFarmState(pet.id)
+            farmRepository.refreshFarmState(pet.id, cycleFrozen = pet.cycleFrozen)
             delay(30_000L)
         }
     }
@@ -182,10 +192,10 @@ fun StoreScreen(
                     when (selectedTab) {
                         0 -> SeedList(onBuy)
                         1 -> ToolList(pet.inventory, onBuy, onBuyDrone)
-                        2 -> MaterialList(onBuy)
-                        3 -> UpgradeList(pet.money, upgrades, farmRepository, onBuyUpgrade)
-                        4 -> LivestockList(livestock, onBuyLivestock)
-                        5 -> SellList(pet.inventory, onSell)
+                        2 -> MaterialList(onBuy, FarmMaterialStock.of(pet.inventory))
+                        3 -> UpgradeList(pet.money, upgrades, farmRepository, onBuyUpgrade, FarmMaterialStock.of(pet.inventory))
+                        4 -> LivestockList(livestock, onBuyLivestock, pet.money, FarmMaterialStock.of(pet.inventory))
+                        5 -> SellList(pet.inventory, onSell, marketPrices, pet.money)
                     }
                 }
             }
@@ -281,7 +291,7 @@ fun ToolList(
 }
 
 @Composable
-fun MaterialList(onBuy: suspend (InventoryItem, Int) -> TamaGameEngine.ActionResult) {
+fun MaterialList(onBuy: suspend (InventoryItem, Int) -> TamaGameEngine.ActionResult, stock: FarmMaterialStock? = null) {
     data class MaterialShopItem(
         val name: String,
         val itemId: String,
@@ -294,6 +304,20 @@ fun MaterialList(onBuy: suspend (InventoryItem, Int) -> TamaGameEngine.ActionRes
 
     val fuelBatchSize = FarmShopCatalog.FUEL_BUCKET_BUY_BATCH_SIZE
     val materials = listOf(
+        MaterialShopItem(
+            name = stringResource(R.string.tama_farm_material_wood),
+            itemId = FARM_WOOD_ID,
+            price = FarmMaterialPrices.WOOD_BUY,
+            icon = "Others/res_wood.png",
+            description = stringResource(R.string.tama_farm_store_wood_desc) + (stock?.let { " " + stringResource(R.string.tama_farm_store_owned, it.wood) } ?: "")
+        ),
+        MaterialShopItem(
+            name = stringResource(R.string.tama_farm_material_stone),
+            itemId = FARM_STONE_ID,
+            price = FarmMaterialPrices.STONE_BUY,
+            icon = "Others/res_stone.png",
+            description = stringResource(R.string.tama_farm_store_stone_desc) + (stock?.let { " " + stringResource(R.string.tama_farm_store_owned, it.stone) } ?: "")
+        ),
         MaterialShopItem(
             name = stringResource(R.string.tama_item_fertilizer),
             itemId = "fertilizer",
@@ -344,7 +368,8 @@ fun UpgradeList(
     petMoney: Long,
     upgrades: List<FarmUpgradeEntity>,
     farmRepository: FarmRepository,
-    onBuyUpgrade: suspend (String, Int) -> TamaGameEngine.ActionResult
+    onBuyUpgrade: suspend (String, Int) -> TamaGameEngine.ActionResult,
+    materials: FarmMaterialStock? = null
 ) {
     data class UpgradeShopItem(
         val type: String,
@@ -352,7 +377,8 @@ fun UpgradeList(
         val description: String,
         val price: Int,
         val icon: String,
-        val maxed: Boolean
+        val maxed: Boolean,
+        val materialCost: FarmMaterialCost = FarmMaterialCost.NONE
     )
 
     val farmlandUpgrade = upgrades.firstOrNull { it.type.equals(FARMLAND_UPGRADE_ID, ignoreCase = true) }
@@ -367,9 +393,9 @@ fun UpgradeList(
         farmRepository.decodeHarvesterDroneState(harvesterDroneUpgrade)
     }
     val baseUpgradeItems = listOf(
-        UpgradeShopItem("well", stringResource(R.string.tama_farm_upgrade_well), stringResource(R.string.tama_farm_store_upgrade_well_desc), FARM_WELL_COST, "Others/well.png", upgrades.firstOrNull { it.type.equals("well", ignoreCase = true) }?.isPurchased == true),
-        UpgradeShopItem("composter", stringResource(R.string.tama_farm_upgrade_composter), stringResource(R.string.tama_farm_store_upgrade_composter_desc), 800, "Others/composter.png", upgrades.firstOrNull { it.type.equals("composter", ignoreCase = true) }?.isPurchased == true),
-        UpgradeShopItem(FARMLAND_UPGRADE_ID, stringResource(R.string.tama_farm_upgrade_farmland), stringResource(R.string.tama_farm_store_upgrade_farmland_desc), farmlandCost ?: 0, "Others/farmland.png", farmlandCost == null)
+        UpgradeShopItem("well", stringResource(R.string.tama_farm_upgrade_well), stringResource(R.string.tama_farm_store_upgrade_well_desc), FARM_WELL_COST, "Others/well.png", upgrades.firstOrNull { it.type.equals("well", ignoreCase = true) }?.isPurchased == true, FarmMaterialCosts.WELL_BUILD),
+        UpgradeShopItem("composter", stringResource(R.string.tama_farm_upgrade_composter), stringResource(R.string.tama_farm_store_upgrade_composter_desc), FARM_COMPOSTER_COST, "Others/composter.png", upgrades.firstOrNull { it.type.equals("composter", ignoreCase = true) }?.isPurchased == true, FarmMaterialCosts.COMPOSTER_BUILD),
+        UpgradeShopItem(FARMLAND_UPGRADE_ID, stringResource(R.string.tama_farm_upgrade_farmland), stringResource(R.string.tama_farm_store_upgrade_farmland_desc), farmlandCost ?: 0, "Others/farmland.png", farmlandCost == null, if (farmlandCost == null) FarmMaterialCost.NONE else FarmMaterialCosts.farmland(farmlandLevel))
     )
     val droneUpgradeItems = buildList {
         if (plantingDroneUpgrade != null) {
@@ -414,7 +440,7 @@ fun UpgradeList(
     val upgradeItems = baseUpgradeItems + droneUpgradeItems
     LazyColumn {
         items(upgradeItems) { item ->
-            val canBuy = petMoney >= item.price && !item.maxed
+            val canBuy = petMoney >= item.price && !item.maxed && item.materialCost.isCoveredBy(materials)
             StoreItemRow(
                 name = item.name,
                 price = item.price,
@@ -422,6 +448,8 @@ fun UpgradeList(
                 description = if (item.maxed) stringResource(R.string.tama_farm_upgrade_maxed) else item.description,
                 showQuantityControls = false,
                 actionEnabled = canBuy,
+                materialCost = if (item.maxed) FarmMaterialCost.NONE else item.materialCost,
+                materials = materials,
                 onAction = { onBuyUpgrade(item.type, item.price) }
             )
         }
@@ -431,7 +459,9 @@ fun UpgradeList(
 @Composable
 fun LivestockList(
     livestock: List<FarmLivestockEntity>,
-    onBuyLivestock: suspend (FarmLivestockType) -> TamaGameEngine.ActionResult
+    onBuyLivestock: suspend (FarmLivestockType) -> TamaGameEngine.ActionResult,
+    petMoney: Long = Long.MAX_VALUE,
+    materials: FarmMaterialStock? = null
 ) {
     LazyColumn {
         items(FarmLivestockType.entries) { type ->
@@ -439,6 +469,7 @@ fun LivestockList(
             val slots = remember(entity?.slotsJson) { runCatching { entity?.let { Json.decodeFromString<List<FarmLivestockSlot>>(it.slotsJson) } }.getOrNull() ?: emptyLivestockSlots(type) }
             val occupied = occupiedLivestockCount(slots)
             val remaining = (type.maxAnimals - occupied).coerceAtLeast(0)
+            val animalMaterials = FarmMaterialCosts.livestock(type)
             StoreItemRow(
                 name = if (type == FarmLivestockType.BARN) stringResource(R.string.tama_farm_livestock_cow) else stringResource(R.string.tama_farm_livestock_chicken),
                 price = type.buyPrice,
@@ -449,7 +480,9 @@ fun LivestockList(
                     type.maxAnimals
                 ),
                 showQuantityControls = false,
-                actionEnabled = remaining > 0,
+                actionEnabled = remaining > 0 && petMoney >= type.buyPrice && animalMaterials.isCoveredBy(materials),
+                materialCost = if (remaining > 0) animalMaterials else FarmMaterialCost.NONE,
+                materials = materials,
                 onAction = { onBuyLivestock(type) }
             )
         }
@@ -457,28 +490,58 @@ fun LivestockList(
 }
 
 @Composable
-fun SellList(inventory: List<InventoryItem>, onSell: suspend (InventoryItem, Int) -> TamaGameEngine.ActionResult) {
+fun SellList(
+    inventory: List<InventoryItem>,
+    onSell: suspend (InventoryItem, Int) -> TamaGameEngine.ActionResult,
+    marketPrices: Map<String, Int> = emptyMap(),
+    money: Long = 0L
+) {
     val context = LocalContext.current
-    val sellable = inventory.filter { it.type == ItemType.CROP && FarmTradeItemCatalog.isTradeItem(it.id) }
-    if (sellable.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(stringResource(R.string.tama_farm_store_no_trade_items), color = Color.Gray)
-        }
-    } else {
-        LazyColumn {
-            items(sellable) { item ->
-                val sellPrice = FarmTradeItemCatalog.sellPrice(item.id).coerceAtLeast(5)
-                
-                StoreItemRow(
-                    name = inventoryItemDisplayName(context, item),
-                    price = sellPrice,
-                    icon = FarmTradeItemCatalog.assetPath(item.id)?.removePrefix("farm/") ?: "Others/soil.png",
-                    description = stringResource(R.string.tama_farm_store_owned, item.quantity),
-                    isSelling = true,
-                    maxQty = item.quantity,
-                    onAction = { qty -> onSell(item, qty) }
+    val sellable = inventory.filter {
+        it.quantity > 0 && (FarmMaterialPrices.isMaterial(it.id) || (it.type == ItemType.CROP && FarmTradeItemCatalog.isTradeItem(it.id)))
+    }
+    // Coin fly-up: any increase of the purse while this tab is open is a sale.
+    var lastMoney by remember { mutableLongStateOf(money) }
+    var coinGain by remember { mutableStateOf<FarmCoinGain?>(null) }
+    val reducedMotion = remember { farmReducedMotion(context) }
+    LaunchedEffect(money) {
+        if (money > lastMoney) coinGain = FarmCoinGain((coinGain?.id ?: 0L) + 1L, money - lastMoney)
+        lastMoney = money
+    }
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (sellable.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    stringResource(R.string.tama_farm_store_no_trade_items),
+                    color = StoreEmptyLabelText,
+                    modifier = Modifier
+                        .background(StoreEmptyLabelBackground.copy(alpha = 0.78f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
                 )
             }
+        } else {
+            LazyColumn {
+                items(sellable) { item ->
+                    // Same per-unit price the sale pays (weekly market quote); base price only before quotes load.
+                    // Wood and stone are not trade items: they sell at their fixed material price.
+                    val materialSellPrice = FarmMaterialPrices.sellPrice(item.id)
+                    val sellPrice = materialSellPrice ?: marketPrices[item.id] ?: FarmTradeItemCatalog.sellPrice(item.id).coerceAtLeast(5)
+
+                    StoreItemRow(
+                        name = inventoryItemDisplayName(context, item),
+                        price = sellPrice,
+                        icon = if (materialSellPrice != null) "Others/res_${item.id}.png"
+                            else FarmTradeItemCatalog.assetPath(item.id)?.removePrefix("farm/") ?: "Others/soil.png",
+                        description = stringResource(R.string.tama_farm_store_owned, item.quantity),
+                        isSelling = true,
+                        maxQty = item.quantity,
+                        onAction = { qty -> onSell(item, qty) }
+                    )
+                }
+            }
+        }
+        coinGain?.let { gain ->
+            FarmCoinFlyUp(gain, reducedMotion) { if (coinGain?.id == gain.id) coinGain = null }
         }
     }
 }
@@ -496,9 +559,12 @@ fun StoreItemRow(
     actionEnabled: Boolean = true,
     quantityMultiplier: Int = 1,
     quantityUnitLabel: String? = null,
+    // Wood/stone charged on top of the coin price (upgrades, animals); [materials] = owned stock, null if unknown.
+    materialCost: FarmMaterialCost = FarmMaterialCost.NONE,
+    materials: FarmMaterialStock? = null,
     onAction: suspend (Int) -> TamaGameEngine.ActionResult
 ) {
-    val context = LocalContext.current
+    val notice = rememberTamaNotice()
     val scope = rememberCoroutineScope()
     var qty by remember { mutableIntStateOf(1) }
     val decrementRepeatState = rememberPressAndHoldRepeatState()
@@ -573,10 +639,19 @@ fun StoreItemRow(
                 Text(
                     (price * qty).toString(),
                     fontWeight = FontWeight.Bold,
-                    color = if (isSelling) Color(0xFF43A047) else Color(0xFFE65100)
+                    color = if (MaterialTheme.colorScheme.surface.luminance() > 0.5f) {
+                        if (isSelling) StorePriceSellLight else StorePriceBuyLight
+                    } else {
+                        if (isSelling) StorePriceSellDark else StorePriceBuyDark
+                    }
                 )
                 Spacer(Modifier.width(4.dp))
                 TamaUiIcon("🪙", fontSize = 14.sp)
+            }
+            if (!materialCost.isFree) {
+                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+                    FarmMaterialCostRow(materialCost, materials)
+                }
             }
 
             androidx.compose.foundation.layout.FlowRow(
@@ -629,10 +704,9 @@ fun StoreItemRow(
                     onClick = {
                         scope.launch {
                             val result = onAction(qty * quantityMultiplier)
-                            if (result.success) {
-                                qty = 1
-                                Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
-                            }
+                            if (result.success) qty = 1
+                            // Failures (e.g. "materials_required") are reported too instead of failing silently.
+                            if (result.message.isNotBlank()) notice.show(result.message, isError = !result.success)
                         }
                     },
                     enabled = actionEnabled,
@@ -642,7 +716,8 @@ fun StoreItemRow(
                         .padding(start = if (showQuantityControls) 8.dp else 0.dp),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isSelling) Color(0xFF4CAF50) else MaterialTheme.colorScheme.primary
+                        containerColor = if (isSelling) StoreSellContainer else MaterialTheme.colorScheme.primary,
+                        contentColor = if (isSelling) StoreSellContent else MaterialTheme.colorScheme.onPrimary
                     )
                 ) {
                     Text(

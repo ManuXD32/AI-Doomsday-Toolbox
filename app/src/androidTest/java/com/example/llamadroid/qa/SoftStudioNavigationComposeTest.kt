@@ -46,17 +46,22 @@ class SoftStudioNavigationComposeTest {
                         AppRootDestination.entries.map { root ->
                             AppNavigationDestination(root.route, root.name, Icons.Default.Home,
                                 onClick = { route = root.route })
-                        }, remember { SnackbarHostState() }, onSettings = { settingsOpened = true }) { Text("Body") }
+                        }, remember { SnackbarHostState() }, onUniversalKey = { route = it.route },
+                        onSettings = { settingsOpened = true }) { Text("Body") }
                 }
             }
         }
-        rule.onNodeWithTag("soft_studio_navigation_bar").assertIsDisplayed()
-        rule.onNodeWithTag("studio_bar_library").performClick()
-        rule.runOnIdle { assertEquals("library", route) }
+        rule.onNodeWithTag("universal_keys_strip").assertIsDisplayed()
+        rule.onNodeWithTag("studio_bar_chats").performClick()
+        rule.runOnIdle { assertEquals("chats", route) }
         rule.onNodeWithTag("soft_studio_settings").performClick()
         rule.runOnIdle { assertTrue(settingsOpened); route = "image_gen?startMode=0" }
-        rule.onNodeWithTag("soft_studio_navigation_bar").assertDoesNotExist()
-        rule.onNodeWithTag("soft_studio_settings").assertDoesNotExist()
+        // Identical bar on deep screens.
+        rule.onNodeWithTag("universal_keys_strip").assertIsDisplayed()
+        rule.onNodeWithTag("studio_bar_dashboard").assertIsDisplayed()
+        rule.onNodeWithTag("studio_bar_ai_hub").assertIsDisplayed()
+        rule.onNodeWithTag("studio_bar_tama").assertIsDisplayed()
+        rule.onNodeWithTag("studio_bar_notes_manager").assertIsDisplayed()
     }
 
     @Test fun largeTextDrawerKeepsEveryRootReachable() {
@@ -66,17 +71,16 @@ class SoftStudioNavigationComposeTest {
             CompositionLocalProvider(LocalWindowInfo provides window,
                 LocalDensity provides Density(LocalDensity.current.density, 2f)) {
                 LlamaDroidTheme(dynamicColor = false) {
-                    val labels = listOf(R.string.studio_nav_home, R.string.studio_nav_tools,
-                        R.string.studio_nav_library, R.string.studio_nav_tama)
+                    val labels = listOf(R.string.studio_nav_home, R.string.studio_nav_chats, R.string.studio_nav_tools,
+                        R.string.studio_nav_tama, R.string.soft_studio_home_organizer)
                     SoftStudioAppScaffold(route,
                         AppRootDestination.entries.mapIndexed { i, root ->
                             AppNavigationDestination(root.route, rule.activity.getString(labels[i]), Icons.Default.Home,
                                 onClick = { route = root.route })
-                        }, remember { SnackbarHostState() }, onSettings = {}) { Text("Body") }
+                        }, remember { SnackbarHostState() }, onUniversalKey = { route = it.route }) { Text("Body") }
                 }
             }
         }
-        rule.onNodeWithTag("soft_studio_navigation_bar").assertDoesNotExist()
         AppRootDestination.entries.forEach { root ->
             rule.onNodeWithTag("soft_studio_menu").performClick()
             rule.onNodeWithTag("studio_drawer_${root.route}").performScrollTo().assertIsDisplayed().performClick()

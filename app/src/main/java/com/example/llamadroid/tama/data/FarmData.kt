@@ -37,7 +37,9 @@ data class FarmTile(
     val id: Int,
     val status: TileStatus = TileStatus.SOIL,
     val crop: PlantedCrop? = null,
-    val lastWateredTime: Long? = null
+    val lastWateredTime: Long? = null,
+    /** Stump, rock or weeds blocking this idle plot (see FarmObstacleData.kt); null when clear. */
+    val obstacle: FarmObstacle? = null
 )
 
 enum class TileStatus {
@@ -56,7 +58,12 @@ data class PlantedCrop(
     val plantedTime: Long,
     val lastStageUpdateTime: Long,
     val isFertilized: Boolean = false,
-    val isDecayed: Boolean = false
+    val isDecayed: Boolean = false,
+    /**
+     * True for crops planted with the moisture model (0.99997+). Older crops lack the field (decodes as false)
+     * and keep growing at full speed until harvested, so nothing stalls after the update.
+     */
+    val moistureTracked: Boolean = false
 )
 
 @Serializable
@@ -100,19 +107,24 @@ object CropDefinitions {
 
     private const val HOUR = 3600000L
 
+    /**
+     * Economy table (formula and rationale: docs/tama-maintainer-reference.md, "Farm economy"). Net profit per
+     * plot-hour = (yieldModifier * sellPrice - seedPrice) / total grow hours, and it rises with grow time:
+     * 4.25 h crops ~5.6-6.0, 6 h ~6.8-8.0, 12 h ~9.7-10.3, 18 h ~12.8-13.6 coins per plot-hour.
+     */
     val CROPS = mapOf(
-        "wheat" to CropInfo("Wheat", 10, 25, listOf(1 * HOUR, 2 * HOUR, 3 * HOUR), 1.0f),
-        "rice" to CropInfo("Rice", 12, 30, listOf(1 * HOUR, 2 * HOUR, 3 * HOUR), 1.1f),
-        "carrot" to CropInfo("Carrot", 15, 40, listOf(1 * HOUR, 2 * HOUR, 3 * HOUR), 1.2f),
-        "tomato" to CropInfo("Tomato", 20, 55, listOf(1 * HOUR, 2 * HOUR, 3 * HOUR), 1.3f),
-        "corn" to CropInfo("Corn", 25, 70, listOf(1 * HOUR, 2 * HOUR, 3 * HOUR), 1.4f),
-        "strawberry" to CropInfo("Strawberry", 30, 85, listOf(1 * HOUR, 2 * HOUR, 3 * HOUR), 1.5f),
-        "daisy" to CropInfo("Daisy", 15, 35, listOf(45 * 60000L, 90 * 60000L, 2 * HOUR), 1.0f),
-        "sunflower" to CropInfo("Sunflower", 25, 65, listOf(45 * 60000L, 90 * 60000L, 2 * HOUR), 1.2f),
-        "rose" to CropInfo("Rose", 40, 120, listOf(2 * HOUR, 4 * HOUR, 6 * HOUR), 2.0f),
-        "tullip" to CropInfo("Tullip", 35, 100, listOf(2 * HOUR, 4 * HOUR, 6 * HOUR), 1.8f),
-        "melon" to CropInfo("Melon", 50, 150, listOf(3 * HOUR, 6 * HOUR, 9 * HOUR), 2.5f),
-        "pumpkin" to CropInfo("Pumpkin", 45, 140, listOf(3 * HOUR, 6 * HOUR, 9 * HOUR), 2.2f)
+        "wheat" to CropInfo("Wheat", 10, 51, listOf(1 * HOUR, 2 * HOUR, 3 * HOUR), 1.0f),
+        "rice" to CropInfo("Rice", 12, 50, listOf(1 * HOUR, 2 * HOUR, 3 * HOUR), 1.1f),
+        "carrot" to CropInfo("Carrot", 15, 49, listOf(1 * HOUR, 2 * HOUR, 3 * HOUR), 1.2f),
+        "tomato" to CropInfo("Tomato", 20, 50, listOf(1 * HOUR, 2 * HOUR, 3 * HOUR), 1.3f),
+        "corn" to CropInfo("Corn", 25, 51, listOf(1 * HOUR, 2 * HOUR, 3 * HOUR), 1.4f),
+        "strawberry" to CropInfo("Strawberry", 30, 52, listOf(1 * HOUR, 2 * HOUR, 3 * HOUR), 1.5f),
+        "daisy" to CropInfo("Daisy", 8, 32, listOf(45 * 60000L, 90 * 60000L, 2 * HOUR), 1.0f),
+        "sunflower" to CropInfo("Sunflower", 14, 33, listOf(45 * 60000L, 90 * 60000L, 2 * HOUR), 1.2f),
+        "rose" to CropInfo("Rose", 40, 78, listOf(2 * HOUR, 4 * HOUR, 6 * HOUR), 2.0f),
+        "tullip" to CropInfo("Tullip", 35, 88, listOf(2 * HOUR, 4 * HOUR, 6 * HOUR), 1.8f),
+        "melon" to CropInfo("Melon", 50, 118, listOf(3 * HOUR, 6 * HOUR, 9 * HOUR), 2.5f),
+        "pumpkin" to CropInfo("Pumpkin", 45, 125, listOf(3 * HOUR, 6 * HOUR, 9 * HOUR), 2.2f)
     )
 }
 

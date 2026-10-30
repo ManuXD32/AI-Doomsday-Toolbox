@@ -225,8 +225,12 @@ fun AgentWorkspaceScreen(navController: NavController, filesOnly: Boolean = fals
     val harnessSession = workspaceConversation?.runtimeSource == com.example.llamadroid.data.db.AgentRuntimeSource.DEEPSEEK
     val harnessWorkspace = harnessSession || workspaceConversation?.runtimeSource == com.example.llamadroid.data.db.AgentRuntimeSource.WORKSPACE_ONLY
     val terminalBackendActive = if (harnessWorkspace) harnessSession else workspaceBackend != AgentWorkspaceBackendType.LOCAL_SANDBOX
-    val workspaceFiles = remember(workspaceConversationAnchor, harnessWorkspace) {
-        com.example.llamadroid.harness.HarnessWorkspaceFiles(context, agentService, workspaceConversationAnchor.takeIf { harnessWorkspace })
+    val workspaceRuntimeId = workspaceConversation?.runtimeId ?: com.example.llamadroid.harness.runtime.HarnessRuntimeScope.LEGACY_RUNTIME_ID
+    val workspaceContext = remember(context, workspaceRuntimeId) {
+        com.example.llamadroid.harness.runtime.HarnessRuntimeScope.context(context, workspaceRuntimeId)
+    }
+    val workspaceFiles = remember(workspaceConversationAnchor, harnessWorkspace, workspaceRuntimeId) {
+        com.example.llamadroid.harness.HarnessWorkspaceFiles(workspaceContext, agentService, workspaceConversationAnchor.takeIf { harnessWorkspace })
     }
 
     LaunchedEffect(prootSessions.map { it.sessionId }, selectedProotTerminalId) {
@@ -412,27 +416,29 @@ fun AgentWorkspaceScreen(navController: NavController, filesOnly: Boolean = fals
             scope.launch {
                 if (captured.second.isBlank()) return@launch
                 setIsLoading(true, uploadingStatusText)
-                val fileName = context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                    val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                    cursor.moveToFirst()
-                    cursor.getString(nameIndex)
-                }?.substringAfterLast('/')?.substringAfterLast('\\')?.take(255)?.takeUnless { it.isBlank() || it in setOf(".", "..") } ?: "uploaded_file"
+                try {
+                    val fileName = context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                        val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (nameIndex >= 0 && cursor.moveToFirst()) cursor.getString(nameIndex) else null
+                    }?.substringAfterLast('/')?.substringAfterLast('\\')?.take(255)?.takeUnless { it.isBlank() || it in setOf(".", "..") } ?: "uploaded_file"
                 
-                captured.first.uploadFile(uri, "${captured.second}/$fileName").onSuccess {
-                    Toast.makeText(
-                        context,
-                        formatAgentWorkspaceString(agentUploadSuccessFormat, fileName),
-                        Toast.LENGTH_SHORT
-                    ).show()
-                    loadFiles()
-                }.onFailure { e: Throwable ->
-                    Toast.makeText(
-                        context,
-                        formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
-                        Toast.LENGTH_LONG
-                    ).show()
+                    captured.first.uploadFile(uri, "${captured.second}/$fileName").onSuccess {
+                        Toast.makeText(
+                            context,
+                            formatAgentWorkspaceString(agentUploadSuccessFormat, fileName),
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        loadFiles()
+                    }.onFailure { e: Throwable ->
+                        Toast.makeText(
+                            context,
+                            formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                } finally {
+                    setIsLoading(false)
                 }
-                setIsLoading(false)
             }
         }
     }
@@ -569,7 +575,7 @@ fun AgentWorkspaceScreen(navController: NavController, filesOnly: Boolean = fals
                                     if (harnessWorkspace) {
                                         val conversationId = workspaceConversationAnchor ?: return@IconButton
                                         scope.launch {
-                                            val runtime = com.example.llamadroid.harness.HarnessAppRuntime.get(context)
+                                            val runtime = com.example.llamadroid.harness.HarnessAppRuntime.forRuntime(context, workspaceRuntimeId)
                                             try {
                                                 val session = requireNotNull(db.harnessDao().sessionForConversation(conversationId)).harnessSessionId
                                                 runtime.terminals.refresh(session)
@@ -728,7 +734,7 @@ fun AgentWorkspaceScreen(navController: NavController, filesOnly: Boolean = fals
                         val capturedId = workspaceConversationAnchor
                         scope.launch {
                             val result = if (harnessWorkspace) runCatching {
-                                com.example.llamadroid.harness.HarnessAppRuntime.get(context).projectRuns.run(requireNotNull(capturedId))
+                                com.example.llamadroid.harness.HarnessAppRuntime.forRuntime(context, workspaceRuntimeId).projectRuns.run(requireNotNull(capturedId))
                             } else agentService.runLocalProject()
                             result.onFailure { e ->
                                 Toast.makeText(
@@ -743,7 +749,7 @@ fun AgentWorkspaceScreen(navController: NavController, filesOnly: Boolean = fals
                         val capturedId = workspaceConversationAnchor
                         scope.launch {
                             val result = if (harnessWorkspace) runCatching {
-                                com.example.llamadroid.harness.HarnessAppRuntime.get(context).projectRuns.stop(requireNotNull(capturedId))
+                                com.example.llamadroid.harness.HarnessAppRuntime.forRuntime(context, workspaceRuntimeId).projectRuns.stop(requireNotNull(capturedId))
                             } else agentService.stopLocalProjectRun(force = false)
                             result.onFailure { e ->
                                 Toast.makeText(
@@ -758,7 +764,7 @@ fun AgentWorkspaceScreen(navController: NavController, filesOnly: Boolean = fals
                         val capturedId = workspaceConversationAnchor
                         scope.launch {
                             val result = if (harnessWorkspace) runCatching {
-                                com.example.llamadroid.harness.HarnessAppRuntime.get(context).projectRuns.stop(requireNotNull(capturedId))
+                                com.example.llamadroid.harness.HarnessAppRuntime.forRuntime(context, workspaceRuntimeId).projectRuns.stop(requireNotNull(capturedId))
                             } else agentService.stopLocalProjectRun(force = true)
                             result.onFailure { e ->
                                 Toast.makeText(
@@ -1248,7 +1254,7 @@ fun AgentWorkspaceScreen(navController: NavController, filesOnly: Boolean = fals
                         stopHarnessSession = null
                         scope.launch {
                             if (harnessTarget != null) {
-                                val runtime = com.example.llamadroid.harness.HarnessAppRuntime.get(context)
+                                val runtime = com.example.llamadroid.harness.HarnessAppRuntime.forRuntime(context, workspaceRuntimeId)
                                 try {
                                     runtime.projectRuns.stop(harnessTarget.first)
                                     runtime.terminals.closeAll(harnessTarget.second)

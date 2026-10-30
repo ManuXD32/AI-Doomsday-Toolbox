@@ -6,7 +6,6 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -35,7 +34,10 @@ class StatsCollectionService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        startForegroundCompat()
+        if (!startForegroundCompat()) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         if (collectionJob?.isActive != true) {
             collectionJob = serviceScope.launch {
                 val repository = SystemStatsRepository(applicationContext)
@@ -69,7 +71,7 @@ class StatsCollectionService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun startForegroundCompat() {
+    private fun startForegroundCompat(): Boolean {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_info_details)
             .setContentTitle(getString(R.string.stats_collection_notification_title))
@@ -79,10 +81,11 @@ class StatsCollectionService : Service() {
             .setShowWhen(false)
             .build()
         if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+            return ForegroundStart.start(this, NOTIFICATION_ID, notification, ForegroundServiceTypes.SPECIAL_USE) is ForegroundStart.Result.Started
         }
+        // specialUse does not exist below API 34, so the 2-argument form is the only valid call.
+        startForeground(NOTIFICATION_ID, notification)
+        return true
     }
 
     private fun createChannel() {

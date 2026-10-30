@@ -34,9 +34,6 @@
     <string name="agent_proot_isolated_environment_detail">Aislado existente · %1$s</string>
     <string name="agent_proot_no_shared_environments">No hay entornos compartidos existentes disponibles.</string>
     <string name="agent_proot_manage_action">Gestionar entornos Debian</string>
-    <string name="agent_proot_reassign_title">¿Cambiar el entorno Debian?</string>
-    <string name="agent_proot_reassign_message">Este proyecto usará el entorno seleccionado en su próxima ejecución. Primero hay que detener los comandos activos.</string>
-    <string name="agent_proot_reassign_confirm">Cambiar entorno</string>
     <string name="agent_proot_backend_label">Debian local</string>
     <string name="agent_proot_backend_desc">Ejecuta comandos en un entorno Debian gestionado por la app mediante el broker PRoot incluido. SSH es opcional.</string>
     <string name="agent_proot_mode_isolated">Aislado</string>

@@ -714,48 +714,51 @@ fun MemoryResultDialog(
             )
         },
         text = {
-            Column(
-                modifier = Modifier
-                    .heightIn(max = 320.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text(
-                    stringResource(R.string.tama_arcade_memory_result_pairs, summary.pairsMatched),
-                    fontFamily = FontFamily.Monospace
-                )
-                Text(
-                    stringResource(R.string.tama_arcade_memory_result_turns, summary.turnsUsed),
-                    fontFamily = FontFamily.Monospace
-                )
-                Text(
-                    stringResource(R.string.tama_arcade_memory_result_score, summary.score),
-                    fontFamily = FontFamily.Monospace
-                )
-                Text(
-                    stringResource(R.string.tama_arcade_memory_result_reward, summary.coins),
-                    fontFamily = FontFamily.Monospace
-                )
-                Text(
-                    stringResource(R.string.tama_arcade_result_happiness, summary.happiness),
-                    fontFamily = FontFamily.Monospace
-                )
-                receiptStatusLabel?.let { status ->
+            Box {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     Text(
-                        status,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        color = TamaMutedText
+                        stringResource(R.string.tama_arcade_memory_result_pairs, summary.pairsMatched),
+                        fontFamily = FontFamily.Monospace
                     )
-                }
-                if (summary.perfectClear) {
                     Text(
-                        stringResource(R.string.tama_arcade_memory_result_perfect_hint),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        color = TamaMutedText
+                        stringResource(R.string.tama_arcade_memory_result_turns, summary.turnsUsed),
+                        fontFamily = FontFamily.Monospace
                     )
+                    Text(
+                        stringResource(R.string.tama_arcade_memory_result_score, summary.score),
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        stringResource(R.string.tama_arcade_memory_result_reward, summary.coins),
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        stringResource(R.string.tama_arcade_result_happiness, summary.happiness),
+                        fontFamily = FontFamily.Monospace
+                    )
+                    receiptStatusLabel?.let { status ->
+                        Text(
+                            status,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            color = TamaMutedText
+                        )
+                    }
+                    if (summary.perfectClear) {
+                        Text(
+                            stringResource(R.string.tama_arcade_memory_result_perfect_hint),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            color = TamaMutedText
+                        )
+                    }
                 }
+                TamaDialogNoticeHost()
             }
         },
         confirmButton = {

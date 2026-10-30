@@ -40,13 +40,19 @@ import com.example.llamadroid.service.LlamaServerSessionSnapshot
 import com.example.llamadroid.service.LlamaServerSessionStateStore
 import com.example.llamadroid.service.LlamaServerSessionStatus
 import com.example.llamadroid.service.LlamaService
+import com.example.llamadroid.service.NativeChatGenerationStates
+import com.example.llamadroid.service.NativeChatLocalServerStarter
+import com.example.llamadroid.service.NativeChatServerStartException
 import com.example.llamadroid.service.NativeChatToolConfig
 import com.example.llamadroid.service.OllamaService
 import com.example.llamadroid.service.OrganizerAlarmScheduler
 import com.example.llamadroid.service.ServerState
+import com.example.llamadroid.service.ForegroundStart
 import com.example.llamadroid.service.isForegroundServiceStartNotAllowed
 import com.example.llamadroid.tama.data.ActivityType
 import com.example.llamadroid.tama.data.FarmTradeItemCatalog
+import com.example.llamadroid.tama.data.FARM_OBSTACLE_STATE_ID
+import com.example.llamadroid.tama.data.FARM_WEATHER_STATE_ID
 import com.example.llamadroid.tama.data.InventoryItem
 import com.example.llamadroid.tama.data.ItemType
 import com.example.llamadroid.tama.data.PetSpeciesLine
@@ -97,6 +103,8 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -133,6 +141,8 @@ object PhoneWearGateway {
     private val revision = AtomicLong(0L)
     private val processedGenerations = Collections.synchronizedSet(mutableSetOf<String>())
     private val messageListeners = ConcurrentHashMap<String, Long>()
+    /** Chat each watch generation request runs on, so Cancel stops that chat only. */
+    private val generationChatIds = ConcurrentHashMap<String, Long>()
 
     private lateinit var appContext: Context
     private lateinit var repository: LlamaRepository
@@ -192,7 +202,8 @@ object PhoneWearGateway {
                 deltaEmitter = deltaEmitter,
                 serverController = serverController,
                 processedGenerations = processedGenerations,
-                messageListeners = messageListeners
+                messageListeners = messageListeners,
+                generationChatIds = generationChatIds
             )
             Wearable.getDataClient(appContext).addListener(
                 dataListener,
@@ -466,9 +477,14 @@ private class WearRequestRouter(
     private val deltaEmitter: WearDeltaEmitter,
     private val serverController: LlamaServerController,
     private val processedGenerations: MutableSet<String>,
-    private val messageListeners: ConcurrentHashMap<String, Long>
+    private val messageListeners: ConcurrentHashMap<String, Long>,
+    /** Chat each watch generation request runs on, so Cancel stops that chat only. */
+    private val generationChatIds: ConcurrentHashMap<String, Long>
 ) {
+    private val quickChatStartScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     private companion object {
+        private const val QUICK_CHAT_START_WAIT_MS = 14_000L
         private const val WEAR_QUICK_CHAT_PREFS = "adt_wear_quick_chat_v1"
         private const val WEAR_QUICK_CHAT_SELECTED_SERVER_ID = "selected_server_id"
         private const val WEAR_QUICK_CHAT_SYSTEM_PROMPT = "system_prompt"
@@ -625,14 +641,15 @@ private class WearRequestRouter(
                 val serverId = metadata.serverId ?: selectedServerId()
                 require(chatId != null && serverId != null) { appContext.getString(R.string.wear_bridge_invalid_id) }
                 updateChatThinking(chatId, request.enableThinking)
-                submitChatGeneration(
-                    replyNodeId = replyNodeId,
-                    requestId = metadata.meta.requestId,
-                    chatId = chatId,
-                    serverId = serverId,
-                    text = "",
-                    audioPath = pending.file.absolutePath
-                )
+                if (!submitChatGeneration(
+                        replyNodeId = replyNodeId,
+                        requestId = metadata.meta.requestId,
+                        chatId = chatId,
+                        serverId = serverId,
+                        text = "",
+                        audioPath = pending.file.absolutePath
+                    )
+                ) return errorBytes(request.meta, "app_not_visible", appContext.getString(R.string.wear_translator_open_phone_message))
                 GenerationAccepted(metadata.meta.requestId, "chat", chatId.toString(), System.currentTimeMillis())
             }
             "tama" -> {
@@ -779,11 +796,14 @@ private class WearRequestRouter(
             AppDatabase.getDatabase(appContext).llamaServerDao().getServerById(it)
         }
         if (
-            config.autoStartServer &&
-            selectedServer?.canAutoStartLocalLlamaServer() == true &&
-            LlamaService.state.value is ServerState.Stopped
+            config.autoStartServer && selectedServer != null &&
+            (selectedServer.managedServerCardId != null || selectedServer.canAutoStartLocalLlamaServer())
         ) {
-            serverController.start(request.meta.requestId)
+            // Start the row the user selected (not the "allow watch to start" card) and report
+            // a real failure instead of silently creating a chat with no server behind it.
+            startSelectedQuickChatServer(selectedServer)?.let { failure ->
+                return errorBytes(request.meta, failure.code, failure.message.orEmpty())
+            }
         }
         serverId?.let { selectedServerPrefs.edit().putLong("selected_server_id", it).apply() }
         val id = repository.createChat(
@@ -797,6 +817,27 @@ private class WearRequestRouter(
         )
         val chat = requireNotNull(repository.getChat(id))
         return ok(request.meta, ChatSummary.serializer(), chat.toChatSummary(null, emptyList()))
+    }
+
+    /**
+     * Waits up to [QUICK_CHAT_START_WAIT_MS] (the watch RPC times out at 18 s) for the selected
+     * server to answer. A start still loading afterwards keeps running in the background and
+     * the first send retries it through the shared starter. Returns the failure, if any.
+     */
+    private suspend fun startSelectedQuickChatServer(server: LlamaServerEntity): NativeChatServerStartException? {
+        val start = quickChatStartScope.async {
+            try {
+                NativeChatLocalServerStarter(appContext).ensureReady(server)
+                null
+            } catch (error: NativeChatServerStartException) {
+                error
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                NativeChatServerStartException("start_failed", error.message.orEmpty())
+            }
+        }
+        return withTimeoutOrNull(QUICK_CHAT_START_WAIT_MS) { start.await() }
     }
 
     private suspend fun handleQuickChatEnd(request: QuickChatEndRequest): ByteArray {
@@ -889,7 +930,9 @@ private class WearRequestRouter(
         require(repository.getChat(request.chatId) != null) { appContext.getString(R.string.wear_bridge_invalid_id) }
         require(repository.getServer(request.serverId) != null) { appContext.getString(R.string.wear_bridge_invalid_id) }
         updateChatThinking(request.chatId, request.enableThinking)
-        submitChatGeneration(replyNodeId, request.meta.requestId, request.chatId, request.serverId, request.text, null)
+        if (!submitChatGeneration(replyNodeId, request.meta.requestId, request.chatId, request.serverId, request.text, null)) {
+            return errorBytes(request.meta, "app_not_visible", appContext.getString(R.string.wear_translator_open_phone_message))
+        }
         return ok(
             request.meta,
             GenerationAccepted.serializer(),
@@ -919,14 +962,15 @@ private class WearRequestRouter(
             ?: throw IllegalArgumentException(appContext.getString(R.string.wear_bridge_invalid_id))
         repository.deleteMessagesAfter(request.chatId, message.timestamp, message.id)
         updateChatThinking(request.chatId, request.enableThinking)
-        submitChatGeneration(
-            replyNodeId = replyNodeId,
-            requestId = request.meta.requestId,
-            chatId = request.chatId,
-            serverId = serverId,
-            text = "",
-            audioPath = message.audioPath
-        )
+        if (!submitChatGeneration(
+                replyNodeId = replyNodeId,
+                requestId = request.meta.requestId,
+                chatId = request.chatId,
+                serverId = serverId,
+                text = "",
+                audioPath = message.audioPath
+            )
+        ) return errorBytes(request.meta, "app_not_visible", appContext.getString(R.string.wear_translator_open_phone_message))
         return ok(
             request.meta,
             GenerationAccepted.serializer(),
@@ -1309,6 +1353,15 @@ private class WearRequestRouter(
         val templateId = requireNotNull(request.templateId) { appContext.getString(R.string.wear_bridge_invalid_id) }
         val template = AppDatabase.getDatabase(appContext).liveTranslatorTemplateDao().getTemplateById(templateId)
             ?: throw IllegalArgumentException(appContext.getString(R.string.wear_bridge_invalid_id))
+        if (!ForegroundStart.isAppVisibleForMicrophone(appContext)) {
+            // Android blocks a microphone foreground service started from the background.
+            postTranslatorOpenPhoneNotification(templateId)
+            return errorBytes(
+                request.meta,
+                "app_not_visible",
+                appContext.getString(R.string.wear_translator_open_phone_message)
+            )
+        }
         pendingTranslatorTemplate = template.toWearTemplate()
         val loadingState = currentTranslatorState(
             template = pendingTranslatorTemplate,
@@ -1317,12 +1370,57 @@ private class WearRequestRouter(
             statusOverride = appContext.getString(R.string.wear_translator_loading_backend)
         )
         publisher.publishTranslatorState(loadingState)
-        appContext.startForegroundService(LiveTranslatorService.startIntent(appContext, templateId, request.sessionId))
+        try {
+            appContext.startForegroundService(LiveTranslatorService.startIntent(appContext, templateId, request.sessionId))
+        } catch (error: Exception) {
+            if (!isForegroundServiceStartNotAllowed(error) && error !is SecurityException) throw error
+            pendingTranslatorTemplate = null
+            publisher.publishTranslatorState(currentTranslatorState())
+            postTranslatorOpenPhoneNotification(templateId)
+            return errorBytes(
+                request.meta,
+                "app_not_visible",
+                appContext.getString(R.string.wear_translator_open_phone_message)
+            )
+        }
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             delay(500L)
             publisher.publishTranslatorState(currentTranslatorState())
         }
         return ok(request.meta, TranslatorStateSnapshot.serializer(), loadingState)
+    }
+
+    /** Tap-to-open notification so the user can start the translator with the app in front. */
+    private fun postTranslatorOpenPhoneNotification(templateId: Long) {
+        val manager = appContext.getSystemService(NotificationManager::class.java) ?: return
+        val channelId = "wear_translator_start"
+        manager.createNotificationChannel(
+            NotificationChannel(channelId, appContext.getString(R.string.wear_translator_start_channel), NotificationManager.IMPORTANCE_HIGH)
+        )
+        val intent = Intent(appContext, com.example.llamadroid.MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(com.example.llamadroid.MainActivity.EXTRA_OPEN_ROUTE, com.example.llamadroid.ui.navigation.Screen.LiveTranslator.route)
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            appContext,
+            0xAD7002 + templateId.toInt(),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(appContext, channelId)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(appContext.getString(R.string.wear_translator_start_title))
+            .setContentText(appContext.getString(R.string.wear_translator_start_message))
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .addAction(0, appContext.getString(R.string.wear_translator_start_action), pendingIntent)
+            .build()
+        try {
+            manager.notify(0xAD7002, notification)
+        } catch (_: SecurityException) {
+            // Notification permission revoked; the watch error message still explains what to do.
+        }
     }
 
     private suspend fun handleTranslatorStop(request: TranslatorCommandRequest): ByteArray {
@@ -1385,9 +1483,13 @@ private class WearRequestRouter(
     }
 
     private fun handleGenerationCancel(request: GenerationCancelRequest): ByteArray {
-        appContext.startService(Intent(appContext, LlamaClientService::class.java).apply {
-            action = LlamaClientService.ACTION_STOP
-        })
+        generationChatIds.remove(request.generationId)?.let { chatId ->
+            val queued = NativeChatGenerationStates.stateFor(chatId) is LlamaClientService.GenerationState.Queued
+            appContext.startService(Intent(appContext, LlamaClientService::class.java).apply {
+                action = if (queued) LlamaClientService.ACTION_CANCEL_QUEUED else LlamaClientService.ACTION_STOP
+                putExtra(LlamaClientService.EXTRA_CHAT_ID, chatId)
+            })
+        }
         messageListeners.remove(request.generationId)
         return ok(request.meta, EmptyResult.serializer(), EmptyResult())
     }
@@ -1444,7 +1546,7 @@ private class WearRequestRouter(
 
     private suspend fun handleTamaFarm(request: TamaHubRequest): ByteArray {
         val pet = activeTamaPet(request.petId)
-        farmEngine.updateFarm(pet.id)
+        farmEngine.updateFarm(pet.id, cycleFrozen = pet.cycleFrozen)
         return ok(request.meta, TamaFarmSnapshot.serializer(), currentFarmSnapshot(pet.id))
     }
 
@@ -1560,11 +1662,11 @@ private class WearRequestRouter(
         val tile = farmRepository.ensureUnlockedFarmTiles(pet.id).firstOrNull { it.id == tileId }
             ?: throw IllegalArgumentException(appContext.getString(R.string.wear_bridge_invalid_id))
         val action = when (request.action) {
-            "till" -> com.example.llamadroid.tama.world.core.ActionId.TILL_SOIL
-            "water" -> com.example.llamadroid.tama.world.core.ActionId.POUR_WATER
-            "plant" -> com.example.llamadroid.tama.world.core.ActionId.PLANT
-            "harvest" -> if (tile.crop?.isDecayed == true) com.example.llamadroid.tama.world.core.ActionId.REMOVE_DEAD_CROP
-                else com.example.llamadroid.tama.world.core.ActionId.HARVEST_CROP
+            "till" -> com.example.llamadroid.tama.game.FarmPlotAction.TILL_SOIL
+            "water" -> com.example.llamadroid.tama.game.FarmPlotAction.POUR_WATER
+            "plant" -> com.example.llamadroid.tama.game.FarmPlotAction.PLANT
+            "harvest" -> if (tile.crop?.isDecayed == true) com.example.llamadroid.tama.game.FarmPlotAction.REMOVE_DEAD_CROP
+                else com.example.llamadroid.tama.game.FarmPlotAction.HARVEST_CROP
             else -> null
         }
         val arguments = if (request.action == "plant") {
@@ -1572,7 +1674,7 @@ private class WearRequestRouter(
                 ?: throw IllegalStateException(appContext.getString(R.string.wear_tama_no_seed))
             mapOf("cropId" to seed.id.removePrefix("seed_"))
         } else emptyMap()
-        val result = if (action != null) com.example.llamadroid.tama.world.runtime.WorldFarmActions.request(
+        val result = if (action != null) com.example.llamadroid.tama.game.ClassicFarmPlots.request(
             appContext, tamaGameEngine, tile.id, action, arguments
         ) else appContext.getString(R.string.wear_tama_action_needs_phone_args)
         return ok(request.meta, TamaFarmSnapshot.serializer(), currentFarmSnapshot(pet.id, result))
@@ -1652,6 +1754,7 @@ private class WearRequestRouter(
             TamaFarmTileSummary(
                 id = tile.id.toString(),
                 title = crop?.type?.replace('_', ' ')?.replaceFirstChar { it.titlecase(Locale.getDefault()) }
+                    ?: tile.obstacle?.name?.lowercase(Locale.getDefault())
                     ?: tile.status.name.lowercase(Locale.getDefault()),
                 status = when {
                     crop == null -> tile.status.name
@@ -1661,6 +1764,8 @@ private class WearRequestRouter(
                 },
                 progressPercent = crop?.stage?.let { (it * 33).coerceIn(0, 100) } ?: 0,
                 actionLabel = when {
+                    // Obstacles need the axe/pickaxe on the phone farm.
+                    tile.obstacle != null -> null
                     tile.status == TileStatus.SOIL -> appContext.getString(R.string.wear_tama_till)
                     tile.crop?.stage == 3 -> appContext.getString(R.string.wear_tama_harvest)
                     tile.status == TileStatus.FARMLAND -> appContext.getString(R.string.wear_tama_water)
@@ -1669,7 +1774,7 @@ private class WearRequestRouter(
                 }
             )
         }
-        val upgrades = farmRepository.getUpgrades(petId).map {
+        val upgrades = farmRepository.getUpgrades(petId).filter { it.type != FARM_OBSTACLE_STATE_ID && it.type != FARM_WEATHER_STATE_ID }.map {
             TamaModuleSummary(it.type, it.type.replace('_', ' ').replaceFirstChar { c -> c.titlecase(Locale.getDefault()) }, "L${it.level} ${it.storedOutput}")
         }
         val livestock = farmRepository.getLivestock(petId).map {
@@ -1688,6 +1793,7 @@ private class WearRequestRouter(
             actionLabel = actionLabel
         )
 
+    /** Returns false when Android refused the foreground start (app not visible); state is rolled back. */
     private fun submitChatGeneration(
         replyNodeId: String?,
         requestId: String,
@@ -1695,27 +1801,34 @@ private class WearRequestRouter(
         serverId: Long,
         text: String,
         audioPath: String?
-    ) {
-        if (!processedGenerations.add(requestId)) return
+    ): Boolean {
+        if (!processedGenerations.add(requestId)) return true
         messageListeners[requestId] = 0L
-        appContext.startForegroundService(Intent(appContext, LlamaClientService::class.java).apply {
-            action = LlamaClientService.ACTION_GENERATE
-            putExtra(LlamaClientService.EXTRA_CHAT_ID, chatId)
-            putExtra(LlamaClientService.EXTRA_SERVER_ID, serverId)
-            putExtra(LlamaClientService.EXTRA_USER_MESSAGE, text)
-            audioPath?.let { putExtra(LlamaClientService.EXTRA_AUDIO_PATH, it) }
-            putExtra(LlamaClientService.EXTRA_FORCE_ASSISTANT_TTS, false)
-        })
+        generationChatIds[requestId] = chatId
+        NativeChatGenerationStates.clearIfIdle(chatId)
+        try {
+            appContext.startForegroundService(Intent(appContext, LlamaClientService::class.java).apply {
+                action = LlamaClientService.ACTION_GENERATE
+                putExtra(LlamaClientService.EXTRA_CHAT_ID, chatId)
+                putExtra(LlamaClientService.EXTRA_SERVER_ID, serverId)
+                putExtra(LlamaClientService.EXTRA_USER_MESSAGE, text)
+                audioPath?.let { putExtra(LlamaClientService.EXTRA_AUDIO_PATH, it) }
+                putExtra(LlamaClientService.EXTRA_FORCE_ASSISTANT_TTS, false)
+            })
+        } catch (error: Exception) {
+            if (!isForegroundServiceStartNotAllowed(error) && error !is SecurityException) throw error
+            processedGenerations.remove(requestId)
+            messageListeners.remove(requestId)
+            generationChatIds.remove(requestId)
+            return false
+        }
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch generationCollector@{
             var observedFreshGeneration = false
-            LlamaClientService.generationState
+            NativeChatGenerationStates.flowFor(chatId)
                 .filter { state ->
-                    when (state) {
-                        is LlamaClientService.GenerationState.Generating -> state.chatId == chatId
-                        is LlamaClientService.GenerationState.Completed -> state.chatId == chatId
-                        is LlamaClientService.GenerationState.Error -> state.chatId == chatId || state.chatId == -1L
-                        else -> false
-                    }
+                    state is LlamaClientService.GenerationState.Generating ||
+                        state is LlamaClientService.GenerationState.Completed ||
+                        state is LlamaClientService.GenerationState.Error
                 }
                 .collect { state ->
                     when (state) {
@@ -1738,6 +1851,7 @@ private class WearRequestRouter(
                             )
                             deleteFinishedQuickChat(chatId)
                             messageListeners.remove(requestId)
+                            generationChatIds.remove(requestId)
                             this@generationCollector.cancel()
                         }
                         is LlamaClientService.GenerationState.Error -> {
@@ -1754,12 +1868,14 @@ private class WearRequestRouter(
                             )
                             deleteFinishedQuickChat(chatId)
                             messageListeners.remove(requestId)
+                            generationChatIds.remove(requestId)
                             this@generationCollector.cancel()
                         }
                         else -> Unit
                     }
                 }
         }
+        return true
     }
 
     private suspend fun deleteFinishedQuickChat(chatId: Long) {

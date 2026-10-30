@@ -2,7 +2,6 @@ package com.example.llamadroid.tama.data
 
 import java.util.Calendar
 import java.util.Locale
-import kotlin.math.floor
 import kotlin.math.roundToInt
 
 const val TAMA_MARKET_PRICE_DROP_FULL_VOLUME = 64
@@ -28,15 +27,8 @@ object TamaMarketPricing {
     fun maxPrice(itemId: String): Int =
         FarmTradeItemCatalog.sellPrice(itemId).coerceAtLeast(1)
 
-    fun minPrice(itemId: String): Int {
-        val maxPrice = maxPrice(itemId)
-        if (itemId.startsWith("crop_")) {
-            val cropId = itemId.removePrefix("crop_")
-            val seedPrice = CropDefinitions.CROPS[cropId]?.seedPrice ?: return (maxPrice / 2).coerceAtLeast(1)
-            return floor(seedPrice * 0.95f).toInt().coerceAtLeast(1)
-        }
-        return (maxPrice / 2).coerceAtLeast(1)
-    }
+    /** Weekly prices never collapse below half of the base price, for every item (store and Park seller alike). */
+    fun minPrice(itemId: String): Int = ((maxPrice(itemId) + 1) / 2).coerceAtLeast(1)
 
     fun priceForWeeklySales(itemId: String, unitsSold: Int): Int {
         val maxPrice = maxPrice(itemId)

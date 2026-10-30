@@ -87,9 +87,25 @@ class SDEnvironmentService : Service() {
         return START_NOT_STICKY
     }
     
+    private var startFailureMessage: String? = null
+
+    private fun enterForeground(notification: Notification): Boolean {
+        val started = ForegroundStart.start(this, NOTIFICATION_ID, notification, ForegroundServiceTypes.DATA_SYNC)
+        if (started is ForegroundStart.Result.Failed) {
+            startFailureMessage = ForegroundStart.failureMessage(this, started.reason, "Stable Diffusion")
+            DebugLog.log("[SDEnvironmentService] $startFailureMessage")
+            return false
+        }
+        return true
+    }
+
     private fun startInstallation() {
         val notification = createNotification("Installing Stable Diffusion...")
-        startForeground(NOTIFICATION_ID, notification)
+        if (!enterForeground(notification)) {
+            SDStateHolder.updateInstallState(SDInstallState.Error(startFailureMessage ?: getString(R.string.error_generic)))
+            stopSelf()
+            return
+        }
         
         serviceScope.launch {
             try {
@@ -213,7 +229,11 @@ class SDEnvironmentService : Service() {
     
     private fun startSDServer() {
         val notification = createNotification("Starting Stable Diffusion server...")
-        startForeground(NOTIFICATION_ID, notification)
+        if (!enterForeground(notification)) {
+            SDStateHolder.updateServerState(SDServerState.Error(startFailureMessage ?: getString(R.string.error_generic)))
+            stopSelf()
+            return
+        }
         
         SDStateHolder.updateServerState(SDServerState.Starting)
         
@@ -283,6 +303,10 @@ class SDEnvironmentService : Service() {
         manager.notify(NOTIFICATION_ID, notification)
     }
     
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        ForegroundTimeoutSupport.handle(this, fgsType)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         serviceScope.cancel()

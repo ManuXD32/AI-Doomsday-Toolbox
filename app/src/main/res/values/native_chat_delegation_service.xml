@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="native_chat_delegation_service_notice_finished">The DeepSeek task finished. Tap to open the chat.</string>
+    <string name="native_chat_delegation_service_notice_direction">The DeepSeek task needs your direction. Tap to open the chat.</string>
+    <string name="native_chat_delegation_service_notice_question">The DeepSeek subagent has a question. Tap to open the chat.</string>
+    <string name="native_chat_delegation_service_tap_to_continue">Tap to continue the DeepSeek task update.</string>
+    <string name="native_chat_delegation_service_status_start">Starting DeepSeek task</string>
+    <string name="native_chat_delegation_service_status_status">Checking DeepSeek task</string>
+    <string name="native_chat_delegation_service_status_message">Asking DeepSeek subagent</string>
+    <string name="native_chat_delegation_service_status_cancel">Cancelling DeepSeek task</string>
+    <string name="native_chat_delegation_service_status_schedule">Scheduling DeepSeek check</string>
+    <string name="native_chat_delegation_service_task_interrupted">The DeepSeek task was interrupted. Open the chat and tap Continue to resume it.</string>
+</resources>

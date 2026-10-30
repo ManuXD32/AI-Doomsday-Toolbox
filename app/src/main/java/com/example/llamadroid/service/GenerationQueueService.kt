@@ -5,7 +5,6 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
-import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.content.ContextCompat
@@ -68,11 +67,22 @@ class GenerationQueueService : Service() {
             ACTION_RUN, ACTION_RUN_SCHEDULED -> {
                 if (drainJob?.isActive == true) return START_NOT_STICKY
                 timedOut = false
-                try {
-                    startForeground(GenerationQueueNotifications.ID,
+                val rejection: String? = try {
+                    val startResult = ForegroundStart.start(
+                        this,
+                        GenerationQueueNotifications.ID,
                         GenerationQueueNotifications.running(this,
-                            GenerationQueueProgress(0, 0, 0, 0, 0), null))
+                            GenerationQueueProgress(0, 0, 0, 0, 0), null),
+                        ForegroundServiceTypes.MEDIA_PROCESSING or
+                            ForegroundServiceTypes.DATA_SYNC
+                    )
+                    (startResult as? ForegroundStart.Result.Failed)?.let {
+                        it.cause?.javaClass?.simpleName ?: it.reason.name
+                    }
                 } catch (error: RuntimeException) {
+                    error.javaClass.simpleName
+                }
+                if (rejection != null) {
                     stopSelfResult(startId)
                     CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
                         if (intent.action == ACTION_RUN_SCHEDULED) {
@@ -82,7 +92,7 @@ class GenerationQueueService : Service() {
                         runCatching { GenerationDiagnosticsStore.recordBreadcrumb(
                             source = "GenerationQueueService", mode = "QUEUE",
                             event = "foreground_start_rejected",
-                            details = "errorClass=${error.javaClass.simpleName}",
+                            details = "errorClass=$rejection",
                             notificationActive = false) }
                     }
                     return START_NOT_STICKY
@@ -329,7 +339,7 @@ class GenerationQueueService : Service() {
 
     override fun onTimeout(startId: Int, fgsType: Int) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM &&
-            fgsType and ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING != 0) {
+            fgsType and ForegroundServiceTypes.MEDIA_PROCESSING != 0) {
             if (timedOut) return
             timedOut = true
             val interruptedId = activeItemId

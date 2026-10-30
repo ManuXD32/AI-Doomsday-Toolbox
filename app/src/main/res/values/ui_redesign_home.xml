@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ui_home_start_title">Start</string>
+    <string name="ui_home_agent_short">Agent</string>
+    <string name="ui_home_continue_title">Continue</string>
+    <string name="ui_home_see_all">See all</string>
+    <string name="ui_home_continue_empty">Your pinned chats and recent Agent projects will appear here.</string>
+    <plurals name="ui_home_queue_pending">
+        <item quantity="one">Generation queue: %1$d pending</item>
+        <item quantity="other">Generation queue: %1$d pending</item>
+    </plurals>
+    <string name="ui_home_status_title">Status</string>
+    <string name="ui_home_status_memory">%1$s of %2$s GB used</string>
+    <plurals name="ui_home_status_servers">
+        <item quantity="one">Local servers: %1$d running</item>
+        <item quantity="other">Local servers: %1$d running</item>
+    </plurals>
+</resources>

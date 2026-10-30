@@ -101,7 +101,9 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.max
 
 private const val LEGACY_UPSCALE_UI_DIAGNOSTIC_SOURCE = "image_generation_ui"
@@ -220,11 +222,13 @@ fun LegacyUpscaleScreen(navController: NavController) {
     val upscaledDir = remember(outputDir) { File(outputDir, "upscaled").apply { mkdirs() } }
     var diskImages by remember { mutableStateOf<List<File>>(emptyList()) }
 
-    fun reloadDiskImages() {
-        diskImages = upscaledDir.listFiles()
-            ?.filter { it.extension.lowercase() in listOf("png", "jpg", "jpeg") }
-            ?.sortedByDescending { it.lastModified() }
-            .orEmpty()
+    suspend fun reloadDiskImages() {
+        diskImages = withContext(Dispatchers.IO) {
+            upscaledDir.listFiles()
+                ?.filter { it.extension.lowercase() in listOf("png", "jpg", "jpeg") }
+                ?.sortedByDescending { it.lastModified() }
+                .orEmpty()
+        }
     }
 
     LaunchedEffect(Unit) {

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="vision_helper_title">Vision helper</string>
+    <string name="vision_helper_description">When a chat model cannot see images, images are never sent to it. With this on, a small vision model describes each image in text first and the description is given to the chat model. The image stays in the chat.</string>
+    <string name="vision_helper_switch">Describe images for text-only models</string>
+    <string name="vision_helper_server_label">Vision server</string>
+    <string name="vision_helper_server_none">No server selected</string>
+    <string name="vision_helper_choose_server">Choose server</string>
+    <string name="vision_helper_change_server">Change</string>
+    <string name="vision_helper_picker_title">Vision server</string>
+    <string name="vision_helper_picker_empty">No local server with a vision model (model plus mmproj) found. Create one in Servers first.</string>
+    <string name="vision_helper_needs_server">Pick a local vision server to enable the helper.</string>
+    <string name="vision_helper_thinking">Let the vision model think (slower)</string>
+    <string name="vision_helper_ram_note">A temporary low-impact server starts only when there is enough free RAM, describes all pending images in one run and is stopped again.</string>
+    <string name="vision_helper_status_waiting_ram">Vision helper waiting for free RAM</string>
+    <string name="vision_helper_status_describing">Describing image…</string>
+</resources>

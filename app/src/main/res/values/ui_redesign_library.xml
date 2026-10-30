@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ui_library_models_title">Models</string>
+    <string name="ui_library_task_chat">For chat</string>
+    <string name="ui_library_task_chat_desc">Language models for chats and agents.</string>
+    <string name="ui_library_task_images">For images and video</string>
+    <string name="ui_library_task_images_desc">Stable Diffusion checkpoints, LoRAs, and video models.</string>
+    <string name="ui_library_task_voice">For voice</string>
+    <string name="ui_library_task_voice_desc">Speech, transcription, and music models.</string>
+    <string name="ui_library_task_documents">Knowledge models</string>
+    <string name="ui_library_task_documents_desc">Embedding and reranking models for knowledge bases.</string>
+    <string name="ui_library_all_managers">Models</string>
+    <string name="ui_library_knowledge_title">Knowledge and notes</string>
+    <string name="ui_library_knowledge_bases">Knowledge bases</string>
+    <string name="ui_library_notes">Organizer</string>
+    <string name="ui_library_creations_title">My creations</string>
+    <string name="ui_library_link_storage">Model sources</string>
+    <string name="ui_sd_group_base">Base models</string>
+    <string name="ui_sd_group_components">Components</string>
+    <string name="ui_sd_group_adapters">Adapters</string>
+    <string name="ui_sd_group_upscalers">Upscalers and detectors</string>
+</resources>

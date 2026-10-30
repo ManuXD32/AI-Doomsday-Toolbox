@@ -14,8 +14,6 @@ import com.example.llamadroid.util.DebugLog
  * 4. Test the migration thoroughly before release
  */
 object TamaMigrations {
-    val MIGRATION_43_44: Migration = com.example.llamadroid.tama.world.persistence.TamaWorldMigration
-    
     /**
      * Versions where destructive migration is allowed.
      * These are early development versions before the migration system was added.
@@ -935,6 +933,110 @@ object TamaMigrations {
     private fun adventureGateStudyMagicBonusSql(): String =
         "COALESCE((SELECT CAST(educationLevel / 15 AS INTEGER) FROM tama_pets WHERE tama_pets.id = adventure_gate_profiles.petId), 0)"
 
+    /** Schema only: deterministic generation ran after migration, never on Room's open thread. */
+    val MIGRATION_43_44: Migration = object : Migration(43, 44) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            listOf("hydration", "social", "curiosity").forEach { name ->
+                db.execSQL("ALTER TABLE tama_pets ADD COLUMN $name REAL NOT NULL DEFAULT 100")
+            }
+            db.execSQL("""CREATE TABLE IF NOT EXISTS tama_worlds (
+                id TEXT NOT NULL PRIMARY KEY, petId TEXT NOT NULL, seed INTEGER NOT NULL,
+                generatorVersion INTEGER NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL,
+                createdAt INTEGER NOT NULL, lastSimulatedAt INTEGER NOT NULL, stateJson TEXT NOT NULL)""")
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_tama_worlds_petId ON tama_worlds(petId)")
+            db.execSQL("""CREATE TABLE IF NOT EXISTS tama_world_actors (
+                worldId TEXT NOT NULL PRIMARY KEY, petId TEXT NOT NULL, payload TEXT NOT NULL)""")
+            db.execSQL("""CREATE TABLE IF NOT EXISTS tama_world_chunks (
+                worldId TEXT NOT NULL, chunkX INTEGER NOT NULL, chunkY INTEGER NOT NULL,
+                payload TEXT NOT NULL, PRIMARY KEY(worldId, chunkX, chunkY))""")
+            listOf("structures", "objects").forEach { family ->
+                db.execSQL("""CREATE TABLE IF NOT EXISTS tama_world_$family (
+                    worldId TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(worldId, id))""")
+            }
+            db.execSQL("""CREATE TABLE IF NOT EXISTS tama_world_npcs (
+                worldId TEXT NOT NULL, npcId TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(worldId, npcId))""")
+            db.execSQL("""CREATE TABLE IF NOT EXISTS tama_world_relationships (
+                petId TEXT NOT NULL, npcId TEXT NOT NULL, familiarity REAL NOT NULL,
+                friendship REAL NOT NULL, trust REAL NOT NULL, lastInteraction INTEGER NOT NULL,
+                sharedEventCount INTEGER NOT NULL, PRIMARY KEY(petId, npcId))""")
+            db.execSQL("""CREATE TABLE IF NOT EXISTS tama_world_events (
+                id TEXT NOT NULL PRIMARY KEY, worldId TEXT NOT NULL, petId TEXT NOT NULL,
+                timestamp INTEGER NOT NULL, importance TEXT NOT NULL, actorId TEXT NOT NULL,
+                eventType TEXT NOT NULL, payload TEXT NOT NULL, memoryEligible INTEGER NOT NULL, episodeId TEXT)""")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_tama_world_events_petId_timestamp ON tama_world_events(petId, timestamp)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_tama_world_events_episodeId ON tama_world_events(episodeId)")
+            db.execSQL("""CREATE TABLE IF NOT EXISTS tama_world_episodes (
+                id TEXT NOT NULL PRIMARY KEY, worldId TEXT NOT NULL, petId TEXT NOT NULL,
+                startTime INTEGER NOT NULL, endTime INTEGER NOT NULL, title TEXT NOT NULL,
+                summary TEXT NOT NULL, importance TEXT NOT NULL, memoryStatus TEXT NOT NULL, evidenceJson TEXT NOT NULL)""")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_tama_world_episodes_petId_startTime ON tama_world_episodes(petId, startTime)")
+            db.execSQL("""CREATE TABLE IF NOT EXISTS tama_world_policies (
+                id TEXT NOT NULL PRIMARY KEY, petId TEXT NOT NULL, version INTEGER NOT NULL,
+                parentId TEXT, modelHash TEXT NOT NULL, inferenceArtifact TEXT NOT NULL,
+                metadataJson TEXT NOT NULL, active INTEGER NOT NULL, createdAt INTEGER NOT NULL)""")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_tama_world_policies_petId_createdAt ON tama_world_policies(petId, createdAt)")
+            db.execSQL("""CREATE TABLE IF NOT EXISTS tama_world_action_receipts (
+                petId TEXT NOT NULL, id TEXT NOT NULL, worldId TEXT NOT NULL, kind TEXT NOT NULL,
+                requestJson TEXT NOT NULL, resultJson TEXT, status TEXT NOT NULL,
+                createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL, completedAt INTEGER, acknowledgedAt INTEGER,
+                PRIMARY KEY(petId, id))""")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_tama_world_action_receipts_petId_status_updatedAt ON tama_world_action_receipts(petId,status,updatedAt)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_tama_world_action_receipts_petId_kind_updatedAt ON tama_world_action_receipts(petId,kind,updatedAt)")
+        }
+    }
+
+    // Migration from v44 to v45: the simulated world is removed. Drop its tables, keep Arcade
+    // receipts (the receipts table keeps its name) and send pets parked in world places home.
+    val MIGRATION_44_45: Migration = object : Migration(44, 45) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            listOf(
+                "tama_worlds", "tama_world_actors", "tama_world_chunks", "tama_world_structures",
+                "tama_world_objects", "tama_world_npcs", "tama_world_relationships",
+                "tama_world_events", "tama_world_episodes", "tama_world_policies"
+            ).forEach { db.execSQL("DROP TABLE IF EXISTS $it") }
+            db.execSQL("DELETE FROM tama_world_action_receipts WHERE kind <> 'ARCADE_SESSION'")
+            db.execSQL(
+                """UPDATE tama_pets SET currentLocationId = 'fixed_0_0'
+                   WHERE currentLocationId IN ('world', 'hometown', 'farm_barn', 'market_stall',
+                       'npc_home_a', 'npc_home_b', 'npc_home_c')
+                   OR currentLocationId LIKE 'world\_%' ESCAPE '\'
+                   OR currentLocationId LIKE 'generated\_%' ESCAPE '\'"""
+            )
+        }
+    }
+
+    // Migration from v45 to v46: durable single-row state for pet transfers between devices.
+    val MIGRATION_45_46: Migration = object : Migration(45, 46) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `tama_transfer_state` (`id` TEXT NOT NULL, `role` TEXT NOT NULL, " +
+                    "`status` TEXT NOT NULL, `transferId` TEXT, `petId` TEXT, `petName` TEXT, `peerName` TEXT, " +
+                    "`originDeviceId` TEXT, `archivePath` TEXT, `pausedPetId` TEXT, `pausedArchivePath` TEXT, " +
+                    "`updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))"
+            )
+        }
+    }
+
+    // Migration from v46 to v47: paired transfer peers (wrapped pairing key + known addresses).
+    val MIGRATION_46_47: Migration = object : Migration(46, 47) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `tama_transfer_peers` (`deviceId` TEXT NOT NULL, `displayName` TEXT NOT NULL, " +
+                    "`wrappedKey` BLOB NOT NULL, `keyIv` BLOB NOT NULL, `addressesJson` TEXT NOT NULL, " +
+                    "`lastSeenAt` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, PRIMARY KEY(`deviceId`))"
+            )
+        }
+    }
+
+    // Migration from v47 to v48: farm obstacles (stump, rock, weeds) on idle plots.
+    val MIGRATION_47_48: Migration = object : Migration(47, 48) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            if (!columnExists(db, "tama_farm_tiles", "obstacle")) {
+                db.execSQL("ALTER TABLE `tama_farm_tiles` ADD COLUMN `obstacle` TEXT")
+            }
+        }
+    }
+
     private fun adventureGateStudyManaBonusSql(): String =
         "COALESCE((SELECT CAST(educationLevel / 10 AS INTEGER) * 4 FROM tama_pets WHERE tama_pets.id = adventure_gate_profiles.petId), 0)"
     
@@ -973,7 +1075,11 @@ object TamaMigrations {
         MIGRATION_40_41,
         MIGRATION_41_42,
         MIGRATION_42_43,
-        MIGRATION_43_44
+        MIGRATION_43_44,
+        MIGRATION_44_45,
+        MIGRATION_45_46,
+        MIGRATION_46_47,
+        MIGRATION_47_48
     )
     
     // ========== HELPER FUNCTIONS ==========

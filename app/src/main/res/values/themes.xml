@@ -1,4 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.LlamaDroid" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!-- Floating desktop-pet chat: translucent window with a dimmed backdrop; Compose draws the rounded panel. -->
+    <style name="Theme.LlamaDroid.ShimejiChat">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:windowAnimationStyle">@android:style/Animation.Dialog</item>
+    </style>
 </resources>

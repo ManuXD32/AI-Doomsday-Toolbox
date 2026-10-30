@@ -217,6 +217,55 @@ class FeatureGuideCoverageTest {
         }
     }
 
+    @Test
+    fun `every catalog target event and step route exists in production source`() {
+        val main = mainSourceText()
+        val ids = FeatureGuideCatalog.guides.flatMap { it.recipes }.flatMap { it.steps }
+            .flatMap { listOfNotNull(it.targetId, it.eventId) }.toSet()
+        // Settings targets are registered dynamically from each settings entry route.
+        val dead = ids.filterNot { it.startsWith("settings.settings_") || main.contains("\"$it\"") }
+        assertTrue("Dead guide target/event IDs: $dead", dead.isEmpty())
+
+        val navigation = source("app/src/main/java/com/example/llamadroid/ui/navigation/Screen.kt") +
+            source("app/src/main/java/com/example/llamadroid/ui/LlamaApp.kt")
+        val routes = FeatureGuideCatalog.guides.flatMap { it.recipes }.flatMap { it.steps }
+            .mapNotNull { it.route }.map { it.substringBefore('?').substringBefore('/') }.toSet()
+        val missing = routes.filterNot { navigation.contains("\"$it") }
+        assertTrue("Guide step routes missing from navigation: $missing", missing.isEmpty())
+    }
+
+    @Test
+    fun `round 11 delegation file station and server recipes are registered`() {
+        val expected = mapOf(
+            "conversations.delegation_start" to "conversations",
+            "conversations.servers_caches" to "conversations",
+            "r7.native_chat_delegation_correct" to "native_chat_delegation",
+            "r7.native_chat_delegation_files" to "native_chat_delegation",
+            "servers.file_station_web" to "servers"
+        )
+        expected.forEach { (recipeId, guideId) ->
+            val guide = FeatureGuideCatalog.guides.first { it.id == guideId }
+            val recipe = requireNotNull(guide.recipes.firstOrNull { it.id == recipeId }) { "Missing $recipeId" }
+            assertEquals(3, recipe.steps.size)
+            assertTrue(recipe.steps.all { it.bodyRes != 0 && it.previewKey.isNotBlank() })
+        }
+        // The retired file-server wording must not come back: the surface is File Station.
+        assertTrue(FeatureGuideCatalog.recipe("servers.files")?.steps?.first()?.route == "file_server")
+    }
+
+    private fun mainSourceText(): String {
+        var directory = File(System.getProperty("user.dir") ?: ".").absoluteFile
+        while (true) {
+            val root = listOf(File(directory, "app/src/main/java"), File(directory, "src/main/java")).firstOrNull { it.isDirectory }
+            if (root != null) {
+                return root.walkTopDown().filter { it.isFile && it.extension == "kt" && "ui/walkthrough" !in it.path }
+                    .joinToString("\n") { it.readText() }
+            }
+            directory = directory.parentFile ?: break
+        }
+        error("Could not find main source root")
+    }
+
     private fun source(relativePath: String): String {
         var directory = File(System.getProperty("user.dir") ?: ".").absoluteFile
         while (true) {

@@ -310,7 +310,7 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
     private val prootTerminalManagerDelegate = lazy { AgentProotTerminalSessionManager(context.applicationContext) }
     private val prootTerminalManager by prootTerminalManagerDelegate
     val localProjectRunStates: StateFlow<Map<Long, AgentLocalRunState>>
-        get() = if (harnessWorkspaceSelected) com.example.llamadroid.harness.HarnessAppRuntime.get(context).projectRuns.states
+        get() = if (harnessWorkspaceSelected) com.example.llamadroid.harness.HarnessAppRuntime.forRuntime(context, harnessWorkspaceRuntimeId).projectRuns.states
             else if (isProotWorkspaceBackend()) prootRunCoordinator.projectStates else localProjectRunner.states
     val prootTerminalStates: StateFlow<Map<Long, List<WorkspaceTerminalUiState>>>
         get() = prootTerminalManager.states
@@ -334,7 +334,7 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
 
     private fun resolveLocalWorkspaceFile(path: String): File {
         return AgentLocalWorkspaceSupport.resolvePath(
-            context = context.applicationContext,
+            context = if (harnessWorkspaceSelected) com.example.llamadroid.harness.runtime.HarnessRuntimeScope.context(context, harnessWorkspaceRuntimeId) else context.applicationContext,
             projectFolder = currentLocalProjectFolder(),
             requestedPath = path
         )
@@ -342,14 +342,14 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
 
     private fun localProjectRootFile(): File {
         return AgentLocalWorkspaceSupport.rootForProject(
-            context = context.applicationContext,
+            context = if (harnessWorkspaceSelected) com.example.llamadroid.harness.runtime.HarnessRuntimeScope.context(context, harnessWorkspaceRuntimeId) else context.applicationContext,
             projectFolder = currentLocalProjectFolder()
         )
     }
 
     private fun localDisplayPath(file: File): String {
         return AgentLocalWorkspaceSupport.toDisplayPath(
-            context = context.applicationContext,
+            context = if (harnessWorkspaceSelected) com.example.llamadroid.harness.runtime.HarnessRuntimeScope.context(context, harnessWorkspaceRuntimeId) else context.applicationContext,
             projectFolder = currentLocalProjectFolder(),
             file = file
         )
@@ -2528,7 +2528,7 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
         try {
             if (harnessWorkspaceSelected) return@withContext runCatching {
                 val id = requireNotNull(_activeConversationId.value)
-                formatLocalRunState(com.example.llamadroid.harness.HarnessAppRuntime.get(context).projectRuns.run(id))
+                formatLocalRunState(com.example.llamadroid.harness.HarnessAppRuntime.forRuntime(context, harnessWorkspaceRuntimeId).projectRuns.run(id))
             }
             if (!isLocalWorkspaceBackend()) {
                 return@withContext Result.failure(IllegalStateException("run_project is only available for local projects."))
@@ -2610,7 +2610,7 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
         try {
             if (harnessWorkspaceSelected) return@withContext runCatching {
                 val id = requireNotNull(_activeConversationId.value)
-                formatLocalRunState(com.example.llamadroid.harness.HarnessAppRuntime.get(context).projectRuns.check(id))
+                formatLocalRunState(com.example.llamadroid.harness.HarnessAppRuntime.forRuntime(context, harnessWorkspaceRuntimeId).projectRuns.check(id))
             }
             val conversationId = _activeConversationId.value
                 ?: return@withContext Result.failure(IllegalStateException("No active project conversation is selected."))
@@ -2639,7 +2639,7 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
         try {
             if (harnessWorkspaceSelected) return@withContext runCatching {
                 val id = requireNotNull(_activeConversationId.value)
-                com.example.llamadroid.harness.HarnessAppRuntime.get(context).projectRuns.stop(id)?.let(::formatLocalRunState).orEmpty()
+                com.example.llamadroid.harness.HarnessAppRuntime.forRuntime(context, harnessWorkspaceRuntimeId).projectRuns.stop(id)?.let(::formatLocalRunState).orEmpty()
             }
             val conversationId = _activeConversationId.value
                 ?: return@withContext Result.failure(IllegalStateException("No active project conversation is selected."))
@@ -5608,8 +5608,10 @@ TODO status. Return via finish_task with JSON:
 
         /** Compatibility context for the retained manual explorer, without legacy brain/turn work. */
         @Volatile private var harnessWorkspaceSelected = false
+        @Volatile private var harnessWorkspaceRuntimeId = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.LEGACY_RUNTIME_ID
 
         fun selectHarnessWorkspace(conversation: com.example.llamadroid.data.db.AgentConversationEntity) {
+            harnessWorkspaceRuntimeId = conversation.runtimeId
             harnessWorkspaceSelected = true
             _preferredConversationId.value = conversation.id
             _activeConversationId.value = conversation.id

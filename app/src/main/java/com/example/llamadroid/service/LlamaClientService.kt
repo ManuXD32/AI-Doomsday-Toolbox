@@ -9,8 +9,13 @@ import android.media.MediaMetadataRetriever
 import android.os.IBinder
 import com.example.llamadroid.data.api.LlamaApi
 import com.example.llamadroid.data.api.LlamaChatRequest
+import com.example.llamadroid.service.compaction.NativeChatCompactionHooks
+import com.example.llamadroid.service.compaction.NativeChatContextFallback
+import com.example.llamadroid.service.compaction.NativeChatContextWindow
+import com.example.llamadroid.service.compaction.NativeChatTurnDecorators
 import com.example.llamadroid.data.api.LlamaChatMessage
 import com.example.llamadroid.data.api.LlamaChatResponse
+import com.example.llamadroid.data.api.LlamaChatTimings
 import com.example.llamadroid.data.api.LlamaStreamOptions
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
@@ -22,6 +27,8 @@ import com.example.llamadroid.data.model.LITERT_BACKEND_GPU
 import com.example.llamadroid.data.model.LiteRtModelEntity
 import com.example.llamadroid.data.model.LlamaChatEntity
 import com.example.llamadroid.data.model.LlamaMessageEntity
+import com.example.llamadroid.service.vision.ImageFallbackLogic
+import com.example.llamadroid.service.vision.VisionDescriptionService
 import com.example.llamadroid.data.model.LlamaServerEntity
 import com.example.llamadroid.data.model.defaultLiteRtChatContextTokens
 import com.example.llamadroid.data.model.hasEmbeddedAudioTranscript
@@ -50,7 +57,27 @@ import java.io.IOException
 import java.io.InputStreamReader
 import java.net.URI
 import java.util.Locale
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.ConcurrentHashMap
+import com.example.llamadroid.service.chat.ChatAdmissionController
+import com.example.llamadroid.service.chat.ChatAdmissionPlanner
+import com.example.llamadroid.service.chat.ChatGenerationScheduler
+import com.example.llamadroid.service.chat.ChatGenerationSession
+import com.example.llamadroid.service.chat.ChatPowerLocks
+import com.example.llamadroid.service.chat.LiteRtSamplerDefaults
+import com.example.llamadroid.service.chat.withExtendedSamplers
+import com.example.llamadroid.service.chat.DecodeTimings
+import com.example.llamadroid.service.chat.NativeChatModelActivity
+import com.example.llamadroid.service.chat.NativeChatStepHistory
+import com.example.llamadroid.service.chat.NativeChatStepRecorder
+import com.example.llamadroid.service.chat.NativeChatStepResume
+import com.example.llamadroid.service.chat.NativeChatStepSession
+import com.example.llamadroid.service.chat.NativeChatToolLoopState
+import com.example.llamadroid.service.chat.NativeChatTurnNotes
+import com.example.llamadroid.service.chat.NativeToolRetryPolicy
+import com.example.llamadroid.service.chat.onOverflowWithTurn
+import com.example.llamadroid.service.chat.saveSlotAfterStop
+import com.example.llamadroid.service.chat.NativeToolCallPatcher
+import com.example.llamadroid.service.chat.extractThinkingTags
 import com.example.llamadroid.data.repository.LlamaRepository
 import com.example.llamadroid.onnx.OnnxTtsRequest
 import com.example.llamadroid.onnx.SUPERTONIC_DEFAULT_LANGUAGE
@@ -65,52 +92,6 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.math.ceil
 import kotlin.math.roundToInt
-
-// Native MTMD defaults to 2 fps. Keeping direct input to twelve seconds caps the
-// decoded frame budget at 24 even when a remote server has no app-managed fps
-// profile. Longer videos go through the bounded, sequential recognition path.
-private const val NATIVE_CHAT_MAX_DIRECT_VIDEO_DURATION_MS = MAX_DIRECT_VIDEO_DURATION_MS
-private const val NATIVE_CHAT_VIDEO_MAX_TOKENS = 512
-private const val NATIVE_CHAT_VIDEO_TIMEOUT_MINUTES = 10
-private const val NATIVE_CHAT_VIDEO_WHOLE_TIMEOUT_MS = 60L * 60L * 1_000L
-private const val NATIVE_CHAT_VIDEO_MERGE_OBSERVATION_CHARS = 3_500
-private const val NATIVE_CHAT_VIDEO_QUESTION_MAX_CHARS = 2_000
-private const val NATIVE_CHAT_VIDEO_TRANSCRIPT_MAX_CHARS = 12_000
-private const val NATIVE_CHAT_VIDEO_PHASE_MAX_CHARS = 120
-
-private data class NativeChatVideoPayload(
-    val streamVideo: Boolean = false,
-    val localVideoData: String? = null,
-    val sampledFramePaths: List<String> = emptyList(),
-    val samplingDisclosure: String? = null,
-    val videoObservation: String? = null,
-    /** Transient, extracted audio; never written back to the chat message. */
-    val videoAudioPath: String? = null
-)
-
-private data class NativeChatVideoPreparation(
-    val payloads: List<NativeChatVideoPayload>,
-    val streamedMediaPaths: List<String>,
-    val cleanupRoot: File?,
-    val stagedRuntimeFiles: List<File>,
-    val transientAudioRoot: File? = null
-) {
-    val hasDirectVideo: Boolean
-        get() = payloads.any {
-            !it.localVideoData.isNullOrBlank() || it.streamVideo
-        }
-
-    fun cleanup() {
-        cleanupRoot?.deleteRecursively()
-        transientAudioRoot?.deleteRecursively()
-        stagedRuntimeFiles.forEach { file -> file.delete() }
-    }
-}
-
-private data class NativeChatVideoObservation(
-    val text: String,
-    val range: VideoRecognitionSegment
-)
 
 internal fun isNativeChatLoopbackHost(host: String): Boolean {
     val normalized = normalizeNativeChatServerHost(host)
@@ -130,20 +111,6 @@ internal fun generationElapsedMs(
 private const val LITERT_CHAT_FALLBACK_CONTEXT_TOKENS = 4000
 private const val STREAMING_STATE_UPDATE_INTERVAL_MS = 100L
 private const val STREAMING_PERSIST_INTERVAL_MS = 500L
-
-private val KnownToolImagePathPlaceholders = setOf(
-    "image_from_user_input",
-    "image_from_user",
-    "image_path_to_the_provided_image",
-    "image_path_to_provided_image",
-    "path_to_the_provided_image",
-    "path_to_provided_image",
-    "provided_image_path",
-    "provided_image",
-    "user_image",
-    "user_provided_image",
-    "attached_image"
-)
 
 private fun LlamaChatEntity.withDefaultLiteRtContext(model: LiteRtModelEntity): LlamaChatEntity {
     val selectedContext = contextSize.takeIf { it > 0 }
@@ -165,7 +132,7 @@ internal fun shouldAutoStartLocalLlamaServer(
 ): Boolean =
     server.isLlamaServerEngine() &&
         isNativeChatLoopbackHost(server.host) &&
-        state is ServerState.Stopped
+        (state is ServerState.Stopped || state is ServerState.Error)
 
 internal fun shouldAttachMmprojForLocalAutoStart(
     server: LlamaServerEntity,
@@ -192,16 +159,16 @@ private fun LlamaServerEntity.supportsNativeVideoInput(): Boolean {
  * video-enabled profile (or an explicit video-capable remote row) is the
  * compatibility default, while a JSON false value always disables it.
  */
-private fun LlamaServerEntity.allowsNativeChatVideoAudio(): Boolean =
+internal fun LlamaServerEntity.allowsNativeChatVideoAudio(): Boolean =
     // Processing preferences live in VideoRecognitionSettingsRepository. A launch profile may
     // still contain the old audio flag for decoding, but it must not override the global policy.
     supportsNativeVideoInput() && supportsDirectAudioInput()
 
-private fun VideoProcessingPolicy.usesLegacyTranscriptRoute(): Boolean =
+internal fun VideoProcessingPolicy.usesLegacyTranscriptRoute(): Boolean =
     mode == VideoProcessingMode.LEGACY_TRANSCRIPT
 
 /** Inline video is safe only for an app-managed loopback profile with a verified bounded FPS. */
-private fun LlamaServerEntity.allowsSafeNativeChatVideoStream(): Boolean {
+internal fun LlamaServerEntity.allowsSafeNativeChatVideoStream(): Boolean {
     if (!isLlamaServerEngine() || !isNativeChatLoopbackHost(host)) return false
     val profile = LlamaServerLaunchProfile.decode(localLaunchProfileJson) ?: return false
     return profile.videoEnabled &&
@@ -229,290 +196,34 @@ internal fun normalizeNativeChatServerHost(host: String): String {
     }.getOrDefault(trimmed).lowercase()
 }
 
-private val NativeChatCitationLinkPattern = Regex(
-    """\[((?:\\.|[^\]\n])+)]\(\s*<?((?:https?://[^\s)>]+)|(?:kb://chunk/\d+))>?(?:\s+"[^"]*")?\s*\)""",
-    RegexOption.IGNORE_CASE
-)
-
-internal data class NativeChatSourceCitation(
-    val label: String,
-    val url: String,
-    val markdown: String
-)
-
-internal data class LiteRtToolCallExtraction(
-    val visibleContent: String,
-    val payloads: List<String>
-)
-
-private val LiteRtToolCallTagPattern = Regex(
-    pattern = """(?is)(?:<\s*(?:tool[_-]?)?call\s*>|_call\s*>)\s*([\s\S]*?)\s*(?:<\s*/\s*(?:tool[_-]?)?call\s*>|</_call\s*>)"""
-)
-
-internal fun extractLiteRtToolCallPayloads(text: String): LiteRtToolCallExtraction {
-    val payloads = LiteRtToolCallTagPattern.findAll(text)
-        .mapNotNull { match ->
-            match.groupValues.getOrNull(1)
-                ?.trim()
-                ?.takeIf { payload -> payload.startsWith("{") || payload.startsWith("[") }
-        }
-        .toList()
-    return LiteRtToolCallExtraction(
-        visibleContent = text.replace(LiteRtToolCallTagPattern, "").trim(),
-        payloads = payloads
-    )
-}
-
-internal fun extractNativeChatSourceCitations(toolOutput: String): List<NativeChatSourceCitation> {
-    return toolOutput
-        .lineSequence()
-        .filter { line ->
-            line.contains("citation", ignoreCase = true) ||
-                line.trimStart().matches(Regex("""^\d+\.\s+\[.*"""))
-        }
-        .flatMap { line ->
-            NativeChatCitationLinkPattern.findAll(line).map { match ->
-                val label = unescapeNativeChatMarkdownLabel(match.groupValues[1])
-                val url = match.groupValues[2]
-                NativeChatSourceCitation(
-                    label = label,
-                    url = url,
-                    markdown = "[${escapeNativeChatMarkdownLabel(label)}]($url)"
-                )
-            }
-        }
-        .distinctBy { it.url }
-        .toList()
-}
-
-internal fun applyNativeChatSourceCitationFallback(
-    content: String,
-    citations: List<NativeChatSourceCitation>
-): String {
-    val uniqueCitations = citations.distinctBy { it.url }
-    if (uniqueCitations.isEmpty() || content.isBlank()) return content
-
-    var updated = Regex("""\[(\d+)](?!\()""").replace(content) { match ->
-        val sourceIndex = match.groupValues[1].toIntOrNull()?.minus(1) ?: return@replace match.value
-        val citation = uniqueCitations.getOrNull(sourceIndex) ?: return@replace match.value
-        "[${match.groupValues[1]}](${citation.url})"
-    }
-
-    uniqueCitations.forEach { citation ->
-        val label = citation.label.trim()
-        if (label.isBlank()) return@forEach
-        updated = Regex("""\[${Regex.escape(label)}](?!\()""").replace(updated) { citation.markdown }
-    }
-
-    val hasSourceLink = uniqueCitations.any { citation -> updated.contains(citation.url) }
-    if (!hasSourceLink) {
-        updated = buildString {
-            append(updated.trimEnd())
-            appendLine()
-            appendLine()
-            appendLine("Sources:")
-            uniqueCitations.take(8).forEachIndexed { index, citation ->
-                appendLine("${index + 1}. ${citation.markdown}")
-            }
-        }.trimEnd()
-    }
-
-    return updated
-}
-
-private fun unescapeNativeChatMarkdownLabel(label: String): String {
-    val result = StringBuilder()
-    var escaped = false
-    for (char in label) {
-        if (escaped) {
-            result.append(char)
-            escaped = false
-        } else if (char == '\\') {
-            escaped = true
-        } else {
-            result.append(char)
-        }
-    }
-    if (escaped) result.append('\\')
-    return result.toString()
-}
-
-private fun escapeNativeChatMarkdownLabel(label: String): String =
-    label
-        .replace("\\", "\\\\")
-        .replace("[", "\\[")
-        .replace("]", "\\]")
-
-internal fun nativeChatToolAwarenessMessages(
-    toolConfig: NativeChatToolConfig,
-    knowledgeBaseRoutingGuide: String? = null
-): List<OllamaService.ChatMessage> = buildList {
-    if (!toolConfig.hasEnabledTools()) return@buildList
-    add(
-        OllamaService.ChatMessage(
-            role = "system",
-            content = "You are enclosed in the app runtime. Use only the native tools explicitly available in this turn; do not assume shell access, arbitrary files, network, Android APIs, or external services unless a listed tool provides them."
-        )
-    )
-    val currentYear = java.time.LocalDate.now().year
-
-    if (toolConfig.fileToolsEnabled) {
-        add(
-            OllamaService.ChatMessage(
-                role = "system",
-                content = "A private workspace is available for this saved chat. Use list/read before editing existing files. Keep files focused, write at most one bounded batch per call, then use append_workspace_file, edit_workspace_lines, or apply_workspace_patch. Do not claim access to files outside this chat workspace."
-            )
-        )
-    }
-
-    if (toolConfig.noteToolsEnabled || toolConfig.todoToolsEnabled) {
-        val noteGuidance = if (toolConfig.noteToolsEnabled) {
-            "When the user asks you to write, save, create, update, or improve a note, call the appropriate note tool in this turn instead of only saying that you will do it. Use create_note to save durable findings and long research notes with source citations. Use list_notes to discover whitelisted note IDs, then read_note to inspect exact note content before editing. Do not ask the user to provide note IDs when list_notes/read_note can find them. Use update_note or replace_note_text to revise notes later, and read_note to recover previous research instead of forgetting it."
-        } else {
-            "Use list_notes to discover whitelisted todo-list note IDs, then read_note to inspect exact todo item indexes before editing. Do not ask the user to provide note IDs or todo indexes when list_notes/read_note can find them."
-        }
-        val todoGuidance = if (toolConfig.todoToolsEnabled) {
-            " For todo lists, use the todo-list tools for creating lists, checking, unchecking, adding, editing, or removing items."
-        } else {
-            ""
-        }
-        add(
-            OllamaService.ChatMessage(
-                role = "system",
-                content = "Native chat note tools are available. $noteGuidance$todoGuidance Existing notes outside the whitelist are intentionally invisible."
-            )
-        )
-    }
-
-    if (toolConfig.imageGenerationEnabled) {
-        add(
-            OllamaService.ChatMessage(
-                role = "system",
-                content = "When using generate_image, first improve the user's image idea into a stronger prompt with clear subject, composition, style, lighting, color, medium, and constraints. If generated-image review is enabled and an attached result image appears, inspect it before the final answer; regenerate with a better optimized prompt when it misses the request, otherwise answer using the available result."
-            )
-        )
-    }
-
-    if (toolConfig.webSearchEnabled || toolConfig.fetchUrlEnabled) {
-        val webGuidance = buildList {
-            if (toolConfig.webSearchEnabled) {
-                add("Use web_search for broad discovery")
-            }
-            add("use search_page to inspect links and snippets inside a specific page")
-            if (toolConfig.fetchUrlEnabled) {
-                add("use fetch_url to read the full content of a chosen URL")
-            }
-        }.joinToString(", ").replaceFirstChar { it.uppercase() }
-        val workflowGuidance = when {
-            toolConfig.webSearchEnabled && toolConfig.fetchUrlEnabled ->
-                " For tasks like latest commits, releases, issues, changelogs, or docs on a project site, first find the official page, then use search_page with a navigation query such as commits or releases, then fetch_url the returned URL before summarizing."
-            toolConfig.webSearchEnabled ->
-                " For tasks like latest commits, releases, issues, changelogs, or docs on a project site, first find the official page, then use search_page with a navigation query such as commits or releases before summarizing."
-            else ->
-                " Use the URL the user provides as the starting point; search_page can inspect same-page matches and links, and fetch_url can read the chosen URL."
-        }
-        val kbFallbackTargets = buildList {
-            if (toolConfig.webSearchEnabled) add("web_search")
-            if (toolConfig.fetchUrlEnabled) add("fetch_url")
-            add("Kiwix")
-        }
-        val kbFallbackTargetText = when (kbFallbackTargets.size) {
-            0 -> "external tools"
-            1 -> kbFallbackTargets.single()
-            2 -> kbFallbackTargets.joinToString(" or ")
-            else -> kbFallbackTargets.dropLast(1).joinToString(", ") + ", or " + kbFallbackTargets.last()
-        }
-        add(
-            OllamaService.ChatMessage(
-                role = "system",
-                content = "Web navigation tools are available. $webGuidance.$workflowGuidance If selected knowledge-base guidance says a KB is relevant, call kb_search/kb_read_source before $kbFallbackTargetText unless the user explicitly needs current/external information."
-            )
-        )
-    }
-
-    if (toolConfig.deepResearchEnabled) {
-        val selectedKbImportGuidance = if (toolConfig.deepResearchImportIntoSelectedKbEnabled && toolConfig.selectedKnowledgeBaseIds.any { it > 0L }) {
-            " If the user explicitly asks to find/import new resources for the currently selected knowledge base, call deep_research with target_knowledge_base_id set to one of the selected KB ids; this permission is enabled for this chat."
-        } else {
-            " Do not import Deep Research sources into an already selected knowledge base; create a new visible KB unless the selected-KB import permission is enabled."
-        }
-        add(
-            OllamaService.ChatMessage(
-                role = "system",
-                content = "Deep Research is available. Use deep_research when the user asks for broad, multi-source research that should create a normal visible knowledge base. Refine the query before calling it, include a short title/focus and content_summary that explain what the generated KB will contain, and set source_limit only when the user asks for a custom maximum import count. Treat source_limit as an upper bound, not as a required number of sources. The tool runs more than one search when useful, scores candidates, skips uninteresting/low-quality results, downloads readable webpages and PDFs, extracts their text, imports the best sources into the KB, vectorizes them, and selects the KB for this chat; it is not a note-writing tool.$selectedKbImportGuidance The tool may run for a long time and returns only after the knowledge base has been created or updated, imported, vectorized, and selected for this chat. Do not send a final answer saying research will start; wait for the tool result, then answer using kb_search/kb_read_source with exact KB citation links when needed."
-            )
-        )
-    }
-
-    if (toolConfig.calendarToolsEnabled || toolConfig.alarmToolsEnabled) {
-        val organizerGuidance = buildList {
-            if (toolConfig.calendarToolsEnabled) {
-                add("Use list_calendar_events/read_calendar_event to discover event IDs before editing or deleting")
-            }
-            if (toolConfig.alarmToolsEnabled) {
-                add("use list_alarms/read_alarm to discover alarm IDs before editing or deleting")
-            }
-        }.joinToString("; ").replaceFirstChar { it.uppercase() }
-        val idGuidance = when {
-            toolConfig.calendarToolsEnabled && toolConfig.alarmToolsEnabled ->
-                "Do not ask the user for event or alarm IDs when the tools can find them. Calendar events can exist without alarms. Create or update phone alarms only when the user asks for an alert/reminder or when it is clearly useful for scheduling."
-            toolConfig.calendarToolsEnabled ->
-                "Do not ask the user for event IDs when the tools can find them. Calendar events can exist without alarms."
-            else ->
-                "Do not ask the user for alarm IDs when the tools can find them. Create or update phone alarms only when the user asks for an alert/reminder or when it is clearly useful for scheduling."
-        }
-        add(
-            OllamaService.ChatMessage(
-                role = "system",
-                content = "Organizer tools are available. $organizerGuidance; $idGuidance For enabled organizer tool times, use the device-local timezone; if the user gives a month/day without a year, assume the current year ($currentYear) unless they explicitly say another year."
-            )
-        )
-    }
-
-    if (toolConfig.knowledgeBaseEnabled) {
-        val routingGuide = knowledgeBaseRoutingGuide?.takeIf { it.isNotBlank() }
-            ?.let { " $it" }
-            .orEmpty()
-        val guidance = if (toolConfig.chatDocumentKnowledgeBaseId?.let { it > 0L } == true) {
-            "This chat has uploaded document vectors available through the knowledge-base tools. When the user mentions the document, file, attachment, PDF, or says to use what they sent, use the retrieved chat-document context or call kb_search before answering. Do not say no document was attached when the chat document tools are enabled; use the returned chunks and cite them with the exact Markdown citation links, for example [AL.pdf chunk 9](kb://chunk/123), not bare labels like [AL.pdf chunk 9].$routingGuide"
-        } else {
-            "Knowledge-base tools are available. Use kb_search before answering questions that ask for local knowledge-base content, and cite KB-derived claims with the returned exact Markdown citation links, not bare citation labels.$routingGuide"
-        }
-        add(
-            OllamaService.ChatMessage(
-                role = "system",
-                content = guidance
-            )
-        )
-    }
-}
-
 class LlamaClientService : Service() {
 
-    private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    
-    // Active generation state
-    private var job: Job? = null
+    internal val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    /** One generation session per chat id; a chat already in the map is busy (running or queued). */
+    private val sessions = ConcurrentHashMap<Long, ChatGenerationSession>()
+    private val foregroundLock = Any()
     private var notificationTaskId: Int? = null
-    private val stoppingGeneration = AtomicBoolean(false)
-    @Volatile private var activeNativeChatCall: Call? = null
-    @Volatile private var activeNativeChatRetrofitCall: retrofit2.Call<ResponseBody>? = null
-    
+    private var foregroundFailureMessage = ""
+    private lateinit var powerLocks: ChatPowerLocks
+    private lateinit var admissionPlanner: ChatAdmissionPlanner
+    private lateinit var scheduler: ChatGenerationScheduler
+    private lateinit var toolExtensions: List<NativeChatToolExtension>
+    /** Used only by code paths that run outside any chat session. */
+    private val fallbackChatService by lazy { LlamaServerChatService() }
+
     // Repository to save messages
     private lateinit var repository: LlamaRepository
-    private lateinit var settingsRepo: SettingsRepository
+    internal lateinit var settingsRepo: SettingsRepository
     /** Shared policy used by Video Summary and Native Chat video preparation. */
-    private lateinit var videoSettingsRepo: VideoRecognitionSettingsRepository
+    internal lateinit var videoSettingsRepo: VideoRecognitionSettingsRepository
     private lateinit var ollamaService: OllamaService
     private lateinit var database: AppDatabase
-    private val llamaServerChatService = LlamaServerChatService()
     private lateinit var liteRtLmChatService: LiteRtLmChatService
     private lateinit var liteRtLmWorkerClient: LiteRtLmWorkerClient
     private lateinit var nativeChatToolRuntime: NativeChatToolRuntime
     private val whisperBindingIntent by lazy { Intent(applicationContext, WhisperService::class.java) }
-    private val powerLockGuard = Any()
-    private var powerLocksHeld = false
-    
+
     override fun onCreate() {
         super.onCreate()
         // Initialize repository (using manual instantiation for now, assuming DI isn't fully set up)
@@ -528,6 +239,21 @@ class LlamaClientService : Service() {
         ollamaService = OllamaService(applicationContext)
         liteRtLmChatService = LiteRtLmChatService(applicationContext)
         liteRtLmWorkerClient = LiteRtLmWorkerClient(applicationContext)
+        powerLocks = ChatPowerLocks(applicationContext, "LlamaClientService")
+        admissionPlanner = ChatAdmissionPlanner(applicationContext, database)
+        scheduler = ChatGenerationScheduler(
+            scope = serviceScope,
+            controller = ChatAdmissionController(ramFits = { target, reservedBytes ->
+                val estimate = target.ramEstimate
+                estimate == null || admissionPlanner.ramGate.decide(
+                    estimate.copy(weightsBytes = estimate.weightsBytes + reservedBytes)
+                ).ok
+            }),
+            publish = { state -> Companion.updateState(state) }
+        )
+        // Same extensions and order as PrepareCachesSheet, so prepared prefixes match.
+        toolExtensions = listOf(com.example.llamadroid.service.delegation.NativeChatDelegationTools(applicationContext),
+            NativeChatAttachmentTools.forChatService(applicationContext))
         nativeChatToolRuntime = NativeChatToolRuntime(
             context = applicationContext,
             noteDao = database.noteDao(),
@@ -542,7 +268,8 @@ class LlamaClientService : Service() {
             pdfTextExtractor = { pdfBytes, maxChars ->
                 com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(applicationContext)
                 extractNativePdfTextFromBytes(pdfBytes, maxChars)
-            }
+            },
+            extensions = toolExtensions
         )
     }
 
@@ -551,8 +278,12 @@ class LlamaClientService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_GENERATE -> {
-                val taskId = ensureForegroundStarted()
                 val chatId = intent.getLongExtra(EXTRA_CHAT_ID, -1L)
+                if (synchronized(foregroundLock) { ensureForegroundStarted() } == null) {
+                    Companion.updateState(GenerationState.Error(foregroundFailureMessage, chatId))
+                    stopSelf(startId)
+                    return START_NOT_STICKY
+                }
                 val serverId = intent.getLongExtra(EXTRA_SERVER_ID, -1L)
                 val userMessage = intent.getStringExtra(EXTRA_USER_MESSAGE)
                 val imagePath = intent.getStringExtra(EXTRA_IMAGE_PATH)
@@ -566,7 +297,6 @@ class LlamaClientService : Service() {
                     startGeneration(
                         chatId,
                         serverId,
-                        taskId,
                         userMessage,
                         imagePath,
                         audioPath,
@@ -578,34 +308,110 @@ class LlamaClientService : Service() {
                 } else {
                     DebugLog.log("LlamaClientService: Missing params for generation")
                     Companion.updateState(GenerationState.Error("Missing parameters for generation", chatId))
-                    stopGeneration()
+                    releaseForegroundIfIdle()
                 }
             }
             ACTION_STOP -> {
-                if (notificationTaskId == null) {
-                    ensureForegroundStarted()
+                if (synchronized(foregroundLock) { ensureForegroundStarted() } == null) {
+                    stopSelf(startId)
+                    return START_NOT_STICKY
                 }
-                stopGeneration()
+                val chatId = intent.getLongExtra(EXTRA_CHAT_ID, -1L)
+                if (chatId > 0L) {
+                    sessions[chatId]?.let(::stopSession)
+                } else {
+                    stopAllSessions()
+                }
+                releaseForegroundIfIdle()
+            }
+            ACTION_CANCEL_QUEUED -> {
+                if (synchronized(foregroundLock) { ensureForegroundStarted() } == null) {
+                    stopSelf(startId)
+                    return START_NOT_STICKY
+                }
+                val chatId = intent.getLongExtra(EXTRA_CHAT_ID, -1L)
+                if (chatId > 0L && scheduler.isQueued(chatId)) {
+                    sessions[chatId]?.let(::stopSession)
+                }
+                releaseForegroundIfIdle()
             }
         }
         return START_NOT_STICKY
     }
 
-    private fun ensureForegroundStarted(): Int {
+    /** Android 15 foreground-service timeout: stop every session cleanly, never throw. */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        runCatching {
+            DebugLog.log("LlamaClientService: foreground timeout type=$fgsType; stopping all generations")
+            stopAllSessions()
+        }
+        runCatching {
+            synchronized(foregroundLock) {
+                notificationTaskId?.let { UnifiedNotificationManager.dismissTask(it) }
+                notificationTaskId = null
+            }
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        }
+        runCatching { stopSelf() }
+    }
+
+    /** Caller holds [foregroundLock]. */
+    private fun ensureForegroundStarted(): Int? {
         notificationTaskId?.let { return it }
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.LLAMA_CLIENT,
             "Llama Chat"
         )
+        val startResult = ForegroundStart.start(
+            this,
+            taskId,
+            notification,
+            ForegroundServiceTypes.SPECIAL_USE
+        )
+        if (startResult is ForegroundStart.Result.Failed) {
+            foregroundFailureMessage = ForegroundStart.failureMessage(this, startResult.reason, "Llama Chat")
+            UnifiedNotificationManager.failTask(taskId, foregroundFailureMessage)
+            return null
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
         return taskId
     }
+
+    /** Removes the foreground notification once no chat is generating or queued. */
+    private fun releaseForegroundIfIdle() {
+        synchronized(foregroundLock) {
+            if (sessions.isNotEmpty()) {
+                refreshNotification()
+                return
+            }
+            notificationTaskId?.let { UnifiedNotificationManager.dismissTask(it) }
+            notificationTaskId = null
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        }
+    }
+
+    /** The single notification: per-chat progress for one chat, "N chats generating" for several. */
+    private fun notifyProgress(taskId: Int, progress: Float, text: String) {
+        val count = sessions.size
+        val shown = if (count > 1) {
+            resources.getQuantityString(R.plurals.native_chat_notification_generating_count, count, count)
+        } else {
+            text
+        }
+        UnifiedNotificationManager.updateProgress(notificationTaskId ?: taskId, progress, shown)
+    }
+
+    private fun refreshNotification() {
+        val taskId = notificationTaskId ?: return
+        if (sessions.size > 1) notifyProgress(taskId, 0.05f, "")
+    }
+
+    private fun chatService(chatId: Long): LlamaServerChatService =
+        sessions[chatId]?.llamaServerChatService ?: fallbackChatService
 
     private fun startGeneration(
         chatId: Long,
         serverId: Long,
-        taskId: Int,
         userMessage: String?,
         imagePath: String?,
         audioPath: String?,
@@ -614,24 +420,84 @@ class LlamaClientService : Service() {
         forceAssistantTts: Boolean = false,
         callMode: Boolean = false
     ) {
-        if (job?.isActive == true) {
-            DebugLog.log("LlamaClientService: Generation already in progress")
+        val session = ChatGenerationSession(chatId)
+        var foregroundFailed = false
+        val taskId = synchronized(foregroundLock) {
+            if (sessions.containsKey(chatId)) {
+                null
+            } else {
+                ensureForegroundStarted()?.also { sessions[chatId] = session } ?: run {
+                    foregroundFailed = true
+                    null
+                }
+            }
+        } ?: run {
+            if (foregroundFailed) {
+                Companion.updateState(GenerationState.Error(foregroundFailureMessage, chatId))
+                return
+            }
+            DebugLog.log("LlamaClientService: Generation already in progress for chat $chatId")
+            // Surface the in-flight start instead of silently dropping the second send.
+            if (NativeChatGenerationStates.stateFor(chatId).let {
+                    it is GenerationState.Generating && it.content.isEmpty() &&
+                        it.promptTotal == 0 && !it.statusText.isNullOrBlank()
+                }
+            ) {
+                updateLocalLlamaServerStartupStatus(
+                    chatId,
+                    getString(R.string.native_chat_server_start_still_starting)
+                )
+            }
             return
         }
-        
-        stoppingGeneration.set(false)
-        acquirePowerLocks()
+
+        powerLocks.acquire()
         warnIfBatteryOptimizationMayThrottle(chatId)
 
-        resetThinking()
         Companion.updateState(GenerationState.Generating(chatId = chatId, content = ""))
+        refreshNotification()
 
-        job = serviceScope.launch {
+        val sessionJob = serviceScope.launch(session, start = CoroutineStart.LAZY) {
             var assistantMsgId: Long = -1L
+            var managedUsage: LlamaServerUsageLease? = null
             val progress = StreamingProgress()
+            // Forced direct-audio / native-video state for the one-shot Whisper / transcript fallback.
+            val mediaTurn = MediaTurnState()
+            var fallbackStatus: String? = null
             try {
-                val server = resolveServerForGeneration(serverId)
+                var server = resolveServerForGeneration(serverId)
                     ?: throw Exception("Server with ID $serverId not found")
+                session.usesOllama = server.isOllamaEngine()
+                // Plain text/image turns are saved before any wait so a queued message stays visible
+                // in the chat; audio and video turns need the server to prepare them first.
+                val userTurnSavedEarly = audioPath.isNullOrBlank() && videoPath.isNullOrBlank() &&
+                    (!userMessage.isNullOrBlank() || !imagePath.isNullOrBlank())
+                if (userTurnSavedEarly) {
+                    val savedId = repository.addMessage(chatId = chatId, role = "user", content = userMessage.orEmpty(),
+                        imagePath = imagePath?.takeIf { it.isNotBlank() }, audioPath = null, videoPath = null)
+                    // Files picked in the composer belong to this message from the moment it is sent.
+                    NativeChatAttachmentBinding.bindPending(applicationContext, chatId, savedId)
+                }
+                // Same-endpoint slots, RAM for a not-yet-running local model and the LiteRT engine
+                // are shared resources: wait (Queued) until the scheduler admits this chat.
+                scheduler.awaitAdmission(admissionPlanner.targetFor(chatId, server))
+                Companion.updateState(GenerationState.Generating(chatId = chatId, content = ""))
+                var managedContext: Int? = null
+                server.managedServerCardId?.let { cardId ->
+                    managedUsage = withContext(Dispatchers.IO) {
+                        LlamaServerUsageLease(applicationContext,
+                            com.example.llamadroid.data.model.LlamaServerCardEntity.sessionIdForCard(cardId), serviceScope)
+                    }
+                    val ready = ManagedLlamaServerCoordinator(applicationContext, database).prepare(cardId, onStatus = {
+                        updateLocalLlamaServerStartupStatus(chatId, it)
+                    })
+                    val profile = requireNotNull(ready.profile)
+                    server = server.copy(host = managedLlamaConnectHost(profile.host), port = profile.serverPort,
+                        modelName = profile.modelPath.substringAfterLast('/'),
+                        localLaunchProfileJson = LlamaServerLaunchProfile.encodeForPersistence(profile),
+                        supportsVision = profile.visionEnabled, supportsVideo = profile.videoEnabled)
+                    managedContext = ready.contextTokens
+                }
                 if (server.isLiteRtEngine()) {
                     DebugLog.log("LlamaClientService: Using local LiteRT engine for Chat ID $chatId")
                 } else {
@@ -641,7 +507,25 @@ class LlamaClientService : Service() {
                     DebugLog.log("LlamaClientService: handling call-mode turn for Chat ID $chatId")
                 }
 
-                val chat = repository.getChat(chatId) ?: throw Exception("Chat with ID $chatId not found")
+                var chat = repository.getChat(chatId) ?: throw Exception("Chat with ID $chatId not found")
+                if (server.id > 0) repository.bindChatServerIfUnbound(chatId, server.id)
+                // Per-chat audio routing (direct vs Whisper, model, language) overrides the server card.
+                val mediaConfig = NativeChatToolConfig.fromApiParams(chat.apiParams)
+                val audioRejected = NativeChatMediaFailures.audioRejected(chatId)
+                server = server.withChatAudioOverrides(mediaConfig, audioRejected)
+                session.videoMode = NativeChatMediaRouting.effectiveVideoMode(
+                    mediaConfig.videoInputMode, NativeChatMediaFailures.videoRejected(chatId)
+                )
+                server = server.withChatVideoOverrides(session.videoMode)
+                mediaTurn.audioDirectMode = NativeChatMediaRouting.forcesDirectAudio(mediaConfig.audioInputMode, audioRejected)
+                mediaTurn.videoNativeMode = NativeChatMediaRouting.forcesNativeVideo(session.videoMode)
+                managedContext?.let { limit ->
+                    // The linked server owns the maximum; retain a user's smaller conversation budget.
+                    if (chat.contextSize > limit) {
+                        repository.updateChatContextSize(chatId, limit)
+                        chat = chat.copy(contextSize = limit)
+                    }
+                }
                 // A retry/continuation may not carry a new attachment intent, but replayed
                 // history still needs MTMD enabled before the local server is started.
                 val historyVideoPath = videoPath
@@ -650,8 +534,7 @@ class LlamaClientService : Service() {
                         .firstOrNull { !it.videoPath.isNullOrBlank() }
                         ?.videoPath
                 if (!historyVideoPath.isNullOrBlank() &&
-                    !server.supportsNativeVideoInput() &&
-                    !videoSettingsRepo.snapshot().processingPolicy.usesLegacyTranscriptRoute()
+                    nativeChatVideoRoute(chatId, server) == NativeChatMediaRouting.VideoRoute.UNSUPPORTED
                 ) {
                     throw IllegalStateException(getString(R.string.llama_video_unsupported))
                 }
@@ -661,6 +544,14 @@ class LlamaClientService : Service() {
                     imagePath = imagePath,
                     videoPath = historyVideoPath
                 )
+                // The server answers: its memory is real now, not just reserved by the RAM gate.
+                scheduler.markServerUp(chatId)
+                // contextSize 0 means "the server's window": resolve it (in memory only) so the
+                // context ring and compaction have a real window. llama-server engines only.
+                if (chat.contextSize <= 0) {
+                    val window = NativeChatContextWindow.resolve(server, chat, managedContext)
+                    if (window > 0) chat = chat.copy(contextSize = window)
+                }
 
                 val preparedUserTurn = prepareUserTurnForServer(
                     chatId = chatId,
@@ -672,7 +563,7 @@ class LlamaClientService : Service() {
                     pretranscribedAudioText = pretranscribedAudioText
                 )
 
-                if (preparedUserTurn.shouldPersist() && !preparedUserTurn.alreadyPersisted) {
+                if (preparedUserTurn.shouldPersist() && !preparedUserTurn.alreadyPersisted && !userTurnSavedEarly) {
                     repository.addMessage(
                         chatId = chatId,
                         role = "user",
@@ -683,13 +574,24 @@ class LlamaClientService : Service() {
                     )
                 }
 
-                val history = prepareHistoryForServer(
-                    chatId = chatId,
-                    taskId = taskId,
-                    server = server,
-                    progress = progress
+                val history = NativeChatTurnDecorators.apply(
+                    applicationContext,
+                    chatId,
+                    applyImageFallbackForServer(
+                        chatId = chatId,
+                        server = server,
+                        messages = prepareHistoryForServer(
+                            chatId = chatId,
+                            taskId = taskId,
+                            server = server,
+                            progress = progress
+                        )
+                    )
                 )
                 if (history.isEmpty()) throw Exception("Chat history is empty")
+                mediaTurn.audioInTurn = server.supportsDirectAudioInput() &&
+                    history.lastOrNull { it.role == "user" }?.audioPath?.isNotBlank() == true
+                mediaTurn.videoInTurn = history.any { !it.videoPath.isNullOrBlank() }
 
                 val isContinuation = !preparedUserTurn.shouldPersist() && history.last().role == "assistant"
                 val assistantPreparation = prepareAssistantMessage(chatId, history, isContinuation)
@@ -700,21 +602,57 @@ class LlamaClientService : Service() {
                 val params = parseChatParams(chat.apiParams)
                 val paramEnableThinking = (params["enable_thinking"] as? Boolean) ?: true
                 val chatToolConfig = NativeChatToolConfig.fromParams(params)
-                val serverToolDefaults = if (server.isLiteRtEngine()) {
-                    NativeChatToolConfig.liteRtToolDefaults()
-                } else {
-                    NativeChatToolConfig.fromApiParams(server.defaultApiParams)
-                }
+                // Tool permissions are per chat now; the server card no longer caps them.
+                val serverToolDefaults = NativeChatToolConfig.liteRtToolDefaults()
                 val toolConfig = chatToolConfig.effectiveWithServerDefaults(serverToolDefaults)
-                val useNativeTools = !isContinuation && toolConfig.hasEnabledTools()
+                // Continue is one path: an interrupted tool loop, a reply stopped mid-sentence or a finished
+                // reply resumes the tool loop on the same row (llama-server also extends finished replies).
+                val resume = if (isContinuation && toolConfig.hasEnabledTools()) {
+                    NativeChatStepResume.prepare(
+                        assistantPreparation.history.last(),
+                        allowComplete = !server.isOllamaEngine() && !server.isLiteRtEngine()
+                    )
+                } else {
+                    null
+                }
+                val useNativeTools = (!isContinuation || resume != null) && toolConfig.hasEnabledTools()
+                var turnHistory = assistantPreparation.history
+                if (useNativeTools && resume != null) {
+                    // The partial text stays in the live columns (prefilled); the reply's steps replace its history entry.
+                    turnHistory = turnHistory.dropLast(1)
+                    progress.thinking = resume.message.thinking.orEmpty()
+                    progress.stepRecorder = NativeChatStepRecorder(resume.steps)
+                    repository.updateMessageStepsAndText(assistantMsgId, progress.content, resume.message.thinking, resume.message.stepsJson)
+                }
+                // Tool messages only for tool turns on engines that take them; others get flat text.
+                if (!useNativeTools || server.isLiteRtEngine()) turnHistory = NativeChatStepHistory.flattenEntities(turnHistory)
 
+                // Per-chat disk KV cache: pins a slot (and restores a saved state) for eligible
+                // llama-server chats; every other engine runs with a null slot and no overhead.
+                val kvCache = NativeChatKvCacheCoordinator(applicationContext)
+                // May restart the local server with slot saving; a managed card can move ports.
+                if (kvCache.ensureSlotSaveSupport(server, chat) { updateLocalLlamaServerStartupStatus(chatId, it) }) {
+                    server.managedServerCardId?.let { cardId ->
+                        ManagedLlamaServerCoordinator(applicationContext, database).prepare(cardId).profile?.let { p ->
+                            server = server.copy(host = managedLlamaConnectHost(p.host), port = p.serverPort)
+                        }
+                    }
+                }
+                val kvSlot = kvCache.withChatLease(
+                    server = server,
+                    chat = chat,
+                    pinOnly = toolConfig.deepSeekDelegationEnabled,
+                    onStatus = { updateLocalLlamaServerStartupStatus(chatId, it) }
+                ) { lease ->
+                session.kvLease = lease
+                try {
                 if (useNativeTools) {
                     streamNativeToolResponse(
                         chatId = chatId,
                         taskId = taskId,
                         chat = chat,
                         server = server,
-                        history = assistantPreparation.history,
+                        history = turnHistory,
                         assistantMsgId = assistantMsgId,
                         thinkingEnabled = paramEnableThinking,
                         params = params,
@@ -727,7 +665,7 @@ class LlamaClientService : Service() {
                         taskId = taskId,
                         chat = chat,
                         server = server,
-                        history = assistantPreparation.history,
+                        history = turnHistory,
                         assistantMsgId = assistantMsgId,
                         isContinuation = isContinuation,
                         thinkingEnabled = !isContinuation && paramEnableThinking,
@@ -739,48 +677,73 @@ class LlamaClientService : Service() {
                         taskId = taskId,
                         chat = chat,
                         server = server,
-                        history = assistantPreparation.history,
+                        history = turnHistory,
                         assistantMsgId = assistantMsgId,
                         isContinuation = isContinuation,
                         params = params,
                         progress = progress
                     )
                 } else {
-                    streamLlamaServerResponse(
-                        chatId = chatId,
-                        taskId = taskId,
-                        chat = chat,
-                        server = server,
-                        history = assistantPreparation.history,
-                        assistantMsgId = assistantMsgId,
-                        isContinuation = isContinuation,
-                        params = params,
-                        progress = progress
-                    )
+                    NativeChatCompactionHooks.runPlainTurn(
+                        applicationContext, chat, params, server, nativeChatMaxOutputTokens(params),
+                        lease, turnHistory
+                    ) { compactedHistory ->
+                        streamLlamaServerResponse(
+                            chatId = chatId,
+                            taskId = taskId,
+                            chat = chat,
+                            server = server,
+                            history = compactedHistory,
+                            assistantMsgId = assistantMsgId,
+                            isContinuation = isContinuation,
+                            params = params,
+                            progress = progress
+                        )
+                        progress.promptTokens to progress.completionTokens
+                    }
                 }
+                } catch (e: Exception) {
+                    // Stop: save the chat's slot state before the lease is released.
+                    if (e is CancellationException || session.stopping.get()) saveSlotAfterStop(lease)
+                    throw e
+                } finally {
+                    session.kvLease = null
+                }
+                lease.slotId
+                }
+                // Reached only after a complete reply; cancelled or failed turns throw before here.
+                if (kvSlot != null && !session.stopping.get()) kvCache.scheduleSave(server, chat, kvSlot)
 
                 val finalElapsedMs = progress.generationElapsedMs()
-                val finalElapsed = finalElapsedMs / 1000.0
-                val finalTps = progress.reportedTokensPerSecond
-                    ?: if (finalElapsed > 0.0) progress.tokenCount / finalElapsed else 0.0
+                val finalTps = progress.finalTokensPerSecond()
                 if (progress.completionTokens == 0) {
                     progress.completionTokens = progress.tokenCount
                 }
-                if (progress.content.isBlank() && progress.toolEvents.isNotEmpty()) {
+                if (progress.content.isBlank() && progress.toolEvents.isNotEmpty() && progress.stepRecorder?.hasSteps != true) {
                     DebugLog.log("LlamaClientService: tool loop finished without visible assistant content; persisting localized fallback")
                     progress.content = getString(R.string.llama_tool_empty_final_answer)
                 }
 
                 repository.updateMessageTruncatedStatus(assistantMsgId, progress.isTruncated)
-                repository.updateMessageThinkingAndContent(
+                repository.updateMessageStreaming(
                     assistantMsgId,
                     progress.content,
                     progress.thinking.takeIf { it.isNotBlank() },
-                    promptTokens = progress.promptTokens,
+                    promptTokens = progress.displayPromptTokens(),
                     completionTokens = progress.completionTokens,
                     tps = finalTps,
-                    generationTimeMs = finalElapsedMs
+                    generationTimeMs = finalElapsedMs,
+                    stepsJson = progress.stepRecorder?.toJson(complete = true)
                 )
+                // Ollama/LiteRT turns bypass NativeChatCompactionHooks.Turn; keep the context ring measured.
+                if (server.isOllamaEngine() || server.isLiteRtEngine()) {
+                    NativeChatContextFallback.recordAfterTurn(
+                        applicationContext, chatId, progress.promptTokens, progress.completionTokens,
+                        managedContext ?: chat.contextSize
+                    )
+                }
+                NativeChatTurnDecorators.onTurnCompleted(applicationContext, chatId, assistantMsgId)
+                com.example.llamadroid.service.titlegen.TitleGenerationManager.onReplyCompleted(applicationContext, chatId)
                 persistGeneratedImageMessages(chatId, progress)
                 generateAssistantAudioIfEnabled(
                     messageId = assistantMsgId,
@@ -799,39 +762,123 @@ class LlamaClientService : Service() {
                     tokensPerSecond = finalTps
                 ))
             } catch (e: Exception) {
-                if (e is CancellationException || stoppingGeneration.get() || e.message == "Stopped by user") {
+                if (e is CancellationException || session.stopping.get() || e.message == "Stopped by user") {
                      DebugLog.log("LlamaClientService: Generation cancelled")
                      if (assistantMsgId != -1L) {
                          val finalElapsedMs = progress.generationElapsedMs()
-                         val finalElapsed = finalElapsedMs / 1000.0
-                         val finalTps = progress.reportedTokensPerSecond
-                             ?: if (finalElapsed > 0.0) progress.tokenCount / finalElapsed else 0.0
-                         repository.updateMessageThinkingAndContent(
+                         val finalTps = progress.finalTokensPerSecond()
+                         progress.stepRecorder?.sealRunning()
+                         repository.updateMessageStreaming(
                              assistantMsgId,
                              progress.content,
                              progress.thinking.takeIf { it.isNotBlank() },
-                             promptTokens = progress.promptTokens,
+                             promptTokens = progress.displayPromptTokens(),
                              completionTokens = if (progress.completionTokens == 0) progress.tokenCount else progress.completionTokens,
                              tps = finalTps,
-                             generationTimeMs = finalElapsedMs
+                             generationTimeMs = finalElapsedMs,
+                             stepsJson = progress.stepRecorder?.toJson(complete = false)
                          )
                          persistGeneratedImageMessages(chatId, progress)
                      }
                 } else {
                     DebugLog.log("LlamaClientService: Error ${e.message}")
-                    Companion.updateState(GenerationState.Error(e.message ?: "Unknown error", chatId))
+                    progress.stepRecorder?.sealRunning()
+                    progress.stepRecorder?.toJsonIfDirty()?.let { repository.updateMessageSteps(assistantMsgId, it) }
+                    fallbackStatus = prepareMediaFallback(chatId, serverId, assistantMsgId, mediaTurn, progress, e.message)
+                    if (fallbackStatus == null) {
+                        Companion.updateState(GenerationState.Error(e.message ?: "Unknown error", chatId))
+                    }
                 }
             } finally {
-                releasePowerLocks()
-                notificationTaskId?.let { taskId ->
-                    UnifiedNotificationManager.dismissTask(taskId)
-                }
-                notificationTaskId = null
-                stoppingGeneration.set(false)
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                job = null
+                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { managedUsage?.close() }
+                endSession(session, keepForeground = fallbackStatus != null)
+            }
+            // The server rejected the forced media: rerun the turn once on the Whisper / transcript route.
+            fallbackStatus?.let { status ->
+                startGeneration(
+                    chatId, serverId, null, null, null, null, null, forceAssistantTts, callMode
+                )
+                updateLocalLlamaServerStartupStatus(chatId, status)
             }
         }
+        session.job = sessionJob
+        sessionJob.start()
+    }
+
+    /** Frees everything a finished (or stopped) session held and starts whoever was waiting for it. */
+    private fun endSession(session: ChatGenerationSession, keepForeground: Boolean) {
+        stoppingChats.remove(session.chatId)
+        sessions.remove(session.chatId, session)
+        session.kvLease = null
+        scheduler.finish(session.chatId)
+        powerLocks.release()
+        if (keepForeground) refreshNotification() else releaseForegroundIfIdle()
+    }
+
+    private fun stopSession(session: ChatGenerationSession) {
+        if (!session.stopping.compareAndSet(false, true)) return
+        val chatId = session.chatId
+        (NativeChatGenerationStates.stateFor(chatId) as? GenerationState.Generating)?.let { generating ->
+            Companion.updateState(generating.copy(statusText = getString(R.string.llama_generation_stopping)))
+        }
+        stoppingChats.add(chatId)
+        session.cancelTransport()
+        session.job?.cancel()
+        // Ollama's stop switch is process-wide: only use it when no other chat talks to Ollama.
+        if (session.usesOllama && sessions.values.none { it !== session && it.usesOllama }) OllamaService.stop()
+        session.llamaServerChatService.stopGeneration()
+        clearChatState(chatId)
+    }
+
+    private fun stopAllSessions() {
+        val active = sessions.values.toList()
+        active.forEach(::stopSession)
+        if (active.isNotEmpty()) OllamaService.stop()
+    }
+
+    private class MediaTurnState {
+        var audioDirectMode = false
+        var audioInTurn = false
+        var videoNativeMode = false
+        var videoInTurn = false
+    }
+
+    private fun nativeChatVideoRoute(chatId: Long, server: LlamaServerEntity): NativeChatMediaRouting.VideoRoute =
+        NativeChatMediaRouting.videoRoute(
+            sessions[chatId]?.videoMode ?: NativeChatToolConfig.VIDEO_INPUT_SERVER,
+            server.supportsNativeVideoInput(),
+            videoSettingsRepo.snapshot().processingPolicy.usesLegacyTranscriptRoute()
+        )
+
+    /**
+     * Remembers a media rejection for the chat and returns the status to show when the turn should be
+     * retried on Whisper / the transcript route, or null to surface the original error.
+     */
+    private suspend fun prepareMediaFallback(
+        chatId: Long,
+        serverId: Long,
+        assistantMsgId: Long,
+        turn: MediaTurnState,
+        progress: StreamingProgress,
+        message: String?
+    ): String? {
+        val streamed = progress.content.isNotBlank() || progress.completionTokens > 0 || progress.toolEvents.isNotEmpty()
+        val audio = NativeChatMediaRouting.shouldFallBack(
+            turn.audioDirectMode, turn.audioInTurn, NativeChatMediaFailures.audioRejected(chatId), streamed, message
+        )
+        val video = !audio && NativeChatMediaRouting.shouldFallBack(
+            turn.videoNativeMode, turn.videoInTurn, NativeChatMediaFailures.videoRejected(chatId), streamed, message
+        )
+        if (!audio && !video) return null
+        val server = resolveServerForGeneration(serverId) ?: return null
+        if (resolveWhisperModelPath(server) == null) return null
+        if (audio) NativeChatMediaFailures.markAudioRejected(chatId) else NativeChatMediaFailures.markVideoRejected(chatId)
+        if (assistantMsgId != -1L) {
+            repository.getMessagesOnce(chatId).firstOrNull { it.id == assistantMsgId && it.content.isBlank() }
+                ?.let { repository.deleteMessage(it) }
+        }
+        DebugLog.log("LlamaClientService: ${if (audio) "audio" else "video"} rejected by server; retrying via Whisper")
+        return getString(if (audio) R.string.native_chat_audio_fallback_status else R.string.native_chat_video_fallback_status)
     }
 
     private suspend fun ensureLocalLlamaServerReadyIfNeeded(
@@ -840,119 +887,13 @@ class LlamaClientService : Service() {
         imagePath: String?,
         videoPath: String?
     ) {
-        if (!server.isLlamaServerEngine() || !isNativeChatLoopbackHost(server.host)) return
-        val baseUrl = server.baseUrl()
-        if (llamaServerChatService.checkConnection(baseUrl)) return
-
-        val serverState = LlamaService.state.value
-        if (serverState is ServerState.Starting || serverState is ServerState.Loading) {
-            updateLocalLlamaServerStartupStatus(
-                chatId,
-                getString(R.string.llama_client_status_waiting_local_server)
-            )
-            if (waitForLocalLlamaServerReady(baseUrl = baseUrl)) {
-                return
-            }
-        }
-        if (!shouldAutoStartLocalLlamaServer(server, serverState) || LlamaService.hasRecentStartupFailure()) {
-            throw IllegalStateException(getString(R.string.llama_client_error_local_server_not_running))
-        }
-
-        val savedProfile = LlamaServerLaunchProfile.decode(server.localLaunchProfileJson)
-        val modelPath = savedProfile?.modelPath?.takeIf { it.isNotBlank() }
-            ?: settingsRepo.selectedModelPath.value
-            ?: throw IllegalStateException(getString(R.string.llama_client_error_no_selected_model))
-        val selectedVisionEnabled = savedProfile?.visionEnabled ?: settingsRepo.enableVision.value
-        val selectedMmprojPath = savedProfile?.mmprojPath ?: settingsRepo.selectedMmprojPath.value
-        val videoAutoStartProfile = if (!videoPath.isNullOrBlank()) {
-            (savedProfile ?: LlamaServerLaunchProfile.capture(settingsRepo)).copy(
-                modelPath = modelPath,
-                mmprojPath = savedProfile?.mmprojPath ?: selectedMmprojPath,
-                // A video turn must load the projector even when general vision
-                // chat is disabled in Settings.
-                visionEnabled = true,
-                host = nativeChatLocalHostForServer(server.host),
-                serverPort = server.port
-            )
-        } else {
-            null
-        }
-        // A saved profile represents the exact server configuration. A video-only
-        // turn creates a short-lived profile so LlamaService enables MTMD and its
-        // private media directory for this auto-started process.
-        val profileForRequest = videoAutoStartProfile ?: savedProfile
-        val profileJsonForRequest = profileForRequest?.let(LlamaServerLaunchProfile::encode)
-        val shouldPassVisionProjector = profileForRequest?.let { profile ->
-            (profile.visionEnabled || profile.videoEnabled) && !profile.mmprojPath.isNullOrBlank()
-        } ?: shouldAttachMmprojForLocalAutoStart(
-            server = server,
-            imagePath = imagePath,
-            videoPath = videoPath,
-            visionEnabled = selectedVisionEnabled,
-            selectedMmprojPath = selectedMmprojPath
+        // Linked cards have already been prepared through the shared keyed-session owner above.
+        if (server.managedServerCardId != null) return
+        NativeChatLocalServerStarter(applicationContext, settingsRepo, database, chatService(chatId)).ensureReady(
+            server,
+            NativeChatServerStartRequest(chatId = chatId, imagePath = imagePath, videoPath = videoPath),
+            onStatus = { updateLocalLlamaServerStartupStatus(chatId, it) }
         )
-        val startIntent = Intent(applicationContext, LlamaService::class.java).apply {
-            action = LlamaService.ACTION_START
-            putExtra(LlamaService.EXTRA_MODEL_PATH, modelPath)
-            putExtra(LlamaService.EXTRA_SETTINGS_PROFILE, LlamaService.SETTINGS_PROFILE_GENERAL)
-            putExtra(LlamaService.EXTRA_HOST, nativeChatLocalHostForServer(server.host))
-            putExtra(LlamaService.EXTRA_PORT, server.port)
-            putExtra(LlamaService.EXTRA_ALLOW_SETTINGS_MMPROJ, false)
-            profileJsonForRequest?.let { profileJson ->
-                putExtra(LlamaService.EXTRA_LAUNCH_PROFILE_JSON, profileJson)
-            }
-            if (shouldPassVisionProjector) {
-                putExtra(
-                    LlamaService.EXTRA_MMPROJ_PATH,
-                    profileForRequest?.mmprojPath ?: selectedMmprojPath
-                )
-            }
-            if (profileForRequest == null && settingsRepo.speculativeEnabled.value) {
-                val speculativeMode = settingsRepo.speculativeMode.value
-                val shouldPassDraftModel =
-                    speculativeMode.requiresDraftModel ||
-                        (speculativeMode == LlamaSpeculativeMode.DRAFT_MTP && settingsRepo.mtpUseDraftModel.value)
-                if (shouldPassDraftModel) {
-                    putExtra(LlamaService.EXTRA_DRAFT_MODEL_PATH, settingsRepo.draftModelPath.value)
-                }
-                putExtra(LlamaService.EXTRA_DRAFT_MAX, settingsRepo.draftMaxTokens.value)
-                putExtra(LlamaService.EXTRA_DRAFT_MIN, settingsRepo.draftMinTokens.value)
-                putExtra(LlamaService.EXTRA_DRAFT_P_MIN, settingsRepo.draftPMin.value)
-                putExtra(LlamaService.EXTRA_DRAFT_THREADS, settingsRepo.draftThreads.value)
-                putExtra(LlamaService.EXTRA_DRAFT_THREADS_BATCH, settingsRepo.draftThreadsBatch.value)
-            }
-            putExtra(LlamaService.EXTRA_FLASH_ATTENTION, settingsRepo.flashAttentionEnabled.value)
-            putExtra(LlamaService.EXTRA_CUSTOM_FLAGS, settingsRepo.customFlags.value)
-            putExtra(LlamaService.EXTRA_COMMAND_TEMPLATE, settingsRepo.customCommandTemplate.value)
-        }
-
-        updateLocalLlamaServerStartupStatus(
-            chatId,
-            getString(R.string.llama_client_status_starting_local_server)
-        )
-        DebugLog.log("LlamaClientService: Auto-starting local llama-server at $baseUrl")
-        LlamaServerLauncher.startLocalChat(applicationContext, startIntent).getOrThrow()
-        if (videoAutoStartProfile != null && profileJsonForRequest != server.localLaunchProfileJson) {
-            // Keep the video-enabled profile on the server row so a cold retry or Continue
-            // can reconstruct the same MTMD launch without relying on transient intent state.
-            repository.updateServer(server.copy(localLaunchProfileJson = profileJsonForRequest))
-        }
-
-        if (!waitForLocalLlamaServerReady(baseUrl = baseUrl)) {
-            throw IllegalStateException(getString(R.string.llama_client_error_local_server_timeout))
-        }
-    }
-
-    private suspend fun waitForLocalLlamaServerReady(baseUrl: String): Boolean {
-        repeat(LOCAL_SERVER_READY_ATTEMPTS) { attempt ->
-            delay(LOCAL_SERVER_READY_DELAY_MS)
-            currentCoroutineContext().ensureActive()
-            if (llamaServerChatService.checkConnection(baseUrl)) {
-                DebugLog.log("LlamaClientService: local llama-server ready after attempt=${attempt + 1}")
-                return true
-            }
-        }
-        return false
     }
 
     private fun updateLocalLlamaServerStartupStatus(chatId: Long, status: String) {
@@ -963,9 +904,7 @@ class LlamaClientService : Service() {
                 statusText = status
             )
         )
-        notificationTaskId?.let { taskId ->
-            UnifiedNotificationManager.updateProgress(taskId, 0.05f, status)
-        }
+        notificationTaskId?.let { taskId -> notifyProgress(taskId, 0.05f, status) }
     }
 
     private suspend fun resolveServerForGeneration(serverId: Long): LlamaServerEntity? {
@@ -991,8 +930,7 @@ class LlamaClientService : Service() {
             ?.takeIf { it.isNotBlank() }
             ?.also(::requireVideoAttachment)
         if (persistedVideoPath != null &&
-            !server.supportsNativeVideoInput() &&
-            !videoSettingsRepo.snapshot().processingPolicy.usesLegacyTranscriptRoute()
+            nativeChatVideoRoute(chatId, server) == NativeChatMediaRouting.VideoRoute.UNSUPPORTED
         ) {
             throw IllegalStateException(getString(R.string.llama_video_unsupported))
         }
@@ -1078,6 +1016,24 @@ class LlamaClientService : Service() {
         }
     }
 
+    /**
+     * Servers without vision never receive image parts: the images stay in Room and the chat, and a
+     * stored (or freshly generated) vision-helper description is attached as text instead.
+     */
+    private suspend fun applyImageFallbackForServer(
+        chatId: Long,
+        server: LlamaServerEntity,
+        messages: List<LlamaMessageEntity>
+    ): List<LlamaMessageEntity> {
+        if (server.supportsVision || messages.none { ImageFallbackLogic.hasImage(it) }) return messages
+        // Easy chats never use the advanced global vision helper.
+        if (database.llamaChatDao().getChatById(chatId)?.easyMode == true) return messages
+        val descriptions = VisionDescriptionService.ensureDescriptions(
+            applicationContext, chatId, server
+        ) { updateLocalLlamaServerStartupStatus(chatId, it) }
+        return ImageFallbackLogic.apply(messages, server.supportsVision, descriptions)
+    }
+
     private suspend fun prepareHistoryForServer(
         chatId: Long,
         taskId: Int,
@@ -1085,8 +1041,7 @@ class LlamaClientService : Service() {
         progress: StreamingProgress
     ): List<LlamaMessageEntity> {
         val messages = repository.getMessages(chatId).first().filterNot { it.isError }
-        val videoPolicy = videoSettingsRepo.snapshot().processingPolicy
-        if (videoPolicy.usesLegacyTranscriptRoute()) {
+        if (nativeChatVideoRoute(chatId, server) == NativeChatMediaRouting.VideoRoute.TRANSCRIPT) {
             val videoMessages = messages.filter { !it.videoPath.isNullOrBlank() }
             if (videoMessages.isNotEmpty()) {
                 val whisperModelPath = resolveWhisperModelPath(server)
@@ -1152,8 +1107,7 @@ class LlamaClientService : Service() {
         messages.forEach { message ->
             message.videoPath?.takeIf { it.isNotBlank() }?.let(::requireVideoAttachment)
             if (!message.videoPath.isNullOrBlank() &&
-                !server.supportsNativeVideoInput() &&
-                !videoSettingsRepo.snapshot().processingPolicy.usesLegacyTranscriptRoute()
+                nativeChatVideoRoute(chatId, server) == NativeChatMediaRouting.VideoRoute.UNSUPPORTED
             ) {
                 throw IllegalStateException(getString(R.string.llama_video_unsupported))
             }
@@ -1305,7 +1259,7 @@ class LlamaClientService : Service() {
         }
     }
 
-    private fun nativeChatMaxOutputTokens(params: Map<String, Any>): Int? {
+    internal fun nativeChatMaxOutputTokens(params: Map<String, Any>): Int? {
         val enabled = (params[NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS_ENABLED] as? Boolean) ?: false
         if (!enabled) return null
         return (params[NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS] as? Number)
@@ -1313,772 +1267,22 @@ class LlamaClientService : Service() {
             ?.takeIf { it > 0 }
     }
 
-    /**
-     * Prepare the representation sent to Native Chat while retaining every original
-     * attachment path in the conversation. Managed local runtimes can send a short clip
-     * directly through their private media directory. Remote-compatible endpoints receive a
-     * separately normalized short clip through a streaming body, while longer clips are
-     * recognized in sequential, bounded segments against the selected server and the resulting
-     * observations are injected as text into this request. This keeps remote requests free of
-     * local paths and prevents an arbitrary remote fps setting from decoding a whole long source
-     * in one chat request.
-     */
-    private suspend fun prepareNativeChatVideoPayloads(
-        history: List<LlamaMessageEntity>,
-        chatId: Long,
-        server: LlamaServerEntity,
-        contextSize: Int,
-        params: Map<String, Any>,
-        taskId: Int,
-        progress: StreamingProgress,
-        forceBoundedVideo: Boolean = false
-    ): NativeChatVideoPreparation {
-        if (history.none { !it.videoPath.isNullOrBlank() }) {
-            return NativeChatVideoPreparation(
-                payloads = List(history.size) { NativeChatVideoPayload() },
-                streamedMediaPaths = emptyList(),
-                cleanupRoot = null,
-                transientAudioRoot = null,
-                stagedRuntimeFiles = emptyList()
-            )
-        }
-        val policy = videoSettingsRepo.snapshot().processingPolicy
-        val wantsIndependentWhisper = when (policy.mode) {
-            VideoProcessingMode.VISUAL_WHISPER,
-            VideoProcessingMode.LEGACY_TRANSCRIPT -> true
-            VideoProcessingMode.AUTO_MULTIMODAL -> policy.nativeChatParallelWhisperEnabled
-        }
-        val payloads = mutableListOf<NativeChatVideoPayload>()
-        val streamedMediaPaths = mutableListOf<String>()
-        val stagedRuntimeFiles = mutableListOf<File>()
-        var transientAudioRoot: File? = null
-        val canUseManagedLocalRuntime = server.isLlamaServerEngine() &&
-            isNativeChatLoopbackHost(server.host)
-        var recognitionRuntime: NativeVideoRecognitionRuntime? = null
-        var mediaDependenciesChecked = false
-        var mediaDependenciesAvailable = false
-        var streamingRoot: File? = null
-        val canUseSafeDirectStream = policy.mode == VideoProcessingMode.AUTO_MULTIMODAL &&
-            server.allowsSafeNativeChatVideoStream() &&
-            NativeLlamaVideoSupport.activeRuntimeDirectories(
-                context = applicationContext,
-                serverPort = server.port
-            ) != null
-        val canAttachVideoAudio = policy.mode == VideoProcessingMode.AUTO_MULTIMODAL &&
-            policy.directAudioEnabled &&
-            server.allowsNativeChatVideoAudio()
-
-        suspend fun prepareVideoAudio(source: File, durationMs: Long, messageId: Long): String? {
-            if (!canAttachVideoAudio ||
-                nativeLlamaVideoAudioDurationMs(durationMs) == null
-            ) return null
-            currentCoroutineContext().ensureActive()
-            val outputDirectory = transientAudioRoot ?: File(
-                applicationContext.cacheDir,
-                "native_chat_video_audio/${chatId}_${System.nanoTime()}"
-            ).also {
-                require(it.mkdirs() || it.isDirectory) {
-                    "Unable to create transient video audio directory"
-                }
-                transientAudioRoot = it
-            }
-            return extractNativeLlamaVideoAudio(
-                context = applicationContext,
-                videoPath = source.absolutePath,
-                outputDirectory = outputDirectory,
-                durationMs = durationMs,
-                preferredName = "chat_${messageId}_${source.name}"
-            ).fold(
-                onSuccess = { path -> path },
-                onFailure = { error ->
-                    // Audio is an optional companion to visual input. Keep a
-                    // valid video request when extraction is unavailable or
-                    // the source has no audio stream.
-                    DebugLog.log(
-                        "LlamaClientService: video audio unavailable; continuing video-only: " +
-                            (error.message ?: error.javaClass.simpleName)
-                    )
-                    null
-                }
-            )
-        }
-        var visualFraction = 0f
-        var audioFraction = 0f
-        var parallelWhisperJob: Deferred<String?>? = null
-        var parallelWhisperPayloadIndex: Int? = null
-        var parallelWhisperMerged = false
-        fun publishVideoProgress(
-            visual: Float = visualFraction,
-            audio: Float = audioFraction,
-            visualPhase: String? = null,
-            audioPhase: String? = null
-        ) {
-            visualFraction = visual.coerceIn(0f, 1f)
-            audioFraction = audio.coerceIn(0f, 1f)
-            publishNativeChatVideoProgress(
-                chatId = chatId,
-                taskId = taskId,
-                progress = progress,
-                visualFraction = visualFraction,
-                audioFraction = audioFraction,
-                visualPhase = visualPhase,
-                audioPhase = audioPhase,
-                audioExpected = wantsIndependentWhisper
-            )
-        }
-
-        if (policy.mode == VideoProcessingMode.AUTO_MULTIMODAL &&
-            policy.directAudioEnabled &&
-            !canAttachVideoAudio
-        ) {
-            publishVideoProgress(
-                audioPhase = getString(R.string.video_recognition_audio_unavailable)
-            )
-        }
-
-        suspend fun startParallelWhisper(source: File): Deferred<String?>? {
-            if (!wantsIndependentWhisper) return null
-            val modelPath = resolveWhisperModelPath(server)
-            if (modelPath.isNullOrBlank()) {
-                publishVideoProgress(
-                    audio = 0f,
-                    audioPhase = getString(R.string.video_recognition_audio_unavailable)
-                )
-                return null
-            }
-            return serviceScope.async {
-                runCatching {
-                    VideoRecognitionWhisperTranscriber(
-                        context = applicationContext,
-                        runId = System.nanoTime()
-                    ).transcribe(
-                        sourceFile = source,
-                        request = VideoRecognitionAudioFallbackRequest(
-                            whisperModelPath = modelPath,
-                            language = server.whisperLanguage.ifBlank {
-                                LlamaServerEntity.DEFAULT_WHISPER_LANGUAGE
-                            },
-                            threads = settingsRepo.whisperThreads.value,
-                            vadConfig = settingsRepo.whisperVadConfigSnapshot(),
-                            settingsOverride = null,
-                            saveToNotes = false
-                        )
-                    ) { label, fraction ->
-                        publishVideoProgress(audio = fraction, audioPhase = label)
-                    }
-                }.onFailure { error ->
-                    DebugLog.log(
-                        "LlamaClientService: Native Chat Whisper video branch failed: " +
-                            (error.message ?: error.javaClass.simpleName)
-                    )
-                    publishVideoProgress(
-                        audio = 0f,
-                        audioPhase = getString(R.string.video_recognition_audio_unavailable)
-                    )
-                }.getOrNull()
-            }
-        }
-
-        val latestUserQuestion = history
-            .asReversed()
-            .firstOrNull { it.role == "user" }
-            ?.content
-            ?.trim()
-            ?.take(NATIVE_CHAT_VIDEO_QUESTION_MAX_CHARS)
-        val target = VideoRecognitionTarget.fromServer(server)
-        if (!policy.usesLegacyTranscriptRoute() && target == null) {
-            throw IllegalStateException(getString(R.string.llama_video_unsupported))
-        }
-        try {
-            history.forEach { message ->
-                val sourcePath = message.videoPath?.takeIf { it.isNotBlank() }
-                if (sourcePath == null) {
-                    payloads += NativeChatVideoPayload()
-                    return@forEach
-                }
-
-                val source = File(sourcePath)
-                val durationMs = readNativeChatVideoDurationMs(source)
-                    ?: throw IllegalStateException(getString(R.string.llama_video_duration_unavailable))
-                if (parallelWhisperJob == null) {
-                    parallelWhisperJob = startParallelWhisper(source)
-                    if (parallelWhisperJob != null) {
-                        parallelWhisperPayloadIndex = payloads.size
-                    }
-                }
-
-                if (policy.usesLegacyTranscriptRoute()) {
-                    val transcript = parallelWhisperJob?.await()?.trim()
-                        ?.take(NATIVE_CHAT_VIDEO_TRANSCRIPT_MAX_CHARS)
-                    if (transcript.isNullOrBlank()) {
-                        throw IllegalStateException(getString(R.string.llama_video_whisper_unavailable))
-                    }
-                    payloads += NativeChatVideoPayload(
-                        videoObservation = getString(
-                            R.string.llama_video_transcript_disclosure,
-                            transcript
-                        )
-                    )
-                    parallelWhisperMerged = true
-                    return@forEach
-                }
-
-                if (!forceBoundedVideo &&
-                    policy.mode == VideoProcessingMode.AUTO_MULTIMODAL &&
-                    durationMs <= NATIVE_CHAT_MAX_DIRECT_VIDEO_DURATION_MS &&
-                    canUseManagedLocalRuntime
-                ) {
-                    if (!mediaDependenciesChecked) {
-                        val availability = NativeVideoDependencies.ensure(
-                            context = applicationContext,
-                            requireLlm = false
-                        )
-                        mediaDependenciesAvailable = availability.mediaAvailable
-                        mediaDependenciesChecked = true
-                    }
-                    if (mediaDependenciesAvailable) {
-                        val staged = try {
-                            val mediaDirectory = NativeLlamaVideoSupport.activeMediaDirectory(
-                                context = applicationContext,
-                                serverPort = server.port
-                            ) ?: throw IllegalStateException(
-                                "No active native video runtime is available"
-                            )
-                            stageBoundedLocalChatVideoForRuntime(
-                                source = source,
-                                mediaDirectory = mediaDirectory,
-                                durationMs = durationMs,
-                                preferredName = "chat_${message.id}_${source.name}",
-                                maxFrames = policy.maxFrames,
-                                maxFps = policy.maxFps
-                            )
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (error: Throwable) {
-                            DebugLog.log(
-                                "LlamaClientService: local video staging unavailable; " +
-                                    "falling back to bounded recognition: ${error.message}"
-                            )
-                            null
-                        }
-                        if (staged != null) {
-                            stagedRuntimeFiles += staged.file
-                            val videoAudioPath = prepareVideoAudio(source, durationMs, message.id)
-                            if (policy.directAudioEnabled && canAttachVideoAudio && videoAudioPath == null) {
-                                publishVideoProgress(
-                                    audioPhase = getString(R.string.video_recognition_audio_unavailable)
-                                )
-                            }
-                            payloads += NativeChatVideoPayload(
-                                localVideoData = staged.relativeFileUrl,
-                                videoAudioPath = videoAudioPath
-                            )
-                            publishVideoProgress(
-                                visual = 1f,
-                                visualPhase = getString(R.string.video_recognition_progress_complete)
-                            )
-                            return@forEach
-                        }
-                    }
-                }
-
-                // Remote rows do not expose their native decoder FPS, so they skip inline
-                // input_video and use the bounded timestamped-frame runtime path below. The
-                // streaming branch is reserved for an app-managed loopback profile whose FPS
-                // is verified.
-                if (!forceBoundedVideo &&
-                    policy.mode == VideoProcessingMode.AUTO_MULTIMODAL &&
-                    canUseSafeDirectStream &&
-                    durationMs <= NATIVE_CHAT_MAX_DIRECT_VIDEO_DURATION_MS
-                ) {
-                    if (!mediaDependenciesChecked) {
-                        val availability = NativeVideoDependencies.ensure(
-                            context = applicationContext,
-                            requireLlm = false
-                        )
-                        mediaDependenciesAvailable = availability.mediaAvailable
-                        mediaDependenciesChecked = true
-                    }
-                    if (mediaDependenciesAvailable) {
-                        val staged = try {
-                            val root = streamingRoot ?: File(
-                                applicationContext.cacheDir,
-                                "native_chat_video_stream/${chatId}_${System.nanoTime()}"
-                            ).also {
-                                require(it.mkdirs() || it.isDirectory) {
-                                    "Unable to create Native Chat streaming directory"
-                                }
-                                streamingRoot = it
-                            }
-                            val mediaDirectory = File(root, "message_${message.id}")
-                            stageBoundedLocalChatVideoForRuntime(
-                                source = source,
-                                mediaDirectory = mediaDirectory,
-                                durationMs = durationMs,
-                                preferredName = "chat_${message.id}_${source.name}",
-                                maxFrames = policy.maxFrames,
-                                maxFps = policy.maxFps
-                            )
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (error: Throwable) {
-                            DebugLog.log(
-                                "LlamaClientService: normalized remote video staging unavailable; " +
-                                    "falling back to bounded recognition: ${error.message}"
-                            )
-                            null
-                        }
-                        if (staged != null) {
-                            stagedRuntimeFiles += staged.file
-                            streamedMediaPaths += staged.file.absolutePath
-                            val videoAudioPath = prepareVideoAudio(source, durationMs, message.id)
-                            if (policy.directAudioEnabled && canAttachVideoAudio && videoAudioPath == null) {
-                                publishVideoProgress(
-                                    audioPhase = getString(R.string.video_recognition_audio_unavailable)
-                                )
-                            }
-                            payloads += NativeChatVideoPayload(
-                                streamVideo = true,
-                                videoAudioPath = videoAudioPath
-                            )
-                            publishVideoProgress(
-                                visual = 1f,
-                                visualPhase = getString(R.string.video_recognition_progress_complete)
-                            )
-                            return@forEach
-                        }
-                    }
-                }
-
-                if (!mediaDependenciesChecked) {
-                    val availability = NativeVideoDependencies.ensure(
-                        context = applicationContext,
-                        requireLlm = false
-                    )
-                    mediaDependenciesAvailable = availability.mediaAvailable
-                    DebugLog.log(
-                        "LlamaClientService: video media dependencies available=" +
-                            availability.mediaAvailable
-                    )
-                    mediaDependenciesChecked = true
-                }
-                val runtime = recognitionRuntime ?: NativeVideoRecognitionRuntime(
-                    applicationContext
-                ).also { recognitionRuntime = it }
-                val observations = withTimeout(NATIVE_CHAT_VIDEO_WHOLE_TIMEOUT_MS) {
-                    summarizeNativeChatVideo(
-                        runtime = runtime,
-                        target = requireNotNull(target),
-                        source = source,
-                        chatId = chatId,
-                        messageId = message.id,
-                        durationMs = durationMs,
-                        contextSize = contextSize,
-                        params = params,
-                        latestUserQuestion = latestUserQuestion,
-                        policy = policy,
-                        parallelWhisperJob = parallelWhisperJob,
-                        onProgress = { visual, phase ->
-                            publishVideoProgress(visual = visual, visualPhase = phase)
-                        }
-                    )
-                }
-                parallelWhisperMerged = parallelWhisperJob != null
-                payloads += NativeChatVideoPayload(
-                    videoObservation = getString(
-                        R.string.llama_video_observation_disclosure,
-                        observations
-                    )
-                )
-            }
-            if (parallelWhisperJob != null && !parallelWhisperMerged) {
-                val transcript = parallelWhisperJob?.await()
-                    ?.trim()
-                    ?.take(NATIVE_CHAT_VIDEO_TRANSCRIPT_MAX_CHARS)
-                if (!transcript.isNullOrBlank()) {
-                    val payloadIndex = parallelWhisperPayloadIndex
-                    if (payloadIndex != null && payloadIndex in payloads.indices) {
-                        val payload = payloads[payloadIndex]
-                        payloads[payloadIndex] = payload.copy(
-                            videoObservation = listOf(
-                                payload.videoObservation,
-                                getString(
-                                    R.string.llama_video_transcript_disclosure,
-                                    transcript
-                                )
-                            ).filter { !it.isNullOrBlank() }.joinToString("\n\n")
-                        )
-                    }
-                    parallelWhisperMerged = true
-                    publishVideoProgress(
-                        audio = 1f,
-                        audioPhase = getString(R.string.video_recognition_audio_complete),
-                        visual = visualFraction
-                    )
-                }
-            }
-            publishVideoProgress(
-                visual = 1f,
-                audio = if (parallelWhisperJob != null) audioFraction else 0f,
-                visualPhase = getString(R.string.video_recognition_progress_complete)
-            )
-            return NativeChatVideoPreparation(
-                payloads = payloads,
-                streamedMediaPaths = streamedMediaPaths,
-                cleanupRoot = streamingRoot,
-                transientAudioRoot = transientAudioRoot,
-                stagedRuntimeFiles = stagedRuntimeFiles.toList()
-            )
-        } catch (error: Throwable) {
-            parallelWhisperJob?.cancel()
-            stagedRuntimeFiles.forEach { file -> file.delete() }
-            streamingRoot?.deleteRecursively()
-            transientAudioRoot?.deleteRecursively()
-            throw error
-        } finally {
-            recognitionRuntime?.shutdown()
-        }
-    }
-
-    /**
-     * Recognize each globally configured segment (capped to twelve seconds for Native Chat) in
-     * order using the exact selected server endpoint,
-     * then merge observations hierarchically with that same model. The runtime receives a
-     * REMOTE_SERVER target even for a managed localhost server, so this path never launches
-     * a second local model session for a Native Chat turn.
-     */
-    private suspend fun summarizeNativeChatVideo(
-        runtime: NativeVideoRecognitionRuntime,
-        target: VideoRecognitionTarget,
-        source: File,
-        chatId: Long,
-        messageId: Long,
-        durationMs: Long,
-        contextSize: Int,
-        params: Map<String, Any>,
-        latestUserQuestion: String?,
-        policy: VideoProcessingPolicy,
-        parallelWhisperJob: Deferred<String?>? = null,
-        onProgress: (visualFraction: Float, phase: String) -> Unit = { _, _ -> }
-    ): String {
-        // Native MTMD accepts at most a twelve-second direct clip. Longer videos are segmented
-        // client-side even when the global policy allows larger Video Summary windows.
-        val segmentSeconds = policy.segmentSeconds.coerceAtMost(
-            NATIVE_CHAT_MAX_DIRECT_VIDEO_DURATION_MS.toInt() / 1_000
-        )
-        val segmentMaxFramesSetting = policy.maxFrames
-        val segmentMaxFps = policy.maxFps
-        val includeSegmentAudio = policy.mode == VideoProcessingMode.AUTO_MULTIMODAL &&
-            policy.directAudioEnabled && target.supportsAudio
-        val mediaProcessor = VideoMediaProcessor(
-            context = applicationContext,
-            policy = NativeLlamaVideoPolicy(
-                maxSegmentDurationMs = LlamaVideoProfileLimits
-                    .normalizeSegmentSeconds(segmentSeconds) * 1_000L,
-                maxFramesPerSegment = LlamaVideoProfileLimits
-                    .normalizeMaxFrames(segmentMaxFramesSetting),
-                maxFps = LlamaVideoProfileLimits.normalizeMaxFps(segmentMaxFps),
-                defaultFps = LlamaVideoProfileLimits.normalizeMaxFps(segmentMaxFps)
-            )
-        )
-        val segments = mediaProcessor.segmentPlan(durationMs)
-        if (segments.isEmpty()) {
-            throw IllegalStateException(getString(R.string.llama_video_sampling_failed))
-        }
-        val targetLanguage = if (Locale.getDefault().language.equals("es", ignoreCase = true)) {
-            "Spanish"
-        } else {
-            "English"
-        }
-        val prompt = buildString {
-            append(getString(R.string.llama_video_segment_prompt))
-            latestUserQuestion
-                ?.takeIf { it.isNotBlank() }
-                ?.let { question ->
-                    append("\nCurrent/latest user question: ")
-                    append(question)
-                    append("\nPrioritize observations that help answer that question.")
-                }
-        }
-        val maxTokens = nativeChatMaxOutputTokens(params)
-            ?.coerceIn(128, NATIVE_CHAT_VIDEO_MAX_TOKENS)
-            ?: NATIVE_CHAT_VIDEO_MAX_TOKENS
-        val segmentMaxFrames = boundedVideoFrameCount(
-            contextSize = contextSize,
-            maxTokens = maxTokens,
-            requestedFrames = segmentMaxFramesSetting
-        )
-        val temperature = (params["temperature"] as? Number)
-            ?.toFloat()
-            ?.coerceIn(0f, 1f)
-            ?: 0.2f
-        val summaries = mutableListOf<NativeChatVideoObservation>()
-        segments.forEach { segment ->
-            currentCoroutineContext().ensureActive()
-            val startSeconds = (segment.startMs / 1_000L).toInt()
-            val durationSeconds = ((segment.durationMs + 999L) / 1_000L)
-                .toInt()
-                .coerceIn(1, NativeLlamaVideoSupport.MAX_SEGMENT_DURATION_MS.toInt() / 1_000)
-            val segmentRange = VideoRecognitionSegment(
-                // VideoMediaProcessor uses zero-based indexes; the runtime transport and
-                // progress contract use one-based segment numbers.
-                index = segment.index + 1,
-                total = segments.size,
-                startSeconds = startSeconds,
-                durationSeconds = durationSeconds
-            )
-            val segmentRequest = VideoRecognitionSegmentRequest(
-                sessionKey = "native-chat-video:$chatId:$messageId:${target.id}",
-                target = target,
-                sourceFile = source,
-                sourceName = source.name,
-                segment = segmentRange,
-                maxFrames = segmentMaxFrames,
-                maxFps = segmentMaxFps,
-                targetLanguage = targetLanguage,
-                prompt = prompt,
-                contextSize = contextSize.takeIf { it > 0 } ?: target.preferredContextSize,
-                maxTokens = maxTokens,
-                temperature = temperature,
-                timeoutMinutes = NATIVE_CHAT_VIDEO_TIMEOUT_MINUTES,
-                includeAudio = includeSegmentAudio
-            )
-            // The selected server is represented as a REMOTE_SERVER target even when it is
-            // localhost. The shared runtime therefore extracts timestamped JPEGs and bounds
-            // the remote request before it is sent; it does not expose the Android source path
-            // or let an arbitrary server-side fps setting decode the whole clip.
-            val summary = runtime.summarizeSegment(segmentRequest) { label, fraction ->
-                val completed = ((segment.index + fraction.coerceIn(0f, 1f)) / segments.size)
-                    .coerceIn(0f, 1f)
-                onProgress(completed, label.take(NATIVE_CHAT_VIDEO_PHASE_MAX_CHARS))
-            }.trim()
-            if (summary.isBlank()) {
-                throw IllegalStateException(getString(R.string.llama_video_sampling_failed))
-            }
-            summaries += NativeChatVideoObservation(
-                text = summary.take(NATIVE_CHAT_VIDEO_MERGE_OBSERVATION_CHARS),
-                range = segmentRange
-            )
-        }
-
-        var level = summaries.toList()
-        var round = 0
-        while (level.size > 1) {
-            currentCoroutineContext().ensureActive()
-            round += 1
-            val batches = level.chunked(4)
-            level = batches.mapIndexed { batchIndex, batch ->
-                if (batch.size == 1) {
-                    batch.single()
-                } else {
-                    val mergeObservationLimit = nativeChatMergeObservationLimit(
-                        contextSize = contextSize,
-                        maxTokens = maxTokens,
-                        observationCount = batch.size
-                    )
-                    val merged = runtime.mergeSummaries(
-                        VideoRecognitionMergeRequest(
-                            sessionKey = "native-chat-video:$chatId:$messageId:${target.id}",
-                            target = target,
-                            sourceName = source.name,
-                            summaries = batch.map {
-                                it.text.take(mergeObservationLimit)
-                            },
-                            round = round,
-                            batchIndex = batchIndex,
-                            targetLanguage = targetLanguage,
-                            prompt = prompt,
-                            contextSize = contextSize.takeIf { it > 0 } ?: target.preferredContextSize,
-                            maxTokens = maxTokens,
-                            temperature = temperature,
-                            timeoutMinutes = NATIVE_CHAT_VIDEO_TIMEOUT_MINUTES,
-                            segmentRanges = batch.map { it.range }
-                        )
-                    ) { label, fraction ->
-                        onProgress(
-                            (0.9f + ((batchIndex + fraction.coerceIn(0f, 1f)) / batches.size) * 0.1f)
-                                .coerceIn(0f, 1f),
-                            label.take(NATIVE_CHAT_VIDEO_PHASE_MAX_CHARS)
-                        )
-                    }.trim()
-                    if (merged.isBlank()) {
-                        throw IllegalStateException(getString(R.string.llama_video_sampling_failed))
-                    }
-                    NativeChatVideoObservation(
-                        text = merged.take(NATIVE_CHAT_VIDEO_MERGE_OBSERVATION_CHARS),
-                        range = mergeNativeChatVideoRanges(batch.map { it.range })
-                    )
-                }
-            }
-        }
-        val visualSummary = level.single().text
-        val transcript = parallelWhisperJob?.await()
-            ?.trim()
-            ?.take(NATIVE_CHAT_VIDEO_TRANSCRIPT_MAX_CHARS)
-        if (transcript.isNullOrBlank()) return visualSummary
-
-        onProgress(0.98f, getString(R.string.video_recognition_progress_multimodal_merge))
-        val merged = runtime.mergeMultimodalSummary(
-            VideoRecognitionMultimodalMergeRequest(
-                sessionKey = "native-chat-video:$chatId:$messageId:${target.id}",
-                target = target,
-                sourceName = source.name,
-                visualSummary = visualSummary,
-                transcript = transcript,
-                targetLanguage = targetLanguage,
-                prompt = prompt,
-                contextSize = contextSize.takeIf { it > 0 } ?: target.preferredContextSize,
-                maxTokens = maxTokens,
-                temperature = temperature,
-                timeoutMinutes = NATIVE_CHAT_VIDEO_TIMEOUT_MINUTES
-            )
-        ) { label, fraction ->
-            onProgress(
-                (0.98f + fraction.coerceIn(0f, 1f) * 0.02f).coerceIn(0f, 1f),
-                label.take(NATIVE_CHAT_VIDEO_PHASE_MAX_CHARS)
-            )
-        }.trim()
-        return merged.ifBlank { visualSummary }
-    }
-
-    /** Keep merge input inside the selected context after reserving output/system tokens. */
-    private fun nativeChatMergeObservationLimit(
-        contextSize: Int,
-        maxTokens: Int,
-        observationCount: Int
-    ): Int {
-        val availableInputTokens = (
-            contextSize.coerceAtLeast(1_024) - maxTokens.coerceAtLeast(64) - 512
-            ).coerceAtLeast(128)
-        return ((availableInputTokens * 4) / observationCount.coerceAtLeast(1))
-            .coerceIn(256, NATIVE_CHAT_VIDEO_MERGE_OBSERVATION_CHARS)
-    }
-
-    private fun mergeNativeChatVideoRanges(
-        ranges: List<VideoRecognitionSegment>
-    ): VideoRecognitionSegment {
-        require(ranges.isNotEmpty()) { "At least one video range is required" }
-        val first = ranges.first()
-        val last = ranges.last()
-        val endSeconds = (last.startSeconds + last.durationSeconds).coerceAtLeast(
-            first.startSeconds + first.durationSeconds
-        )
-        return first.copy(
-            durationSeconds = (endSeconds - first.startSeconds).coerceAtLeast(1)
-        )
-    }
-
-    private suspend fun readNativeChatVideoDurationMs(source: File): Long? =
-        withContext(Dispatchers.IO) {
-            if (!source.isFile || !source.canRead()) return@withContext null
-            try {
-                val retriever = MediaMetadataRetriever()
-                try {
-                    retriever.setDataSource(source.absolutePath)
-                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                        ?.toLongOrNull()
-                        ?.takeIf { it > 0L }
-                } finally {
-                    retriever.release()
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Throwable) {
-                null
-            }
-        }
-
-    /**
-     * Normalize a short local clip before placing it in llama-server's private media root.
-     * A duration cap alone is insufficient for a 4K source; this encoder bounds both the
-     * decoded frame count and the largest frame edge before native MTMD sees the file.
-     */
-    private suspend fun stageBoundedLocalChatVideoForRuntime(
-        source: File,
-        mediaDirectory: File,
-        durationMs: Long,
-        preferredName: String,
-        maxFrames: Int,
-        maxFps: Float
-    ): StagedVideoMedia = withContext(Dispatchers.IO) {
-        require(durationMs in 1L..NATIVE_CHAT_MAX_DIRECT_VIDEO_DURATION_MS) {
-            "Direct Native Chat video duration is outside the bounded range"
-        }
-        val ffmpeg = BinaryRepository(applicationContext).getFFmpegBinary()
-            ?.takeIf { it.isFile }
-            ?: throw IOException("Packaged ffmpeg binary is unavailable")
-        require(mediaDirectory.mkdirs() || mediaDirectory.isDirectory) {
-            "Unable to create native video media directory"
-        }
-        val durationSeconds = durationMs / 1_000.0
-        val normalizedMaxFrames = VideoRecognitionLimits.normalizeMaxFrames(maxFrames)
-        val normalizedMaxFps = VideoRecognitionLimits.normalizeMaxFps(maxFps)
-        val frameLimit = ceil(durationSeconds * normalizedMaxFps)
-            .toInt()
-            .coerceIn(1, normalizedMaxFrames)
-        val boundedFps = minOf(
-            normalizedMaxFps,
-            frameLimit / durationSeconds.toFloat()
-        ).coerceIn(0.1f, normalizedMaxFps)
-        val safeStem = NativeLlamaVideoSupport.sanitizeMediaFileName(preferredName)
-            .substringBeforeLast('.', preferredName)
-        val output = File(
-            mediaDirectory,
-            "${safeStem}_${System.nanoTime().toString(16)}.mp4"
-        )
-        val command = listOf(
-            ffmpeg.absolutePath,
-            "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-            "-ss", "0",
-            "-i", source.absolutePath,
-            "-t", String.format(Locale.US, "%.3f", durationSeconds),
-            "-vf",
-            "scale=${NativeLlamaVideoSupport.MAX_VIDEO_FRAME_DIMENSION}:" +
-                "${NativeLlamaVideoSupport.MAX_VIDEO_FRAME_DIMENSION}:" +
-                "force_original_aspect_ratio=decrease:force_divisible_by=2," +
-                "fps=${NativeLlamaVideoSupport.formatFps(boundedFps)}",
-            "-frames:v", frameLimit.toString(),
-            "-vsync", "vfr",
-            "-an", "-c:v", "mpeg4", "-q:v", "4",
-            output.absolutePath
-        )
-        try {
-            val result = BoundedVideoProcessRunner().run(
-                command = command,
-                workingDirectory = mediaDirectory,
-                timeoutMs = 120_000L
-            )
-            if (result.exitCode != 0 || !output.isFile || output.length() <= 0L) {
-                throw IOException("Unable to normalize video for Native Chat: ${result.output.takeLast(240)}")
-            }
-            StagedVideoMedia(
-                file = output,
-                mediaDirectory = mediaDirectory,
-                relativeFileUrl = NativeLlamaVideoSupport.relativeFileUrl(output.name)
-            )
-        } catch (cancelled: CancellationException) {
-            output.delete()
-            throw cancelled
-        } catch (error: Throwable) {
-            output.delete()
-            throw error
-        }
-    }
-
     /** Execute a streaming request without leaving a blocking OkHttp call behind on cancel. */
     private suspend fun executeCancellableNativeChatRequest(
         client: OkHttpClient,
         request: Request
-    ): okhttp3.Response = suspendCancellableCoroutine { continuation ->
+    ): okhttp3.Response {
+        val session = currentCoroutineContext()[ChatGenerationSession]
+        return suspendCancellableCoroutine { continuation ->
         val call = client.newCall(request)
-        activeNativeChatCall = call
+        session?.activeCall = call
         continuation.invokeOnCancellation {
             call.cancel()
-            if (activeNativeChatCall === call) activeNativeChatCall = null
+            if (session != null && session.activeCall === call) session.activeCall = null
         }
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, error: IOException) {
-                if (activeNativeChatCall === call) activeNativeChatCall = null
+                if (session != null && session.activeCall === call) session.activeCall = null
                 if (!continuation.isCancelled) {
                     continuation.resumeWithException(error)
                 }
@@ -2092,20 +1296,28 @@ class LlamaClientService : Service() {
                 continuation.resume(response) { _, value, _ -> value.close() }
             }
         })
+        }
+    }
+
+    /** Cancels the HTTP calls of the calling coroutine's chat session (other chats keep theirs). */
+    private suspend fun cancelActiveNativeChatTransport() {
+        currentCoroutineContext()[ChatGenerationSession]?.cancelTransport()
     }
 
     /** Retrofit's synchronous execute() has the same cancellation hazard as OkHttp execute(). */
     private suspend fun executeCancellableNativeChatRetrofitCall(
         call: retrofit2.Call<ResponseBody>
-    ): retrofit2.Response<ResponseBody> = suspendCancellableCoroutine { continuation ->
-        activeNativeChatRetrofitCall = call
+    ): retrofit2.Response<ResponseBody> {
+        val session = currentCoroutineContext()[ChatGenerationSession]
+        return suspendCancellableCoroutine { continuation ->
+        session?.activeRetrofitCall = call
         continuation.invokeOnCancellation {
             call.cancel()
-            if (activeNativeChatRetrofitCall === call) activeNativeChatRetrofitCall = null
+            if (session != null && session.activeRetrofitCall === call) session.activeRetrofitCall = null
         }
         call.enqueue(object : retrofit2.Callback<ResponseBody> {
             override fun onFailure(call: retrofit2.Call<ResponseBody>, error: Throwable) {
-                if (activeNativeChatRetrofitCall === call) activeNativeChatRetrofitCall = null
+                if (session != null && session.activeRetrofitCall === call) session.activeRetrofitCall = null
                 if (!continuation.isCancelled) {
                     continuation.resumeWithException(error)
                 }
@@ -2126,6 +1338,7 @@ class LlamaClientService : Service() {
                 }
             }
         })
+        }
     }
 
     private suspend fun streamLlamaServerResponse(
@@ -2211,7 +1424,7 @@ class LlamaClientService : Service() {
             server.modelName?.takeIf { it.isNotBlank() } ?: "default"
         }
 
-        val request = LlamaChatRequest(
+        val baseRequest = LlamaChatRequest(
             model = requestModel,
             messages = apiMessages,
             stream = true,
@@ -2229,9 +1442,25 @@ class LlamaClientService : Service() {
                 mapOf("enable_thinking" to false)
             } else {
                 mapOf("enable_thinking" to true)
-            }
-        )
+            },
+            idSlot = null,
+            cachePrompt = null
+        ).withExtendedSamplers(params)
 
+        // The slot lock is held for exactly this request/stream (not re-entrant); a direct-video
+        // rejection leaves the lock first, then retries below.
+        // No base cache on this path: it only runs without tools, so there is no stable prefix.
+        // Per-turn extension hints (e.g. delegation reminders) go after the conversation and are
+        // never persisted.
+        if (!isContinuation) {
+            val hintConfig = NativeChatToolConfig.fromParams(params)
+                .effectiveWithServerDefaults(NativeChatToolConfig.liteRtToolDefaults())
+            history.lastOrNull { it.role == "user" }?.content?.let { latestUserText ->
+                turnHintTexts(hintConfig, latestUserText).forEach { apiMessages += LlamaChatMessage("system", it) }
+            }
+        }
+        val retryWithoutDirectVideo = NativeChatModelActivity.track(chatId) { (sessions[chatId]?.kvLease ?: UnpinnedKvSlotLease).request { slot ->
+        val request = baseRequest.copy(idSlot = slot, cachePrompt = slot?.let { true })
         DebugLog.log("LlamaClientService: Sending request to $baseUrl")
         showDebugToast("Connecting to $baseUrl...")
 
@@ -2274,18 +1503,7 @@ class LlamaClientService : Service() {
                 cancelActiveNativeChatTransport()
                 if (!videoFallbackAttempted && videoPreparation.hasDirectVideo) {
                     videoPreparation.cleanup()
-                    return streamLlamaServerResponse(
-                        chatId = chatId,
-                        taskId = taskId,
-                        chat = chat,
-                        server = server,
-                        history = history,
-                        assistantMsgId = assistantMsgId,
-                        isContinuation = isContinuation,
-                        params = params,
-                        progress = progress,
-                        videoFallbackAttempted = true
-                    )
+                    return@request true
                 }
                 videoPreparation.cleanup()
                 showDebugToast("Server Error ${rawResponse.code}")
@@ -2310,18 +1528,7 @@ class LlamaClientService : Service() {
                 if (!videoFallbackAttempted && videoPreparation.hasDirectVideo) {
                     response.errorBody()?.close()
                     videoPreparation.cleanup()
-                    return streamLlamaServerResponse(
-                        chatId = chatId,
-                        taskId = taskId,
-                        chat = chat,
-                        server = server,
-                        history = history,
-                        assistantMsgId = assistantMsgId,
-                        isContinuation = isContinuation,
-                        params = params,
-                        progress = progress,
-                        videoFallbackAttempted = true
-                    )
+                    return@request true
                 }
                 showDebugToast("Server Error ${response.code()}")
                 videoPreparation.cleanup()
@@ -2346,6 +1553,7 @@ class LlamaClientService : Service() {
             )
             var lastUpdate = System.currentTimeMillis()
             var firstDeltaReceived = false
+            var plainTimings: LlamaChatTimings? = null
             val needsSpaceCheck = isContinuation && progress.content.isNotEmpty() && !progress.content.last().isWhitespace()
             progress.resetForNewStream()
 
@@ -2363,6 +1571,7 @@ class LlamaClientService : Service() {
                     progress.promptTokens = usage.promptTokens
                     progress.completionTokens = usage.completionTokens
                 }
+                chunk.timings?.let { plainTimings = it }
                 chunk.promptProgress?.takeIf { it.total > 0 }?.let { promptProgress ->
                     progress.promptProcessed = promptProgress.processed.coerceIn(0, promptProgress.total)
                     progress.promptTotal = promptProgress.total
@@ -2428,10 +1637,27 @@ class LlamaClientService : Service() {
             val completed = textAccumulator.finish()
             progress.content = completed.content
             progress.thinking = completed.thinking
+            progress.speed.endRound(plainTimings?.let { DecodeTimings(it.predictedN, it.predictedMs, it.promptN) })
         } finally {
             responseBody.close()
             cancelActiveNativeChatTransport()
             videoPreparation.cleanup()
+        }
+        false
+        } }
+        if (retryWithoutDirectVideo) {
+            return streamLlamaServerResponse(
+                chatId = chatId,
+                taskId = taskId,
+                chat = chat,
+                server = server,
+                history = history,
+                assistantMsgId = assistantMsgId,
+                isContinuation = isContinuation,
+                params = params,
+                progress = progress,
+                videoFallbackAttempted = true
+            )
         }
         } finally {
             // Covers failures while building messages, Retrofit calls, or request bodies before
@@ -2466,7 +1692,7 @@ class LlamaClientService : Service() {
         val needsSpaceCheck = isContinuation && progress.content.isNotEmpty() && !progress.content.last().isWhitespace()
         progress.resetForNewStream()
 
-        val result = ollamaService.chatWithToolsStreaming(
+        val result = NativeChatModelActivity.track(chatId) { ollamaService.chatWithToolsStreaming(
             model = modelName,
             messages = buildOllamaMessages(chat, history, server),
             thinkingEnabled = thinkingEnabled,
@@ -2507,7 +1733,7 @@ class LlamaClientService : Service() {
                     }
                 }
             }
-        ).getOrElse { throw it }
+        ).getOrElse { throw it } }
 
         val completed = textAccumulator.finish()
         progress.content = completed.content
@@ -2583,7 +1809,7 @@ class LlamaClientService : Service() {
                     toolEvents = progress.toolEvents.toList()
                 )
             )
-            UnifiedNotificationManager.updateProgress(taskId, 0.12f, status)
+            notifyProgress(taskId, 0.12f, status)
         }
 
         suspend fun handleChunk(delta: String) {
@@ -2754,17 +1980,25 @@ class LlamaClientService : Service() {
 
         val sourceCitations = mutableListOf<NativeChatSourceCitation>()
         val knowledgeBaseRoutingGuide = nativeChatToolRuntime.buildKnowledgeBaseSelectionGuidance(effectiveToolConfig)
-        val transientSystemMessages = nativeChatToolAwarenessMessages(
+        // Stable prefix (tool awareness + extension rules, config-only) first, so a prepared base
+        // cache matches; per-chat text (routing guide, retrieved context) goes after it.
+        val stableBaseText = NativeChatBasePrefix.stableText(
             effectiveToolConfig,
-            knowledgeBaseRoutingGuide
-        ).toMutableList()
+            nativeChatToolRuntime.extensionAwareness(effectiveToolConfig)
+        )
+        val dynamicSystemBlocks = mutableListOf<String>()
+        knowledgeBaseRoutingGuide?.takeIf { it.isNotBlank() }?.let { dynamicSystemBlocks += it }
+        var latestTurnKnowledgeContext: String? = null
         history.lastOrNull { it.role == "user" }?.content?.let { latestUserText ->
             nativeChatToolRuntime.buildAutoKnowledgeContext(latestUserText, effectiveToolConfig)?.let { kbContext ->
                 sourceCitations += extractNativeChatSourceCitations(kbContext)
-                transientSystemMessages += OllamaService.ChatMessage(
-                    role = "system",
-                    content = kbContext
-                )
+                if (chat.persistKvCache) {
+                    // Per-turn retrieval would change the system prompt every turn and defeat the
+                    // saved KV prefix, so a cached chat carries it on the newest user turn instead.
+                    latestTurnKnowledgeContext = kbContext
+                } else {
+                    dynamicSystemBlocks += kbContext
+                }
             }
         }
         // Native tool streaming uses the text-only ChatMessage contract. Resolve video turns
@@ -2800,13 +2034,42 @@ class LlamaClientService : Service() {
         }
         val messages = try {
             buildOllamaMessages(chat, toolHistory, server)
-                .withMergedTransientSystemMessages(transientSystemMessages)
+                .let { NativeChatBasePrefix.orderForBase(it, stableBaseText, dynamicSystemBlocks) }
+                .withContextOnLatestUserTurn(latestTurnKnowledgeContext)
                 .toMutableList()
         } finally {
             videoPreparation?.cleanup()
         }
         val samplingParams = LlamaServerSamplingParams.fromParams(params)
         val maxOutputTokens = nativeChatMaxOutputTokens(params)
+        // Context compaction + gauge for llama-server engines (never Ollama/LiteRT).
+        val compaction = if (server.isOllamaEngine() || server.isLiteRtEngine()) null else {
+            NativeChatCompactionHooks.Turn(
+                applicationContext, chat, params, server.baseUrl(), modelName, chat.contextSize,
+                maxOutputTokens, tools, sessions[chatId]?.kvLease ?: UnpinnedKvSlotLease
+            )
+        }
+        val historyIds = NativeChatStepHistory.entityIds(toolHistory)
+        compaction?.prepare(messages, List<Long?>(messages.size - historyIds.size) { null } + historyIds)
+        val resuming = progress.stepRecorder != null
+        val steps = NativeChatStepSession(
+            progress.stepRecorder ?: NativeChatStepRecorder().also { progress.stepRecorder = it },
+            repository,
+            assistantMsgId
+        )
+        // The model-facing messages of the turn are rebuilt from the recorded steps every round, with the
+        // same expansion later turns replay, so live and replay are byte-identical. A Continue sends its
+        // partial text as the trailing assistant message (prefill) for the first call only.
+        val imageEncoder: ((String) -> String?)? =
+            if (server.isOllamaEngine()) ({ path: String -> runCatching { fileToBase64(path) }.getOrNull() }) else null
+        var prefill: OllamaService.ChatMessage? = if (resuming && progress.content.isNotBlank()) {
+            OllamaService.ChatMessage(
+                role = "assistant", content = progress.content, thinking = progress.thinking.takeIf { it.isNotBlank() }
+            )
+        } else {
+            null
+        }
+        fun turnMessages() = NativeChatStepHistory.turnMessages(steps.recorder.snapshot(false).steps, prefill, imageEncoder)
 
         val textAccumulator = LlamaStreamingTextAccumulator(
             parseThinkingTags = false,
@@ -2816,8 +2079,11 @@ class LlamaClientService : Service() {
         var lastUpdate = System.currentTimeMillis()
         progress.resetForNewStream()
         progress.statusText = null
-        val executedToolSignatures = mutableSetOf<String>()
-        val completedMutatingToolCounts = mutableMapOf<String, Int>()
+        val loopState = NativeChatToolLoopState.rebuild(steps.recorder.snapshot(false).steps) { name ->
+            maxMutatingToolExecutionsForTurn(name, effectiveToolConfig) != null
+        }
+        val executedToolSignatures = loopState.executedSignatures
+        val completedMutatingToolCounts = loopState.completedMutatingCounts
 
         fun syncTextAccumulator(force: Boolean = false) {
             if (!force && !shouldPublishStreamingProgress(progress, lastUpdate)) return
@@ -2835,8 +2101,18 @@ class LlamaClientService : Service() {
             }
         }
 
+        // One-turn hints from the enabled extensions are sent ONCE, right after the user message, and
+        // recorded as a note so every later round and replay keeps them in place.
+        if (!resuming) {
+            com.example.llamadroid.service.delegation.NativeChatNoticeFraming.hintTarget(history)?.let { steps.turnHints(turnHintTexts(effectiveToolConfig, it)) }
+        }
+
         suspend fun runModelCall(availableTools: List<AgentTool>): OllamaService.ChatResponse {
             progress.statusText = null
+            progress.speed.beginRound()
+            // llama.cpp refuses a prefilled (trailing assistant) request while thinking is on.
+            val callThinking = thinkingEnabled && prefill == null
+            val requestMessages = messages + turnMessages()
             val chunkHandler: (String?, String?) -> Unit = chunkHandler@{ delta, thinkingDelta ->
                 val contentDelta = delta.orEmpty()
                 val reasoningDelta = thinkingDelta.orEmpty()
@@ -2857,12 +2133,12 @@ class LlamaClientService : Service() {
                 syncTextAccumulator()
             }
 
-            return if (server.isOllamaEngine()) {
+            return NativeChatModelActivity.track(chatId) { if (server.isOllamaEngine()) {
                 ollamaService.chatWithToolsStreaming(
                     model = modelName ?: "",
-                    messages = messages,
+                    messages = requestMessages,
                     tools = availableTools,
-                    thinkingEnabled = thinkingEnabled,
+                    thinkingEnabled = callThinking,
                     numCtxOverride = chat.contextSize.takeIf { it > 0 },
                     onChunk = chunkHandler
                 ).getOrElse { throw it }
@@ -2870,9 +2146,9 @@ class LlamaClientService : Service() {
                 chatWithLiteRtToolsStreaming(
                     server = server,
                     chat = chat,
-                    messages = messages,
+                    messages = requestMessages,
                     tools = availableTools,
-                    thinkingEnabled = thinkingEnabled,
+                    thinkingEnabled = callThinking,
                     params = params,
                     onStatus = { status ->
                         publishToolStatus(
@@ -2885,14 +2161,23 @@ class LlamaClientService : Service() {
                     onChunk = chunkHandler
                 )
             } else {
-                llamaServerChatService.chatWithToolsStreaming(
+                (sessions[chatId]?.kvLease ?: UnpinnedKvSlotLease).request(
+                    // The base is built prefix-only by the coordinator; a chat's own state is never saved as one.
+                    base = if (server.isLlamaServerEngine() && availableTools.isNotEmpty()) {
+                        NativeChatBasePrefix.hint(server.baseUrl(), modelName, stableBaseText, availableTools)
+                    } else {
+                        null
+                    }
+                ) { slot ->
+                chatService(chatId).chatWithToolsStreaming(
                     baseUrl = server.baseUrl(),
-                    messages = messages,
+                    messages = requestMessages,
                     tools = availableTools,
                     modelLabel = modelName,
-                    thinkingEnabled = thinkingEnabled,
+                    thinkingEnabled = callThinking,
                     maxTokens = maxOutputTokens,
                     samplingParams = samplingParams,
+                    requestOptions = LlamaServerRequestOptions(slotId = slot, sendReasoningContent = true),
                     onPromptProgress = { promptProgress ->
                         progress.promptProcessed = promptProgress.processed
                         progress.promptTotal = promptProgress.total
@@ -2917,25 +2202,23 @@ class LlamaClientService : Service() {
                     },
                     onChunk = chunkHandler
                 ).getOrElse { throw it }
-            }
+                }
+            } }
         }
 
-        fun mergeUsage(response: OllamaService.ChatResponse) {
-            val usage = response.usage ?: return
-            usage.promptTokens?.let { progress.promptTokens += it }
-            usage.completionTokens?.let { completionTokens ->
-                progress.completionTokens += completionTokens
-                progress.tokenCount = progress.completionTokens
+        // One forced compaction + retry when the server rejects the prompt as too long.
+        suspend fun runGuardedModelCall(availableTools: List<AgentTool>): OllamaService.ChatResponse =
+            try {
+                runModelCall(availableTools)
+            } catch (error: Exception) {
+                if (error is CancellationException || compaction?.onOverflowWithTurn(messages, turnMessages(), error) != true) throw error
+                runModelCall(availableTools)
             }
-            usage.evalDurationNs
-                ?.takeIf { it > 0L }
-                ?.let { durationNs ->
-                    usage.completionTokens
-                        ?.takeIf { it > 0 }
-                        ?.let { completionTokens ->
-                            progress.reportedTokensPerSecond = completionTokens / (durationNs / 1_000_000_000.0)
-                        }
-                }
+
+        suspend fun mergeUsage(response: OllamaService.ChatResponse) {
+            response.usage?.let { compaction?.onCallUsage(it.promptTokens, it.completionTokens) }
+            progress.absorbCallUsage(response.usage)
+            prefill = null
         }
 
         fun appendFallbackContent(response: OllamaService.ChatResponse) {
@@ -3018,7 +2301,8 @@ class LlamaClientService : Service() {
                     NativeChatToolResult("tool_error: ${error.message ?: error::class.java.simpleName}")
                 }
                 lastResult = result
-                if (!result.content.startsWith("tool_error:", ignoreCase = true)) {
+                // Only transient failures (timeouts, network, busy server) are worth a second run.
+                if (!NativeToolRetryPolicy.shouldRetry(result.content)) {
                     return result
                 }
                 if (attemptIndex + 1 < NATIVE_TOOL_EXECUTION_MAX_ATTEMPTS) {
@@ -3035,20 +2319,18 @@ class LlamaClientService : Service() {
 
         repeat(effectiveToolConfig.maxToolRounds) { round ->
             currentCoroutineContext().ensureActive()
-            val visibleContentBeforeModelCall = textAccumulator.rawContent()
-            val response = runModelCall(tools)
+            // Out of room for more recorded tool steps: skip to the wrap-up so the transcript stays complete.
+            if (steps.recorder.atToolCapacity) return@repeat
+            val response = runGuardedModelCall(tools)
             mergeUsage(response)
 
             val toolCalls = normalizeToolCalls(response.toolCalls.orEmpty(), round)
             if (toolCalls.isEmpty()) {
                 appendFallbackContent(response)
-                if (progress.content.isBlank() && messages.any { it.role == "tool" }) {
+                if (progress.content.isBlank() && steps.recorder.hasToolSteps) {
                     DebugLog.log("LlamaClientService: model returned blank answer after tool results; retrying final response with tools disabled engine=${server.normalizedEngine()}")
-                    messages += OllamaService.ChatMessage(
-                        role = "system",
-                        content = "The app already returned the requested tool results. Send the final visible answer now using those results. Do not call tools."
-                    )
-                    val retryResponse = runModelCall(emptyList())
+                    steps.note(round, NativeChatTurnNotes.Note(NativeChatTurnNotes.BLANK_ANSWER_RETRY))
+                    val retryResponse = runGuardedModelCall(emptyList())
                     mergeUsage(retryResponse)
                     appendFallbackContent(retryResponse)
                 }
@@ -3057,8 +2339,12 @@ class LlamaClientService : Service() {
                 return
             }
 
-            textAccumulator.reset(visibleContentBeforeModelCall, progress.thinking)
-            progress.content = visibleContentBeforeModelCall
+            // The round's text and thinking become steps (written together with the cleared live columns).
+            val roundSnapshot = textAccumulator.snapshot()
+            textAccumulator.reset()
+            progress.content = ""
+            progress.thinking = ""
+            steps.roundEnded(round, roundSnapshot.content, roundSnapshot.thinking)
             lastUpdate = updateStreamingProgress(
                 chatId = chatId,
                 taskId = taskId,
@@ -3067,22 +2353,19 @@ class LlamaClientService : Service() {
                 lastUpdateMs = lastUpdate
             )
 
-            messages += response.message.copy(content = "", toolCalls = toolCalls)
-            val roundReviewMessages = mutableListOf<OllamaService.ChatMessage>()
+            val roundNotes = mutableListOf<NativeChatTurnNotes.Note>()
             for ((toolIndex, rawToolCall) in toolCalls.withIndex()) {
                 currentCoroutineContext().ensureActive()
-                val toolCall = prepareToolCallForNativeExecution(
+                val toolCall = NativeToolCallPatcher.prepare(
                     toolCall = rawToolCall,
-                    messages = messages,
+                    messages = messages + turnMessages(),
                     progress = progress
                 )
-                val toolSignature = "${toolCall.name}:${JSONObject(toolCall.arguments as Map<*, *>)}"
+                val toolSignature = NativeChatToolLoopState.signature(toolCall.name, toolCall.arguments)
                 if (!executedToolSignatures.add(toolSignature)) {
                     DebugLog.log("LlamaClientService: repeated native tool call after result; steering to final answer tool=${toolCall.name} engine=${server.normalizedEngine()}")
-                    messages += OllamaService.ChatMessage(
-                        role = "system",
-                        content = "The tool ${toolCall.name} was already called with the same arguments and its result is above. Do not repeat that call. Use the existing result to answer now."
-                    )
+                    steps.toolSkipped(round, toolCall, NativeChatStepSession.SKIPPED_DUPLICATE)
+                    roundNotes += NativeChatTurnNotes.duplicateCall(toolCall.name)
                     continue
                 }
                 val completedMutatingCount = completedMutatingToolCounts[toolCall.name] ?: 0
@@ -3092,13 +2375,14 @@ class LlamaClientService : Service() {
                         "LlamaClientService: suppressing repeated mutating native tool " +
                             "tool=${toolCall.name} completed=$completedMutatingCount limit=$mutatingLimit engine=${server.normalizedEngine()}"
                     )
-                    messages += OllamaService.ChatMessage(
-                        role = "system",
-                        content = "The app already completed ${toolCall.name}. Do not call it again in this turn. Send the final visible answer now using the completed result."
-                    )
+                    steps.toolSkipped(round, toolCall, NativeChatStepSession.skippedLimit(toolCall.name))
+                    roundNotes += NativeChatTurnNotes.mutatingLimit(toolCall.name)
                     continue
                 }
                 val toolActivityBaseId = buildToolActivityBaseId(round, toolIndex, toolCall)
+                val toolStartedAtMs = System.currentTimeMillis()
+                val stepIndex = steps.toolStarted(round, toolCall)
+                if (stepIndex < 0) continue // transcript is full: never run a call the model would not see
                 publishToolStatus(
                     chatId = chatId,
                     taskId = taskId,
@@ -3118,6 +2402,7 @@ class LlamaClientService : Service() {
                 )
                 val toolResult = executeToolCallWithRetry(toolCall, toolActivityBaseId)
                 val toolSucceeded = !toolResult.content.startsWith("tool_error:", ignoreCase = true)
+                steps.toolFinished(stepIndex, toolSucceeded, toolResult.content, toolStartedAtMs)
                 if (toolSucceeded && mutatingLimit != null) {
                     completedMutatingToolCounts[toolCall.name] = completedMutatingCount + 1
                 }
@@ -3138,54 +2423,37 @@ class LlamaClientService : Service() {
                     progress.generatedImagePaths += imagePath
                 }
                 sourceCitations += extractNativeChatSourceCitations(toolResult.content)
-                messages += OllamaService.ChatMessage(
-                    role = "tool",
-                    content = toolResult.content,
-                    toolCallId = toolCall.id
-                )
                 if (toolCall.name == NativeChatToolRuntime.TOOL_DEEP_RESEARCH) {
-                    messages += OllamaService.ChatMessage(
-                        role = "system",
-                        content = "Deep Research has finished. Do not call deep_research again for the same request. Send a visible chat response now. Briefly say the research KB is ready and mention the imported source count from the tool result. If the user asked for factual conclusions, use kb_search or kb_read_source on the selected KB first and cite exact KB links."
-                    )
+                    roundNotes += NativeChatTurnNotes.Note(NativeChatTurnNotes.DEEP_RESEARCH_DONE)
                 }
                 toolResult.generatedImagePath
                     ?.takeIf { effectiveToolConfig.imageIterationEnabled && it.isNotBlank() }
                     ?.let { imagePath ->
-                        buildGeneratedImageReviewMessage(imagePath, server)?.let { reviewMessage ->
-                            roundReviewMessages += reviewMessage
+                        buildGeneratedImageReviewMessage(imagePath, server)?.let { review ->
+                            roundNotes += NativeChatTurnNotes.Note(review.content, review.role, review.imagePath)
                         }
                     }
             }
-            messages += roundReviewMessages
-            if (sourceCitations.isNotEmpty()) {
-                messages += OllamaService.ChatMessage(
-                    role = "system",
-                    content = "Citation requirement: The recent tool results include source_citations or KB citation Markdown links. Cite web, Kiwix, search_page, fetch_url, and KB-derived claims using the exact Markdown links. If you use numeric citations like [1], make them Markdown links to the matching source URL. If you use KB labels like [AL.pdf chunk 9], keep the full link form [AL.pdf chunk 9](kb://chunk/123)."
-                )
-            }
-            if (server.isLiteRtEngine()) {
-                messages += OllamaService.ChatMessage(
-                    role = "system",
-                    content = "The app has returned the requested tool result above. If it is enough to answer, send the final visible answer now instead of repeating the same tool call. Call another tool only if the provided result is clearly insufficient."
-                )
-            }
+            // App messages of the round follow all its tool messages; the citation reminder lives in the stable system text.
+            if (server.isLiteRtEngine()) roundNotes += NativeChatTurnNotes.Note(NativeChatTurnNotes.LITERT_FINALIZE)
+            steps.notes(round, roundNotes)
         }
 
-        messages += OllamaService.ChatMessage(
-            role = "system",
-            content = "The native chat tool round limit has been reached. Answer now using only the tool results already provided. Do not call more tools. If the tool results include source_citations or KB citation links, cite sourced claims with those exact Markdown links."
-        )
+        steps.note(effectiveToolConfig.maxToolRounds, NativeChatTurnNotes.Note(NativeChatTurnNotes.ROUND_LIMIT))
         publishToolStatus(
             chatId = chatId,
             taskId = taskId,
             progress = progress,
             statusText = getString(R.string.llama_tool_status_finalizing)
         )
-        val finalResponse = runModelCall(emptyList())
+        val finalResponse = runGuardedModelCall(emptyList())
         mergeUsage(finalResponse)
         appendFallbackContent(finalResponse)
         applySourceCitationFallback(progress, sourceCitations)
+        // The progress note becomes the last step; the reply stays resumable so Continue keeps working.
+        steps.limitReached(effectiveToolConfig.maxToolRounds, progress.content, getString(R.string.native_chat_step_limit_notice))
+        textAccumulator.reset()
+        progress.content = ""
         progress.statusText = null
     }
 
@@ -3258,7 +2526,10 @@ class LlamaClientService : Service() {
                 onChunk(recovered.visible, null)
             }
         }
-        val extracted = extractThinking(rendered.toString())
+        val extracted = extractThinkingTags(
+            rendered.toString(),
+            currentCoroutineContext()[ChatGenerationSession]?.cumulativeDedicatedReasoning.orEmpty()
+        )
         val responseThinking = mergeLiteRtRecoveredThinking(recoveredThinking, extracted.second)
         val enabledToolNames = tools.map { it.name }.toSet()
         val exposedToolNames = liteRtTools.map { it.name }.toSet()
@@ -3384,9 +2655,9 @@ class LlamaClientService : Service() {
 
     private fun liteRtGalleryParams(params: Map<String, Any>): Map<String, Any> =
         linkedMapOf<String, Any>(
-            "top_k" to ((params["top_k"] as? Number)?.toInt() ?: 40).coerceIn(5, 64),
-            "top_p" to ((params["top_p"] as? Number)?.toDouble() ?: 0.95).coerceIn(0.0, 0.95),
-            "temperature" to ((params["temperature"] as? Number)?.toDouble() ?: 1.0).coerceIn(0.0, 1.0),
+            "top_k" to ((params["top_k"] as? Number)?.toInt() ?: LiteRtSamplerDefaults.TOP_K).coerceIn(5, 64),
+            "top_p" to ((params["top_p"] as? Number)?.toDouble() ?: LiteRtSamplerDefaults.TOP_P).coerceIn(0.0, 0.95),
+            "temperature" to ((params["temperature"] as? Number)?.toDouble() ?: LiteRtSamplerDefaults.TEMPERATURE).coerceIn(0.0, 1.0),
             "enable_thinking" to ((params["enable_thinking"] as? Boolean) ?: false),
             LITERT_PARAM_MTP_ENABLED to ((params[LITERT_PARAM_MTP_ENABLED] as? Boolean) ?: false)
         ).apply {
@@ -3847,7 +3118,8 @@ class LlamaClientService : Service() {
         if (selected.isEmpty()) {
             selected += tools.take(LITERT_MAX_STRUCTURED_TOOLS)
         }
-        return selected
+        // The delegation tools are only present when enabled for the chat; never shortlist them out.
+        return (tools.filter { it.name.startsWith("deepseek_") } + selected)
             .distinctBy { it.name }
             .take(LITERT_MAX_STRUCTURED_TOOLS)
     }
@@ -4345,18 +3617,16 @@ class LlamaClientService : Service() {
                 numCtxOverride = NATIVE_SEARCH_SUMMARY_CONTEXT
             ).getOrElse { throw it }
         } else {
-            llamaServerChatService.chatWithToolsStreaming(
-                baseUrl = server.baseUrl(),
-                messages = messages,
-                tools = emptyList(),
-                modelLabel = modelName,
-                thinkingEnabled = false,
-                maxTokens = NATIVE_SEARCH_SUMMARY_MAX_TOKENS,
-                samplingParams = LlamaServerSamplingParams(
-                    temperature = 0.2f,
-                    topP = 0.9f
-                )
-            ).getOrElse { throw it }
+            val chatService = currentCoroutineContext()[ChatGenerationSession]?.llamaServerChatService ?: fallbackChatService
+            // A slot that never disturbs a chat's in-turn cache (spare slot, or swap-save on a 1-slot server).
+            NativeChatKvCacheCoordinator(applicationContext).withUtilitySlot(server.baseUrl(), server) { slotId ->
+                chatService.chatWithToolsStreaming(
+                    baseUrl = server.baseUrl(), messages = messages, tools = emptyList(), modelLabel = modelName,
+                    thinkingEnabled = false, maxTokens = NATIVE_SEARCH_SUMMARY_MAX_TOKENS,
+                    samplingParams = LlamaServerSamplingParams(temperature = 0.2f, topP = 0.9f),
+                    requestOptions = LlamaServerRequestOptions(slotId = slotId)
+                ).getOrElse { throw it }
+            }
         }
 
         return response.message.content
@@ -4442,6 +3712,15 @@ class LlamaClientService : Service() {
         }
 
         history.forEach { message ->
+            val steps = if (message.role == "assistant") NativeChatStepHistory.decode(message.stepsJson) else null
+            if (steps != null) {
+                // Reasoning is replayed for every reply; the chat template decides what to render, so
+                // templates that keep it reuse the cached prefix across turns.
+                val encodeImage: ((String) -> String?)? =
+                    if (server.isOllamaEngine()) ({ path: String -> runCatching { fileToBase64(path) }.getOrNull() }) else null
+                messages += NativeChatStepHistory.expand(message.content, steps, true, encodeImage, message.thinking)
+                return@forEach
+            }
             messages += OllamaService.ChatMessage(
                 role = message.role,
                 content = message.content,
@@ -4452,38 +3731,27 @@ class LlamaClientService : Service() {
                 },
                 imagePath = message.imagePath,
                 audioPath = message.audioPath,
-                thinking = message.thinking
+                // Past reasoning is replayed; the template decides whether to render it.
+                thinking = message.thinking?.takeIf { message.role == "assistant" && it.isNotBlank() }
             )
         }
         return messages
     }
 
-    private fun List<OllamaService.ChatMessage>.withMergedTransientSystemMessages(
-        transientSystemMessages: List<OllamaService.ChatMessage>
+    private fun List<OllamaService.ChatMessage>.withContextOnLatestUserTurn(
+        context: String?
     ): List<OllamaService.ChatMessage> {
-        val transientContent = transientSystemMessages
-            .filter { it.role == "system" && it.content.isNotBlank() }
-            .joinToString("\n\n") { it.content.trim() }
-        if (transientContent.isBlank()) return this
-        val messages = toMutableList()
-        val firstSystemIndex = messages.indexOfFirst { it.role == "system" }
-        if (firstSystemIndex >= 0) {
-            val existing = messages[firstSystemIndex]
-            messages[firstSystemIndex] = existing.copy(
-                content = listOf(existing.content.trim(), transientContent)
+        if (context.isNullOrBlank()) return this
+        val index = indexOfLast { it.role == "user" }
+        if (index < 0) return this
+        return toMutableList().also { messages ->
+            val message = messages[index]
+            messages[index] = message.copy(
+                content = listOf(context.trim(), message.content.trim())
                     .filter { it.isNotBlank() }
                     .joinToString("\n\n")
             )
-        } else {
-            messages.add(
-                0,
-                OllamaService.ChatMessage(
-                    role = "system",
-                    content = transientContent
-                )
-            )
         }
-        return messages
     }
 
     private suspend fun updateStreamingProgress(
@@ -4494,8 +3762,7 @@ class LlamaClientService : Service() {
         lastUpdateMs: Long
     ): Long {
         val nowMs = System.currentTimeMillis()
-        val elapsed = progress.generationElapsedSeconds()
-        val tps = if (elapsed > 0.0) progress.tokenCount / elapsed else 0.0
+        val tps = progress.liveTokensPerSecond(nowMs)
         maybeRecordPowerDiagnostics(progress)
 
         if (nowMs - progress.lastStateUpdateMs >= STREAMING_STATE_UPDATE_INTERVAL_MS) {
@@ -4527,14 +3794,15 @@ class LlamaClientService : Service() {
         }
 
         val currentElapsedMs = progress.generationElapsedMs()
-        repository.updateMessageThinkingAndContent(
+        repository.updateMessageStreaming(
             assistantMsgId,
             progress.content,
             progress.thinking.takeIf { it.isNotBlank() },
-            promptTokens = progress.promptTokens,
+            promptTokens = progress.displayPromptTokens(),
             completionTokens = progress.completionTokens,
             tps = tps,
-            generationTimeMs = currentElapsedMs
+            generationTimeMs = currentElapsedMs,
+            stepsJson = progress.stepRecorder?.toJsonIfDirty()
         )
         val progressContext = if (progress.thinking.isNotBlank() && progress.content.isBlank()) {
             progress.thinking
@@ -4548,7 +3816,7 @@ class LlamaClientService : Service() {
         } else {
             "%d tok · %.1f t/s | ...$lastWords".format(progress.tokenCount, tps)
         }
-        UnifiedNotificationManager.updateProgress(taskId, 0.5f, progressText)
+        notifyProgress(taskId, 0.5f, progressText)
         return System.currentTimeMillis()
     }
 
@@ -4557,7 +3825,7 @@ class LlamaClientService : Service() {
      * The visual and audio branches report independently; the overall value is a weighted
      * fraction so a parallel Whisper process cannot make a long visual run appear complete.
      */
-    private fun publishNativeChatVideoProgress(
+    internal fun publishNativeChatVideoProgress(
         chatId: Long,
         taskId: Int,
         progress: StreamingProgress,
@@ -4584,7 +3852,7 @@ class LlamaClientService : Service() {
             progress.videoAudioPhase = it.take(NATIVE_CHAT_VIDEO_PHASE_MAX_CHARS)
         }
         progress.statusText = progress.videoVisualPhase ?: progress.videoAudioPhase
-        val current = Companion.generationState.value as? GenerationState.Generating
+        val current = NativeChatGenerationStates.stateFor(chatId) as? GenerationState.Generating
         Companion.updateState(
             GenerationState.Generating(
                 chatId = chatId,
@@ -4605,7 +3873,7 @@ class LlamaClientService : Service() {
                 toolEvents = current?.toolEvents ?: progress.toolEvents.toList()
             )
         )
-        UnifiedNotificationManager.updateProgress(
+        notifyProgress(
             taskId,
             (0.05f + overall * 0.4f).coerceIn(0.05f, 0.45f),
             progress.statusText ?: getString(R.string.video_recognition_progress_preparing)
@@ -4643,7 +3911,7 @@ class LlamaClientService : Service() {
                 toolEvents = progress.toolEvents.toList()
             )
         )
-        UnifiedNotificationManager.updateProgress(taskId, 0.45f, statusText)
+        notifyProgress(taskId, 0.45f, statusText)
     }
 
     private fun publishToolActivity(
@@ -4669,7 +3937,7 @@ class LlamaClientService : Service() {
                 toolEvents = progress.toolEvents.toList()
             )
         )
-        UnifiedNotificationManager.updateProgress(taskId, 0.45f, uniqueEvent.status)
+        notifyProgress(taskId, 0.45f, uniqueEvent.status)
     }
 
     private fun buildToolActivityBaseId(
@@ -4749,7 +4017,8 @@ class LlamaClientService : Service() {
             NativeChatToolRuntime.TOOL_KB_LIST_SOURCES -> getString(R.string.llama_tool_status_kb_sources)
             NativeChatToolRuntime.TOOL_GENERATE_IMAGE -> getString(R.string.llama_tool_status_generate_image)
             NativeChatToolRuntime.TOOL_REMOVE_IMAGE_BACKGROUND -> getString(R.string.llama_tool_status_bgr)
-            else -> getString(R.string.llama_tool_status_running)
+            else -> nativeChatToolRuntime.extensionFor(toolCall.name)?.statusText(toolCall.name)
+                ?: getString(R.string.llama_tool_status_running)
         }
 
     private fun localizedToolProgressStatus(
@@ -4822,99 +4091,6 @@ class LlamaClientService : Service() {
         }
     }
 
-    private fun prepareToolCallForNativeExecution(
-        toolCall: OllamaService.ToolCall,
-        messages: List<OllamaService.ChatMessage>,
-        progress: StreamingProgress
-    ): OllamaService.ToolCall {
-        if (toolCall.name != NativeChatToolRuntime.TOOL_REMOVE_IMAGE_BACKGROUND) return toolCall
-
-        val providedImagePath = firstToolArgument(
-            arguments = toolCall.arguments,
-            "image_path",
-            "path",
-            "source_image_path",
-            "input_image_path",
-            "image"
-        ).orEmpty().trim()
-
-        val hasExistingFile = providedImagePath.isNotBlank() &&
-            !isLikelyImagePathPlaceholder(providedImagePath) &&
-            File(providedImagePath).let { it.exists() && it.isFile }
-        if (hasExistingFile) return toolCall
-
-        val resolvedImagePath = resolveLatestChatImagePath(
-            messages = messages,
-            progress = progress
-        ) ?: return toolCall
-
-        val patchedArguments = toolCall.arguments.toMutableMap()
-        val knownPathKeys = listOf("image_path", "path", "source_image_path", "input_image_path", "image")
-        var updatedExistingKey = false
-        knownPathKeys.forEach { key ->
-            if (patchedArguments.containsKey(key)) {
-                patchedArguments[key] = resolvedImagePath
-                updatedExistingKey = true
-            }
-        }
-        if (!updatedExistingKey) {
-            patchedArguments["image_path"] = resolvedImagePath
-        }
-
-        DebugLog.log(
-            "LlamaClientService: patched remove_image_background input path " +
-                "original='${providedImagePath.take(120)}' resolved='${resolvedImagePath.take(160)}'"
-        )
-        return toolCall.copy(arguments = patchedArguments)
-    }
-
-    private fun firstToolArgument(
-        arguments: Map<String, String>,
-        vararg keys: String
-    ): String? = keys
-        .firstNotNullOfOrNull { key ->
-            arguments[key]?.trim()?.takeIf { value -> value.isNotBlank() }
-        }
-
-    private fun isLikelyImagePathPlaceholder(value: String): Boolean {
-        val normalized = value.trim().lowercase()
-        if (normalized.isBlank()) return true
-        if (normalized.startsWith("/") || normalized.startsWith("file://")) return false
-
-        val compact = normalized.replace(Regex("""[^a-z0-9]+"""), "_").trim('_')
-        if (compact.isBlank()) return true
-        if (compact in KnownToolImagePathPlaceholders) return true
-
-        return !normalized.contains('/') &&
-            compact.contains("image") &&
-            (
-                compact.contains("user") ||
-                    compact.contains("provided") ||
-                    compact.contains("input") ||
-                    compact.contains("path")
-                )
-    }
-
-    private fun resolveLatestChatImagePath(
-        messages: List<OllamaService.ChatMessage>,
-        progress: StreamingProgress
-    ): String? {
-        progress.generatedImagePaths
-            .asReversed()
-            .firstOrNull { path ->
-                path.isNotBlank() && File(path).let { file -> file.exists() && file.isFile }
-            }
-            ?.let { return it }
-
-        messages.asReversed().forEach { message ->
-            val candidate = message.imagePath?.trim().orEmpty()
-            if (candidate.isNotBlank() && File(candidate).let { it.exists() && it.isFile }) {
-                return candidate
-            }
-        }
-        return null
-    }
-
     private suspend fun transcribeAudioAttachment(
         server: LlamaServerEntity,
         audioPath: String
@@ -4937,7 +4113,7 @@ class LlamaClientService : Service() {
         )
     }
 
-    private suspend fun resolveWhisperModelPath(server: LlamaServerEntity): String? {
+    internal suspend fun resolveWhisperModelPath(server: LlamaServerEntity): String? {
         server.whisperModelPath
             ?.takeIf { it.isNotBlank() && java.io.File(it).exists() }
             ?.let { return it }
@@ -4997,71 +4173,11 @@ class LlamaClientService : Service() {
         }
     }
 
-    private var cumulativeDedicatedReasoning = ""
-
-    private fun extractThinking(text: String, newDedicated: String = ""): Pair<String, String> {
-        if (newDedicated.isNotEmpty()) {
-            cumulativeDedicatedReasoning += newDedicated
+    /** Non-empty one-turn hints of the enabled tool extensions for [latestUserText]. */
+    private fun turnHintTexts(config: NativeChatToolConfig, latestUserText: String): List<String> =
+        toolExtensions.filter { it.isEnabled(config) }.mapNotNull { extension ->
+            runCatching { extension.turnHint(config, latestUserText) }.getOrNull()?.takeIf { it.isNotBlank() }
         }
-        val thinkTags = listOf("<think>", "<|think|>", "<thought>", "<Thought>", "<Think>")
-        val endThinkTags = listOf("</think>", "</|think|>", "</thought>", "</Thought>", "</Think>")
-        
-        var startTag: String? = null
-        var startIndex = -1
-        
-        for (tag in thinkTags) {
-            val idx = text.indexOf(tag, ignoreCase = true)
-            if (idx != -1 && (startIndex == -1 || idx < startIndex)) {
-                startIndex = idx
-                startTag = tag
-            }
-        }
-        if (startIndex == -1) {
-            return Pair(text, cumulativeDedicatedReasoning.trim())
-        }
-        var endTag: String? = null
-        var endIndex = -1
-        for (tag in endThinkTags) {
-            val idx = text.indexOf(tag, startIndex + (startTag?.length ?: 0), ignoreCase = true)
-            if (idx != -1 && (endIndex == -1 || idx < endIndex)) {
-                endIndex = idx
-                endTag = tag
-            }
-        }
-        return if (endIndex != -1) {
-            val thinking = text.substring(startIndex + (startTag?.length ?: 0), endIndex)
-            val content = text.substring(0, startIndex) + text.substring(endIndex + (endTag?.length ?: 0))
-            Pair(content.trim(), (cumulativeDedicatedReasoning + "\n" + thinking).trim())
-        } else {
-            val thinking = text.substring(startIndex + (startTag?.length ?: 0))
-            val content = text.substring(0, startIndex)
-            Pair(content.trim(), (cumulativeDedicatedReasoning + "\n" + thinking).trim())
-        }
-    }
-
-    private fun resetThinking() {
-        cumulativeDedicatedReasoning = ""
-    }
-
-    private fun stopGeneration() {
-        if (!stoppingGeneration.compareAndSet(false, true)) return
-        (Companion.generationState.value as? GenerationState.Generating)?.let { generating ->
-            Companion.updateState(
-                generating.copy(statusText = getString(R.string.llama_generation_stopping))
-            )
-        }
-        cancelActiveNativeChatTransport()
-        job?.cancel()
-        OllamaService.stop()
-        llamaServerChatService.stopGeneration()
-        notificationTaskId?.let { taskId ->
-            UnifiedNotificationManager.dismissTask(taskId)
-        }
-        notificationTaskId = null
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        releasePowerLocks()
-        Companion.updateState(GenerationState.Idle)
-    }
 
     private fun showDebugToast(message: String) {
         android.os.Handler(android.os.Looper.getMainLooper()).post {
@@ -5069,44 +4185,21 @@ class LlamaClientService : Service() {
         }
     }
 
-    private fun cancelActiveNativeChatTransport() {
-        activeNativeChatCall?.cancel()
-        activeNativeChatCall = null
-        activeNativeChatRetrofitCall?.cancel()
-        activeNativeChatRetrofitCall = null
-    }
-
     override fun onDestroy() {
         super.onDestroy()
-        cancelActiveNativeChatTransport()
-        job?.cancel()
+        sessions.values.forEach { session ->
+            session.cancelTransport()
+            session.job?.cancel()
+            session.llamaServerChatService.stopGeneration()
+        }
         OllamaService.stop()
-        llamaServerChatService.stopGeneration()
         serviceScope.cancel()
-        stoppingGeneration.set(false)
-        notificationTaskId?.let { taskId ->
-            UnifiedNotificationManager.dismissTask(taskId)
+        sessions.clear()
+        synchronized(foregroundLock) {
+            notificationTaskId?.let { taskId -> UnifiedNotificationManager.dismissTask(taskId) }
+            notificationTaskId = null
         }
-        notificationTaskId = null
-        releasePowerLocks()
-    }
-
-    private fun acquirePowerLocks() {
-        synchronized(powerLockGuard) {
-            if (powerLocksHeld) return
-            WakeLockManager.acquire(applicationContext, "LlamaClientService")
-            WakeLockManager.acquireWifiLock(applicationContext, "LlamaClientService")
-            powerLocksHeld = true
-        }
-    }
-
-    private fun releasePowerLocks() {
-        synchronized(powerLockGuard) {
-            if (!powerLocksHeld) return
-            WakeLockManager.release("LlamaClientService")
-            WakeLockManager.releaseWifiLock("LlamaClientService")
-            powerLocksHeld = false
-        }
+        powerLocks.releaseAll()
     }
 
     private data class PreparedUserTurn(
@@ -5151,72 +4244,16 @@ class LlamaClientService : Service() {
         NativeChatToolRuntime.TOOL_UPDATE_CALENDAR_EVENT,
         NativeChatToolRuntime.TOOL_CREATE_ALARM,
         NativeChatToolRuntime.TOOL_UPDATE_ALARM -> 1
-        else -> null
-    }
-
-    private data class StreamingProgress(
-        var content: String = "",
-        var thinking: String = "",
-        var promptTokens: Int = 0,
-        var completionTokens: Int = 0,
-        var tokenCount: Int = 0,
-        var streamRequestStartTimeMs: Long = System.currentTimeMillis(),
-        var firstTokenReceivedAtMs: Long? = null,
-        var isTruncated: Boolean = false,
-        var reportedTokensPerSecond: Double? = null,
-        var statusText: String? = null,
-        var promptProgress: Float? = null,
-        var promptProcessed: Int = 0,
-        var promptTotal: Int = 0,
-        var promptCached: Int = 0,
-        /** Bounded Native Chat video preparation progress exposed to the chat UI. */
-        var videoProgress: Float? = null,
-        var videoVisualProgress: Float = 0f,
-        var videoAudioProgress: Float = 0f,
-        var videoVisualPhase: String? = null,
-        var videoAudioPhase: String? = null,
-        val toolEvents: MutableList<ToolActivityEvent> = mutableListOf(),
-        val generatedImagePaths: MutableList<String> = mutableListOf(),
-        var lastPowerDiagnosticMs: Long = 0L,
-        var lastStateUpdateMs: Long = 0L,
-        var lastTokenAtMs: Long = System.currentTimeMillis()
-    ) {
-        fun resetForNewStream(nowMs: Long = System.currentTimeMillis()) {
-            streamRequestStartTimeMs = nowMs
-            firstTokenReceivedAtMs = null
-            tokenCount = 0
-            promptTokens = 0
-            completionTokens = 0
-            isTruncated = false
-            promptProgress = null
-            promptProcessed = 0
-            promptTotal = 0
-            promptCached = 0
-            lastStateUpdateMs = 0L
-            lastTokenAtMs = nowMs
-        }
-
-        fun markFirstTokenReceived(nowMs: Long = System.currentTimeMillis()) {
-            if (firstTokenReceivedAtMs == null) {
-                firstTokenReceivedAtMs = nowMs
-            }
-            lastTokenAtMs = nowMs
-        }
-
-        fun generationElapsedMs(nowMs: Long = System.currentTimeMillis()): Long =
-            generationElapsedMs(
-                requestStartedAtMs = streamRequestStartTimeMs,
-                firstTokenReceivedAtMs = firstTokenReceivedAtMs,
-                nowMs = nowMs
-            )
-
-        fun generationElapsedSeconds(nowMs: Long = System.currentTimeMillis()): Double =
-            generationElapsedMs(nowMs) / 1000.0
+        com.example.llamadroid.service.delegation.NativeChatDelegationTools.TOOL_SCHEDULE -> 2
+        else -> if (nativeChatToolRuntime.extensionFor(toolName)?.isMutating(toolName) == true) 1 else null
     }
 
     companion object {
         const val ACTION_GENERATE = "GENERATE"
         const val ACTION_STOP = "STOP"
+
+        /** Removes a queued (not yet running) chat; send with [EXTRA_CHAT_ID]. */
+        const val ACTION_CANCEL_QUEUED = "CANCEL_QUEUED"
         const val EXTRA_CHAT_ID = "CHAT_ID"
         const val EXTRA_SERVER_ID = "SERVER_ID"
         const val EXTRA_USER_MESSAGE = "USER_MESSAGE"
@@ -5227,21 +4264,62 @@ class LlamaClientService : Service() {
         const val EXTRA_FORCE_ASSISTANT_TTS = "FORCE_ASSISTANT_TTS"
         const val EXTRA_CALL_MODE = "CALL_MODE"
 
+        /**
+         * Deprecated mirror of the latest change of any chat. Read the per-chat state from
+         * [NativeChatGenerationStates] instead.
+         */
         private val _generationState = MutableStateFlow<GenerationState>(GenerationState.Idle)
         val generationState = _generationState.asStateFlow()
-        
+
+        /** Chats whose stop was requested: late progress updates must not revive their state. */
+        private val stoppingChats: MutableSet<Long> = ConcurrentHashMap.newKeySet<Long>()
+
+        /** Publishes [state] for its chat (per-chat store) and mirrors it into [generationState]. */
         fun updateState(state: GenerationState) {
+            val chatId = when (state) {
+                is GenerationState.Generating -> state.chatId
+                is GenerationState.Completed -> state.chatId
+                is GenerationState.Error -> state.chatId
+                is GenerationState.Queued -> state.chatId
+                GenerationState.Idle -> -1L
+            }
+            if ((state is GenerationState.Generating || state is GenerationState.Queued) &&
+                stoppingChats.contains(chatId)
+            ) {
+                return
+            }
+            if (chatId > 0L) NativeChatGenerationStates.update(chatId, state)
             _generationState.value = state
         }
 
+        /** Marks [chatId] idle (stopped/cancelled) in the per-chat store and, if it is the latest, the mirror. */
+        internal fun clearChatState(chatId: Long) {
+            NativeChatGenerationStates.update(chatId, GenerationState.Idle)
+            val latest = _generationState.value
+            val latestChat = when (latest) {
+                is GenerationState.Generating -> latest.chatId
+                is GenerationState.Completed -> latest.chatId
+                is GenerationState.Error -> latest.chatId
+                is GenerationState.Queued -> latest.chatId
+                GenerationState.Idle -> -1L
+            }
+            if (latestChat == chatId) _generationState.value = GenerationState.Idle
+        }
+
         private const val POWER_DIAGNOSTIC_INTERVAL_MS = 30_000L
-        private const val LOCAL_SERVER_READY_ATTEMPTS = 90
-        private const val LOCAL_SERVER_READY_DELAY_MS = 2_000L
         
+        /** Resets the deprecated mirror when nothing is running; per-chat entries are untouched. */
         fun resetStateIfIdle() {
-            if (_generationState.value !is GenerationState.Generating) {
+            val latest = _generationState.value
+            if (latest !is GenerationState.Generating && latest !is GenerationState.Queued) {
                 _generationState.value = GenerationState.Idle
             }
+        }
+
+        /** Drops the finished (Completed/Error) entry of [chatId] so it reads as idle again. */
+        fun resetStateIfIdle(chatId: Long) {
+            NativeChatGenerationStates.clearIfIdle(chatId)
+            resetStateIfIdle()
         }
 
         private const val MAX_TOOL_ACTIVITY_EVENTS = 40
@@ -5303,5 +4381,18 @@ class LlamaClientService : Service() {
             val tokensPerSecond: Double = 0.0
         ) : GenerationState()
         data class Error(val message: String, val chatId: Long = -1L) : GenerationState()
+        /**
+         * The chat's message is waiting: [reason] says for what (a free slot on the same server,
+         * free RAM to start another local model, or the single LiteRT/Ollama engine).
+         * [position] is 1-based within the queue of that resource; [resourceLabel] names it.
+         */
+        data class Queued(
+            val chatId: Long,
+            val reason: QueueReason,
+            val position: Int = 1,
+            val resourceLabel: String? = null
+        ) : GenerationState()
     }
+
+    enum class QueueReason { SLOT, RAM, ENGINE }
 }

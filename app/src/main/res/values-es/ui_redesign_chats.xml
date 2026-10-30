@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ui_chats_title">Chats</string>
+    <string name="ui_chats_more">Más opciones</string>
+    <string name="ui_chats_scheduled_prompts">Prompts programados</string>
+    <string name="ui_chats_tab_chats">Chats</string>
+    <string name="ui_chats_tab_agent">Proyectos del Agente</string>
+    <string name="ui_chats_open_agent">Abrir Agente</string>
+    <string name="ui_chats_open_agent_desc">Inicia o continúa un proyecto de código con el Agente.</string>
+    <string name="ui_chats_agent_empty">Tus proyectos recientes del Agente aparecerán aquí.</string>
+    <string name="ui_chats_new_agent">Nuevo proyecto del Agente</string>
+    <string name="chats_open_web_ui">Abrir Web UI de llama.cpp</string>
+</resources>

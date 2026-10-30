@@ -146,7 +146,8 @@ import com.example.llamadroid.sd.SdLoraSpec
 import com.example.llamadroid.sd.SdParamsBackendMode
 import com.example.llamadroid.sd.SdRuntimeBackendMode
 import com.example.llamadroid.sd.SdVideoComponentRole
-import com.example.llamadroid.sd.SdVideoFamily
+import com.example.llamadroid.sd.SdCuratedPresets
+import com.example.llamadroid.sd.SdTaeCheck
 import com.example.llamadroid.sd.SdVideoFamilyProfiles
 import com.example.llamadroid.sd.SdVideoInputs
 import com.example.llamadroid.sd.SdVideoMainModelLayout
@@ -161,6 +162,7 @@ import com.example.llamadroid.sd.validateSdLoras
 import com.example.llamadroid.ui.components.SdSchedulerPicker
 import com.example.llamadroid.ui.components.AppAdvancedSection
 import com.example.llamadroid.ui.components.AppScrollableTabRow
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppStateKind
 import com.example.llamadroid.ui.components.AppStatePanel
 import com.example.llamadroid.ui.components.AppTaskActionFooter
@@ -197,6 +199,7 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
     val scope = rememberCoroutineScope()
     val queueRepository = remember(context) { GenerationQueueRepository(context) }
     val queueRunning by GenerationQueueRuntime.active.collectAsState()
+    val queuePendingCount by queueRepository.pendingCountFlow.collectAsState(initial = 0)
     val batteryGateState = rememberBatteryOptimizationGateState()
     val settingsRepo = remember { SettingsRepository(context) }
     val restoredDraft = remember { settingsRepo.videoGenerationDraft() }
@@ -572,6 +575,11 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
         }
     }
 
+    val videoTaeCheck by produceState<SdTaeCheck?>(null, videoEditorOptions, availableVideoModels) {
+        value = null
+        value = withContext(Dispatchers.IO) { videoTaePreflight(videoEditorOptions) }
+    }
+
     val generateVideo = generation@ fun(addToQueue: Boolean) {
         val mode = if (selectedMode == 1) VideoGenerationMode.IMG2VID else VideoGenerationMode.TXT2VID
         val frames = videoFramesText.toIntOrNull()
@@ -616,6 +624,10 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
             }
             videoPathsAvailable != true -> {
                 errorMessage = resources.getString(R.string.video_controls_unavailable_values_hint)
+                return
+            }
+            videoTaeErrorMessage(resources, videoTaeCheck) != null -> {
+                errorMessage = videoTaeErrorMessage(resources, videoTaeCheck)
                 return
             }
             mode == VideoGenerationMode.IMG2VID && effectiveVideoInputPath == null -> {
@@ -808,17 +820,9 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
 
     fun applyLingBotProfile() {
         val bundle = lingBotBundle ?: return
-        val installedById = bundle.files.mapNotNull { file ->
-            file.installedSdCuratedModel(bundle, lingBotInstalledModels)?.let { file.id to it.path }
-        }.toMap()
-        if (installedById.size != bundle.files.size) return
+        val components = SdCuratedPresets.resolveLingBotComponents(bundle, lingBotInstalledModels) ?: return
+        val preset = SdCuratedPresets.LingBotPhone
         reuseBackendOverrides = null
-        val components = com.example.llamadroid.sd.SdVideoComponentPaths(
-            diffusionModelPath = installedById["lingbot-dense-13b"],
-            llmPath = installedById["lingbot-qwen3-vl-4b-q4"],
-            taePath = installedById["lingbot-taew21"],
-            vaePath = null
-        )
         val examplePrompt = resources.getString(R.string.video_lingbot_example_prompt)
         // Mode restoration must observe the preset prompt, including when switching from I2V.
         VideoGenerationStateHolder.txt2vid.updatePrompt(examplePrompt)
@@ -829,23 +833,23 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
         prompt = examplePrompt
         negativePrompt = resources.getString(R.string.video_lingbot_example_negative)
         selectedVideoModelPath = components.diffusionModelPath
-        useVae = false
+        useVae = preset.USE_VAE
         selectedVaePath = null
         useT5xxl = false
         selectedT5xxlPath = null
-        videoFramesText = "9"
-        fpsText = "4"
-        widthText = "256"
-        heightText = "144"
-        stepsText = "12"
-        cfgScaleText = "3"
+        videoFramesText = preset.FRAMES.toString()
+        fpsText = preset.FPS.toString()
+        widthText = preset.WIDTH.toString()
+        heightText = preset.HEIGHT.toString()
+        stepsText = preset.STEPS.toString()
+        cfgScaleText = preset.CFG_SCALE_TEXT
         flowShiftEnabled = true
-        flowShiftText = "3"
-        threadsText = "4"
-        mmap = true
-        diffusionFa = true
-        selectedSampler = SamplingMethod.EULER
-        selectedScheduler = null
+        flowShiftText = preset.FLOW_SHIFT_TEXT
+        threadsText = preset.THREADS.toString()
+        mmap = preset.MMAP
+        diffusionFa = preset.DIFFUSION_FA
+        selectedSampler = preset.SAMPLER
+        selectedScheduler = preset.SCHEDULER
         videoLoras = emptyList()
         videoHighNoiseLoras = emptyList()
         videoLoraApplyMode = SdLoraApplyMode.fromStoredValue(null)
@@ -854,16 +858,7 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
         manualCommandFlags = ""
         errorMessage = null
         warningMessage = null
-        videoRuntimeOptions = VideoRuntimeOptions(
-            videoFamily = SdVideoFamily.LINGBOT_VIDEO,
-            videoVariant = "dense_1.3b",
-            workflow = SdVideoWorkflow.TEXT_TO_VIDEO,
-            videoComponents = components,
-            videoInputs = SdVideoInputs(),
-            useTae = true,
-            seed = 42L,
-            promptFormat = com.example.llamadroid.sd.SdVideoPromptFormat.LINGBOT_CAPTION_JSON
-        )
+        videoRuntimeOptions = SdCuratedPresets.lingBotRuntimeOptions(components)
     }
 
     fun applyVideoReuse(payload: VideoReusePayload, verifiedSources: Map<String, String> = emptyMap()) {
@@ -947,36 +942,18 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(
-                onClick = { navController.popBackStack() },
-                modifier = Modifier.walkthroughTarget("back")
-            ) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
-            }
-            Text(
-                stringResource(R.string.video_gen_title),
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            FeatureGuideAction()
-            GenerationQueueHeaderAction(navController)
+    AppScreenScaffold(
+        title = stringResource(R.string.video_gen_title),
+        onBack = { navController.popBackStack() },
+        actions = {
+            GenerationQueueHeaderAction(navController, pendingCount = queuePendingCount)
+            GenerationSettingsHeaderAction(navController)
             IconButton(onClick = { showInfoDialog = true }) {
                 Icon(Icons.Default.Info, contentDescription = stringResource(R.string.gen_help_open))
             }
         }
+    ) { _ ->
+    Column(modifier = Modifier.fillMaxSize()) {
 
         AppScrollableTabRow(
             selectedTabIndex = mainTab,
@@ -1010,7 +987,8 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
             if (mainTab == 0) {
                 val formScroll = rememberLazyListState()
                 WalkthroughScrollOwner(setOf("video.prompt", "video.models", "video.profile", "video.inputs", "video.advanced", "video.loras")) { target ->
-                    formScroll.animateScrollToItem(if (target == "video.prompt") 0 else if (availableVideoModels.isEmpty()) 2 else 1)
+                    val leadingItems = (if (availableVideoModels.isEmpty()) 1 else 0) + (if (reuseBackendOverrides != null) 1 else 0)
+                    formScroll.animateScrollToItem(if (target == "video.prompt") leadingItems + 1 else leadingItems)
                 }
                 LazyColumn(
                     state = formScroll,
@@ -1021,38 +999,6 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     contentPadding = PaddingValues(bottom = 16.dp)
                 ) {
-                    item(key = "prompts") { Card(
-                        modifier = Modifier.fillMaxWidth().walkthroughTarget("video.prompt"),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text(
-                                stringResource(R.string.video_gen_prompt_label),
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            OutlinedTextField(
-                                value = prompt,
-                                onValueChange = { prompt = it },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(120.dp),
-                                placeholder = { Text(stringResource(R.string.video_gen_prompt_placeholder)) },
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            OutlinedTextField(
-                                value = negativePrompt,
-                                onValueChange = { negativePrompt = it },
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text(stringResource(R.string.video_gen_negative_prompt_label)) },
-                                placeholder = { Text(stringResource(R.string.video_gen_negative_prompt_placeholder)) },
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                        }
-                    } }
-
                     if (availableVideoModels.isEmpty()) item(key = "get-models") {
                         OutlinedButton(
                             onClick = { navController.navigate(Screen.SDModels.route) },
@@ -1117,6 +1063,40 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
                             }
                         }
                     }
+
+                    item(key = "prompts") { Card(
+                        modifier = Modifier.fillMaxWidth().walkthroughTarget("video.prompt"),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                stringResource(R.string.video_gen_prompt_label),
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = prompt,
+                                onValueChange = { prompt = it },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(120.dp),
+                                placeholder = { Text(stringResource(R.string.video_gen_prompt_placeholder)) },
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            AppAdvancedSection(title = stringResource(R.string.ui_redesign_gen_more_prompt), initiallyExpanded = negativePrompt.isNotBlank()) {
+                                OutlinedTextField(
+                                    value = negativePrompt,
+                                    onValueChange = { negativePrompt = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text(stringResource(R.string.video_gen_negative_prompt_label)) },
+                                    placeholder = { Text(stringResource(R.string.video_gen_negative_prompt_placeholder)) },
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                            }
+                        }
+                    } }
 
                     item(key = "parameters") { Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -1558,6 +1538,7 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
                 }
             }
         }
+    }
     }
 
     selectedGalleryVideo?.let { metadata ->

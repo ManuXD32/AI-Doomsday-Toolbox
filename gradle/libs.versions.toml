@@ -35,6 +35,8 @@ wearTiles = "1.4.1"
 wearProtoLayout = "1.2.1"
 wearRemoteInteractions = "1.1.0"
 playServicesWearable = "19.0.0"
+zip4j = "2.11.6"
+snakeyaml = "2.4"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -93,6 +95,8 @@ pdfbox = { group = "com.tom-roush", name = "pdfbox-android", version.ref = "pdfb
 # Apache Commons Compress for tar extraction
 commons-compress = { group = "org.apache.commons", name = "commons-compress", version = "1.26.1" }
 xz = { group = "org.tukaani", name = "xz", version = "1.9" }
+zip4j = { group = "net.lingala.zip4j", name = "zip4j", version.ref = "zip4j" }
+snakeyaml = { group = "org.yaml", name = "snakeyaml", version.ref = "snakeyaml" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

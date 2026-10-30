@@ -21,17 +21,21 @@ object ExternalRouteResolver {
     private const val LEGACY_MODELS_ROUTE = "models"
     private const val LEGACY_STATS_ROUTE = "stats"
     private const val LEGACY_KIWIX_HUB_ROUTE = "kiwix_hub"
+    private const val LEGACY_LLAMA_SERVERS_ROUTE = "llama_servers"
+    private const val LEGACY_LLAMA_SERVER_LIST_ROUTE = "llama_server_list"
 
     private val staticRoutes = setOf(
         Screen.Dashboard.route,
         Screen.Library.route,
+        Screen.Chats.route,
         Screen.Settings.route,
         Screen.Stats.route,
         Screen.Logs.route,
         Screen.AIHub.route,
+        "global_search",
+        "servers_hub",
         Screen.AiServersHub.route,
         Screen.FileServer.route,
-        Screen.LlamaServers.route,
         Screen.ImageGen.route,
         Screen.ImageGenUpscale.route,
         Screen.GenerationQueue.route,
@@ -93,7 +97,6 @@ object ExternalRouteResolver {
         Screen.AdventureGate.route,
         Screen.NightArena.route,
         Screen.OllamaManager.route,
-        Screen.LlamaServerList.route,
         Screen.LlamaChatList.route,
         Screen.LlamaScheduler.route,
         "model_share",
@@ -118,6 +121,10 @@ object ExternalRouteResolver {
     private val onnxModelsTabPattern = Regex(
         "^${Regex.escape(Screen.OnnxModels.route)}\\?tab=(?:installed|downloading|catalog)$"
     )
+    private val aiHubTabPattern = Regex("^ai_hub\\?tab=(?:tools|library)$")
+    private val allMediaGalleryPattern = Regex(
+        "^all_media_gallery(?:\\?(?:type=(?:image|video|audio)(?:&source=[a-z0-9_]{1,40})?|source=[a-z0-9_]{1,40}))?$"
+    )
     private val adventureRoutes = DungeonType.entries
         .map { Screen.Adventure.createRoute(it.name) }
         .toSet()
@@ -132,6 +139,8 @@ object ExternalRouteResolver {
             LEGACY_STATS_ROUTE -> Screen.Stats.route
             // KiwixHub was renamed to the existing ZIM manager destination.
             LEGACY_KIWIX_HUB_ROUTE -> Screen.ZimManager.route
+            // Server management now lives in the Chats home.
+            LEGACY_LLAMA_SERVERS_ROUTE, LEGACY_LLAMA_SERVER_LIST_ROUTE -> Screen.Chats.route
             IMAGE_GEN_UPSCALE_LEGACY_ROUTE -> Screen.ImageGen.createRoute(startMode = 2)
             else -> trimmed
         }
@@ -146,6 +155,8 @@ object ExternalRouteResolver {
             imageGenWithModePattern.matches(canonical) -> canonical
             audioWorkspacePattern.matches(canonical) -> canonical
             onnxModelsTabPattern.matches(canonical) -> canonical
+            aiHubTabPattern.matches(canonical) -> canonical
+            allMediaGalleryPattern.matches(canonical) -> canonical
             canonical in setOf("litert_models?tab=installed", "litert_models?tab=downloading", "litert_models?tab=catalog") -> canonical
             canonical.startsWith("agent?conversationId=") &&
                 Regex("agent\\?conversationId=[0-9]+(?:&harnessTab=(?:conversation|requests|plan))?").matches(canonical) &&

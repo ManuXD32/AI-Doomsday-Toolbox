@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ui_sweepb_generation_queue">Cola de generación</string>
+    <string name="ui_sweepb_generation_queue_desc">Trabajos de generación pendientes, en curso y terminados</string>
+</resources>

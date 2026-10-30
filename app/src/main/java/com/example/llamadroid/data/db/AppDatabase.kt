@@ -99,6 +99,7 @@ class Converters {
         HarnessRuntimeEntity::class,
         HarnessWorkspaceEntity::class,
         HarnessSessionEntity::class,
+        HarnessTransferImportReceiptEntity::class,
         AgentProjectEventEntity::class,
         AgentMessagePartEntity::class,
         AgentTurnContextEntity::class,
@@ -179,9 +180,15 @@ class Converters {
         com.example.llamadroid.data.model.library.ModelDeletionJournalOperationEntity::class,
         com.example.llamadroid.data.model.library.ModelDeletionJournalPathEntity::class,
         GenerationQueueItemEntity::class,
-        GenerationQueueControlEntity::class
-    ], 
-    version = 125,
+        GenerationQueueControlEntity::class,
+        com.example.llamadroid.data.model.NativeChatDelegateTaskEntity::class,
+        com.example.llamadroid.data.model.NativeChatDelegateMessageEntity::class,
+        com.example.llamadroid.data.model.NativeChatDelegateEventEntity::class,
+        com.example.llamadroid.data.model.LlamaMessageAttachmentEntity::class,
+        com.example.llamadroid.data.model.NativeChatCompactionEntity::class,
+        com.example.llamadroid.data.model.LlamaMessageImageDescriptionEntity::class
+    ],
+    version = 132,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -202,6 +209,10 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun agentProotEnvironmentDao(): AgentProotEnvironmentDao
     abstract fun agentProotRunDao(): AgentProotRunDao
     abstract fun harnessDao(): HarnessDao
+    /** Room metadata access used by Harness runtime transfer import/export. */
+    abstract fun harnessTransferDao(): com.example.llamadroid.harness.HarnessTransferDao
+    /** Runtime installation catalog backed by the shared PRoot environment table. */
+    abstract fun harnessInstallationDao(): HarnessInstallationDao
     abstract fun agentWorkflowDao(): AgentWorkflowDao
     abstract fun customToolDao(): CustomToolDao
     abstract fun customAgentDao(): CustomAgentDao
@@ -216,6 +227,12 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun llamaChatPromptProfileDao(): com.example.llamadroid.data.dao.LlamaChatPromptProfileDao
     abstract fun llamaChatDao(): com.example.llamadroid.data.dao.LlamaChatDao
     abstract fun llamaMessageDao(): com.example.llamadroid.data.dao.LlamaMessageDao
+    abstract fun nativeChatDelegateTaskDao(): com.example.llamadroid.data.dao.NativeChatDelegateTaskDao
+    abstract fun nativeChatDelegateMessageDao(): com.example.llamadroid.data.dao.NativeChatDelegateMessageDao
+    abstract fun nativeChatDelegateEventDao(): com.example.llamadroid.data.dao.NativeChatDelegateEventDao
+    abstract fun llamaMessageAttachmentDao(): com.example.llamadroid.data.dao.LlamaMessageAttachmentDao
+    abstract fun nativeChatCompactionDao(): com.example.llamadroid.data.dao.NativeChatCompactionDao
+    abstract fun llamaMessageImageDescriptionDao(): com.example.llamadroid.data.dao.LlamaMessageImageDescriptionDao
     abstract fun llamaScheduledTaskDao(): com.example.llamadroid.data.dao.LlamaScheduledTaskDao
     abstract fun llamaSpeculativeRunDao(): com.example.llamadroid.data.dao.LlamaSpeculativeRunDao
     abstract fun organizerDao(): OrganizerDao
@@ -235,6 +252,9 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun audioLibraryDao(): com.example.llamadroid.audio.library.AudioLibraryDao
     abstract fun modelDeletionJournalDao(): com.example.llamadroid.data.model.library.ModelDeletionJournalDao
     abstract fun generationQueueDao(): GenerationQueueDao
+
+    /** Capture runtime ownership once; the global process-owner row remains available on the facade. */
+    fun harnessDao(runtimeId: String): HarnessRuntimeDao = HarnessRuntimeDao(harnessDao(), runtimeId)
 
     companion object {
         @Volatile

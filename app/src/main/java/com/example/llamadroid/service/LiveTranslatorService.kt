@@ -120,8 +120,9 @@ class LiveTranslatorService : Service() {
                 } else if (activeJob?.isActive == true) {
                     publishError(getString(R.string.live_translator_error_already_running))
                 } else {
-                    startForegroundSession()
-                    startLoop(templateId, sessionId.takeIf { it > 0L }, startId)
+                    if (startForegroundSession(startId)) {
+                        startLoop(templateId, sessionId.takeIf { it > 0L }, startId)
+                    }
                 }
             }
             ACTION_STOP -> stopTranslator()
@@ -138,8 +139,9 @@ class LiveTranslatorService : Service() {
                 } else if (sampleJob?.isActive == true) {
                     publishSampleError(getString(R.string.live_translator_sampler_error_already_running))
                 } else {
-                    startForegroundSession()
-                    startLanguageSample(whisperModelPath, whisperThreads, startId)
+                    if (startForegroundSession(startId, forSample = true)) {
+                        startLanguageSample(whisperModelPath, whisperThreads, startId)
+                    }
                 }
             }
         }
@@ -156,14 +158,29 @@ class LiveTranslatorService : Service() {
         super.onDestroy()
     }
 
-    private fun startForegroundSession() {
+    /** Starts the microphone foreground session; on denial shows a readable failure and stops. */
+    private fun startForegroundSession(startId: Int, forSample: Boolean = false): Boolean {
+        val title = getString(R.string.live_translator_title)
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.LIVE_TRANSLATOR,
-            getString(R.string.live_translator_title)
+            title
         )
+        val result = ForegroundStart.startRequiringMicrophone(
+            this,
+            taskId,
+            notification,
+            ForegroundServiceTypes.MICROPHONE or ForegroundServiceTypes.MEDIA_PLAYBACK
+        )
+        if (result is ForegroundStart.Result.Failed) {
+            val message = ForegroundStart.failureMessage(this, result.reason, title)
+            UnifiedNotificationManager.failTask(taskId, message)
+            if (forSample) publishSampleError(message) else publishError(message)
+            stopSelf(startId)
+            return false
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
         acquireLocks()
+        return true
     }
 
     private fun startLoop(templateId: Long, existingSessionId: Long?, startId: Int) {

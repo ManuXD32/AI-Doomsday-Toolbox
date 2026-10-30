@@ -31,6 +31,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -1058,9 +1060,61 @@ class NativeHarnessControllerWireTest {
         }
     }
 
+    @Test
+    fun managedPreparationDoesNotCommitAfterTheSelectedSessionIsReplaced() = runBlocking {
+        val client = RecordingHarnessClient().apply {
+            sessionItems = listOf("session-1", "session-2")
+            modelCatalogResult = HarnessRpcResult.Success(buildJsonObject { putJsonArray("groups") {} })
+        }
+        val localCatalog = Json.parseToJsonElement(
+            """{"data":[
+                {"id":"llama:8","owned_by":"adt-llama-server","name":"old.gguf"},
+                {"id":"llama:7","owned_by":"adt-llama-server","name":"new.gguf"}
+            ]}"""
+        ).jsonObject
+        val prepareStarted = CompletableDeferred<Unit>()
+        val releasePrepare = CompletableDeferred<Unit>()
+        val controller = controller(
+            client,
+            localModelCatalog = { localCatalog },
+            prepareLocalModel = {
+                prepareStarted.complete(Unit)
+                releasePrepare.await()
+                Json.parseToJsonElement(
+                    """{"id":"llama:7","owned_by":"adt-llama-server","status":"running","available":true,"context_length":32768}"""
+                ).jsonObject
+            },
+        )
+        try {
+            waitUntil {
+                controller.state.value.selectedSessionId == "session-1" &&
+                    controller.state.value.provider.selectedModel == "llama:8"
+            }
+            controller.dispatch(NativeHarnessUiAction.SelectModel("llama:7"))
+            prepareStarted.await()
+
+            client.sessionItems = listOf("session-2")
+            controller.refreshAfterWebView()
+            assertEquals("session-2", controller.state.value.selectedSessionId)
+
+            releasePrepare.complete(Unit)
+            waitUntil { !controller.state.value.provider.isPreparingModel }
+            assertEquals("llama:8", controller.state.value.provider.selectedModel)
+            assertTrue(client.calls.none { call ->
+                call.namespace == "session" && call.method == "selectModel" &&
+                    call.args["request"]?.jsonObject?.get("model")?.jsonPrimitive?.content == "llama:7"
+            })
+        } finally {
+            releasePrepare.complete(Unit)
+            controller.close()
+        }
+    }
+
     private fun controller(
         client: RecordingHarnessClient,
-        externalAction: suspend (NativeHarnessUiAction) -> Unit = {}
+        localModelCatalog: suspend () -> JsonObject? = { null },
+        prepareLocalModel: suspend (String) -> JsonObject? = { null },
+        externalAction: suspend (NativeHarnessUiAction) -> Unit = {},
     ): NativeHarnessController = NativeHarnessController(
         parentScope = CoroutineScope(Dispatchers.Unconfined + Job()),
         clientProvider = { client },
@@ -1070,6 +1124,8 @@ class NativeHarnessControllerWireTest {
             stop = { HarnessRuntimeUiState(status = HarnessRuntimeStatus.STOPPED) },
             forceStop = { HarnessRuntimeUiState(status = HarnessRuntimeStatus.STOPPED) }
         ),
+        localModelCatalog = localModelCatalog,
+        prepareLocalModel = prepareLocalModel,
         handleExternalAction = externalAction
     )
 
@@ -1129,6 +1185,7 @@ class NativeHarnessControllerWireTest {
         @Volatile var followCalls = 0
         @Volatile var controlCalls = 0
         var customProviderSettings = false
+        var modelCatalogResult: HarnessRpcResult = HarnessRpcResult.Success(JsonNull)
         var settingsMutateResult: HarnessRpcResult = HarnessRpcResult.Success(JsonNull)
         var credentialsSetResult: HarnessRpcResult = HarnessRpcResult.Success(JsonNull)
         var credentialsUnsetResult: HarnessRpcResult = HarnessRpcResult.Success(JsonNull)
@@ -1182,6 +1239,8 @@ class NativeHarnessControllerWireTest {
                         ?.get("throughSeq")?.toString()?.toLongOrNull()
                     throughSeq?.let { pageResultsByThroughSeq[it] } ?: pageResult
                 }
+                "session" to "modelCatalog" -> modelCatalogResult
+                "session" to "selectModel" -> HarnessRpcResult.Success(JsonNull)
                 "settings" to "describe" -> HarnessRpcResult.Success(buildJsonObject {
                     put("writable", true)
                     put("hasDocument", true)

@@ -17,22 +17,22 @@ import java.security.MessageDigest
 
 /** Durable dedupe stores hashes/times only; request content remains in the live Harness store. */
 internal class HarnessAttentionNotifications(
-    context: Context,
+    private val context: Context,
     private val database: AppDatabase,
 ) {
-    private val file = AtomicFile(File(context.filesDir, "agent_harness/attention-notifications.json"))
+    private val file = AtomicFile(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.dataFile(context, "agent_harness/attention-notifications.json"))
     private val lock = Mutex()
     private var delivered: LinkedHashMap<String, Long>? = null
 
     suspend fun publish(notice: HarnessAttentionNotice) = withContext(Dispatchers.IO) {
-        val mapping = database.harnessDao().session(notice.sessionId)
+        val mapping = database.harnessDao(com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context)).session(notice.sessionId)
         val destination = when (notice.kind) {
             "plan" -> "plan"
             "question", "approval" -> "requests"
             else -> "conversation"
         }
         val route = mapping?.let { Screen.Agent.createRoute(it.conversationId, destination) } ?: Screen.Agent.route
-        val key = attentionNotificationKey(notice.sessionId, notice.key, notice.kind)
+        val key = attentionNotificationKey(notice.sessionId, notice.key, notice.kind, com.example.llamadroid.harness.runtime.HarnessRuntimeScope.id(context))
         lock.withLock {
             val known = delivered ?: read().also { delivered = it }
             if (key in known) return@withLock
@@ -62,6 +62,6 @@ internal class HarnessAttentionNotifications(
     }.getOrDefault(LinkedHashMap())
 }
 
-internal fun attentionNotificationKey(session: String, event: String, kind: String): String =
-    MessageDigest.getInstance("SHA-256").digest("$session\u0000$event\u0000$kind".toByteArray())
+internal fun attentionNotificationKey(session: String, event: String, kind: String, runtimeId: String = com.example.llamadroid.harness.runtime.HarnessRuntimeScope.LEGACY_RUNTIME_ID): String =
+    MessageDigest.getInstance("SHA-256").digest("$runtimeId\u0000$session\u0000$event\u0000$kind".toByteArray())
         .joinToString("") { "%02x".format(it) }

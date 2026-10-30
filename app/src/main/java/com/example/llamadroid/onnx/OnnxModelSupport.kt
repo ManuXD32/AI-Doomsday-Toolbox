@@ -143,7 +143,9 @@ data class OnnxImageGenConfig(
     val strength: Float? = null,
     val backend: OnnxRuntimeBackend = OnnxRuntimeBackend.CPU,
     val runtimeOptions: OnnxRuntimeOptions = OnnxRuntimeOptions(),
-    val outputPath: String
+    val outputPath: String,
+    /** True for runs started by Easy mode; advanced screens ignore the state of such runs. */
+    val easyMode: Boolean = false
 ) : Parcelable
 
 data class OnnxCatalogEntry(
@@ -160,7 +162,9 @@ data class OnnxCatalogEntry(
     val assetKind: String = ONNX_ASSET_KIND_SDAI_CATALOG_BUNDLE,
     val pipelineFamily: String = ONNX_PIPELINE_FAMILY_SDAI_LOCAL_DIFFUSION,
     val directDownloadUrl: String? = null,
-    val gated: Boolean = false
+    val gated: Boolean = false,
+    /** Localized style line; [summary] stays as the English fallback. */
+    @androidx.annotation.StringRes val summaryRes: Int? = null
 ) {
     val stableId: String
         get() = buildOnnxCatalogStableId(provider, bundleId)
@@ -334,7 +338,7 @@ object OnnxCatalog {
         OnnxCatalogEntry(OnnxCatalogProvider.MANUXD32, "realvision", "Realvision", "realvision.zip", "vae_encoder", "realastic-vision-v20", "Earlier realistic local bundle from the fork with img2img support.", 652324928L),
         OnnxCatalogEntry(OnnxCatalogProvider.MANUXD32, "sunshinemix", "Sunshine Mix", "sunshinemix.zip", "vae_encoder", "sunshinemix", "Warm general-purpose local diffusion mix with VAE encoder added.", 651071465L),
         OnnxCatalogEntry(OnnxCatalogProvider.MANUXD32, "universestable", "Universe Stable", "universestable.zip", "vae_encoder", "universestable", "General-use SD1.5 ORT bundle with img2img-ready VAE encoder.", 650520961L)
-    )
+    ).map { it.copy(summaryRes = onnxManuSummaryRes[it.bundleId]) }
 
     private val supertonicEntries: List<OnnxCatalogEntry> = listOf(
         OnnxCatalogEntry(

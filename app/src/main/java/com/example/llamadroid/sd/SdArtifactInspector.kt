@@ -49,6 +49,13 @@ class SdArtifactInspector {
     fun inspect(path: String, configuredRole: SdArtifactRole? = null): SdArtifactInspection =
         inspect(File(path), configuredRole)
 
+    /** Inspect a local copy whose own name is meaningless (SAF temp copy) using the user-visible name. */
+    fun inspectWithDisplayName(
+        file: File,
+        displayName: String?,
+        configuredRole: SdArtifactRole? = null
+    ): SdArtifactInspection = inspectInternal(file, configuredRole, nameHint = displayName)
+
     fun inspect(path: Path, configuredRole: SdArtifactRole? = null): SdArtifactInspection =
         inspect(path.toFile(), configuredRole)
 
@@ -97,7 +104,7 @@ class SdArtifactInspector {
                     headerValid = false
                 )
             } else {
-                inspect(prefixFile, configuredRole).copy(
+                inspectInternal(prefixFile, configuredRole, nameHint = displayName).copy(
                     fileSizeBytes = sourceSize ?: copied,
                     // SAF does not expose a stable modification timestamp for
                     // every provider; leave it unknown instead of inventing one.
@@ -121,7 +128,14 @@ class SdArtifactInspector {
     fun inspectModel(file: File, configuredType: ModelType?): SdArtifactInspection =
         inspect(file, configuredType.toArtifactRole())
 
-    private fun inspectInternal(file: File, configuredRole: SdArtifactRole?): SdArtifactInspection {
+    private fun inspectInternal(
+        file: File,
+        configuredRole: SdArtifactRole?,
+        nameHint: String? = null
+    ): SdArtifactInspection {
+        // SAF inspections run on a temp copy with a meaningless name; the real
+        // display name is the only filename evidence available.
+        val classifierName = nameHint?.takeIf { it.isNotBlank() } ?: file.name
         val size = file.takeIf { it.exists() }?.length()
         val modified = file.takeIf { it.exists() }?.lastModified()
         val extension = file.extension.lowercase(Locale.US)
@@ -148,8 +162,8 @@ class SdArtifactInspector {
             RandomAccessFile(file, "r").use { raf ->
                 val format = detectFormat(raf, extension)
                 when (format) {
-                    SdArtifactFormat.SAFETENSORS -> inspectSafeTensors(raf, file, configuredRole)
-                    SdArtifactFormat.GGUF -> inspectGguf(raf, file, configuredRole)
+                    SdArtifactFormat.SAFETENSORS -> inspectSafeTensors(raf, file, configuredRole, classifierName)
+                    SdArtifactFormat.GGUF -> inspectGguf(raf, file, configuredRole, classifierName)
                     SdArtifactFormat.CKPT -> inspectLegacyCheckpoint(file, configuredRole)
                     SdArtifactFormat.UNKNOWN -> baseResult(
                         format = format,
@@ -175,7 +189,8 @@ class SdArtifactInspector {
     private fun inspectSafeTensors(
         raf: RandomAccessFile,
         file: File,
-        configuredRole: SdArtifactRole?
+        configuredRole: SdArtifactRole?,
+        classifierName: String
     ): SdArtifactInspection {
         val size = file.length()
         val modified = file.lastModified()
@@ -240,6 +255,7 @@ class SdArtifactInspector {
         }
 
         val tensorNames = ArrayList<String>(minOf(root.length(), MAX_RECORDED_TENSOR_NAMES))
+        val clipProbe = ClipShapeProbe()
         val representativePrefixes = linkedSetOf<String>()
         val metadata = linkedMapOf<String, String>()
         var tensorCount = 0L
@@ -275,6 +291,9 @@ class SdArtifactInspector {
             digest.update(key.toByteArray(Charsets.UTF_8))
             digest.update(0)
             if (tensorNames.size < MAX_RECORDED_TENSOR_NAMES) tensorNames += key
+            descriptor?.optJSONArray("shape")?.let { shape ->
+                clipProbe.observe(key, List(shape.length()) { shape.optLong(it, -1L) })
+            }
             recordPrefix(representativePrefixes, key)
         }
 
@@ -283,8 +302,9 @@ class SdArtifactInspector {
             format = SdArtifactFormat.SAFETENSORS,
             tensorNames = tensorNames,
             metadata = metadata,
-            filename = file.name,
-            configuredRole = configuredRole
+            filename = classifierName,
+            configuredRole = configuredRole,
+            clipShape = clipProbe.verdict()
         )
         if (malformedDescriptor) warnings += "Tensor metadata could not be fully validated"
         val finalConfidence = if (malformedDescriptor && evidence.confidence == SdInspectionConfidence.HIGH) {
@@ -306,7 +326,8 @@ class SdArtifactInspector {
     private fun inspectGguf(
         raf: RandomAccessFile,
         file: File,
-        configuredRole: SdArtifactRole?
+        configuredRole: SdArtifactRole?,
+        classifierName: String
     ): SdArtifactInspection {
         val warnings = mutableListOf<String>()
         val digest = MessageDigest.getInstance("SHA-256")
@@ -328,10 +349,12 @@ class SdArtifactInspector {
             }
 
             val tensorNames = ArrayList<String>(minOf(tensorCount.toInt(), MAX_RECORDED_TENSOR_NAMES))
+            val clipProbe = ClipShapeProbe()
             val prefixes = linkedSetOf<String>()
             repeat(tensorCount.toInt()) {
                 val name = reader.readString()
-                reader.readTensorDescriptor()
+                val dims = reader.readTensorDescriptor()
+                clipProbe.observe(name, dims)
                 if (tensorNames.size < MAX_RECORDED_TENSOR_NAMES) tensorNames += name
                 recordPrefix(prefixes, name)
                 reader.updateDigest(name)
@@ -341,8 +364,9 @@ class SdArtifactInspector {
                 format = SdArtifactFormat.GGUF,
                 tensorNames = tensorNames,
                 metadata = metadata,
-                filename = file.name,
-                configuredRole = configuredRole
+                filename = classifierName,
+                configuredRole = configuredRole,
+                clipShape = clipProbe.verdict()
             )
             evidence.toInspection(
                 tensorCount = tensorCount,
@@ -528,12 +552,66 @@ class SdArtifactInspector {
 
     }
 
+    /**
+     * Collects text-encoder hidden size and depth from tensor shapes so CLIP-G
+     * (hidden 1280, 32 layers) and CLIP-L (768, 12) can be told apart without
+     * any filename. GGUF dimension order is reversed, so the vocab-sized axis
+     * is skipped instead of assuming a position.
+     */
+    private class ClipShapeProbe {
+        private var hidden: Long? = null
+        private var maxLayer = -1
+        private var clipLike = false
+
+        fun observe(rawName: String, dims: List<Long>) {
+            val name = rawName.lowercase(Locale.US)
+            val textTower = name.contains("text_model") || name.contains("resblocks") ||
+                name.contains("token_embedding") ||
+                name.contains("clip") || name.contains("embedders")
+            if (!textTower || name.contains("lora") || name.contains("lycoris")) return
+            clipLike = true
+            LAYER_INDEX.find(name)?.groupValues?.get(1)?.toIntOrNull()?.let { maxLayer = maxOf(maxLayer, it) }
+            if (hidden != null) return
+            val isTokenEmbedding = name.contains("token_embedding") || name.contains("embeddings.token")
+            val isPositionEmbedding = name.contains("position_embedding")
+            val isFinalNorm = name.contains("final_layer_norm") || name.contains("ln_final")
+            hidden = when {
+                isTokenEmbedding && dims.size == 2 && CLIP_VOCAB in dims -> dims.firstOrNull { it != CLIP_VOCAB }
+                isPositionEmbedding && dims.size == 2 && CLIP_POSITIONS in dims -> dims.firstOrNull { it != CLIP_POSITIONS }
+                isFinalNorm && dims.size == 1 -> dims[0]
+                else -> null
+            }
+        }
+
+        fun verdict(): SdArtifactRole? {
+            if (!clipLike) return null
+            val layers = if (maxLayer >= 0) maxLayer + 1 else null
+            return when {
+                hidden == CLIP_G_HIDDEN || layers == CLIP_G_LAYERS -> SdArtifactRole.CLIP_G
+                hidden == CLIP_L_HIDDEN && (layers == null || layers == CLIP_L_LAYERS) -> SdArtifactRole.CLIP_L
+                hidden == null && layers == CLIP_L_LAYERS -> SdArtifactRole.CLIP_L
+                else -> null
+            }
+        }
+
+        private companion object {
+            const val CLIP_VOCAB = 49408L
+            const val CLIP_POSITIONS = 77L
+            const val CLIP_G_HIDDEN = 1280L
+            const val CLIP_L_HIDDEN = 768L
+            const val CLIP_G_LAYERS = 32
+            const val CLIP_L_LAYERS = 12
+            val LAYER_INDEX = Regex("(?:layers|resblocks)\\.(\\d+)\\.")
+        }
+    }
+
     private fun classifyEvidence(
         format: SdArtifactFormat,
         tensorNames: List<String>,
         metadata: Map<String, String>,
         filename: String,
-        configuredRole: SdArtifactRole?
+        configuredRole: SdArtifactRole?,
+        clipShape: SdArtifactRole? = null
     ): Evidence {
         val normalizedNames = tensorNames.map { it.lowercase(Locale.US) }
         val metadataText = metadata.entries.joinToString(" ") { "${it.key} ${it.value}" }.lowercase(Locale.US)
@@ -562,14 +640,26 @@ class SdArtifactInspector {
         val genericClip = anyBaseName(::looksLikeGenericClipTensor)
         val filenameSuggestsClipG = filenameText.contains("clip_g") ||
             filenameText.contains("clip-g") || filenameText.contains("clipg") ||
-            filenameText.contains("openclip")
+            filenameText.contains("openclip") || filenameText.contains("open_clip") ||
+            filenameText.contains("open-clip") || filenameText.contains("big_g") ||
+            filenameText.contains("big-g") || BIG_G_NAME.containsMatchIn(filenameText)
         val filenameSuggestsClipL = filenameText.contains("clip_l") ||
             filenameText.contains("clip-l") || filenameText.contains("clipl")
+        // Tensor shapes (hidden 1280 / 32 layers vs 768 / 12) outrank the
+        // filename; explicit tensor-name markers outrank both.
+        val shapeG = clipShape == SdArtifactRole.CLIP_G
+        val shapeL = clipShape == SdArtifactRole.CLIP_L
+        // Only generic `text_model.*` names with no shape or filename hint: the
+        // L default is a guess, so it must not count as confident evidence.
+        val genericOnlyClipGuess = genericClip && !explicitClipL && !explicitClipG &&
+            !shapeG && !shapeL && !filenameSuggestsClipG && !filenameSuggestsClipL
         val containsClipG = explicitClipG ||
-            (!explicitClipL && filenameSuggestsClipG && normalizedNames.isNotEmpty())
+            (!explicitClipL && (shapeG ||
+                (!shapeL && filenameSuggestsClipG && normalizedNames.isNotEmpty())))
         val containsClipL = explicitClipL ||
-            (!explicitClipG && !filenameSuggestsClipG && genericClip) ||
-            (!explicitClipG && filenameSuggestsClipL && normalizedNames.isNotEmpty())
+            (!explicitClipG && shapeL) ||
+            (!explicitClipG && !shapeG && !shapeL && !filenameSuggestsClipG && genericClip) ||
+            (!explicitClipG && !shapeG && !shapeL && filenameSuggestsClipL && normalizedNames.isNotEmpty())
 
         val filenameSuggestsT5 = filenameText.contains("t5xxl") ||
             filenameText.contains("t5_xxl") || filenameText.contains("t5-xxl") ||
@@ -642,7 +732,7 @@ class SdArtifactInspector {
         val family = familyFromStructure ?: familyFromMetadata ?: familyFromFilename
         val tensorRoleEvidence = anyBaseName(::looksLikeVaeTensor) ||
             anyBaseName(::looksLikeTaeTensor) ||
-            explicitClipL || explicitClipG || genericClip ||
+            explicitClipL || explicitClipG || (genericClip && !genericOnlyClipGuess) ||
             anyBaseName(::looksLikeT5Tensor) ||
             anyBaseName(::looksLikeDiffusionTensor) ||
             anyBaseName(::looksLikeLlmTensor) || containsLora
@@ -1021,12 +1111,15 @@ class SdArtifactInspector {
             }
         }
 
-        fun readTensorDescriptor() {
+        fun readTensorDescriptor(): List<Long> {
             val dimensions = readU32()
             if (dimensions > MAX_GGUF_DIMENSIONS) throw InvalidArtifactException("GGUF tensor has too many dimensions")
-            repeat(dimensions.toInt()) { readI64().also { if (it < 0L) throw InvalidArtifactException("negative GGUF tensor dimension") } }
+            val dims = List(dimensions.toInt()) {
+                readI64().also { if (it < 0L) throw InvalidArtifactException("negative GGUF tensor dimension") }
+            }
             readU32() // ggml_type
             readI64() // data offset; payload is deliberately not read
+            return dims
         }
 
         fun updateDigest(value: String) {
@@ -1074,6 +1167,8 @@ class SdArtifactInspector {
     private class InvalidArtifactException(message: String) : IOException(message)
 
     companion object {
+        /** `bigG` as a word-ish token; excludes words such as "bigger". */
+        private val BIG_G_NAME = Regex("bigg(?![a-z])")
         const val MAX_SAFETENSORS_HEADER_BYTES: Long = 32L * 1024L * 1024L
         const val MAX_GGUF_HEADER_BYTES: Long = 32L * 1024L * 1024L
         /** Maximum URI prefix copied into the temporary header-only file. */

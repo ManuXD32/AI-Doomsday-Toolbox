@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -36,6 +37,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -61,22 +63,38 @@ internal fun HarnessRuntimeTab(
     runtime: HarnessRuntimeUiState,
     onAction: (NativeHarnessUiAction) -> Unit,
     modifier: Modifier = Modifier,
-    onReinstallRuntime: (() -> Unit)? = null
+    onReinstallRuntime: (() -> Unit)? = null,
+    installations: HarnessRuntimeInstallationsUiState? = null,
+    onInstallationAction: (HarnessRuntimeInstallationAction) -> Unit = {},
+    scrollToEnvironmentsToken: Int = 0,
 ) {
+    val listState = rememberLazyListState()
+    // Overflow -> Environments lands on the environments manager below the lifecycle controls.
+    LaunchedEffect(scrollToEnvironmentsToken) {
+        if (scrollToEnvironmentsToken > 0 && installations != null) listState.animateScrollToItem(1)
+    }
     LazyColumn(
+        state = listState,
         modifier = modifier
             .fillMaxWidth()
             .testTag("harness_runtime_tab"),
         contentPadding = PaddingValues(vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // Lifecycle (Start/Stop) stays first; the environments manager follows it.
         item(key = "runtime-lifecycle") {
             HarnessRuntimeHeader(runtime = runtime, onAction = onAction)
+        }
+        if (installations != null) item(key = "runtime-installations") {
+            HarnessRuntimeInstallationsHost(
+                state = installations,
+                onAction = onInstallationAction,
+            )
         }
         item(key = "runtime-lan-access") {
             HarnessLanAccessPanel(runtime = runtime)
         }
-        if (onReinstallRuntime != null) item(key = "runtime-reinstall") {
+        if (onReinstallRuntime != null && installations == null) item(key = "runtime-reinstall") {
             HarnessRuntimeReinstallPanel(onReinstallRuntime)
         }
         item(key = "runtime-diagnostics") {

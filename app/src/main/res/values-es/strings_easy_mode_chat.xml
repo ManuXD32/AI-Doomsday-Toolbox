@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="easy_chat_opts_button">Opciones del chat</string>
+    <string name="easy_chat_opts_title">Opciones del chat</string>
+    <string name="easy_chat_opts_web_search">Búsqueda web</string>
+    <string name="easy_chat_opts_web_search_hint">Permite que el asistente busque información en internet cuando lo necesite.</string>
+    <string name="easy_chat_opts_remember">Recordar este chat</string>
+    <string name="easy_chat_opts_remember_hint">Guarda la conversación en este teléfono para que se abra más rápido.</string>
+    <string name="easy_chat_opts_memory">Memoria de la conversación</string>
+    <string name="easy_chat_opts_memory_hint">Cuánto de la conversación puede tener en cuenta el asistente. Más memoria usa más RAM del teléfono.</string>
+    <string name="easy_chat_opts_memory_auto">Auto (%1$s)</string>
+    <string name="easy_chat_opts_memory_warning">Es más de lo recomendado (%1$s) para este teléfono. Puede ir lento o la app puede quedarse sin memoria.</string>
+    <string name="easy_chat_opts_memory_apply">Aplicar y reiniciar el modelo</string>
+    <string name="easy_chat_opts_memory_applying">Reiniciando el modelo…</string>
+    <string name="easy_chat_opts_memory_busy">Espera a que termine la respuesta actual antes de cambiar la memoria.</string>
+    <string name="easy_chat_opts_memory_failed">No se pudo reiniciar el modelo con este ajuste. Inténtalo de nuevo.</string>
+    <string name="easy_chat_opts_rename">Renombrar chat</string>
+    <string name="easy_chat_opts_delete">Eliminar chat</string>
+    <string name="easy_chat_opts_delete_title">¿Eliminar este chat?</string>
+    <string name="easy_chat_opts_delete_body">La conversación y sus adjuntos se quitarán de este teléfono.</string>
+    <string name="easy_server_running">En marcha</string>
+    <string name="easy_server_stopped">Detenido</string>
+    <string name="easy_server_stop">Detener</string>
+    <string name="easy_chat_switch_title">Cambiar modelo</string>
+    <string name="easy_chat_switch_hint">Este chat continuará con el modelo que elijas. Se borra su memoria guardada.</string>
+    <string name="easy_chat_switch_busy">Espera a que termine la respuesta actual antes de cambiar el modelo.</string>
+    <string name="easy_chat_switch_failed">No se pudo iniciar ese modelo. Inténtalo de nuevo.</string>
+    <string name="easy_chat_switch_none">Aún no hay modelos de chat descargados. Descarga uno desde Modelos.</string>
+    <string name="easy_chat_switch_current">Modelo actual</string>
+    <string name="easy_chat_orphan_pick_model">Elige primero un modelo y vuelve a abrir este chat.</string>
+    <string name="easy_chat_model_missing_choose">Ese modelo ya no está en este teléfono. Elige otro modelo.</string>
+    <string name="easy_chat_saved_servers_section">Servidores guardados</string>
+    <string name="easy_chat_models_section">Modelos fáciles</string>
+    <string name="easy_chat_saved_server_current">Servidor actual</string>
+    <string name="easy_chat_saved_server_title">Chatear con un servidor guardado</string>
+    <string name="easy_chat_saved_server_hint">Inicia un chat nuevo en un servidor que configuraste en Servidores. Mantiene sus propios ajustes y arranca si hace falta.</string>
+    <string name="easy_chat_saved_server_none">Aún no hay servidores locales guardados. Crea uno en Servidores.</string>
+</resources>

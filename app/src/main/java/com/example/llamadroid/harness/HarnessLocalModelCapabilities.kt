@@ -145,7 +145,7 @@ class HarnessLocalModelCapabilityStore(context: Context) {
                     val id = row?.get("id")?.jsonPrimitive?.contentOrNull
                     val override = id?.let(overrides::get)
                     if (
-                        row == null || override == null ||
+                        row == null || override == null || id?.startsWith("llama:") == true ||
                         (override.contextTokens == null && override.maxOutputTokens == null)
                     ) {
                         add(element)

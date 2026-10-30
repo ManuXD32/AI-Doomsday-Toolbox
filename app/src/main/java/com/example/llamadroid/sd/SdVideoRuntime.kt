@@ -143,6 +143,8 @@ data class SdVideoComponentPaths(
     val ipAdapterPath: String? = null,
     val vaePath: String? = null,
     val taePath: String? = null,
+    /** Latent channels read from the selected TAE header; null when unknown. */
+    val taeLatentChannels: Int? = null,
     val t5xxlPath: String? = null,
     val llmPath: String? = null,
     val llmVisionPath: String? = null,
@@ -194,10 +196,15 @@ data class SdVideoDefaults(
 
 data class SdVideoPrerequisiteResult(
     val missingComponents: List<SdVideoComponentRole> = emptyList(),
-    val missingInputs: List<SdVideoInputRole> = emptyList()
+    val missingInputs: List<SdVideoInputRole> = emptyList(),
+    /** Set when the selected TAE has the wrong latent channel count for the family. */
+    val taeMismatch: SdTaeCheck.Mismatch? = null,
+    /** True when a TAE is selected for a family that cannot use one. */
+    val taeNotSupported: Boolean = false
 ) {
     val isSatisfied: Boolean
-        get() = missingComponents.isEmpty() && missingInputs.isEmpty()
+        get() = missingComponents.isEmpty() && missingInputs.isEmpty() &&
+            taeMismatch == null && !taeNotSupported
 }
 
 class SdVideoPrerequisiteException(
@@ -206,7 +213,9 @@ class SdVideoPrerequisiteException(
 ) : IllegalArgumentException(
     "${profile.family.storedValue} video prerequisites missing: " +
         (result.missingComponents.map { it.name } + result.missingInputs.map { it.name })
-            .joinToString(", ")
+            .joinToString(", ") +
+        (result.taeMismatch?.let { " (TAE latent channels ${it.actual}, needed ${it.expected})" } ?: "") +
+        (if (result.taeNotSupported) " (TAE not supported by this family)" else "")
 )
 
 enum class SdVideoWorkflowErrorCode {
@@ -285,7 +294,17 @@ data class SdVideoFamilyProfile(
         val missingInputs = (exactInputGroups + alternativeInputGroups)
             .filterNot { group -> group.any(availableInputs::contains) }
             .flatMap { it.toList() }
-        return SdVideoPrerequisiteResult(missingComponents, missingInputs)
+        val taeCheck = if (components.taePath.isUsable()) {
+            SdTaeCompatibility.check(this, components.taeLatentChannels)
+        } else {
+            SdTaeCheck.Ok
+        }
+        return SdVideoPrerequisiteResult(
+            missingComponents,
+            missingInputs,
+            taeMismatch = taeCheck as? SdTaeCheck.Mismatch,
+            taeNotSupported = taeCheck == SdTaeCheck.NotSupported
+        )
     }
 
     fun supports(workflow: SdVideoWorkflow): Boolean = workflow in supportedWorkflows
@@ -547,13 +566,25 @@ object SdVideoFamilyProfiles {
         }
     }
 
+    private fun wanVariantKey(variant: String): String =
+        variant.lowercase().replace('-', '_').replace(' ', '_')
+
+    // `wan2_2…` is the token SdArtifactInspector writes for detected Wan 2.2 models.
+    private fun isWan22Key(key: String): Boolean =
+        "2.2" in key || "wan22" in key || "wan_2_2" in key || "wan2_2" in key
+
+    /** True when a Wan variant names its generation (2.1 or 2.2); blank or free text does not. */
+    fun wanGenerationKnown(variant: String?): Boolean {
+        val key = variant?.let(::wanVariantKey) ?: return false
+        return isWan22Key(key) || "2.1" in key || "wan21" in key || "wan_2_1" in key || "wan2_1" in key
+    }
+
     private fun resolveWanVariant(
         base: SdVideoFamilyProfile,
         variant: String
     ): SdVideoFamilyProfile {
-        val key = variant.lowercase().replace('-', '_').replace(' ', '_')
-        val isWan22 = "2.2" in key || "wan22" in key || "wan_2_2" in key
-        if (!isWan22) return base.copy(variant = variant)
+        val key = wanVariantKey(variant)
+        if (!isWan22Key(key)) return base.copy(variant = variant)
 
         val isTi2v = "ti2v" in key || "t2i" in key
         if (isTi2v) {

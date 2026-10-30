@@ -45,7 +45,16 @@ class OrganizerAlarmRingingService : Service() {
             triggerAtMillis = triggerAtMillis,
             soundEnabled = soundEnabled
         )
-        startForeground(UnifiedNotificationManager.organizerAlarmNotificationId(alarmId), notification)
+        val notificationId = UnifiedNotificationManager.organizerAlarmNotificationId(alarmId)
+        val started = ForegroundStart.start(this, notificationId, notification, ForegroundServiceTypes.MEDIA_PLAYBACK)
+        if (started is ForegroundStart.Result.Failed) {
+            // Keep ringing: show the alarm as a plain notification and still play the sound/UI.
+            DebugLog.log("[OrganizerAlarm] foreground start failed: ${started.reason}")
+            runCatching {
+                (getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager)
+                    .notify(notificationId, notification)
+            }
+        }
         OrganizerAlarmRinger.start(applicationContext, alarmId, soundEnabled)
         OrganizerAlarmRingActivity.start(applicationContext, alarmId)
         DebugLog.log("[OrganizerAlarm] ringing service started id=$alarmId")

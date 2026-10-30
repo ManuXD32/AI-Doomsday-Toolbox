@@ -536,7 +536,7 @@ fun buildVideoFrameExtractionCommand(
             "scale=${MAX_VIDEO_FRAME_DIMENSION}:${MAX_VIDEO_FRAME_DIMENSION}:" +
             "force_original_aspect_ratio=decrease:force_divisible_by=2",
         "-frames:v", boundedFrames.toString(),
-        "-vsync", "vfr",
+        "-fps_mode", "vfr",
         "-q:v", "3",
         outputPattern
     )

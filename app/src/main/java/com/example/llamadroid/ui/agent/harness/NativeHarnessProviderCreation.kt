@@ -20,6 +20,15 @@ internal val NATIVE_CUSTOM_PROVIDER_PROTOCOLS = listOf(
     "anthropic-messages"
 )
 
+/** Largest `streamIdleTimeoutMs` the pinned provider plugin accepts (it rejects 0 and larger values). */
+internal const val NATIVE_CUSTOM_PROVIDER_MAX_STREAM_IDLE_TIMEOUT_MS = 2147483647L
+
+/**
+ * Stream idle limit written when the user sets none. The plugin default is 5 minutes, which slow
+ * on-device prompt processing exceeds and which surfaces as a "stream idle timeout" error.
+ */
+internal const val NATIVE_CUSTOM_PROVIDER_DEFAULT_STREAM_IDLE_TIMEOUT_MS = 1_800_000L
+
 /** Presets exposed by the custom-provider form; the built-in ADT route is managed separately. */
 internal val NATIVE_CUSTOM_PROVIDER_PRESETS = listOf(
     HarnessProviderPreset.REMOTE_LLAMA_CPP,
@@ -45,7 +54,9 @@ data class NativeHarnessCustomProviderRequest(
     val baseUrl: String,
     val models: List<NativeHarnessCustomProviderModel>,
     /** Transient secret; it is never included in UI state or settings JSON. */
-    val apiKey: String = ""
+    val apiKey: String = "",
+    /** Optional per-route stream idle timeout (ms); null writes [NATIVE_CUSTOM_PROVIDER_DEFAULT_STREAM_IDLE_TIMEOUT_MS]. */
+    val streamIdleTimeoutMs: Long? = null
 )
 
 internal data class NativeHarnessCustomProviderValidationError(
@@ -254,6 +265,11 @@ internal fun buildNativeCustomProviderProfile(
         }
         put("api", request.api)
         put("baseURL", request.baseUrl)
+        put(
+            "streamIdleTimeoutMs",
+            (request.streamIdleTimeoutMs ?: NATIVE_CUSTOM_PROVIDER_DEFAULT_STREAM_IDLE_TIMEOUT_MS)
+                .coerceIn(1L, NATIVE_CUSTOM_PROVIDER_MAX_STREAM_IDLE_TIMEOUT_MS)
+        )
         putJsonArray("models") {
             request.models.forEach { model ->
                 add(buildJsonObject {
@@ -289,6 +305,24 @@ internal fun buildNativeCustomProviderOperation(
         listOf("providers", request.route),
         buildNativeCustomProviderProfile(request)
     )
+}
+
+/**
+ * `set` operations adding the default `streamIdleTimeoutMs` to every provider profile of the
+ * `llm-pi-ai` namespace [value] that has none. Existing values (including user-chosen ones) are
+ * never touched, and incomplete profiles (no `api`/`baseURL`) are skipped.
+ */
+internal fun nativeCustomProviderTimeoutUpgradeOperations(value: JsonObject?): List<JsonObject> {
+    val providers = value?.get("providers") as? JsonObject ?: return emptyList()
+    return providers.mapNotNull { (route, profile) ->
+        val obj = profile as? JsonObject ?: return@mapNotNull null
+        if (obj.containsKey("streamIdleTimeoutMs")) return@mapNotNull null
+        if (obj["api"] == null || obj["baseURL"] == null) return@mapNotNull null
+        NativeHarnessCapabilities.setOperation(
+            listOf("providers", route, "streamIdleTimeoutMs"),
+            JsonPrimitive(NATIVE_CUSTOM_PROVIDER_DEFAULT_STREAM_IDLE_TIMEOUT_MS)
+        )
+    }
 }
 
 private fun isQuotedNativeApiKey(value: String): Boolean {

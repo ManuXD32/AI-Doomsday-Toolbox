@@ -17,7 +17,84 @@ data class StorySchematic(
     val difficulty: String,                  // How harsh consequences are
     val worldImagePath: String? = null,
     val worldImagePrompt: String? = null,
-    val worldImageNegativePrompt: String? = null
+    val worldImageNegativePrompt: String? = null,
+    /** Hidden run state (hope/items/flags), persisted inside the schematic JSON so no DB column is needed. */
+    val runState: AdventureRunState = AdventureRunState(),
+    /** Dream Chronicle page written when the run ends; null while the run is in progress. */
+    val chronicle: DreamChroniclePage? = null,
+    /** Chaos Realm only: the unlocked Gate world this dream visits and its cameo monster ids (stable for the run). */
+    val chaosWorldId: String? = null,
+    val cameoMonsterIds: List<String> = emptyList()
+)
+
+/**
+ * Hidden state of one LLM run: hope (0..100), found items and story flags.
+ * The model reports absolute values (or signed hope deltas) each scene; everything is clamped here.
+ */
+@Serializable
+data class AdventureRunState(
+    val hope: Int = START_HOPE,
+    val items: List<String> = emptyList(),
+    val flags: List<String> = emptyList()
+) {
+    val isDepleted: Boolean get() = hope <= 0
+
+    fun applying(update: SceneStateUpdate?): AdventureRunState {
+        if (update == null) return this
+        val newHope = when {
+            update.hope == null -> hope
+            update.hopeIsDelta -> hope + update.hope
+            else -> update.hope
+        }.coerceIn(0, MAX_HOPE)
+        return AdventureRunState(
+            hope = newHope,
+            items = update.items?.let { clean(it, MAX_ITEMS) } ?: items,
+            flags = update.flags?.let { clean(it, MAX_FLAGS) } ?: flags
+        )
+    }
+
+    companion object {
+        const val START_HOPE = 70
+        const val MAX_HOPE = 100
+        const val MAX_ITEMS = 12
+        const val MAX_FLAGS = 16
+        const val MAX_ENTRY_CHARS = 40
+
+        private fun clean(values: List<String>, max: Int): List<String> =
+            values.map { it.trim().trim('*', '_', '"', '.', ' ').take(MAX_ENTRY_CHARS).trim() }
+                .filter { it.isNotEmpty() }
+                .distinctBy { it.lowercase() }
+                .take(max)
+    }
+}
+
+/** How a run ended. CARRIED_BACK is the gentle "hope ran out" ending (nobody dies). */
+@Serializable
+enum class AdventureOutcome { VICTORY, CARRIED_BACK }
+
+/**
+ * Typed reward still to be granted to the pet. [rewardId] is an id from
+ * AdventureLore.chronicleRewards (memory_fragment, gate_item, lantern_spark); [detail] is a free label
+ * (for example the dungeon's reward text). [resolved] is filled when the grant is applied (AdventureChronicleLink:
+ * "supply:<id>", "fragment:<world>#<n>", "spark" or "coins:<n>"); granting flips [DreamChroniclePage.grantsApplied].
+ */
+@Serializable
+data class ChronicleGrant(val rewardId: String, val detail: String? = null, val resolved: String? = null)
+
+/** The Dream Chronicle page shown on the results card. Coins/XP/bond are applied once ([rewardsApplied]). */
+@Serializable
+data class DreamChroniclePage(
+    val title: String,
+    val summary: String,
+    val outcome: AdventureOutcome,
+    val finalHope: Int,
+    val difficulty: String,
+    val coins: Int = 0,
+    val xp: Int = 0,
+    val bond: Int = 0,
+    val grants: List<ChronicleGrant> = emptyList(),
+    val rewardsApplied: Boolean = false,
+    val grantsApplied: Boolean = false
 )
 
 /**
@@ -70,6 +147,11 @@ data class AdventureSession(
         return copy(isCompleted = true, lastPlayedAt = System.currentTimeMillis())
     }
     
+    val runState: AdventureRunState get() = schematic.runState
+
+    fun withRunState(state: AdventureRunState): AdventureSession =
+        copy(schematic = schematic.copy(runState = state), lastPlayedAt = System.currentTimeMillis())
+
     fun updateSummary(newSummary: String): AdventureSession {
         return copy(cumulativeSummary = newSummary, lastPlayedAt = System.currentTimeMillis())
     }

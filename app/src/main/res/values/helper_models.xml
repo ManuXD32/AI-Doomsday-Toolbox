@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="helper_models_sheet_title">Helper models</string>
+    <string name="helper_models_sheet_hint">Small optional models that help your chats: one writes chat titles, the other describes images for models that cannot see.</string>
+    <string name="helper_notice_title">Set up your helper models</string>
+    <string name="helper_notice_intro">These optional helpers are not set up yet:</string>
+    <string name="helper_notice_title_unset">Chat titles: no title model is set, so chats keep their automatic names.</string>
+    <string name="helper_notice_vision_unset">Vision helper: no vision server is set, so models without vision cannot read images you send.</string>
+    <string name="helper_notice_set_up">Set up</string>
+</resources>

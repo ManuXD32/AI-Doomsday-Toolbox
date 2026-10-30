@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ui_redesign_tools_category_documents">Documentos</string>
+    <string name="ui_redesign_tools_category_share_network">Compartir y red</string>
+    <string name="ui_redesign_tools_category_advanced">Avanzado</string>
+    <string name="ui_redesign_tools_audio_studio">Estudio de audio</string>
+    <string name="ui_redesign_tools_subtitle">Crea, convierte y comparte</string>
+    <string name="ui_redesign_tools_offline_wiki">Wiki sin conexión</string>
+</resources>

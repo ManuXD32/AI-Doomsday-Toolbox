@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="easy_images_tap_to_enlarge">Toca la imagen para ampliarla</string>
+    <string name="easy_images_close">Cerrar</string>
+</resources>

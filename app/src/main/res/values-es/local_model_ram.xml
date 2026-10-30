@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="local_model_ram_freeing">Liberando memoria…</string>
+    <string name="local_model_ram_insufficient">No hay memoria libre suficiente para cargar este modelo: necesita unos %1$s y hay unos %2$s disponibles, incluso tras detener los modelos inactivos. Detén otros modelos o elige uno más pequeño.</string>
+    <string name="local_model_ram_dialog_title">Memoria libre insuficiente</string>
+    <string name="local_model_ram_dialog_hint">Iniciarlo de todos modos puede ralentizar el teléfono, cerrar otras apps o hacer que el servidor falle.</string>
+    <string name="local_model_ram_start_anyway">Iniciar de todos modos</string>
+</resources>

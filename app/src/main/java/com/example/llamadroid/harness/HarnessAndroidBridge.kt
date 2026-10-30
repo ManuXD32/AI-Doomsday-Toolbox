@@ -171,7 +171,7 @@ class HarnessAndroidBridge(
         }
         return try { json(Response.Status.OK, runBlocking { operation.await() }) }
         catch (error: Exception) {
-            val code = providerModelErrorCode(error)
+            val code = providerFailure(error)
             json(Response.Status.INTERNAL_ERROR, JSONObject().put("error", JSONObject().put("code", code).put("message", code)))
         } finally { modelCalls.remove(id); operation.cancel(); modelSlots.release() }
     }
@@ -189,7 +189,7 @@ class HarnessAndroidBridge(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                val code = providerModelErrorCode(error)
+                val code = providerFailure(error)
                 val event = JSONObject().put("error", JSONObject().put("code", code).put("message", code))
                 runCatching { output.write("data: $event\n\n".toByteArray(Charsets.UTF_8)) }
             } finally {
@@ -286,17 +286,11 @@ class HarnessAndroidBridge(
     private fun failure(code: String) = JSONObject().put("version", 1).put("ok", false)
         .put("error", JSONObject().put("code", code).put("message", code).put("details", JSONObject()))
 
-    private fun providerModelErrorCode(error: Throwable): String {
-        if (error.containsLiteRtPromptOverLimit()) return LiteRtPromptOverLimitException.CODE
-        val seen = java.util.Collections.newSetFromMap(
-            java.util.IdentityHashMap<Throwable, Boolean>()
-        )
-        var cause: Throwable? = error
-        while (cause != null && seen.add(cause)) {
-            if (cause is LiteRtLmWorkerCrashedException) return "LITERT_WORKER_CRASHED"
-            cause = cause.cause
-        }
-        return "PROVIDER_INTERRUPTED"
+    /** Maps the failure and records a metadata-only diagnostic (no prompt text). */
+    private fun providerFailure(error: Throwable): String {
+        val code = harnessProviderModelErrorCode(error)
+        runCatching { com.example.llamadroid.util.DebugLog.log(HarnessProviderErrorCodes.diagnostic(code, error)) }
+        return code
     }
     private data class Pending(val digest: List<Byte>, val result: Deferred<Any?>)
     private companion object {
@@ -307,4 +301,22 @@ class HarnessAndroidBridge(
         const val RECEIPT_TTL_NANOS = 120_000_000_000L
         val REQUEST_ID = Regex("[A-Za-z0-9_.:-]{1,128}")
     }
+}
+
+/**
+ * Maps one provider failure to the stable code sent over the bridge. Shared with
+ * [HarnessLocalModels], which records the same code in the model-failure log.
+ */
+internal fun harnessProviderModelErrorCode(error: Throwable): String {
+    if (error.containsLiteRtPromptOverLimit()) return LiteRtPromptOverLimitException.CODE
+    val seen = java.util.Collections.newSetFromMap(
+        java.util.IdentityHashMap<Throwable, Boolean>()
+    )
+    var cause: Throwable? = error
+    while (cause != null && seen.add(cause)) {
+        if (cause is LiteRtLmWorkerCrashedException) return "LITERT_WORKER_CRASHED"
+        if (cause is com.example.llamadroid.service.ManagedLlamaServerException) return cause.code
+        cause = cause.cause
+    }
+    return HarnessProviderErrorCodes.classify(error) ?: HarnessProviderErrorCodes.PROVIDER_INTERRUPTED
 }

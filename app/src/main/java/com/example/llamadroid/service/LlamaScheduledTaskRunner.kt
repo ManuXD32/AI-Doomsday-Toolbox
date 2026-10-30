@@ -40,7 +40,8 @@ class LlamaScheduledTaskRunner(
         val params = parseChatParams(task.apiParams)
         val thinkingEnabled = (params["enable_thinking"] as? Boolean) ?: true
         val rawToolConfig = NativeChatToolConfig.fromParams(params)
-            .effectiveWithServerDefaults(NativeChatToolConfig.fromApiParams(server.defaultApiParams))
+            // Tool permissions belong to the task itself; the server card no longer caps them.
+            .effectiveWithServerDefaults(NativeChatToolConfig.liteRtToolDefaults())
         val toolConfig = nativeChatToolRuntime.configWithOrganizerPermissions(rawToolConfig)
         val tools = nativeChatToolRuntime.availableTools(toolConfig)
         val modelName = if (server.isOllamaEngine()) {

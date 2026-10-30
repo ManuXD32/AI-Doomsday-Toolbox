@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="helper_models_sheet_title">Modelos auxiliares</string>
+    <string name="helper_models_sheet_hint">Modelos pequeños y opcionales que ayudan a tus chats: uno escribe los títulos y el otro describe imágenes para los modelos que no pueden verlas.</string>
+    <string name="helper_notice_title">Configura tus modelos auxiliares</string>
+    <string name="helper_notice_intro">Estos ayudantes opcionales todavía no están configurados:</string>
+    <string name="helper_notice_title_unset">Títulos de chat: no hay modelo de títulos, así que los chats conservan su nombre automático.</string>
+    <string name="helper_notice_vision_unset">Ayudante de visión: no hay servidor de visión, así que los modelos sin visión no pueden leer las imágenes que envías.</string>
+    <string name="helper_notice_set_up">Configurar</string>
+</resources>

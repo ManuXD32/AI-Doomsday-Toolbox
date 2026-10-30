@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tama_action_unavailable">That action is not available right now.</string>
+    <string name="tama_action_crop_not_food">Raw crops like wheat, rice, pumpkin and flowers aren\'t food. Sell them or use them for something else.</string>
+    <string name="tama_action_already_awake">%1$s is already awake.</string>
+    <string name="tama_action_use_one_item">Use one item at a time.</string>
+    <string name="tama_hatch_effect_description">Pet hatching animation</string>
+    <string name="tama_place_home">Pet house</string>
+    <string name="tama_place_shop">Mimi\'s shop</string>
+    <string name="tama_place_park">Park</string>
+    <string name="tama_place_hospital">Doctor Pip\'s clinic</string>
+    <string name="tama_place_arcade">Pixel Pop arcade</string>
+    <string name="tama_place_alchemist">Sage Wisp\'s alchemy shop</string>
+    <string name="tama_place_school">Miss Clover\'s school</string>
+    <string name="tama_place_workplace">Workplace</string>
+    <string name="tama_place_farm">Patch\'s farm</string>
+    <string name="tama_place_boxing_gym">Boxing gym</string>
+    <string name="tama_place_dungeon">Dungeon entrance</string>
+    <string name="tama_place_adventure_gate">Adventure Gate</string>
+    <string name="tama_place_farm_barn">Farm barn</string>
+    <string name="tama_place_landmark">Landmark</string>
+    <string name="tama_arcade_session_starting">Starting a saved arcade session…</string>
+    <string name="tama_arcade_session_recovery">A saved arcade session needs to be reconciled before another game can start.</string>
+    <string name="tama_arcade_session_cancel">Cancel saved session</string>
+    <string name="tama_arcade_session_cancel_failed">The saved arcade session is still active. Try again.</string>
+    <string name="tama_arcade_reward_submitting">Saving arcade result…</string>
+    <string name="tama_arcade_reward_queued">Arcade result queued</string>
+    <string name="tama_arcade_reward_saved">Arcade reward saved</string>
+    <string name="tama_arcade_reward_rejected">Arcade result rejected</string>
+    <string name="tama_arcade_reward_failed">Arcade reward could not be saved</string>
+    <string name="tama_arcade_reward_unavailable">Arcade rewards are unavailable</string>
+    <string name="tama_arcade_session_pending">Your Arcade result is still being saved.</string>
+    <string name="tama_arcade_session_retry">Retry session</string>
+    <string name="tama_arcade_session_recovery_unavailable">Arcade session recovery is temporarily unavailable. Try again.</string>
+    <string name="tama_arcade_session_ack_failed">The Arcade result could not be closed. Try again.</string>
+    <string name="tama_chat_gameplay_limits">Chat is for conversation. Use Care to feed, play, or look after your pet.</string>
+</resources>

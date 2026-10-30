@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="harness_header_fallback_title">Agente</string>
+    <string name="harness_header_subtitle_env">%1$s · %2$s</string>
+    <string name="harness_tab_more">Más</string>
+    <plurals name="harness_tab_more_badge">
+        <item quantity="one">Más, %1$d solicitud pendiente</item>
+        <item quantity="many">Más, %1$d solicitudes pendientes</item>
+        <item quantity="other">Más, %1$d solicitudes pendientes</item>
+    </plurals>
+    <string name="harness_menu_group_project">Proyecto</string>
+    <string name="harness_menu_group_environment">Entorno</string>
+    <string name="harness_menu_group_other">Otros</string>
+    <string name="harness_menu_environments">Entornos</string>
+    <string name="harness_menu_export">Exportar</string>
+    <string name="harness_menu_switch_session">Cambiar de sesión</string>
+    <string name="harness_menu_app_tools">Herramientas de la app</string>
+    <string name="harness_menu_tools_log">Herramientas (registro de actividad)</string>
+    <string name="harness_chip_model">Modelo: %1$s</string>
+    <string name="harness_chip_reasoning">Razonamiento: %1$s</string>
+    <string name="harness_chip_permission">Permiso: %1$s</string>
+    <string name="harness_model_needs_context_open">Define una ventana de contexto en los ajustes del modelo (toca para abrir)</string>
+</resources>

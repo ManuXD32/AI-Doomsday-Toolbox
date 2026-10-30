@@ -10,6 +10,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -28,6 +30,15 @@ class LlamaServerSessionService : Service() {
     override fun onCreate() {
         super.onCreate()
         runtime = LlamaServerSessionRuntime(applicationContext)
+        scope.launch {
+            while (isActive) {
+                delay(15_000)
+                commandMutex.withLock {
+                    runCatching { runtime.stopIdleSessions() }
+                    recycleWhenIdle(latestStartId)
+                }
+            }
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -35,12 +46,19 @@ class LlamaServerSessionService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         latestStartId = startId
         val sessionId = intent?.getStringExtra(EXTRA_SESSION_ID).orEmpty()
+        if (sessionId.isBlank() && intent?.action != ACTION_START) {
+            // Blank-session STOP/CLEAR/REMOVE (or unknown/null intent) would otherwise leave a fresh
+            // startForegroundService() launch without startForeground() or stopSelf().
+            recycleWhenIdle(startId)
+            return START_NOT_STICKY
+        }
         when (intent?.action) {
             ACTION_START -> {
                 val profile = LlamaServerLaunchProfile.decode(intent.getStringExtra(EXTRA_PROFILE_JSON))
                 val leaseToken = intent.getStringExtra(EXTRA_LEASE_TOKEN)
                 if (sessionId.isBlank() || profile == null) {
                     DebugLog.log("LlamaServerSessionService: rejected start with missing session/profile")
+                    recycleWhenIdle(startId)
                 } else if (LlamaOcrExclusiveLeaseStore.rejectsSessionCommand(
                         applicationContext,
                         sessionId,
@@ -48,13 +66,17 @@ class LlamaServerSessionService : Service() {
                     )
                 ) {
                     DebugLog.log("LlamaServerSessionService[$sessionId]: rejected start while OCR lease is active")
+                    recycleWhenIdle(startId)
                 } else {
-                    ensureForeground()
+                    if (!ensureForeground()) {
+                        stopSelf(startId)
+                        return START_NOT_STICKY
+                    }
                     val portOverride = intent.takeIf { it.hasExtra(EXTRA_PORT) }
                         ?.getIntExtra(EXTRA_PORT, profile.serverPort)
                     scope.launch {
                         commandMutex.withLock {
-                            runtime.start(sessionId, profile, portOverride)
+                            runtime.start(sessionId, profile, portOverride, intent.getBooleanExtra(EXTRA_ENSURE_RUNNING, false))
                                 .onFailure { DebugLog.log("LlamaServerSessionService[$sessionId]: ${it.message}") }
                             recycleWhenIdle(startId)
                         }
@@ -65,6 +87,7 @@ class LlamaServerSessionService : Service() {
                 val leaseToken = intent.getStringExtra(EXTRA_LEASE_TOKEN)
                 if (LlamaOcrExclusiveLeaseStore.rejectsSessionCommand(applicationContext, sessionId, leaseToken)) {
                     DebugLog.log("LlamaServerSessionService[$sessionId]: rejected stop while OCR lease is active")
+                    recycleWhenIdle(startId)
                 } else {
                     scope.launch {
                         commandMutex.withLock {
@@ -78,9 +101,13 @@ class LlamaServerSessionService : Service() {
                 val leaseToken = intent.getStringExtra(EXTRA_LEASE_TOKEN)
                 if (LlamaOcrExclusiveLeaseStore.rejectsSessionCommand(applicationContext, sessionId, leaseToken)) {
                     DebugLog.log("LlamaServerSessionService[$sessionId]: rejected clear while OCR lease is active")
+                    recycleWhenIdle(startId)
                 } else {
                     scope.launch {
-                        commandMutex.withLock { runtime.clearLogs(sessionId) }
+                        commandMutex.withLock {
+                            runtime.clearLogs(sessionId)
+                            recycleWhenIdle(startId)
+                        }
                     }
                 }
             }
@@ -88,6 +115,7 @@ class LlamaServerSessionService : Service() {
                 val leaseToken = intent.getStringExtra(EXTRA_LEASE_TOKEN)
                 if (LlamaOcrExclusiveLeaseStore.rejectsSessionCommand(applicationContext, sessionId, leaseToken)) {
                     DebugLog.log("LlamaServerSessionService[$sessionId]: rejected remove while OCR lease is active")
+                    recycleWhenIdle(startId)
                 } else {
                     scope.launch {
                         commandMutex.withLock {
@@ -97,8 +125,13 @@ class LlamaServerSessionService : Service() {
                     }
                 }
             }
+            else -> recycleWhenIdle(startId)
         }
         return START_NOT_STICKY
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        ForegroundTimeoutSupport.handle(this, fgsType)
     }
 
     override fun onDestroy() {
@@ -109,14 +142,27 @@ class LlamaServerSessionService : Service() {
         super.onDestroy()
     }
 
-    private fun ensureForeground() {
-        if (notificationTaskId != null) return
+    private fun ensureForeground(): Boolean {
+        if (notificationTaskId != null) return true
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.LLAMA_SERVER,
             getString(R.string.llama_cards_title)
         )
+        val startResult = ForegroundStart.start(
+            this,
+            taskId,
+            notification,
+            ForegroundServiceTypes.SPECIAL_USE
+        )
+        if (startResult is ForegroundStart.Result.Failed) {
+            UnifiedNotificationManager.failTask(
+                taskId,
+                ForegroundStart.failureMessage(this, startResult.reason, getString(R.string.llama_cards_title))
+            )
+            return false
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
+        return true
     }
 
     /**
@@ -141,6 +187,7 @@ class LlamaServerSessionService : Service() {
         const val EXTRA_SESSION_ID = "LLAMA_SESSION_ID"
         const val EXTRA_PROFILE_JSON = "LLAMA_SESSION_PROFILE_JSON"
         const val EXTRA_PORT = "LLAMA_SESSION_PORT"
+        const val EXTRA_ENSURE_RUNNING = "LLAMA_SESSION_ENSURE_RUNNING"
         const val EXTRA_LEASE_TOKEN = LlamaOcrExclusiveLeaseStore.TOKEN_EXTRA
     }
 }

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="spe_title_new">New local server</string>
+    <string name="spe_title_edit">Edit server</string>
+    <string name="spe_subtitle">All LLM launch options, saved only with this server.</string>
+    <string name="spe_section_title">Server</string>
+    <string name="spe_intro">Every option below belongs to this server only. Changing it never affects other servers or the global LLM settings.</string>
+    <string name="spe_loading">Loading server settings…</string>
+    <string name="spe_save_and_restart">Save and restart</string>
+    <string name="spe_discard_title">Discard changes?</string>
+    <string name="spe_discard_message">Your edits to this server have not been saved.</string>
+    <string name="spe_discard_confirm">Discard</string>
+    <string name="spe_discard_keep">Keep editing</string>
+    <string name="server_defaults_title">Defaults for new chats</string>
+    <string name="server_defaults_desc">New chats created with this server start with these options: the same settings every chat has. Each chat keeps its own copy and can change it later.</string>
+</resources>

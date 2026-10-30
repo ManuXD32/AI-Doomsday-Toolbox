@@ -14,7 +14,4 @@
     <string name="llm_video_whisper_parallel_title">Procesar el audio con Whisper en paralelo</string>
     <string name="llm_video_whisper_parallel_desc">Usar Whisper junto al procesamiento visual cuando haya un modelo Whisper configurado.</string>
     <string name="llm_video_low_end_warning">Los segmentos largos, más fotogramas y el audio en paralelo usan más memoria en teléfonos sencillos.</string>
-    <string name="video_profile_fps">Frecuencia de muestreo: %1$.1f FPS</string>
-    <string name="video_profile_timestamp">Intervalo de marcas de tiempo: %1$d ms</string>
-    <string name="video_profile_sampling_hint">Se guarda con este servidor local. Los vídeos largos pueden usar una frecuencia menor para respetar los límites de fotogramas y contexto.</string>
 </resources>

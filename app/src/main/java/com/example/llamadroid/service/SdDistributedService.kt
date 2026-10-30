@@ -271,6 +271,10 @@ class SdDistributedService : Service() {
         return START_NOT_STICKY
     }
 
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        ForegroundTimeoutSupport.handle(this, fgsType)
+    }
+
     override fun onDestroy() {
         stopWorkerMode()
         serviceScope.cancel()
@@ -301,7 +305,7 @@ class SdDistributedService : Service() {
         _localIp.value = detectLocalIp()
         _connectionCount.value = 0
 
-        startForegroundIfNeeded(getString(R.string.sd_dist_worker_notification_title))
+        if (!startForegroundIfNeeded(getString(R.string.sd_dist_worker_notification_title))) return
 
         serviceScope.launch {
             try {
@@ -401,14 +405,22 @@ class SdDistributedService : Service() {
         runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
     }
 
-    private fun startForegroundIfNeeded(title: String) {
-        if (notificationTaskId != null) return
+    private fun startForegroundIfNeeded(title: String): Boolean {
+        if (notificationTaskId != null) return true
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
             UnifiedNotificationManager.TaskType.IMAGE_GEN,
             title
         )
+        val started = ForegroundStart.start(this, taskId, notification, ForegroundServiceTypes.DATA_SYNC)
+        if (started is ForegroundStart.Result.Failed) {
+            val message = ForegroundStart.failureMessage(this, started.reason, title)
+            UnifiedNotificationManager.failTask(taskId, message)
+            addLog(message)
+            stopSelf()
+            return false
+        }
         notificationTaskId = taskId
-        startForeground(taskId, notification)
         UnifiedNotificationManager.updateProgress(taskId, -1f, title)
+        return true
     }
 }

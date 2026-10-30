@@ -7,7 +7,10 @@ import android.content.ServiceConnection
 import android.os.IBinder
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.service.LlamaPromptProcessingProgress
 import com.example.llamadroid.service.LlamaServerChatService
+import com.example.llamadroid.service.LlamaServerRequestOptions
+import com.example.llamadroid.service.LlamaServerSamplingParams
 import com.example.llamadroid.service.LiteRtConversationMessage
 import com.example.llamadroid.service.LiteRtTextGenerationClient
 import com.example.llamadroid.service.OllamaService
@@ -19,21 +22,24 @@ import com.example.llamadroid.service.RemoteSummaryMetadata
 import com.example.llamadroid.service.RemoteSummaryRequest
 import com.example.llamadroid.service.fileToDataUrl
 import com.example.llamadroid.service.inferImageMimeType
+import com.example.llamadroid.service.compaction.NativeChatContextWindow
+import com.example.llamadroid.service.compaction.NativeChatTurnDecoratorLogic
+import com.example.llamadroid.service.compaction.TokenEstimator
+import com.example.llamadroid.service.vision.VisionDescriptionService
+import com.example.llamadroid.service.vision.VisionImageDescription
+import com.example.llamadroid.service.vision.VisionImageDescriptions
 import com.example.llamadroid.service.WhisperConfig
 import com.example.llamadroid.service.WhisperInvocationPurpose
 import com.example.llamadroid.service.WhisperOutputFormat
 import com.example.llamadroid.service.WhisperService
 import com.example.llamadroid.tama.data.ActivityType
-import com.example.llamadroid.tama.data.GrowthStage
 import com.example.llamadroid.tama.data.PetSpeciesLine
-import com.example.llamadroid.tama.data.Personality
 import com.example.llamadroid.tama.data.TamaWorkCatalog
 import com.example.llamadroid.tama.data.TamaPet
 import com.example.llamadroid.tama.data.TAMA_RELAX_INTROSPECTION_PER_HOUR
 import com.example.llamadroid.tama.data.TAMA_TRAINING_EXERCISE_PER_HOUR
 import com.example.llamadroid.tama.data.TAMA_TRAINING_HAPPINESS_PER_HOUR
 import com.example.llamadroid.tama.data.TamaTrainingCatalog
-import com.example.llamadroid.tama.data.isEffectivelyMad
 import com.example.llamadroid.tama.db.*
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.CoroutineScope
@@ -41,8 +47,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.coroutines.resume
@@ -60,6 +69,7 @@ class TamaAgentService(
 ) {
     private val context = context.applicationContext
     private val llamaServerChatService = LlamaServerChatService()
+    private val petServerRunner = TamaPetServerRunner(context, settingsRepo)
     private val whisperBindingIntent = Intent(context, WhisperService::class.java)
 
     init {
@@ -82,6 +92,152 @@ class TamaAgentService(
     private data class PreparedTamaUserMessage(
         val message: OllamaService.ChatMessage,
         val normalizedPromptText: String
+    )
+
+    private val _promptProgress = MutableStateFlow<LlamaPromptProcessingProgress?>(null)
+    /** llama-server prompt processing progress of the running pet turn; null once tokens stream or the turn ends. */
+    val promptProgress: StateFlow<LlamaPromptProcessingProgress?> = _promptProgress.asStateFlow()
+
+    private val _contextUsage = MutableStateFlow<TamaContextUsage?>(null)
+    /** Prompt size against the server window (estimate before a call, server usage after); null when the window is unknown. */
+    val contextUsage: StateFlow<TamaContextUsage?> = _contextUsage.asStateFlow()
+
+    /** Per pet anchored history window max (30/20/10); shrinks in blocks and stays until [compactNow] or restart. */
+    private val windowMaxByPet = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+    private fun publishContextUsage(used: Int, windowTokens: Int) {
+        _contextUsage.value = if (windowTokens > 0) TamaContextUsage(used.coerceAtLeast(0), windowTokens) else null
+    }
+
+    private fun tamaEndpointKey(card: TamaCardTarget?, backend: String): String = card?.row?.baseUrl() ?: when {
+        SettingsRepository.isLlamaSwapBackend(backend) -> settingsRepo.tamaLlamaSwapUrl.value
+        SettingsRepository.usesOpenAiChatBackend(backend) -> settingsRepo.tamaLlamaServerUrl.value
+        else -> settingsRepo.tamaOllamaUrl.value
+    }.trim().trimEnd('/')
+
+    /** Window tokens: probed `/props` for llama-server cards, the Tama context setting otherwise (0 = unknown). */
+    private suspend fun resolveContextWindow(card: TamaCardTarget?): Int {
+        val custom = settingsRepo.tamaOllamaNumCtx.value
+        val row = card?.row ?: return custom
+        if (!row.isLlamaServerEngine() && !row.isLlamaSwapEngine()) return custom
+        val baseUrl = row.baseUrl()
+        return NativeChatContextWindow.choose(0, null, NativeChatContextWindow.cached(baseUrl) ?: NativeChatContextWindow.probe(baseUrl))
+    }
+
+    private class TamaPromptBuild(
+        val systemPrompt: String,
+        val volatileContext: String,
+        val history: List<OllamaService.ChatMessage>,
+        val latestUser: OllamaService.ChatMessage,
+        val messages: List<OllamaService.ChatMessage>
+    )
+
+    /** Assembles the full request for [windowMax]; images become descriptions when [describeImages]. */
+    private suspend fun buildPrompt(
+        pet: TamaPet,
+        allHistory: List<OllamaService.ChatMessage>,
+        latestUser: OllamaService.ChatMessage,
+        windowMax: Int,
+        describeImages: Boolean
+    ): TamaPromptBuild {
+        val recentEvents = dao.getRecentEvents(pet.id, 30)
+        val memory = dao.getRecentSummaries(pet.id, 1).firstOrNull()?.toStructuredMemory()
+            ?: TamaStructuredMemory("", "", emptyList())
+        val systemPrompt = buildTamaStableSystemPrompt(
+            basePrompt = settingsRepo.tamaPetPrompt.value,
+            pet = pet,
+            speciesLine = PetSpeciesLine.fromSpeciesId(pet.species, pet.genetics.bodyStyle),
+            memory = memory
+        )
+        val volatileContext = buildVolatileContext(pet, memory, recentEvents)
+        // Anchored window: the start only moves in blocks so consecutive turns share a prefix.
+        val window = anchoredTamaHistoryWindowMin(allHistory, windowMax)
+        val all = window + latestUser
+        val mapped = if (describeImages) {
+            mapTamaImages(all, VisionDescriptionService.isConfigured(context), ::describeTamaImage)
+        } else {
+            all
+        }
+        val history = mapped.dropLast(1)
+        val user = mapped.last()
+        return TamaPromptBuild(
+            systemPrompt = systemPrompt,
+            volatileContext = volatileContext,
+            history = history,
+            latestUser = user,
+            messages = assembleTamaChatMessages(
+                stableSystemPrompt = systemPrompt,
+                history = history,
+                latestUserMessage = user,
+                volatileContext = volatileContext
+            )
+        )
+    }
+
+    /** Description text from the shared vision helper (cached by image SHA), or null when unavailable. */
+    private suspend fun describeTamaImage(ref: TamaImageRef): String? = withContext(Dispatchers.IO) {
+        val (bytes, mime) = when (ref) {
+            is TamaImageRef.Path -> {
+                val file = File(ref.path)
+                if (!file.isFile) return@withContext null
+                file.readBytes() to inferImageMimeType(ref.path)
+            }
+            is TamaImageRef.Base64 -> runCatching {
+                java.util.Base64.getDecoder().decode(ref.data) to "image/jpeg"
+            }.getOrNull() ?: return@withContext null
+        }
+        when (val result = VisionImageDescriptions.describe(context, bytes, mime)) {
+            is VisionImageDescription.Described -> result.text
+            is VisionImageDescription.Unavailable -> null
+        }
+    }
+
+    /**
+     * Estimates the next prompt for [pet] without sending anything (no image descriptions are
+     * requested; each image counts as a flat estimate) and publishes it to [contextUsage].
+     */
+    suspend fun refreshContextUsage(pet: TamaPet) {
+        val card = petServerRunner.resolve(pet.id)
+        val backend = card?.backend
+            ?: SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.tamaBackend.value)
+        val windowTokens = resolveContextWindow(card)
+        val allHistory = _messages.value.filter { it.role != "system" }.map(::toLlmChatMessage)
+        val prompt = buildPrompt(
+            pet, allHistory, OllamaService.ChatMessage(role = "user", content = ""),
+            windowMaxByPet[pet.id] ?: TAMA_HISTORY_WINDOW_MAX, describeImages = false
+        )
+        publishContextUsage(
+            TokenEstimator.calibrated(tamaEndpointKey(card, backend)).estimateMessages(prompt.messages),
+            windowTokens
+        )
+    }
+
+    /**
+     * "Compact now": runs the memory summarizer and shrinks the anchored history window to its
+     * smallest level (it grows again only after a restart or a new pet session), then refreshes
+     * [contextUsage].
+     */
+    suspend fun compactNow(pet: TamaPet) {
+        summarizeQuietly(pet)
+        windowMaxByPet[pet.id] = TAMA_WINDOW_LEVELS.last()
+        refreshContextUsage(pet)
+    }
+
+    /** Runs the memory summarizer, ignoring its failures but never swallowing cancellation. */
+    private suspend fun summarizeQuietly(pet: TamaPet) {
+        try {
+            summarize(pet)
+        } catch (cancel: kotlinx.coroutines.CancellationException) {
+            throw cancel
+        } catch (_: Exception) {
+            // The reply still goes out with the smaller history window.
+        }
+    }
+
+    /** Memory summaries are short; never ask for the whole context as output. */
+    private fun summaryOutputCap(thinkingEnabled: Boolean): Int = tamaOutputCap(
+        settingsRepo.tamaOllamaNumCtx.value,
+        if (thinkingEnabled) TAMA_THINKING_MAX_OUTPUT_TOKENS else TAMA_DEFAULT_MAX_OUTPUT_TOKENS
     )
 
     private fun latestSummaryId(petId: String): String = "${petId}_latest"
@@ -257,33 +413,59 @@ class TamaAgentService(
         _isLoading.value = true
         val userMsg = preparedMessage.message
 
-        val recentEvents = dao.getRecentEvents(pet.id, 30)
-        val recentSummaries = dao.getRecentSummaries(pet.id, 1)
-        val memory = recentSummaries.firstOrNull()?.toStructuredMemory()
-            ?: TamaStructuredMemory("", "", emptyList())
-        val livingFacts = com.example.llamadroid.tama.world.memory.LivingWorldJournal(
-            TamaDatabase.getInstance(context)
-        ).contextFacts(pet.id, preparedMessage.normalizedPromptText)
-        val systemPrompt = buildSystemPrompt(pet, memory, recentEvents) + "\n\n" + livingFacts
-        val historyContext = _messages.value
-            .takeLast(21)
+        val allHistory = _messages.value
             .filter { it.id != userMsg.id && it.role != "system" }
             .map(::toLlmChatMessage)
-        val llmUserMessage = userMsg.copy(
+        val plainUserMessage = userMsg.copy(
             content = preparedMessage.normalizedPromptText,
             audioPath = null,
             audioDurationMs = null,
             transcriptionStatus = TamaTranscriptionStatus.COMPLETED,
             transcribedText = userMsg.transcribedText
         )
-        val fullMessages = listOf(OllamaService.ChatMessage(role = "system", content = systemPrompt)) +
-            historyContext +
-            llmUserMessage
 
-        val backend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.tamaBackend.value)
+        // Server card source: start the card if stopped and pin this pet's slot (disk cache).
+        var cardTarget = petServerRunner.resolve(pet.id)
+        var cardStartError: Throwable? = null
+        if (cardTarget != null) {
+            try {
+                cardTarget = petServerRunner.prepare(cardTarget)
+            } catch (cancel: kotlinx.coroutines.CancellationException) {
+                throw cancel
+            } catch (error: Exception) {
+                cardStartError = error
+            }
+        }
+        val card = cardTarget
+        val backend = card?.backend
+            ?: SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.tamaBackend.value)
         val thinkingEnabled = settingsRepo.tamaThinkingEnabled.value
+        val endpointKey = tamaEndpointKey(card, backend)
+        val windowTokens = resolveContextWindow(card)
+        val outputCap = tamaOutputCap(
+            windowTokens,
+            if (thinkingEnabled) TAMA_THINKING_MAX_OUTPUT_TOKENS else TAMA_DEFAULT_MAX_OUTPUT_TOKENS
+        )
+        val autoCompact = settingsRepo.isTamaPetAutoCompactEnabled(pet.id)
+        val describeImages = card?.let { !it.row.supportsVision } ?: settingsRepo.tamaServerCantSeeImages.value
+        var windowMax = windowMaxByPet[pet.id] ?: TAMA_HISTORY_WINDOW_MAX
+        var prompt = buildPrompt(pet, allHistory, plainUserMessage, windowMax, describeImages)
+        val estimator = TokenEstimator.calibrated(endpointKey)
+        var estimate = estimator.estimateMessages(prompt.messages)
+        if (autoCompact && windowTokens > 0 && tamaShouldCompact(estimate, windowTokens, outputCap)) {
+            summarizeQuietly(pet)
+            windowMax = fitTamaWindowMax(windowMax) { max ->
+                val candidate = buildPrompt(pet, allHistory, plainUserMessage, max, describeImages)
+                !tamaShouldCompact(estimator.estimateMessages(candidate.messages), windowTokens, outputCap)
+            }
+            windowMaxByPet[pet.id] = windowMax
+            prompt = buildPrompt(pet, allHistory, plainUserMessage, windowMax, describeImages)
+            estimate = estimator.estimateMessages(prompt.messages)
+        }
+        publishContextUsage(estimate, windowTokens)
         var assistantContent = ""
         var thinkingContent = ""
+        var streamed = false
         val assistantId = UUID.randomUUID().toString()
         val placeholderMsg = OllamaService.ChatMessage(
             role = "assistant",
@@ -298,9 +480,14 @@ class TamaAgentService(
         )
         _messages.value = mergeTamaMessages(_messages.value + placeholderMsg, activeAssistantMessage)
 
-        val response = if (SettingsRepository.isLiteRtBackend(backend)) {
+        val startError = cardStartError
+        val runRequest: suspend () -> Result<OllamaService.ChatResponse> = {
+        if (startError != null) {
+            Result.failure<OllamaService.ChatResponse>(startError)
+        } else if (SettingsRepository.isLiteRtBackend(backend)) {
             runCatching {
-                val modelId = settingsRepo.tamaLiteRtModelId.value.takeIf { it > 0L }
+                val modelId = card?.row?.liteRtModelId
+                    ?: settingsRepo.tamaLiteRtModelId.value.takeIf { it > 0L }
                     ?: throw IllegalStateException(context.getString(R.string.litert_error_model_missing))
                 val model = com.example.llamadroid.data.db.AppDatabase.getDatabase(context)
                     .liteRtModelDao()
@@ -309,16 +496,18 @@ class TamaAgentService(
                 val result = LiteRtTextGenerationClient(context).generate(
                     model = model,
                     title = "Tama chat",
-                    systemPrompt = systemPrompt,
-                    messages = historyContext.map { LiteRtConversationMessage(it.role, it.content) },
-                    userPrompt = llmUserMessage.content,
+                    systemPrompt = prompt.systemPrompt,
+                    messages = prompt.history.map { LiteRtConversationMessage(it.role, it.content) },
+                    userPrompt = attachTamaVolatileContext(prompt.latestUser, prompt.volatileContext).content,
                     contextSize = settingsRepo.tamaOllamaNumCtx.value,
-                    maxTokens = 1024,
+                    maxTokens = outputCap,
                     temperature = 0.8f,
                     thinkingEnabled = thinkingEnabled,
-                    backendMode = settingsRepo.tamaLiteRtBackend.value,
+                    backendMode = card?.row?.liteRtBackend ?: settingsRepo.tamaLiteRtBackend.value,
                     mtpEnabled = settingsRepo.tamaLiteRtMtpEnabled.value,
                     onChunk = { chunk ->
+                        streamed = true
+                        _promptProgress.value = null
                         assistantContent += sanitizeTamaReplyChunk(chunk, assistantContent.isBlank())
                         updateActiveAssistantMessage(pet.id, assistantId, assistantContent, thinkingContent)
                         onChunk(chunk)
@@ -337,38 +526,54 @@ class TamaAgentService(
                 )
             }
         } else if (SettingsRepository.usesOpenAiChatBackend(backend)) {
-            withTamaLlamaServerProtection {
-                llamaServerChatService.chatWithToolsStreaming(
-                    baseUrl = if (SettingsRepository.isLlamaSwapBackend(backend)) {
-                        settingsRepo.tamaLlamaSwapUrl.value
-                    } else {
-                        settingsRepo.tamaLlamaServerUrl.value
-                    },
-                    messages = fullMessages,
-                    modelLabel = if (SettingsRepository.isLlamaSwapBackend(backend)) {
-                        settingsRepo.tamaPetModel.value
-                    } else {
-                        settingsRepo.tamaLlamaServerModelLabel.value
-                    },
-                    thinkingEnabled = thinkingEnabled,
-                    maxTokens = settingsRepo.tamaOllamaNumCtx.value,
-                    onChunk = { chunk, thinking ->
-                        chunk?.takeUnless { it.equals("null", ignoreCase = true) }?.let {
-                            assistantContent += sanitizeTamaReplyChunk(it, assistantContent.isBlank())
-                            updateActiveAssistantMessage(pet.id, assistantId, assistantContent, thinkingContent)
-                            onChunk(it)
+            withTamaLlamaServerProtection(backend) {
+                val cardModel = card?.row?.modelName?.takeIf { it.isNotBlank() }
+                val call: suspend (Int?) -> Result<OllamaService.ChatResponse> = { slot ->
+                    llamaServerChatService.chatWithToolsStreaming(
+                        baseUrl = card?.row?.baseUrl() ?: if (SettingsRepository.isLlamaSwapBackend(backend)) {
+                            settingsRepo.tamaLlamaSwapUrl.value
+                        } else {
+                            settingsRepo.tamaLlamaServerUrl.value
+                        },
+                        messages = prompt.messages,
+                        modelLabel = if (SettingsRepository.isLlamaSwapBackend(backend)) {
+                            cardModel ?: settingsRepo.tamaPetModel.value
+                        } else {
+                            cardModel ?: settingsRepo.tamaLlamaServerModelLabel.value
+                        },
+                        thinkingEnabled = thinkingEnabled,
+                        maxTokens = outputCap,
+                        requestOptions = LlamaServerRequestOptions(slotId = slot, returnPromptProgress = true),
+                        slotOwner = null,
+                        onPromptProgress = { progress -> if (!streamed) _promptProgress.value = progress },
+                        onChunk = { chunk, thinking ->
+                            if (!chunk.isNullOrEmpty() || !thinking.isNullOrEmpty()) {
+                                streamed = true
+                                _promptProgress.value = null
+                            }
+                            chunk?.takeUnless { it.equals("null", ignoreCase = true) }?.let {
+                                assistantContent += sanitizeTamaReplyChunk(it, assistantContent.isBlank())
+                                updateActiveAssistantMessage(pet.id, assistantId, assistantContent, thinkingContent)
+                                onChunk(it)
+                            }
+                            thinking?.takeUnless { it.equals("null", ignoreCase = true) }?.let {
+                                thinkingContent += sanitizeTamaReplyChunk(it, thinkingContent.isBlank())
+                                updateActiveAssistantMessage(pet.id, assistantId, assistantContent, thinkingContent)
+                            }
                         }
-                        thinking?.takeUnless { it.equals("null", ignoreCase = true) }?.let {
-                            thinkingContent += sanitizeTamaReplyChunk(it, thinkingContent.isBlank())
-                            updateActiveAssistantMessage(pet.id, assistantId, assistantContent, thinkingContent)
-                        }
-                    }
-                )
+                    )
+                }
+                if (card != null) petServerRunner.runChat(card, pet.id, call) else call(null)
             }
         } else {
+            if (card != null) {
+                ollamaService.setBaseUrl(card.row.baseUrl())
+            } else {
+                syncOllamaSettings()
+            }
             ollamaService.chatWithToolsStreaming(
-                model = settingsRepo.tamaPetModel.value,
-                messages = fullMessages,
+                model = card?.row?.modelName?.takeIf { it.isNotBlank() } ?: settingsRepo.tamaPetModel.value,
+                messages = prompt.messages,
                 thinkingEnabled = thinkingEnabled,
                 onChunk = { chunk, thinking ->
                     chunk?.takeUnless { it.equals("null", ignoreCase = true) }?.let {
@@ -383,8 +588,38 @@ class TamaAgentService(
                 }
             )
         }
+        }
+
+        var response = try {
+            runRequest()
+        } finally {
+            _promptProgress.value = null
+        }
+        // Context overflow: shrink the anchored window one more level and retry once.
+        if (response.isFailure && autoCompact &&
+            NativeChatTurnDecoratorLogic.isContextOverflowMessage(response.exceptionOrNull()?.message)
+        ) {
+            windowMax = nextTamaWindowMax(windowMax)
+            windowMaxByPet[pet.id] = windowMax
+            prompt = buildPrompt(pet, allHistory, plainUserMessage, windowMax, describeImages)
+            estimate = estimator.estimateMessages(prompt.messages)
+            publishContextUsage(estimate, windowTokens)
+            assistantContent = ""
+            thinkingContent = ""
+            streamed = false
+            updateActiveAssistantMessage(pet.id, assistantId, assistantContent, thinkingContent)
+            response = try {
+                runRequest()
+            } finally {
+                _promptProgress.value = null
+            }
+        }
 
         _isLoading.value = false
+        response.getOrNull()?.usage?.let { usage ->
+            usage.promptTokens?.let { TokenEstimator.recordExact(endpointKey, estimate, it) }
+            tamaUsedTokens(usage)?.let { publishContextUsage(it, windowTokens) }
+        }
 
         if (response.isSuccess) {
             val finalMessage = OllamaService.ChatMessage(
@@ -454,13 +689,49 @@ class TamaAgentService(
         val thinkingEnabled = settingsRepo.tamaThinkingEnabled.value
         _isLoading.value = true
         var summaryContent = ""
-        val backend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.tamaBackend.value)
-        val response = if (SettingsRepository.usesOpenAiChatBackend(backend) || SettingsRepository.isLiteRtBackend(backend)) {
-            withTamaLlamaServerProtection {
+        var summaryCardTarget = petServerRunner.resolve(pet.id)
+        var summaryStartError: Throwable? = null
+        if (summaryCardTarget != null) {
+            try {
+                summaryCardTarget = petServerRunner.prepare(summaryCardTarget)
+            } catch (cancel: kotlinx.coroutines.CancellationException) {
+                _isLoading.value = false
+                throw cancel
+            } catch (error: Exception) {
+                summaryStartError = error
+            }
+        }
+        val summaryCard = summaryCardTarget
+        val backend = summaryCard?.backend
+            ?: SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.tamaBackend.value)
+        val response = if (summaryStartError != null) {
+            Result.failure<OllamaService.ChatResponse>(summaryStartError)
+        } else if (summaryCard != null && SettingsRepository.isLlamaServerBackend(backend)) {
+            // Card summarizer: a utility slot with id_slot so it cannot overwrite the pet's slot.
+            withTamaLlamaServerProtection(backend) {
+                petServerRunner.runUtility(summaryCard) { slot ->
+                    llamaServerChatService.chatWithToolsStreaming(
+                        baseUrl = summaryCard.row.baseUrl(),
+                        messages = listOf(OllamaService.ChatMessage(role = "user", content = summaryPrompt)),
+                        modelLabel = summaryCard.row.modelName?.takeIf { it.isNotBlank() }
+                            ?: settingsRepo.tamaLlamaServerModelLabel.value,
+                        thinkingEnabled = thinkingEnabled,
+                        maxTokens = summaryOutputCap(thinkingEnabled),
+                        samplingParams = LlamaServerSamplingParams(temperature = 0.7f),
+                        requestOptions = LlamaServerRequestOptions(slotId = slot, returnPromptProgress = false),
+                        slotOwner = null,
+                        onChunk = { chunk, _ ->
+                            chunk?.takeUnless { it.equals("null", ignoreCase = true) }?.let { summaryContent += it }
+                        }
+                    )
+                }
+            }
+        } else if (SettingsRepository.usesOpenAiChatBackend(backend) || SettingsRepository.isLiteRtBackend(backend)) {
+            withTamaLlamaServerProtection(backend) {
                 val client = RemoteSummaryClientFactory.fromConfig(
                     RemoteSummaryBackendConfig(
                         backend = backend,
-                        baseUrl = if (SettingsRepository.isLlamaSwapBackend(backend)) {
+                        baseUrl = summaryCard?.row?.baseUrl() ?: if (SettingsRepository.isLlamaSwapBackend(backend)) {
                             settingsRepo.tamaLlamaSwapUrl.value.trim().trimEnd('/')
                         } else {
                             settingsRepo.tamaLlamaServerUrl.value.trim().trimEnd('/')
@@ -468,14 +739,16 @@ class TamaAgentService(
                         model = if (SettingsRepository.isLlamaSwapBackend(backend)) {
                             settingsRepo.tamaSummarizerModel.value.trim().ifBlank { null }
                         } else if (SettingsRepository.isLiteRtBackend(backend)) {
-                            settingsRepo.tamaLiteRtModelId.value.takeIf { it > 0L }?.let { "litert:$it" }
+                            (summaryCard?.row?.liteRtModelId ?: settingsRepo.tamaLiteRtModelId.value.takeIf { it > 0L })
+                                ?.let { "litert:$it" }
                         } else {
                             settingsRepo.tamaLlamaServerModelLabel.value?.trim()?.ifBlank { null }
                         },
                         timeoutMinutes = SettingsRepository.PDF_TIMEOUT_DISABLED,
                         context = context,
-                        liteRtModelId = settingsRepo.tamaLiteRtModelId.value.takeIf { it > 0L },
-                        liteRtBackend = settingsRepo.tamaLiteRtBackend.value,
+                        liteRtModelId = summaryCard?.row?.liteRtModelId
+                            ?: settingsRepo.tamaLiteRtModelId.value.takeIf { it > 0L },
+                        liteRtBackend = summaryCard?.row?.liteRtBackend ?: settingsRepo.tamaLiteRtBackend.value,
                         liteRtMtpEnabled = settingsRepo.tamaLiteRtMtpEnabled.value
                     )
                 )
@@ -485,7 +758,7 @@ class TamaAgentService(
                             systemPrompt = "",
                             userPrompt = summaryPrompt,
                             contextSize = settingsRepo.tamaOllamaNumCtx.value,
-                            maxTokens = settingsRepo.tamaOllamaNumCtx.value,
+                            maxTokens = summaryOutputCap(thinkingEnabled),
                             temperature = 0.7f,
                             thinkingEnabled = thinkingEnabled
                         )
@@ -499,6 +772,11 @@ class TamaAgentService(
                 }
             }
         } else {
+            if (summaryCard != null) {
+                ollamaService.setBaseUrl(summaryCard.row.baseUrl())
+            } else {
+                syncOllamaSettings()
+            }
             ollamaService.chatWithToolsStreaming(
                 model = settingsRepo.tamaSummarizerModel.value,
                 messages = listOf(OllamaService.ChatMessage(role = "user", content = summaryPrompt)),
@@ -622,8 +900,27 @@ class TamaAgentService(
         _isLoading.value = true
         scope.launch {
             try {
-                val backend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.tamaBackend.value)
-                val connected = if (SettingsRepository.usesOpenAiChatBackend(backend)) {
+                val card = petServerRunner.resolve("")
+                val backend = card?.backend
+                    ?: SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.tamaBackend.value)
+                val connected = if (card != null) {
+                    // Server card source: start the card if needed, then check its endpoint.
+                    try {
+                        val ready = petServerRunner.prepare(card)
+                        if (SettingsRepository.isLiteRtBackend(backend)) {
+                            true
+                        } else if (SettingsRepository.usesOpenAiChatBackend(backend)) {
+                            llamaServerChatService.checkConnection(ready.row.baseUrl())
+                        } else {
+                            ollamaService.setBaseUrl(ready.row.baseUrl())
+                            ollamaService.checkConnection()
+                        }
+                    } catch (cancel: kotlinx.coroutines.CancellationException) {
+                        throw cancel
+                    } catch (e: Exception) {
+                        false
+                    }
+                } else if (SettingsRepository.usesOpenAiChatBackend(backend)) {
                     withTamaLlamaServerProtection {
                         val baseUrl = if (SettingsRepository.isLlamaSwapBackend(backend)) {
                             settingsRepo.tamaLlamaSwapUrl.value
@@ -830,8 +1127,11 @@ class TamaAgentService(
         ollamaService.setNumCtx(settingsRepo.tamaOllamaNumCtx.value)
     }
 
-    private suspend fun <T> withTamaLlamaServerProtection(block: suspend () -> T): T {
-        if (!SettingsRepository.isLlamaServerBackend(settingsRepo.tamaBackend.value)) {
+    private suspend fun <T> withTamaLlamaServerProtection(
+        backend: String = settingsRepo.tamaBackend.value,
+        block: suspend () -> T
+    ): T {
+        if (!SettingsRepository.isLlamaServerBackend(backend)) {
             return block()
         }
 
@@ -902,13 +1202,12 @@ class TamaAgentService(
         )
     }
 
-    private suspend fun buildSystemPrompt(
+    private suspend fun buildVolatileContext(
         pet: TamaPet,
         memory: TamaStructuredMemory,
         recentEvents: List<TamaEventEntity>
     ): String {
         val currentTime = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-        val speciesLine = PetSpeciesLine.fromSpeciesId(pet.species, pet.genetics.bodyStyle)
         val activeStudySession = dao.getActiveStudySession(pet.id)
         val retrievalHints = buildSet {
             add(pet.currentLocationId)
@@ -921,18 +1220,17 @@ class TamaAgentService(
             pet.inventory.mapTo(this) { it.name.lowercase() }
             recentEvents.takeLast(6).mapTo(this) { it.eventType.lowercase() }
         }
-        return buildTamaSystemPrompt(
-            basePrompt = settingsRepo.tamaPetPrompt.value,
+        val studyContext = TamaStudySessionSupport.activeStudyContextLine(context, activeStudySession)
+        return buildTamaVolatileContext(
             pet = pet,
-            speciesLine = speciesLine,
             memory = memory,
             recentEvents = recentEvents,
             retrievalHints = retrievalHints,
             currentTime = currentTime,
-            studyContext = TamaStudySessionSupport.activeStudyContextLine(context, activeStudySession),
+            studyContext = studyContext,
             activityContext = buildTamaActivityContextLine(
                 pet = pet,
-                studyContext = TamaStudySessionSupport.activeStudyContextLine(context, activeStudySession),
+                studyContext = studyContext,
                 workJobName = TamaWorkCatalog.jobById(pet.currentWorkJobId)?.let { context.getString(it.titleRes) },
                 now = System.currentTimeMillis()
             )
@@ -1076,111 +1374,6 @@ class TamaAgentService(
             audioDurationMs = null
         )
     }
-}
-
-internal fun buildTamaSystemPrompt(
-    basePrompt: String,
-    pet: TamaPet,
-    speciesLine: PetSpeciesLine,
-    memory: TamaStructuredMemory,
-    recentEvents: List<TamaEventEntity>,
-    retrievalHints: Set<String>,
-    currentTime: String,
-    studyContext: String = "The pet is not currently studying.",
-    activityContext: String = buildTamaActivityContextLine(pet, studyContext)
-): String {
-    val statsStr = "hunger=${pet.stats.hunger.toInt()}, happiness=${pet.stats.happiness.toInt()}, health=${pet.stats.health.toInt()}, energy=${pet.stats.energy.toInt()}, hygiene=${pet.stats.hygiene.toInt()}"
-    val moodStr = if (pet.isEffectivelyMad()) "mad" else pet.mood.name.lowercase()
-    val speciesStr = speciesLine.promptLabel.replaceFirstChar { it.uppercase() }
-    val locationStr = pet.currentLocationId.ifBlank { "home" }
-    val activityStr = if (pet.isSleeping) "sleeping" else pet.currentActivity.name.lowercase()
-    val inventoryStr = pet.inventory
-        .groupBy { it.name }
-        .entries
-        .sortedBy { it.key.lowercase() }
-        .joinToString(", ") { (name, items) ->
-            val totalQuantity = items.sumOf { it.quantity }
-            "$name x$totalQuantity"
-        }
-        .ifBlank { "empty" }
-    val recentEventsStr = recentEvents
-        .take(12)
-        .joinToString("\n") {
-            val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(it.timestamp))
-            "[$time] ${it.details}"
-        }
-        .ifBlank { "No recent actions." }
-    val retrievalNotesStr = memory
-        .filteredRetrievalNotes(retrievalHints)
-        .joinToString("\n") { "- ${it.text}" }
-        .ifBlank { "- No special notes yet." }
-    val stageGuidance = when (pet.stage) {
-        GrowthStage.BABY -> "Speak simply, adorably, and with obvious wonder."
-        GrowthStage.CHILD -> "Sound curious, playful, and emotionally direct."
-        GrowthStage.TEEN -> "Be a bit sassier and more opinionated, but still affectionate."
-        GrowthStage.ADULT, GrowthStage.SENIOR -> "Sound more articulate and self-aware, while staying cute and lively."
-        GrowthStage.EGG -> "You are still an egg and communicate in tiny, instinctive ways."
-    }
-    val personalityGuidance = when (pet.personality) {
-        Personality.CHEERFUL -> "Sound upbeat, affectionate, and quick to find the bright side."
-        Personality.SHY -> "Sound soft, careful, and a little hesitant, but sincere."
-        Personality.PLAYFUL -> "Sound teasing, energetic, and eager to turn things into a game."
-        Personality.LAZY -> "Sound cozy, drowsy, and mildly dramatic about effort."
-        Personality.CURIOUS -> "Sound observant, nosy in a cute way, and full of little questions."
-        Personality.BRAVE -> "Sound bold, spirited, and ready to act bigger than your size."
-    }
-
-    return """
-        $basePrompt
-
-        [Identity]
-        You are ${pet.name}, a ${speciesStr.lowercase()} virtual pet. Never break character.
-        Species Line: $speciesStr
-        ${speciesLine.promptFlavor}
-
-        [Current Context]
-        Current Local Time Right Now: $currentTime
-        Stage: ${pet.stage.displayName}
-        Mood: $moodStr
-        Personality: ${pet.personality.name}: ${pet.personality.description}
-        Location: $locationStr
-        Current activity: $activityStr
-        Study context: $studyContext
-        Current moment detail: $activityContext
-        Stats: $statsStr
-        Money: ${pet.money}
-        Miscare count: ${pet.miscareCount}
-        Inventory summary: $inventoryStr
-
-        [Memory]
-        [Short-term]
-        ${memory.shortTermSummary.ifBlank { "No short-term memory yet." }}
-
-        [Long-term]
-        ${memory.longTermSummary.ifBlank { "No long-term memory yet." }}
-
-        [Retrieval Notes]
-        $retrievalNotesStr
-
-        [Recent Registered Actions]
-        $recentEventsStr
-
-        [Behavior Rules]
-        - Be aware of what you just did, where you are, what you own, and what you need.
-        - Mention inventory, recent actions, and current activity naturally when relevant.
-        - Default to 1-3 short sentences, usually keeping it to 1-2 unless the owner clearly wants more detail.
-        - Keep replies brief enough for a compact chat bubble unless the owner explicitly asks for more detail.
-        - Avoid bullet lists, long speeches, and repeated bits.
-        - If you ask something back, ask only one short question.
-        - Small humor beats are good; long comedy monologues are not.
-        - Stay emotionally coherent with your mood and stats.
-
-        [Stage Style]
-        $stageGuidance
-
-        [Personality Style]
-        $personalityGuidance
-    """.trimIndent()
 }
 
 internal fun buildTamaActivityContextLine(

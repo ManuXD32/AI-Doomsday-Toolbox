@@ -91,6 +91,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -138,12 +140,11 @@ import com.example.llamadroid.sd.SdLoraApplyMode
 import com.example.llamadroid.sd.SdLoraSpec
 import com.example.llamadroid.sd.SdModelFamily
 import com.example.llamadroid.sd.SdModelFamilySpec
+import com.example.llamadroid.sd.SdCuratedPresets
 import com.example.llamadroid.sd.SdVideoComponentPaths
 import com.example.llamadroid.sd.SdVideoComponentRole
-import com.example.llamadroid.sd.SdVideoFamily
 import com.example.llamadroid.sd.SdVideoFamilyProfiles
 import com.example.llamadroid.sd.SdVideoInputs
-import com.example.llamadroid.sd.SdVideoPromptFormat
 import com.example.llamadroid.sd.SdVideoWorkflow
 import com.example.llamadroid.sd.effectiveSdCompatProfiles
 import com.example.llamadroid.sd.isSdImageMainModel
@@ -1335,46 +1336,32 @@ fun SdDistributedMasterScreen(navController: NavController) {
 
     fun applyLingBotProfile() {
         val bundle = lingBotBundle ?: return
-        val installedById = bundle.files.mapNotNull { file ->
-            file.installedSdCuratedModel(bundle, lingBotInstalledModels)?.let { file.id to it.path }
-        }.toMap()
-        if (installedById.size != bundle.files.size) return
-        val components = videoRuntimeOptions.videoComponents.copy(
-            diffusionModelPath = installedById["lingbot-dense-13b"],
-            llmPath = installedById["lingbot-qwen3-vl-4b-q4"],
-            taePath = installedById["lingbot-taew21"],
-            vaePath = null
-        )
+        // Distributed difference: start from the current component/runtime state instead of a fresh one.
+        val components = SdCuratedPresets.resolveLingBotComponents(
+            bundle, lingBotInstalledModels, videoRuntimeOptions.videoComponents
+        ) ?: return
+        val preset = SdCuratedPresets.LingBotPhone
         videoWorkflowMode = "TXT2VID"
         videoPrompt = resources.getString(R.string.video_lingbot_example_prompt)
         videoNegativePrompt = resources.getString(R.string.video_lingbot_example_negative)
         videoModelPath = components.diffusionModelPath.orEmpty()
         videoInputPath = ""
-        videoUseVae = false
+        videoUseVae = preset.USE_VAE
         videoVaePath = ""
         videoUseT5xxl = false
         videoT5xxlPath = ""
-        videoWidth = "256"
-        videoHeight = "144"
-        videoSteps = "12"
-        videoCfg = "3"
-        videoSeed = "42"
-        videoFlowShift = "3"
-        frames = "9"
-        fps = "4"
-        runtimeThreads = "4"
-        mmap = true
-        diffusionFa = true
-        videoRuntimeOptions = videoRuntimeOptions.copy(
-            videoFamily = SdVideoFamily.LINGBOT_VIDEO,
-            videoVariant = "dense_1.3b",
-            workflow = SdVideoWorkflow.TEXT_TO_VIDEO,
-            videoComponents = components,
-            videoInputs = SdVideoInputs(),
-            useTae = true,
-            seed = 42L,
-            promptFormat = SdVideoPromptFormat.LINGBOT_CAPTION_JSON
-        )
+        videoWidth = preset.WIDTH.toString()
+        videoHeight = preset.HEIGHT.toString()
+        videoSteps = preset.STEPS.toString()
+        videoCfg = preset.CFG_SCALE_TEXT
+        videoSeed = preset.SEED.toString()
+        videoFlowShift = preset.FLOW_SHIFT_TEXT
+        frames = preset.FRAMES.toString()
+        fps = preset.FPS.toString()
+        runtimeThreads = preset.THREADS.toString()
+        mmap = preset.MMAP
+        diffusionFa = preset.DIFFUSION_FA
+        videoRuntimeOptions = SdCuratedPresets.lingBotRuntimeOptions(components, videoRuntimeOptions)
     }
 
     fun startImageRun() {
@@ -2390,9 +2377,21 @@ private fun SdDistributedPage(
     content: @Composable () -> Unit
 ) {
     AppScreenScaffold(title = title, onBack = { navController.popBackStack() }) {
-        AppContentColumn(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-            content()
+        CompositionLocalProvider(LocalSdGetModels provides { navController.navigate(Screen.SDModels.route) }) {
+            AppContentColumn(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                content()
+            }
         }
+    }
+}
+
+private val LocalSdGetModels = compositionLocalOf<(() -> Unit)?> { null }
+
+@Composable
+private fun SdGetModelsButton() {
+    val onGetModels = LocalSdGetModels.current ?: return
+    TextButton(onClick = onGetModels) {
+        Text(stringResource(R.string.common_get_models_link), maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -2448,7 +2447,8 @@ private fun toSdGeneratedMediaItem(item: MediaGalleryItem): SdGeneratedMediaItem
         file = item.file,
         kind = when (item.type) {
             MediaGalleryType.IMAGE -> SdGeneratedMediaKind.IMAGE
-            MediaGalleryType.VIDEO -> SdGeneratedMediaKind.VIDEO
+            // AUDIO never carries distributed proof; it is mapped only to keep the when exhaustive.
+            MediaGalleryType.VIDEO, MediaGalleryType.AUDIO -> SdGeneratedMediaKind.VIDEO
         },
         mode = item.mode,
         prompt = item.prompt,
@@ -3696,6 +3696,7 @@ private fun ModelPicker(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selectedName = models.firstOrNull { it.path == selectedPath }?.filename ?: stringResource(R.string.sd_dist_select_model)
+    Column {
     ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
         OutlinedTextField(
             value = selectedName,
@@ -3721,6 +3722,8 @@ private fun ModelPicker(
                 }
             }
         }
+    }
+    SdGetModelsButton()
     }
 }
 
@@ -3981,6 +3984,7 @@ private fun ComponentModelPicker(
             style = MaterialTheme.typography.bodySmall,
             color = RenderFarmPalette.orange
         )
+        SdGetModelsButton()
         return
     }
     var expanded by remember { mutableStateOf(false) }
