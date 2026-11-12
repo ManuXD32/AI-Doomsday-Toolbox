@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sd_r4_images_title">Imágenes distribuidas</string>
+    <string name="sd_r4_images_subtitle">Elige ayudantes, un modelo de imagen y un prompt. Todo lo demás es opcional.</string>
+    <string name="sd_r4_video_title">Vídeo distribuido</string>
+    <string name="sd_r4_video_subtitle">Elige ayudantes, un modelo de vídeo y un prompt. Todo lo demás es opcional.</string>
+    <string name="sd_r4_hub_images_desc">Crea imágenes con tus ayudantes: texto a imagen, imagen a imagen, escalado y ADetailer.</string>
+    <string name="sd_r4_hub_video_desc">Crea clips de vídeo con tus ayudantes: texto a vídeo e imagen a vídeo.</string>
+    <string name="sd_r4_open_images">Abrir imágenes</string>
+    <string name="sd_r4_open_video">Abrir vídeo</string>
+
+    <string name="sd_r4_run_title">Ejecución actual</string>
+    <string name="sd_r4_run_idle">Aún no hay ninguna ejecución. Inicia una desde Imágenes distribuidas o Vídeo distribuido y su progreso aparecerá aquí.</string>
+    <string name="sd_r4_run_running">En curso</string>
+    <string name="sd_r4_run_complete">Terminada</string>
+    <string name="sd_r4_run_failed">Fallida</string>
+    <string name="sd_r4_run_eta">Tiempo restante: unos %1$s</string>
+    <string name="sd_r4_phase_loading">Cargando modelos</string>
+    <string name="sd_r4_phase_text_encoding">Codificación del texto</string>
+    <string name="sd_r4_phase_diffusion">Difusión</string>
+    <string name="sd_r4_phase_vae_decoding">Decodificación VAE</string>
+    <string name="sd_r4_phase_video_frames">Fotogramas de vídeo</string>
+    <string name="sd_r4_phase_saving">Guardando</string>
+    <string name="sd_r4_phase_step">Paso %1$d/%2$d · %3$s s/it</string>
+    <string name="sd_r4_phase_step_plain">Paso %1$d/%2$d</string>
+    <string name="sd_r4_phase_batch">Elemento %1$d/%2$d</string>
+    <string name="sd_r4_phase_frames">Fotogramas: %1$d</string>
+    <string name="sd_r4_transfer_title">Pesos enviados a los ayudantes</string>
+    <string name="sd_r4_transfer_none">No hay transferencia de pesos que seguir con esta distribución.</string>
+    <string name="sd_r4_placement_title">Quién ejecuta qué</string>
+    <string name="sd_r4_placement_row">%1$s: %2$s</string>
+    <string name="sd_r4_placement_share">%1$s (%2$d%%)</string>
+    <string name="sd_r4_placement_none">ningún módulo asignado</string>
+    <string name="sd_r4_placement_master">Este dispositivo</string>
+    <string name="sd_r4_log_title">Salida del generador</string>
+</resources>

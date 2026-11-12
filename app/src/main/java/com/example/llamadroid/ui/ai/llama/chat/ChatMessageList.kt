@@ -148,7 +148,8 @@ internal fun ChatMessageList(
                             MarkdownText(
                                 text = genState.content,
                                 textColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                onLinkClick = onKnowledgeLinkClick
+                                onLinkClick = onKnowledgeLinkClick,
+                                streaming = true
                             )
                         }
 

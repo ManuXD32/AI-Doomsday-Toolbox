@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="video_ltx09_unsupported">LTX-Video 0.9.x isn\'t supported by this engine. Use LTX 2.3 or 2.5 (needs Gemma 3 12B, connectors, video VAE and audio VAE).</string>
+</resources>

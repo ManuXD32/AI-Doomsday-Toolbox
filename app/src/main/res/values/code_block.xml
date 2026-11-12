@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="code_block_collapse">Collapse code block</string>
+    <string name="code_block_expand">Expand code block</string>
+    <plurals name="code_block_lines">
+        <item quantity="one">%d line</item>
+        <item quantity="other">%d lines</item>
+    </plurals>
+</resources>

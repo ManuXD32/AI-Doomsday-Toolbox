@@ -103,7 +103,7 @@ object FeatureGuideCatalog {
             )
         )
     ) + FeatureMediaModelGuides.guides + FeatureOtherGuides.guides + FeatureTamaGuides.guides +
-        FeatureMediaGalleryGuides.guides + FeatureRound7Guides.guides
+        FeatureMediaGalleryGuides.guides + FeatureRound7Guides.guides + FeatureWorldsGuides.guides
 
     /** Resolve a live route, including query strings and parameterized route prefixes. */
     fun forRoute(route: String?): FeatureGuide? {

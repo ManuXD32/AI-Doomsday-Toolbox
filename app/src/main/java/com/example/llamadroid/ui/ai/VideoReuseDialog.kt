@@ -76,7 +76,7 @@ internal fun VideoReuseDialog(
                     onReuseLocal(payload, sources)
                     onApplied()
                 } else {
-                    navController.navigate(if (target == VideoReuseTarget.LOCAL) Screen.VideoGen.route else Screen.SdDistributedRunConfig.route) {
+                    navController.navigate(if (target == VideoReuseTarget.LOCAL) Screen.VideoGen.route else Screen.SdDistributedVideo.route) {
                         launchSingleTop = true
                     }
                     onApplied()

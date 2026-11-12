@@ -51,6 +51,7 @@ import com.example.llamadroid.data.repository.LlamaRepository
 import com.example.llamadroid.data.repository.UnifiedServer
 import com.example.llamadroid.ui.ai.llama.EasyLlamaModelPickerDialog
 import com.example.llamadroid.ui.ai.llama.LlamaPromptProfilePickerField
+import com.example.llamadroid.ui.ai.llama.mergeProfileToolParams
 import com.example.llamadroid.ui.ai.llama.servers.ServerRegistryViewModel
 import com.example.llamadroid.ui.ai.llama.servers.ServerStatusDot
 import com.example.llamadroid.ui.ai.llama.servers.effectiveServerStatus
@@ -100,6 +101,7 @@ fun NewChatSheet(
 
     var title by rememberSaveable { mutableStateOf("") }
     var systemPrompt by rememberSaveable { mutableStateOf("") }
+    var profileNeedsFileTools by rememberSaveable { mutableStateOf(false) }
     var moreOpen by rememberSaveable { mutableStateOf(false) }
     var showModelPicker by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
@@ -126,7 +128,7 @@ fun NewChatSheet(
                     title = title.trim().ifBlank { defaultTitle },
                     contextSize = 0,
                     systemPrompt = systemPrompt.ifBlank { null },
-                    apiParams = newChatApiParamsForServer(entity),
+                    apiParams = mergeProfileToolParams(newChatApiParamsForServer(entity), profileNeedsFileTools),
                     folderId = folderId,
                     serverId = rowId,
                     persistKvCache = defaultPersistKvCacheForServer(entity)
@@ -250,7 +252,10 @@ fun NewChatSheet(
                 )
                 LlamaPromptProfilePickerField(
                     customProfiles = promptProfiles,
-                    onSelected = { systemPrompt = it.content }
+                    onSelected = {
+                        systemPrompt = it.content
+                        profileNeedsFileTools = it.requiresFileTools
+                    }
                 )
             }
 

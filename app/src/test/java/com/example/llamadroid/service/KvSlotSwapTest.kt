@@ -100,4 +100,16 @@ class KvUtilitySlotTest {
         assertEquals(null, parseKvSlotsOrNull("<html>"))
         assertEquals(emptyList<KvSlotFact>(), parseKvSlotsOrNull("[]"))
     }
+
+    @Test
+    fun `utility slot never lands on a slot a chat owns or last used`() {
+        // Slot 0 holds a chat (idle), slot 1 is assigned to a chat: the never-held slot 2 wins.
+        assertEquals(KvUtilitySlotChoice(2, false), chooseUtilitySlot(3, mapOf(0 to false), setOf(1), setOf(0, 1)))
+        // Every slot is a chat's: no utility slot, the caller sends without id_slot.
+        assertEquals(null, chooseUtilitySlot(2, mapOf(0 to false, 1 to false), setOf(1), setOf(0, 1)))
+        // Single slot last used by a chat is never taken.
+        assertEquals(null, chooseUtilitySlot(1, mapOf(0 to false), emptySet(), setOf(0)))
+        // A non-chat idle holder is still reusable.
+        assertEquals(KvUtilitySlotChoice(1, true), chooseUtilitySlot(2, mapOf(1 to false), emptySet(), setOf(0)))
+    }
 }

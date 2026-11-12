@@ -31,6 +31,8 @@ class StatsCollectionService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            // A STOP delivered through startForegroundService() must still satisfy the contract.
+            ForegroundStart.satisfyAndStop(this@StatsCollectionService)
             stopSelf()
             return START_NOT_STICKY
         }
@@ -84,8 +86,14 @@ class StatsCollectionService : Service() {
             return ForegroundStart.start(this, NOTIFICATION_ID, notification, ForegroundServiceTypes.SPECIAL_USE) is ForegroundStart.Result.Started
         }
         // specialUse does not exist below API 34, so the 2-argument form is the only valid call.
-        startForeground(NOTIFICATION_ID, notification)
-        return true
+        return try {
+            startForeground(NOTIFICATION_ID, notification)
+            true
+        } catch (error: Exception) {
+            DebugLog.log("[StatsCollection] startForeground failed: ${error.javaClass.simpleName}: ${error.message}")
+            ForegroundStart.satisfyAndStop(this, notification)
+            false
+        }
     }
 
     private fun createChannel() {
@@ -107,7 +115,9 @@ class StatsCollectionService : Service() {
 
         fun start(context: Context) {
             val intent = Intent(context, StatsCollectionService::class.java).setAction(ACTION_START)
-            if (Build.VERSION.SDK_INT >= 26) ContextCompat.startForegroundService(context, intent) else context.startService(intent)
+            runCatching {
+                if (Build.VERSION.SDK_INT >= 26) ContextCompat.startForegroundService(context, intent) else context.startService(intent)
+            }.onFailure { DebugLog.log("[StatsCollection] start refused: ${it.javaClass.simpleName}: ${it.message}") }
         }
 
         fun stop(context: Context) {

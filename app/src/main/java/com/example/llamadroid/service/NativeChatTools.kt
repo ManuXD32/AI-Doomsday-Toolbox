@@ -1082,12 +1082,7 @@ class NativeChatToolRuntime(
                 )
             }
             if (config.toolsEnabled) {
-                add(AgentTool(TOOL_LIST_WORKSPACE_FILES, "List files and folders in this chat's private workspace.", mapOf("path" to "Optional workspace-relative directory")))
-                add(AgentTool(TOOL_READ_WORKSPACE_FILE, "Read a bounded UTF-8 file from this chat's private workspace.", mapOf("path" to "Workspace-relative file path"), listOf("path")))
-                if (config.fileToolsEnabled) add(AgentTool(TOOL_WRITE_WORKSPACE_FILE, "Write one bounded batch to a workspace file. Keep generated files focused and use append/edit for later batches.", mapOf("path" to "Workspace-relative file path", "content" to "Content, maximum 16 KiB"), listOf("path", "content")))
-                if (config.fileToolsEnabled) add(AgentTool(TOOL_APPEND_WORKSPACE_FILE, "Append one bounded batch to a workspace file.", mapOf("path" to "Workspace-relative file path", "content" to "Content, maximum 16 KiB"), listOf("path", "content")))
-                if (config.fileToolsEnabled) add(AgentTool(TOOL_EDIT_WORKSPACE_LINES, "Replace an exact line range after reading the file.", mapOf("path" to "Workspace-relative file path", "start_line" to "First line, 1-based", "end_line" to "Last line, inclusive", "content" to "Replacement content"), listOf("path", "start_line", "end_line", "content")))
-                if (config.fileToolsEnabled) add(AgentTool(TOOL_APPLY_WORKSPACE_PATCH, "Apply a bounded unified diff inside this chat workspace.", mapOf("patch" to "Unified diff, maximum 16 KiB"), listOf("patch")))
+                addAll(NativeChatWorkspaceEdits.tools(config.fileToolsEnabled))
             }
             if (config.customToolsEnabled) {
                 customTools.asSequence()
@@ -1964,8 +1959,13 @@ class NativeChatToolRuntime(
                 }
                 TOOL_READ_WORKSPACE_FILE -> {
                     require(config.toolsEnabled) { "Workspace file tools are disabled for this chat." }
-                    NativeChatWorkspaceSupport.read(requireNotNull(context), requireNotNull(chatId), toolCall.arguments["path"].orEmpty())
+                    NativeChatWorkspaceSupport.read(
+                        requireNotNull(context), requireNotNull(chatId), toolCall.arguments["path"].orEmpty(),
+                        toolCall.arguments["start_line"]?.trim()?.toIntOrNull(), toolCall.arguments["end_line"]?.trim()?.toIntOrNull()
+                    )
                 }
+                NativeChatWorkspaceEdits.TOOL_SEARCH, NativeChatWorkspaceEdits.TOOL_REPLACE ->
+                    NativeChatWorkspaceEdits.execute(requireNotNull(context), requireNotNull(chatId), config, toolCall.name, toolCall.arguments)
                 TOOL_WRITE_WORKSPACE_FILE -> {
                     require(config.toolsEnabled && config.fileToolsEnabled) { "Workspace file tools are disabled for this chat." }
                     NativeChatWorkspaceSupport.write(requireNotNull(context), requireNotNull(chatId), toolCall.arguments["path"].orEmpty(), toolCall.arguments["content"].orEmpty(), append = false)

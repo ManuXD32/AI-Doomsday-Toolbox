@@ -204,13 +204,26 @@ class DownloadService : Service() {
                 putExtra(EXTRA_RETRY_REQUESTED_AT, retryRequestedAt)
                 putExtra(EXTRA_PRESERVE_RETRY_TIMESTAMP, preserveRetryTimestamp)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            startGuarded(context, intent)
         }
         
+        /** Background-start denial or IllegalStateException must not crash; the download stays resumable. */
+        private fun startGuarded(context: Context, intent: Intent) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (error: Exception) {
+                if (error is IllegalStateException || error.javaClass.simpleName == "ForegroundServiceStartNotAllowedException") {
+                    DebugLog.log("DownloadService: start refused: ${error.javaClass.simpleName}: ${error.message}")
+                } else {
+                    throw error
+                }
+            }
+        }
+
         fun cancelDownload(context: Context, filename: String, downloadId: String = filename) {
             val intent = Intent(context, DownloadService::class.java).apply {
                 action = ACTION_CANCEL_DOWNLOAD
@@ -235,11 +248,7 @@ class DownloadService : Service() {
                 putExtra(EXTRA_RETRY_REQUESTED_AT, retryRequestedAt)
                 putExtra(EXTRA_PRESERVE_RETRY_TIMESTAMP, preserveRetryTimestamp)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            startGuarded(context, intent)
         }
 
         fun discardDownload(context: Context, downloadId: String) {

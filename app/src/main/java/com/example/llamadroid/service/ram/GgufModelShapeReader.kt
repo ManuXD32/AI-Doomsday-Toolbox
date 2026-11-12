@@ -78,6 +78,45 @@ object GgufModelShapeReader {
         )
     }
 
+    /**
+     * Reads `tokenizer.chat_template` (capped at [maxChars]) from a GGUF header, or null when it is
+     * absent, oversized or unreadable. Stops at the tokenizer arrays, which follow the template.
+     */
+    fun readChatTemplate(file: File, maxChars: Int = 256 * 1024): String? {
+        if (!file.isFile || !file.canRead()) return null
+        return runCatching {
+            FileInputStream(file).use { readChatTemplate(BufferedInputStream(it, 64 * 1024), maxChars) }
+        }.getOrNull()
+    }
+
+    fun readChatTemplate(input: InputStream, maxChars: Int = 256 * 1024): String? {
+        val stream = DataInputStream(input)
+        val magic = ByteArray(4).also { stream.readFully(it) }
+        if (String(magic, Charsets.US_ASCII) != "GGUF") return null
+        stream.skipFully(4)
+        stream.skipFully(8)
+        val kvCount = stream.readLongLe()
+        if (kvCount !in 0..MAX_KV_ENTRIES) return null
+        try {
+            for (i in 0 until kvCount) {
+                val key = stream.readStringLe()
+                val type = stream.readIntLe()
+                if (key == "tokenizer.chat_template" && type == TYPE_STRING) {
+                    val length = stream.readLongLe()
+                    if (length < 0 || length > maxChars) return null
+                    val bytes = ByteArray(length.toInt())
+                    stream.readFully(bytes)
+                    return String(bytes, Charsets.UTF_8)
+                }
+                if (key == "tokenizer.ggml.tokens") return null
+                stream.skipValue(type)
+            }
+        } catch (_: EOFException) {
+            return null
+        }
+        return null
+    }
+
     /** Share of sliding-window layers: explicit pattern wins, else a per-family default. */
     internal fun swaFraction(arch: String, pattern: Int): Double {
         if (pattern > 1) return (pattern - 1).toDouble() / pattern

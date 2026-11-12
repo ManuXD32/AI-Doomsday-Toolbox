@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="dist_r7_log_clear">Borrar registro</string>
+    <string name="dist_r7_log_clear_title">¿Borrar este registro?</string>
+    <string name="dist_r7_log_clear_confirm">Borrar</string>
+    <string name="dist_r7_log_cleared">Registro borrado</string>
+</resources>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="dist_r3_w_vpn_address_label">Dirección VPN</string>
+    <string name="dist_r3_w_lan_address_label">Dirección Wi-Fi</string>
+    <string name="dist_r3_w_ram_override_warning">Android puede cerrar otras apps o este ayudante si se agota la memoria. Máximo seguro: %1$d MB, límite: %2$d MB.</string>
+    <string name="dist_r3_w_ram_override_hint">Se permiten valores por encima del rango del control deslizante hasta %1$d MB (memoria total menos 1024 MB).</string>
+</resources>

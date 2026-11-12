@@ -31,6 +31,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.llamadroid.R
+import com.example.llamadroid.worlds.ui.WorldChatCard
+import com.example.llamadroid.worlds.ui.WorldEditedFileCards
 import com.example.llamadroid.data.model.extractEmbeddedAudioTranscript
 import com.example.llamadroid.data.model.extractEmbeddedDocumentText
 import com.example.llamadroid.data.model.LlamaMessageAttachmentEntity
@@ -285,6 +287,20 @@ fun LlamaMessageItem(
                                         onLinkClick = onKnowledgeLinkClick
                                     )
                                 }
+                            }
+
+                            if (!isUser) {
+                                // Only final messages reach this item (the streaming reply is filtered out upstream).
+                                WorldChatCard(
+                                    content = message.content,
+                                    messageId = message.id,
+                                    chatId = message.chatId
+                                )
+                                WorldEditedFileCards(
+                                    stepsJson = message.stepsJson,
+                                    messageId = message.id,
+                                    chatId = message.chatId
+                                )
                             }
 
                             if (isUser && !embeddedTranscript.isNullOrBlank()) {
@@ -641,7 +657,8 @@ fun ThinkingMessageContent(
                             MarkdownText(
                                 text = preview.text,
                                 textColor = bodyColor,
-                                onLinkClick = onKnowledgeLinkClick
+                                onLinkClick = onKnowledgeLinkClick,
+                                streaming = streamingThinking
                             )
                         }
                         if (preview.truncated) {
@@ -669,7 +686,8 @@ fun ThinkingMessageContent(
             MarkdownText(
                 text = finalResponse,
                 textColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                onLinkClick = onKnowledgeLinkClick
+                onLinkClick = onKnowledgeLinkClick,
+                streaming = forceExpand
             )
         }
     }

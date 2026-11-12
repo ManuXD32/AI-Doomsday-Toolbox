@@ -114,6 +114,8 @@ import com.example.llamadroid.ui.models.OnnxModelsScreen
 import com.example.llamadroid.ui.models.ModelShareScreen
 import com.example.llamadroid.ui.models.LiteRtModelsScreen
 import com.example.llamadroid.ui.notes.NotesManagerScreen
+import com.example.llamadroid.worlds.ui.WorldLibraryScreen
+import com.example.llamadroid.worlds.ui.WorldViewerScreen
 import com.example.llamadroid.ui.knowledge.KnowledgeBaseScreen
 import com.example.llamadroid.ui.knowledge.KnowledgeChunkReaderScreen
 import com.example.llamadroid.ui.ai.VideoSumupScreen
@@ -128,6 +130,7 @@ import com.example.llamadroid.ui.distributed.NetworkVisualizationScreen
 import com.example.llamadroid.ui.distributed.SdDistributedHubScreen
 import com.example.llamadroid.ui.distributed.SdDistributedMasterScreen
 import com.example.llamadroid.ui.distributed.SdDistributedNetworkScreen
+import com.example.llamadroid.ui.distributed.SdDistributedVideoScreen
 import com.example.llamadroid.ui.distributed.SdDistributedRunConfigScreen
 import com.example.llamadroid.ui.distributed.SdDistributedWorkerScreen
 import com.example.llamadroid.ui.settings.WelcomeScreen
@@ -731,6 +734,11 @@ fun LlamaApp(
             composable(Screen.VideoUpscaler.route) { VideoUpscalerScreen(navController) }
             composable(Screen.VideoInterpolation.route) { VideoInterpolationScreen(navController) }
             composable(Screen.SubtitleBurn.route) { SubtitleBurnScreen(navController) }
+            composable(Screen.WorldLibrary.route) { WorldLibraryScreen(navController) }
+            composable(
+                Screen.WorldViewer.route,
+                arguments = listOf(androidx.navigation.navArgument("worldId") { type = androidx.navigation.NavType.StringType })
+            ) { entry -> WorldViewerScreen(navController, entry.arguments?.getString("worldId").orEmpty()) }
             composable(Screen.NotesManager.route) { NotesManagerScreen(navController, asRoot = true) }
             composable(Screen.KnowledgeBase.route) { KnowledgeBaseScreen(navController) }
             composable(
@@ -824,6 +832,8 @@ fun LlamaApp(
             composable(Screen.SdDistributedHub.route) { SdDistributedHubScreen(navController) }
             composable(Screen.SdDistributedWorker.route) { SdDistributedWorkerScreen(navController) }
             composable(Screen.SdDistributedMaster.route) { SdDistributedMasterScreen(navController) }
+            composable(Screen.SdDistributedImages.route) { SdDistributedMasterScreen(navController) }
+            composable(Screen.SdDistributedVideo.route) { SdDistributedVideoScreen(navController) }
             composable(Screen.SdDistributedNetwork.route) { SdDistributedNetworkScreen(navController) }
             composable(Screen.SdDistributedRunConfig.route) { SdDistributedRunConfigScreen(navController) }
             composable(Screen.SdDistributedGallery.route) {

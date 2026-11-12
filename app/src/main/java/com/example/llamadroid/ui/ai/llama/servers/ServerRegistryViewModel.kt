@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.easy.EasyModeSettings
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.SavedCommand
 import com.example.llamadroid.data.db.SavedCommandScopes
@@ -323,11 +324,21 @@ class ServerRegistryViewModel(application: Application) : AndroidViewModel(appli
         name: String,
         port: Int?,
         allowWearStart: Boolean,
-        defaultApiParams: String? = null
+        defaultApiParams: String? = null,
+        baselineJson: String? = null
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            val card = database.llamaServerCardDao().getCard(cardId)
+            val stored = card?.let { database.savedCommandDao().getGeneralCommandById(it.savedCommandId) }?.launchProfile()
+            val toSave = if (stored != null && !baselineJson.isNullOrBlank()) {
+                mergeEditedProfile(stored, baselineJson, profile)
+            } else profile
+            // Easy cards re-apply the per-model context on every open; record an edited context as that override.
+            if (card?.easyModelId != null && stored != null && toSave.contextSize != stored.contextSize) {
+                EasyModeSettings(getApplication()).setContextOverrideFor(toSave.modelPath, toSave.contextSize)
+            }
             localRepository.updateLocalServerProfile(
-                cardId, profile, name = name, port = port, allowWearStart = allowWearStart,
+                cardId, toSave, name = name, port = port, allowWearStart = allowWearStart,
                 defaultApiParams = defaultApiParams)
             Result.success(Unit)
         } catch (cancel: CancellationException) {

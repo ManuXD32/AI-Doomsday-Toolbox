@@ -60,6 +60,7 @@ class GenerationQueueService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (RestoreCoordinator.isMaintenance(this)) {
+            ForegroundStart.satisfyAndStop(this@GenerationQueueService)
             stopSelfResult(startId)
             return START_NOT_STICKY
         }

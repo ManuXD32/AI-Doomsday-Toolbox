@@ -784,9 +784,6 @@
     <string name="share_no_models">No models available to share</string>
     
     <!-- Worker Mode -->
-    <string name="dist_web_monitor">Master WebUI Monitor</string>
-    <string name="dist_web_monitor_desc">View and control the Master\'s inference UI.</string>
-    <string name="dist_master_ip">Master IP</string>
     <string name="dist_open_monitor">Open Monitor</string>
     <string name="dist_load_command">Load Command</string>
     <string name="dist_save_command">Save Command</string>
@@ -3837,7 +3834,6 @@
     <string name="tool_piper_desc">Piper TTS - Efficient, natural sounding local neural TTS.</string>
 
     <!-- Distributed Inference -->
-    <string name="dist_title">Distributed Inference</string>
     <string name="dist_worker_mode">Worker Mode</string>
     <string name="dist_master_mode">Master Mode</string>
     <string name="dist_worker_ram_label">Worker RAM (MB)</string>
@@ -3859,11 +3855,9 @@
     <string name="dist_auto_load_desc">Leave blank for auto (based on RAM)</string>
     <string name="dist_tap_to_select_model">Tap to select model</string>
     <string name="dist_models_available">%d model(s) available</string>
-    <string name="dist_your_ram_contribution">Your RAM Contribution</string>
     <string name="dist_offload_all">Offload All to Workers</string>
     <string name="dist_offload_all_desc">Master keeps 0 layers. All model layers will be sent to workers. Requires enough worker RAM for the entire model.</string>
     <string name="dist_available_ram">Available: %d MB</string>
-    <string name="dist_model_settings_title">⚙️ Model Settings</string>
     <string name="dist_context_size">Context Size</string>
     <string name="dist_tokens">tokens</string>
     <string name="dist_temperature">Temperature</string>
@@ -3872,7 +3866,6 @@
     <string name="dist_network_visibility">Network Visibility</string>
     <string name="dist_host_public">Host: 0.0.0.0 (accessible from network)</string>
     <string name="dist_host_local">Host: 127.0.0.1 (local only)</string>
-    <string name="dist_kv_cache_title">🧠 KV Cache</string>
     <string name="dist_kv_placement_title">KV cache placement</string>
     <string name="dist_kv_placement_distributed">Distribute with model layers</string>
     <string name="dist_kv_placement_distributed_desc">Keep KV placement aligned with the selected model participants.</string>
@@ -3915,7 +3908,6 @@
     <string name="dist_flash_attention_desc">Significantly reduces memory usage and speeds up inference</string>
     
     <!-- Advanced Settings -->
-    <string name="dist_advanced_settings_title">⚙️ Advanced Settings</string>
     <string name="dist_advanced_parallel">Parallel (-np)</string>
     <string name="dist_advanced_cache_ram">Context Cache RAM (MB)</string>
     <string name="dist_advanced_custom_flags">Custom Flags</string>
@@ -3932,9 +3924,7 @@
     <string name="dist_speculative_desc">Uses a small draft model to predict tokens faster</string>
     <string name="dist_speculative_draft_model">Draft Model</string>
     <string name="dist_speculative_select_draft">Select draft model</string>
-    <string name="dist_speculative_no_draft">No draft model selected</string>
     <string name="dist_speculative_clear_draft">Clear</string>
-    <string name="dist_speculative_ram_warning">⚠️ Draft model (%dMB) loads on master device alongside main model</string>
     <string name="dist_speculative_draft_max">Max draft tokens</string>
     <string name="dist_speculative_block_size">Draft block size (--spec-draft-n-max)</string>
     <string name="dist_speculative_block_size_hint">DFlash and DSpark generate this many tokens per block; llama.cpp clamps it to the trained block size.</string>
@@ -3942,7 +3932,6 @@
     <string name="dist_speculative_placement_master_dedicated">Master (MTP only)</string>
     <string name="dist_speculative_draft_min">Min draft tokens</string>
     <string name="dist_speculative_draft_p_min">Min acceptance probability</string>
-    <string name="dist_speculative_draft_p_min_desc">Lower = more aggressive drafting</string>
     <string name="dist_speculative_draft_threads">Draft threads</string>
     <string name="dist_speculative_draft_threads_batch">Draft batch threads</string>
     <string name="dist_speculative_mode_label">Speculative mode</string>
@@ -4011,8 +4000,6 @@
     <string name="dist_reset_command">Reset to Default</string>
     <string name="dist_saved_distribution">Saved distribution for:</string>
     <string name="dist_workers_count">Workers (%d)</string>
-    <string name="dist_no_workers">No workers connected</string>
-    <string name="dist_no_workers_hint">Start Worker mode on another device,\nthen tap \'Add Worker\' to enter their IP:PORT</string>
     <string name="dist_total_ram">Total RAM: %d MB</string>
     <string name="dist_model_ram_requirement">Model needs ~%d MB</string>
     <string name="dist_started_msg">Started with %d worker(s). Check dashboard for status.</string>
@@ -4036,10 +4023,6 @@
     <string name="dist_worker_load">%d%% load</string>
     <string name="dist_worker_load_line">Load: %1$s</string>
     <string name="dist_auto">Auto</string>
-    <string name="dist_load_distribution_title">📊 Load Distribution</string>
-    <string name="dist_master_load_label">Master: %1$d%% (%2$dMB)</string>
-    <string name="dist_worker_load_set">%1$d%% (set)</string>
-    <string name="dist_worker_load_auto">%1$d%% (auto)</string>
 
     <!-- Remote Master -->
     <string name="dist_remote_master">Remote Master Server</string>
@@ -4049,7 +4032,6 @@
     <string name="dist_remote_whitelist">IP Whitelist (comma-separated)</string>
     <string name="dist_remote_whitelist_hint">Leave empty to allow all IPs</string>
     <string name="dist_remote_warning_all_ips">⚠️ Warning: All IPs can connect if they have the password.</string>
-    <string name="dist_remote_logs">Remote Logs</string>
     <string name="dist_remote_server_desc">Allow other devices to control the master</string>
     <string name="dist_remote_client_desc">Connect to another master device to control it</string>
     <string name="dist_remote_connect">Connect to Master</string>
@@ -4072,8 +4054,6 @@
     <string name="dist_remote_context_size">Context Size (Remote)</string>
     <string name="dist_remote_temperature">Temperature (Remote)</string>
     <string name="dist_remote_kv_enable">Enable KV Cache</string>
-    <string name="dist_remote_kv_k">KV Type K</string>
-    <string name="dist_remote_kv_v">KV Type V</string>
     <string name="dist_remote_kv_reuse">Context Reuse</string>
 
     <string name="dist_remote_download_title">Download Model</string>
@@ -4124,7 +4104,6 @@
     <string name="dist_remote_logs_copied">Logs copied to clipboard</string>
     <string name="dist_remote_command_title">Launch Command</string>
 
-    <string name="dist_nearby_workers_title">Nearby Workers (NSD)</string>
     <string name="dist_worker_added">Worker added!</string>
 
     <!-- Kiwix -->
@@ -4193,31 +4172,16 @@
     <string name="pdf_parameters">Parameters</string>
     <string name="pdf_max_tokens">Max Tokens</string>
     <string name="pdf_select_pdf">Select PDF</string>
-    <string name="dist_ram_to_share">RAM to Share</string>
     <string name="dist_total_avail_ram">Available: %1$d MB / Total: %2$d MB</string>
-    <string name="dist_threads_count">Threads: %d</string>
-    <string name="dist_enable_local_cache">Enable Local Cache</string>
-    <string name="dist_local_cache_desc">Cache layers locally for faster reconnection</string>
-    <string name="dist_clear_worker_cache">Clear worker cache</string>
     <string name="dist_worker_cache_cleared">Worker RPC cache cleared.</string>
     <string name="dist_worker_cache_clear_running">Stop the worker before clearing its RPC cache.</string>
     <string name="dist_worker_cache_clear_failed">Could not clear worker RPC cache: %1$s</string>
-    <string name="dist_worker_ram_budget_warning">The worker does not enforce this RAM budget. It is only a reminder; enter the same budget for this device on the master so placement uses it.</string>
     <string name="dist_your_ip_label">Your IP Address</string>
     <string name="dist_not_connected">Not connected to network</string>
-    <string name="dist_scan_to_connect">📲 Scan to Connect</string>
-    <string name="dist_worker_tip_master">Enter this address in Master\'s \'Add Worker\' dialog</string>
-    <string name="dist_master_connected">Master Connected!</string>
     <string name="dist_waiting_for_master">Waiting for Master...</string>
     <string name="dist_processing_layers">Processing layers from master device</string>
     <string name="dist_sharing_ram">Sharing %d MB RAM</string>
-    <string name="dist_start_worker">Start Worker</string>
-    <string name="dist_stop_worker">Stop Worker</string>
-    <string name="dist_worker_active">Worker Active</string>
-    <string name="dist_ready_to_start">Ready to Start</string>
-    <string name="dist_receiving_layers">Receiving model layers...</string>
     <string name="dist_waiting_for_master_connect">Waiting for master to connect</string>
-    <string name="dist_configure_worker_ram">Configure RAM and start worker</string>
     <string name="whisper_models_desc">Larger models = better accuracy, slower speed</string>
     <string name="model_share_instructions">Scan QR or open URL to download models</string>
     <string name="model_share_active_downloads">%d active download(s)</string>
@@ -4232,14 +4196,6 @@
     <string name="agent_action_stop">Stop</string>
     <string name="agent_action_cancel">Cancel</string>
     <string name="kiwix_loading_count">Loading %d ZIM file(s)</string>
-    <string name="dist_role_master_title">Be the MASTER</string>
-    <string name="dist_role_master_desc">Host the model file and coordinate inference across connected workers.</string>
-    <string name="dist_role_master_btn">Configure Master</string>
-    <string name="dist_role_worker_title">Be a WORKER</string>
-    <string name="dist_role_worker_desc">Help process model layers for a master device. Choose how much RAM to share.</string>
-    <string name="dist_role_worker_btn">Start Worker</string>
-    <string name="dist_wifi_warning">All devices must be on the same WiFi network. Performance depends on network speed.</string>
-    <string name="dist_rpc_warning">RPC is unencrypted. Only use on trusted local networks.</string>
     <string name="approval_title">📋 Pending Approvals (%d)</string>
     <string name="approval_no_pending">No pending approvals</string>
     <string name="approval_new_file">📄 NEW</string>
@@ -4797,7 +4753,6 @@
     <string name="net_clear_workers">> CLEAR_WORKERS</string>
 
     <!-- Layer Distribution (MasterMode) -->
-    <string name="dist_layer_distribution">📊 Layer Distribution</string>
     <string name="dist_remember_layer_split">Remember Layer Split</string>
     <string name="dist_layer_split_desc">Keeps same layer assignment for worker cache</string>
     <string name="dist_cache_type_k">Cache Type K</string>
@@ -7594,22 +7549,10 @@
     <string name="ai_servers_type_ai_hub_desc">One launcher URL for the active built-in AI servers.</string>
     <string name="dashboard_sd_distributed_title">Distributed Media Generation</string>
     <string name="dashboard_sd_distributed_desc">Split Stable Diffusion image, edit, upscale, and video work across trusted LAN workers.</string>
-    <string name="sd_dist_title">Distributed Media Generation</string>
-    <string name="sd_dist_subtitle">Run stable-diffusion.cpp RPC workers, choose media pipeline placement, and apply the plan to image and video generation.</string>
-    <string name="sd_dist_hub_worker_title">Run this device as a media worker</string>
-    <string name="sd_dist_hub_worker_desc">Contribute CPU threads and memory to another ADT device running stable-diffusion.cpp.</string>
-    <string name="sd_dist_hub_master_title">Coordinate a media network</string>
-    <string name="sd_dist_hub_master_desc">Add trusted workers manually and prepare backend placement for the next generation.</string>
     <string name="sd_dist_hub_run_title">Tune SD runtime</string>
     <string name="sd_dist_hub_run_desc">Adjust RPC, backend, VAE, adapter, cache, and command preview settings.</string>
-    <string name="sd_dist_open_worker">Open worker</string>
-    <string name="sd_dist_open_master">Open master</string>
     <string name="sd_dist_open_run_config">Open run config</string>
     <string name="sd_dist_open_gallery">Open gallery</string>
-    <string name="sd_dist_worker_title">Media Worker</string>
-    <string name="sd_dist_worker_subtitle">Start a stable-diffusion.cpp RPC worker and control the resources this device contributes.</string>
-    <string name="sd_dist_master_title">Media Master</string>
-    <string name="sd_dist_master_subtitle">Manage trusted LAN workers, device inventory, and RPC server lists for distributed SD runs.</string>
     <string name="sd_dist_network_title">Media Network</string>
     <string name="sd_dist_network_subtitle">Monitor the current SD pipeline topology, assigned workers, budgets, and logs.</string>
     <string name="sd_dist_gallery_title">Generated Media Gallery</string>
@@ -7641,7 +7584,6 @@
     <string name="sd_dist_security_warning">stable-diffusion.cpp RPC has no authentication or encryption. Use it only on a trusted LAN or private hotspot. The master and every worker must run the same ADT version: the RPC protocol changed in this release, so older workers cannot connect.</string>
     <string name="sd_dist_status_running">Worker running</string>
     <string name="sd_dist_status_stopped">Worker stopped</string>
-    <string name="sd_dist_connection_count">%1$d connections</string>
     <string name="sd_dist_worker_resources">Contribution</string>
     <string name="sd_dist_threads_to_share">CPU threads to share</string>
     <string name="sd_dist_ram_to_share">RAM budget</string>
@@ -7656,17 +7598,12 @@
     <string name="sd_dist_worker_cache_enable">Enable local RPC tensor cache</string>
     <string name="sd_dist_worker_cache_clear">Clear cache</string>
     <string name="sd_dist_worker_ram_budget_warning">The RPC worker does not enforce this RAM budget. It is only a reminder; enter the same budget for this device on the master so the placement planner uses it.</string>
-    <string name="sd_dist_start_worker">Start worker</string>
-    <string name="sd_dist_stop_worker">Stop worker</string>
-    <string name="sd_dist_logs">Logs</string>
-    <string name="sd_dist_no_logs">No logs yet.</string>
     <string name="sd_dist_manual_worker">Manual worker</string>
     <string name="sd_dist_worker_host">Worker host or IP</string>
     <string name="sd_dist_threads_short">threads</string>
     <string name="sd_dist_ram_mb_short">RAM MB</string>
     <string name="sd_dist_add_worker">Add worker</string>
     <string name="sd_dist_workers">Workers</string>
-    <string name="sd_dist_no_workers">No workers yet. Add a trusted LAN address to begin.</string>
     <string name="sd_dist_remote_workers">Remote workers</string>
     <string name="sd_dist_new_worker">New worker</string>
     <string name="sd_dist_delete_worker">Delete worker</string>
@@ -7848,10 +7785,8 @@
     <string name="sd_manual_flags_desc">Append extra stable-diffusion.cpp flags to this run only. Structured card settings stay separate.</string>
     <string name="sd_manual_flags_hint">Example: --preview-interval 2 --metadata brief</string>
     <string name="sd_dist_image_mode">Image workflow</string>
-    <string name="sd_dist_video_mode">Video workflow</string>
     <string name="sd_dist_image_model">Image model</string>
     <string name="sd_dist_upscaler_model">Upscaler model</string>
-    <string name="sd_dist_video_model">Video model</string>
     <string name="sd_dist_select_model">Select model</string>
     <string name="sd_dist_no_models_available">No compatible models installed.</string>
     <string name="sd_dist_input_image_path">Input image path</string>
@@ -8357,8 +8292,6 @@
     <string name="dist_speculative_mode_dspark">DSpark</string>
     <string name="dist_speculative_dspark_hint">Uses the selected draft model with llama.cpp draft-dspark speculative decoding.</string>
     <string name="dist_fit_invalid">The distributed fit target or tensor split does not match the enabled device order.</string>
-    <string name="dist_fit_title">Memory fitting and device order</string>
-    <string name="dist_fit_desc">Reserve free RAM per llama.cpp device. One value is broadcast; comma-separated values follow the RPC order.</string>
     <string name="dist_fit_enable">Enable llama.cpp fitting</string>
     <string name="dist_fit_target">Free RAM target (MiB)</string>
     <string name="dist_fit_target_hint">Example: 7168 or 2048,8192</string>
@@ -8377,8 +8310,6 @@
     <string name="llama_server_dspark_unsupported">%1$s does not expose draft-dspark speculative decoding. Select a llama-server binary with DSpark support.</string>
     <string name="llama_server_fit_unsupported" tools:ignore="TypographyDashes">%1$s does not expose llama.cpp distributed fitting (--fit/--fit-target). Select a compatible llama-server binary.</string>
     <string name="llama_local_distributed_args_rejected">Distributed RPC, fitting, and tensor-split arguments are not allowed in a local server profile.</string>
-    <string name="dist_memory_card_desc">Choose how much RAM remains available to the master while workers carry the target model.</string>
-    <string name="dist_model_settings_desc">Runtime, KV cache, sampling, speculative decoding, tools, and launch templates for this distributed profile.</string>
     <string name="sd_component_placement_title">Component placement</string>
     <string name="sd_component_placement_te">Text encoder</string>
     <string name="sd_component_placement_diffusion">Diffusion</string>
@@ -8396,15 +8327,7 @@
     <string name="sd_gallery_unavailable">Unavailable</string>
     <string name="title_feature_media_i8mm">Stable Diffusion I8MM</string>
     <string name="title_feature_media_snapdragon_opencl">Stable Diffusion Adreno OpenCL</string>
-    <string name="dist_step_model_endpoint">1 · Model and endpoint</string>
-    <string name="dist_step_workers">2 · Workers</string>
-    <string name="dist_step_workers_desc">Choose the RPC devices available to this launch. Disabled workers are never contacted.</string>
-    <string name="dist_step_main_placement">3 · Main model placement</string>
-    <string name="dist_step_main_placement_desc">Keep the model on one worker or split it across the selected workers.</string>
-    <string name="dist_step_speculative">4 · Speculative decoding and MTP</string>
     <string name="dist_step_mmproj">5 · Vision projector</string>
-    <string name="dist_step_mmproj_desc">Optional for vision models. llama.cpp currently supports local CPU or accelerator offload, not explicit RPC placement.</string>
-    <string name="dist_step_runtime">6 · Runtime and memory</string>
     <string name="dist_step_review">7 · Review and start</string>
     <string name="dist_master_server_port">Master server port</string>
     <string name="dist_master_server_port_hint">Use a different port from the local llama.cpp server.</string>
@@ -8414,7 +8337,6 @@
     <string name="dist_placement_resident">One device</string>
     <string name="dist_choose_resident_device">Resident device</string>
     <string name="dist_draft_choose_workers">Workers hosting the draft/MTP model (automatic balancing)</string>
-    <string name="dist_mmproj_rpc_unsupported">RPC projector placement is not exposed because upstream llama.cpp has no official mmproj device or split argument.</string>
     <string name="dist_master_cpu">Master CPU</string>
     <string name="net_status_failed">FAILED</string>
     <string name="net_status_connecting">CONNECTING</string>

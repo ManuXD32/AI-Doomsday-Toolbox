@@ -24,7 +24,11 @@ import com.example.llamadroid.onnx.supertonicLanguageCodes
 import com.example.llamadroid.sd.SdComponentRole
 import com.example.llamadroid.sd.resolvedSdFamily
 import com.example.llamadroid.sd.resolveSdFamilySpec
+import com.example.llamadroid.service.LlamaReasoning
 import com.example.llamadroid.service.NativeChatImageGenerationEngine
+import com.example.llamadroid.ui.settings.LlmModeDropdown
+import com.example.llamadroid.ui.settings.reasoningEffortLabel
+import com.example.llamadroid.ui.settings.reasoningModeLabel
 import com.example.llamadroid.service.NativeChatSdImageToolParams
 import com.example.llamadroid.service.NativeChatToolConfig
 import com.example.llamadroid.service.supportsSdTxt2Img
@@ -128,6 +132,38 @@ internal fun ChatSettingsState.SamplingSection() {
 
 @Composable
 internal fun ChatSettingsState.ThinkingSection() {
+    if (!activeServerIsLiteRt) {
+        // llama-server: the same tri-state + effort pickers as the server launch settings.
+        var modeOpen by remember { mutableStateOf(false) }
+        var effortOpen by remember { mutableStateOf(false) }
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LlmModeDropdown(
+                label = stringResource(R.string.chat_thinking_mode_title),
+                selected = thinkingMode,
+                options = LlamaReasoning.CHAT_THINKING_MODES.map { it to reasoningModeLabel(it, chat = true) },
+                expanded = modeOpen,
+                onExpandedChange = { modeOpen = it },
+                onSelected = {
+                    thinkingMode = it
+                    enableThinking = it != LlamaReasoning.THINKING_OFF
+                }
+            )
+            LlmModeDropdown(
+                label = stringResource(R.string.reasoning_effort_title),
+                selected = reasoningEffort,
+                options = LlamaReasoning.EFFORTS.map { it to reasoningEffortLabel(it) },
+                expanded = effortOpen,
+                onExpandedChange = { effortOpen = it },
+                onSelected = { reasoningEffort = it }
+            )
+            Text(
+                text = stringResource(R.string.chat_thinking_effort_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        return
+    }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth()

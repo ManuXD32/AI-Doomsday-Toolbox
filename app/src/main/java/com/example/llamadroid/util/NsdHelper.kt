@@ -22,6 +22,12 @@ class NsdHelper(
         private const val TAG = "NsdHelper"
         const val SERVICE_TYPE = "_llama-rpc._tcp."
         const val SERVICE_NAME_PREFIX = "LlamaWorker"
+        const val MAX_RESOLVE_ATTEMPTS = 4
+        const val RESOLVE_RETRY_DELAY_MS = 800L
+
+        /** Pure: whether a failed resolve is worth retrying (not for hard failures like FAILURE_MAX_LIMIT-free cases past the cap). */
+        fun shouldRetryResolve(errorCode: Int, attempt: Int): Boolean =
+            attempt < MAX_RESOLVE_ATTEMPTS && errorCode != NsdManager.FAILURE_MAX_LIMIT
     }
 
     private val nsdManager = context.getSystemService(Context.NSD_SERVICE) as NsdManager
@@ -41,7 +47,7 @@ class NsdHelper(
     /**
      * Register this device as a worker service
      */
-    fun registerService(port: Int, deviceName: String) {
+    fun registerService(port: Int, deviceName: String, txtRecord: Map<String, String> = emptyMap()) {
         if (registrationListener != null) {
             unregisterService()
         }
@@ -52,6 +58,8 @@ class NsdHelper(
             this.serviceName = "$serviceNamePrefix-${deviceName.filter { it.isLetterOrDigit() }}"
             this.serviceType = this@NsdHelper.serviceType
             this.port = port
+            // TXT record (e.g. ram_free_mb, cores, app_ver); keep it tiny, TXT is limited to ~255 bytes per entry.
+            txtRecord.forEach { (key, value) -> setAttribute(key, value) }
         }
 
         registrationListener = object : NsdManager.RegistrationListener {
@@ -111,6 +119,8 @@ class NsdHelper(
             // Queue for sequential resolution
             private val resolveQueue = java.util.concurrent.ConcurrentLinkedQueue<NsdServiceInfo>()
             private var isResolving = false
+            private val resolveAttempts = java.util.concurrent.ConcurrentHashMap<String, Int>()
+            private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
             private fun processQueue() {
                 if (isResolving) return
@@ -120,8 +130,20 @@ class NsdHelper(
                 try {
                     nsdManager.resolveService(nextService, object : NsdManager.ResolveListener {
                         override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-                            DebugLog.log("[$TAG] Resolve failed: $errorCode")
+                            val attempt = (resolveAttempts[nextService.serviceName] ?: 0) + 1
+                            DebugLog.log("[$TAG] Resolve failed for ${serviceInfo.serviceName}: $errorCode (attempt $attempt)")
                             isResolving = false
+                            // Another NsdHelper (LLM + Media discovery) resolving at the same time, or a
+                            // transient mDNS failure, used to drop the worker for good; retry shortly.
+                            if (shouldRetryResolve(errorCode, attempt)) {
+                                resolveAttempts[nextService.serviceName] = attempt
+                                mainHandler.postDelayed({
+                                    resolveQueue.offer(nextService)
+                                    processQueue()
+                                }, RESOLVE_RETRY_DELAY_MS * attempt)
+                            } else {
+                                resolveAttempts.remove(nextService.serviceName)
+                            }
                             processQueue()
                         }
 
@@ -134,6 +156,7 @@ class NsdHelper(
                             current.removeAll { it.serviceName == serviceInfo.serviceName }
                             current.add(serviceInfo)
                             _discoveredServices.value = current
+                            resolveAttempts.remove(nextService.serviceName)
                             
                             isResolving = false
                             processQueue()

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sd_dist_log_start_blocked">Inicio bloqueado: %1$s</string>
+    <string name="sd_dist_log_run_failed">La generación falló: %1$s</string>
+    <string name="sd_dist_log_run_requested">Inicio solicitado (%1$s); lanzando el generador</string>
+</resources>

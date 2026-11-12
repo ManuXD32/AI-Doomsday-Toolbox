@@ -73,6 +73,7 @@ import com.example.llamadroid.service.chat.NativeChatStepResume
 import com.example.llamadroid.service.chat.NativeChatStepSession
 import com.example.llamadroid.service.chat.NativeChatToolLoopState
 import com.example.llamadroid.service.chat.NativeChatTurnNotes
+import com.example.llamadroid.service.chat.PlainTurnNotes
 import com.example.llamadroid.service.chat.NativeToolRetryPolicy
 import com.example.llamadroid.service.chat.onOverflowWithTurn
 import com.example.llamadroid.service.chat.saveSlotAfterStop
@@ -625,7 +626,14 @@ class LlamaClientService : Service() {
                     repository.updateMessageStepsAndText(assistantMsgId, progress.content, resume.message.thinking, resume.message.stepsJson)
                 }
                 // Tool messages only for tool turns on engines that take them; others get flat text.
-                if (!useNativeTools || server.isLiteRtEngine()) turnHistory = NativeChatStepHistory.flattenEntities(turnHistory)
+                if (!useNativeTools || server.isLiteRtEngine()) {
+                    turnHistory = if (useNativeTools || server.isOllamaEngine() || server.isLiteRtEngine()) {
+                        NativeChatStepHistory.flattenEntities(turnHistory)
+                    } else {
+                        // llama-server plain path: keep the stored per-turn hint notes so they replay in place.
+                        PlainTurnNotes.flattenKeepingNotes(turnHistory)
+                    }
+                }
 
                 // Per-chat disk KV cache: pins a slot (and restores a saved state) for eligible
                 // llama-server chats; every other engine runs with a null slot and no overhead.
@@ -783,6 +791,25 @@ class LlamaClientService : Service() {
                 } else {
                     DebugLog.log("LlamaClientService: Error ${e.message}")
                     progress.stepRecorder?.sealRunning()
+                    if (assistantMsgId != -1L) {
+                        // Keep the partial reply; a persist failure must not mask the original error.
+                        try {
+                            repository.updateMessageStreaming(
+                                assistantMsgId,
+                                progress.content,
+                                progress.thinking.takeIf { it.isNotBlank() },
+                                promptTokens = progress.displayPromptTokens(),
+                                completionTokens = if (progress.completionTokens == 0) progress.tokenCount else progress.completionTokens,
+                                tps = progress.finalTokensPerSecond(),
+                                generationTimeMs = progress.generationElapsedMs(),
+                                stepsJson = progress.stepRecorder?.toJson(complete = false)
+                            )
+                            persistGeneratedImageMessages(chatId, progress)
+                        } catch (persistError: Exception) {
+                            if (persistError is CancellationException) throw persistError
+                            DebugLog.log("LlamaClientService: partial reply persist failed (${persistError.javaClass.simpleName})")
+                        }
+                    }
                     progress.stepRecorder?.toJsonIfDirty()?.let { repository.updateMessageSteps(assistantMsgId, it) }
                     fallbackStatus = prepareMediaFallback(chatId, serverId, assistantMsgId, mediaTurn, progress, e.message)
                     if (fallbackStatus == null) {
@@ -1370,7 +1397,9 @@ class LlamaClientService : Service() {
             apiMessages += LlamaChatMessage("system", chat.systemPrompt)
         }
         var streamedMediaIndex = 0
-        apiMessages += history.mapIndexed { index, message ->
+        // Stored per-turn hint notes replay between the user turn and the reply, as when first sent;
+        // past reasoning goes back as reasoning_content (the template decides what to render).
+        apiMessages += PlainTurnNotes.requestMessages(history) { index, message ->
             val videoPayload = videoPreparation.payloads.getOrElse(index) {
                 NativeChatVideoPayload()
             }
@@ -1382,18 +1411,15 @@ class LlamaClientService : Service() {
             val frameData = videoPayload.sampledFramePaths.map {
                 llamaVideoStreamMarker(streamedMediaIndex++)
             }
-            LlamaChatMessage(
-                message.role,
-                message.toNativeLlamaContent(
-                    videoData = videoData,
-                    videoFrameData = frameData,
-                    videoSamplingDisclosure = videoPayload.samplingDisclosure,
-                    videoObservation = videoPayload.videoObservation,
-                    includeVideo = videoPayload.streamVideo || videoPayload.localVideoData != null,
-                    additionalAudioPaths = videoPayload.videoAudioPath
-                        ?.let(::listOf)
-                        .orEmpty()
-                )
+            message.toNativeLlamaContent(
+                videoData = videoData,
+                videoFrameData = frameData,
+                videoSamplingDisclosure = videoPayload.samplingDisclosure,
+                videoObservation = videoPayload.videoObservation,
+                includeVideo = videoPayload.streamVideo || videoPayload.localVideoData != null,
+                additionalAudioPaths = videoPayload.videoAudioPath
+                    ?.let(::listOf)
+                    .orEmpty()
             )
         }
 
@@ -1438,10 +1464,16 @@ class LlamaClientService : Service() {
             frequency_penalty = (params["frequency_penalty"] as? Number)?.toFloat(),
             presence_penalty = (params["presence_penalty"] as? Number)?.toFloat(),
             max_tokens = nativeChatMaxOutputTokens(params),
-            chat_template_kwargs = if (isContinuation || (params["enable_thinking"] as? Boolean) == false) {
-                mapOf("enable_thinking" to false)
+            chat_template_kwargs = when {
+                isContinuation || LlamaReasoning.chatThinkingMode(params) == LlamaReasoning.THINKING_OFF ->
+                    mapOf("enable_thinking" to false)
+                LlamaReasoning.chatThinkingMode(params) == LlamaReasoning.THINKING_DEFAULT -> null
+                else -> mapOf("enable_thinking" to true)
+            },
+            reasoning_effort = if (isContinuation || LlamaReasoning.chatThinkingMode(params) == LlamaReasoning.THINKING_OFF) {
+                null
             } else {
-                mapOf("enable_thinking" to true)
+                LlamaReasoning.chatEffort(params)
             },
             idSlot = null,
             cachePrompt = null
@@ -1450,13 +1482,21 @@ class LlamaClientService : Service() {
         // The slot lock is held for exactly this request/stream (not re-entrant); a direct-video
         // rejection leaves the lock first, then retries below.
         // No base cache on this path: it only runs without tools, so there is no stable prefix.
-        // Per-turn extension hints (e.g. delegation reminders) go after the conversation and are
-        // never persisted.
+        // Per-turn extension hints (e.g. delegation reminders) go after the user turn and are stored
+        // with the reply (append-only), so the cached prefix stays valid on later turns.
         if (!isContinuation) {
             val hintConfig = NativeChatToolConfig.fromParams(params)
                 .effectiveWithServerDefaults(NativeChatToolConfig.liteRtToolDefaults())
             history.lastOrNull { it.role == "user" }?.content?.let { latestUserText ->
-                turnHintTexts(hintConfig, latestUserText).forEach { apiMessages += LlamaChatMessage("system", it) }
+                val hints = turnHintTexts(hintConfig, latestUserText, chatId)
+                hints.forEach { apiMessages += PlainTurnNotes.noteMessage(it) }
+                // Stored on the reply row (NOTE steps) so later turns replay them at the same position.
+                if (progress.stepRecorder == null) {
+                    PlainTurnNotes.recordHints(hints)?.let { recorder ->
+                        progress.stepRecorder = recorder
+                        repository.updateMessageSteps(assistantMsgId, recorder.toJson(false))
+                    }
+                }
             }
         }
         val retryWithoutDirectVideo = NativeChatModelActivity.track(chatId) { (sessions[chatId]?.kvLease ?: UnpinnedKvSlotLease).request { slot ->
@@ -1992,13 +2032,9 @@ class LlamaClientService : Service() {
         history.lastOrNull { it.role == "user" }?.content?.let { latestUserText ->
             nativeChatToolRuntime.buildAutoKnowledgeContext(latestUserText, effectiveToolConfig)?.let { kbContext ->
                 sourceCitations += extractNativeChatSourceCitations(kbContext)
-                if (chat.persistKvCache) {
-                    // Per-turn retrieval would change the system prompt every turn and defeat the
-                    // saved KV prefix, so a cached chat carries it on the newest user turn instead.
-                    latestTurnKnowledgeContext = kbContext
-                } else {
-                    dynamicSystemBlocks += kbContext
-                }
+                // Recorded as a turn note below (append-only): a changing system prompt or a rewritten
+                // user turn would invalidate the cached prefix on every later turn.
+                latestTurnKnowledgeContext = kbContext
             }
         }
         // Native tool streaming uses the text-only ChatMessage contract. Resolve video turns
@@ -2035,7 +2071,6 @@ class LlamaClientService : Service() {
         val messages = try {
             buildOllamaMessages(chat, toolHistory, server)
                 .let { NativeChatBasePrefix.orderForBase(it, stableBaseText, dynamicSystemBlocks) }
-                .withContextOnLatestUserTurn(latestTurnKnowledgeContext)
                 .toMutableList()
         } finally {
             videoPreparation?.cleanup()
@@ -2104,7 +2139,12 @@ class LlamaClientService : Service() {
         // One-turn hints from the enabled extensions are sent ONCE, right after the user message, and
         // recorded as a note so every later round and replay keeps them in place.
         if (!resuming) {
-            com.example.llamadroid.service.delegation.NativeChatNoticeFraming.hintTarget(history)?.let { steps.turnHints(turnHintTexts(effectiveToolConfig, it)) }
+            val turnNotes = mutableListOf<NativeChatTurnNotes.Note>()
+            com.example.llamadroid.service.delegation.NativeChatNoticeFraming.hintTarget(history)?.let { target ->
+                turnHintTexts(effectiveToolConfig, target, chatId).forEach { turnNotes += NativeChatTurnNotes.Note(it) }
+            }
+            latestTurnKnowledgeContext?.takeIf { it.isNotBlank() }?.let { turnNotes += NativeChatTurnNotes.Note(it, "user") }
+            steps.notes(0, turnNotes)
         }
 
         suspend fun runModelCall(availableTools: List<AgentTool>): OllamaService.ChatResponse {
@@ -2177,7 +2217,12 @@ class LlamaClientService : Service() {
                     thinkingEnabled = callThinking,
                     maxTokens = maxOutputTokens,
                     samplingParams = samplingParams,
-                    requestOptions = LlamaServerRequestOptions(slotId = slot, sendReasoningContent = true),
+                    requestOptions = LlamaServerRequestOptions(
+                        slotId = slot,
+                        sendReasoningContent = true,
+                        omitThinkingKwarg = LlamaReasoning.chatThinkingMode(params) == LlamaReasoning.THINKING_DEFAULT,
+                        reasoningEffort = LlamaReasoning.chatEffort(params)
+                    ),
                     onPromptProgress = { promptProgress ->
                         progress.promptProcessed = promptProgress.processed
                         progress.promptTotal = promptProgress.total
@@ -2328,9 +2373,9 @@ class LlamaClientService : Service() {
             if (toolCalls.isEmpty()) {
                 appendFallbackContent(response)
                 if (progress.content.isBlank() && steps.recorder.hasToolSteps) {
-                    DebugLog.log("LlamaClientService: model returned blank answer after tool results; retrying final response with tools disabled engine=${server.normalizedEngine()}")
+                    DebugLog.log("LlamaClientService: model returned blank answer after tool results; retrying final response with a no-tools instruction (same tool list) engine=${server.normalizedEngine()}")
                     steps.note(round, NativeChatTurnNotes.Note(NativeChatTurnNotes.BLANK_ANSWER_RETRY))
-                    val retryResponse = runGuardedModelCall(emptyList())
+                    val retryResponse = runGuardedModelCall(tools)
                     mergeUsage(retryResponse)
                     appendFallbackContent(retryResponse)
                 }
@@ -2446,7 +2491,7 @@ class LlamaClientService : Service() {
             progress = progress,
             statusText = getString(R.string.llama_tool_status_finalizing)
         )
-        val finalResponse = runGuardedModelCall(emptyList())
+        val finalResponse = runGuardedModelCall(tools)
         mergeUsage(finalResponse)
         appendFallbackContent(finalResponse)
         applySourceCitationFallback(progress, sourceCitations)
@@ -3095,7 +3140,9 @@ class LlamaClientService : Service() {
                 NativeChatToolRuntime.TOOL_WRITE_WORKSPACE_FILE,
                 NativeChatToolRuntime.TOOL_APPEND_WORKSPACE_FILE,
                 NativeChatToolRuntime.TOOL_EDIT_WORKSPACE_LINES,
-                NativeChatToolRuntime.TOOL_APPLY_WORKSPACE_PATCH
+                NativeChatToolRuntime.TOOL_APPLY_WORKSPACE_PATCH,
+                NativeChatWorkspaceEdits.TOOL_SEARCH,
+                NativeChatWorkspaceEdits.TOOL_REPLACE
             ) || tool.description.contains("Local curl-style API tool enabled by the user.")
         }.toMutableList()
         wanted.mapNotNullTo(selected) { name ->
@@ -3738,22 +3785,6 @@ class LlamaClientService : Service() {
         return messages
     }
 
-    private fun List<OllamaService.ChatMessage>.withContextOnLatestUserTurn(
-        context: String?
-    ): List<OllamaService.ChatMessage> {
-        if (context.isNullOrBlank()) return this
-        val index = indexOfLast { it.role == "user" }
-        if (index < 0) return this
-        return toMutableList().also { messages ->
-            val message = messages[index]
-            messages[index] = message.copy(
-                content = listOf(context.trim(), message.content.trim())
-                    .filter { it.isNotBlank() }
-                    .joinToString("\n\n")
-            )
-        }
-    }
-
     private suspend fun updateStreamingProgress(
         chatId: Long,
         taskId: Int,
@@ -3809,14 +3840,13 @@ class LlamaClientService : Service() {
         } else {
             progress.content
         }
-        val words = progressContext.takeLast(512).trim().split(Regex("\\s+")).filter { it.isNotBlank() }
-        val lastWords = words.takeLast(7).joinToString(" ")
-        val progressText = if (lastWords.isBlank()) {
-            "%d tok · %.1f t/s".format(progress.tokenCount, tps)
-        } else {
-            "%d tok · %.1f t/s | ...$lastWords".format(progress.tokenCount, tps)
+        // The notification is cosmetic: it must never abort the stream.
+        runCatching {
+            notifyProgress(taskId, 0.5f, streamingProgressText(progress.tokenCount, tps, progressContext))
+        }.onFailure { err ->
+            DebugLog.log("LlamaClientService: progress notification failed (${err.javaClass.simpleName})")
+            runCatching { notifyProgress(taskId, 0.5f, streamingProgressText(progress.tokenCount, tps, "")) }
         }
-        notifyProgress(taskId, 0.5f, progressText)
         return System.currentTimeMillis()
     }
 
@@ -4174,10 +4204,15 @@ class LlamaClientService : Service() {
     }
 
     /** Non-empty one-turn hints of the enabled tool extensions for [latestUserText]. */
-    private fun turnHintTexts(config: NativeChatToolConfig, latestUserText: String): List<String> =
+    private fun turnHintTexts(config: NativeChatToolConfig, latestUserText: String, chatId: Long? = null): List<String> =
         toolExtensions.filter { it.isEnabled(config) }.mapNotNull { extension ->
             runCatching { extension.turnHint(config, latestUserText) }.getOrNull()?.takeIf { it.isNotBlank() }
-        }
+        } + listOfNotNull(
+            // Per-chat file list (after the conversation, never in the cached prefix) so the model edits files in place.
+            chatId?.takeIf { config.fileToolsEnabled }?.let { id ->
+                runCatching { NativeChatWorkspaceEdits.workspaceHint(NativeChatWorkspaceSupport.rootIfPresent(applicationContext, id)) }.getOrNull()
+            }
+        )
 
     private fun showDebugToast(message: String) {
         android.os.Handler(android.os.Looper.getMainLooper()).post {

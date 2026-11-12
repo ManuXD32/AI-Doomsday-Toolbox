@@ -13,4 +13,5 @@
     <string name="spe_discard_keep">Keep editing</string>
     <string name="server_defaults_title">Defaults for new chats</string>
     <string name="server_defaults_desc">New chats created with this server start with these options: the same settings every chat has. Each chat keeps its own copy and can change it later.</string>
+    <string name="spe_profile_missing">Could not read the saved settings of this server, so saving is disabled to avoid overwriting them with defaults. Delete the server and create it again.</string>
 </resources>

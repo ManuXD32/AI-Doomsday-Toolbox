@@ -10,7 +10,8 @@ data class LlamaConfig(
     /** Optional CPU threads used for batch and prompt processing (`--threads-batch`). */
     val threadsBatch: Int? = null,
     val port: Int = 8080,
-    val temperature: Float = 0.8f,
+    /** Launch temperature; null is Auto and emits no `--temp` flag. */
+    val temperature: Float? = null,
     val host: String = "0.0.0.0",
     val mmprojPath: String? = null, // Vision model projector path
     /** Enable llama.cpp's MTMD video input path for this server session. */
@@ -106,7 +107,15 @@ data class LlamaConfig(
     /** Distributed profiles disable implicit cache-policy flags that are not exposed in their UI. */
     val emitDefaultCachePolicyArgs: Boolean = true,
     val customFlags: String? = null,
-    val flashAttention: Boolean = false
+    val flashAttention: Boolean = false,
+    /** `--reasoning-preserve` / `--no-reasoning-preserve` for chat servers; null emits neither. */
+    val reasoningPreserve: Boolean? = null,
+    /** `--reasoning on|off`; null or "auto" emits nothing (llama.cpp default). */
+    val reasoningMode: String? = null,
+    /** `--reasoning-effort <level>`; null or "default" emits nothing. */
+    val reasoningEffort: String? = null,
+    /** Patched chat template (`--chat-template-file`) that honours preserved reasoning; null emits none. */
+    val chatTemplateFile: String? = null
 )
 
 /**

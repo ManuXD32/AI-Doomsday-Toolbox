@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="dist_r3_helper_unreachable">No se puede alcanzar a %1$s (%2$s).</string>
+    <string name="dist_r3_connect_hint">Ambos teléfonos deben estar en la misma red Wi-Fi o VPN. Con una VPN, añade el ayudante con su dirección VPN.</string>
+    <string name="dist_r3_server_abort">El servidor del modelo se detuvo (abortado).</string>
+    <string name="dist_r3_server_abort_line">El servidor del modelo se detuvo (abortado). Última línea del registro: %1$s</string>
+    <string name="dist_r3_test_connection">Probar conexión</string>
+    <string name="dist_r3_testing">Probando…</string>
+    <string name="dist_r3_probe_ok">Alcanzable · %1$d ms</string>
+    <string name="dist_r3_probe_fail">No alcanzable</string>
+    <string name="dist_r3_log_share">Compartir registro</string>
+    <string name="dist_r3_log_close">Cerrar</string>
+    <string name="dist_r3_topology_layers_label">Capas asignadas</string>
+    <string name="dist_r3_topology_status_label">Detalles del estado</string>
+</resources>

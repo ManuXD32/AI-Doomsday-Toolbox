@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Pantallas distribuidas de medios (Stable Diffusion), capa de lenguaje sencillo (W21c) -->
+    <string name="sd_ui2_hub_title">Imagen y vídeo entre móviles</string>
+    <string name="sd_ui2_hub_subtitle">Usa varios móviles juntos para crear imágenes y vídeos. Uno es el dispositivo principal (maestro); los demás prestan su memoria como ayudantes.</string>
+    <string name="sd_ui2_hub_helper_title">Presta la memoria de este móvil (Ayudante)</string>
+    <string name="sd_ui2_hub_helper_desc">Deja que otro móvil use la memoria y el procesador de este mientras crea imágenes o vídeo.</string>
+    <string name="sd_ui2_open_helper">Abrir ayudante</string>
+    <string name="sd_ui2_worker_title">Móvil ayudante (medios)</string>
+    <string name="sd_ui2_worker_subtitle">Presta la memoria de este móvil al dispositivo principal para imágenes y vídeo.</string>
+
+    <string name="sd_ui2_how_hub_1">En los otros móviles, abre Ayudante y pulsa Empezar a compartir.</string>
+    <string name="sd_ui2_how_hub_2">En este móvil, abre Dispositivo principal y añade esos ayudantes.</string>
+    <string name="sd_ui2_how_hub_3">Elige un modelo, escribe un prompt y empieza.</string>
+    <string name="sd_ui2_how_worker_1">Elige cuánta memoria prestar y pulsa Empezar a compartir.</string>
+    <string name="sd_ui2_how_worker_2">En el dispositivo principal, añade este móvil con la dirección que aparece abajo.</string>
+    <string name="sd_ui2_how_worker_3">Mantén este móvil en la misma Wi-Fi que el dispositivo principal mientras trabaja.</string>
+    <string name="sd_ui2_how_master_1">Añade los ayudantes que están compartiendo su memoria.</string>
+    <string name="sd_ui2_how_master_2">Elige cómo se reparte el trabajo. El plan automático de memoria es un buen punto de partida.</string>
+    <string name="sd_ui2_how_master_3">Elige un modelo y un prompt y lanza la ejecución.</string>
+    <string name="sd_ui2_how_network_1">Inicia una ejecución en el dispositivo principal.</string>
+    <string name="sd_ui2_how_network_2">Los ayudantes que participan aparecen abajo.</string>
+    <string name="sd_ui2_how_network_3">Si algo falla, abre el registro técnico.</string>
+
+    <string name="sd_ui2_worker_idle_message">Pulsa Empezar a compartir para que el dispositivo principal pueda usar este móvil.</string>
+    <string name="sd_ui2_worker_running_message">El dispositivo principal puede añadir esta dirección: %1$s</string>
+    <plurals name="sd_ui2_worker_connections">
+        <item quantity="one">%d dispositivo principal conectado</item>
+        <item quantity="many">%d dispositivos principales conectados</item>
+        <item quantity="other">%d dispositivos principales conectados</item>
+    </plurals>
+    <string name="sd_ui2_worker_advanced_title">Avanzado: dirección de red y caché</string>
+    <string name="sd_ui2_worker_advanced_hint">La mayoría de las personas no necesita cambiar esto. La dirección es donde este ayudante espera al dispositivo principal.</string>
+    <string name="sd_ui2_worker_start">Empezar a compartir</string>
+    <string name="sd_ui2_worker_stop">Dejar de compartir</string>
+
+    <string name="sd_ui2_master_none_title">Aún no hay ayudantes</string>
+    <string name="sd_ui2_master_none_message">Añade al menos un ayudante para poder repartir el trabajo.</string>
+    <plurals name="sd_ui2_master_ready_title">
+        <item quantity="one">%d ayudante listo</item>
+        <item quantity="many">%d ayudantes listos</item>
+        <item quantity="other">%d ayudantes listos</item>
+    </plurals>
+    <string name="sd_ui2_master_ready_message">Elige un modelo abajo y lanza la ejecución.</string>
+    <string name="sd_ui2_master_running_title">Generando</string>
+    <string name="sd_ui2_master_running_message">El trabajo se está repartiendo entre tus ayudantes activos.</string>
+    <string name="sd_ui2_master_error_title">Esto necesita tu atención</string>
+    <string name="sd_ui2_no_helpers_title">Aún no hay ayudantes</string>
+    <string name="sd_ui2_no_helpers_message">Empieza a compartir en otro móvil y añádelo aquí con su dirección.</string>
+
+    <string name="sd_ui2_network_idle_title">No se está ejecutando nada</string>
+    <string name="sd_ui2_network_idle_message">Cuando empiece una ejecución, los ayudantes que participan aparecerán aquí.</string>
+    <plurals name="sd_ui2_network_live_title">
+        <item quantity="one">%d ayudante participa</item>
+        <item quantity="many">%d ayudantes participan</item>
+        <item quantity="other">%d ayudantes participan</item>
+    </plurals>
+</resources>

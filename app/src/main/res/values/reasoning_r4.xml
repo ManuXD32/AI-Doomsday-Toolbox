@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="reasoning_mode_title">Reasoning</string>
+    <string name="reasoning_mode_auto">Auto</string>
+    <string name="reasoning_mode_on">On</string>
+    <string name="reasoning_mode_off">Off</string>
+    <string name="reasoning_mode_desc" tools:ignore="TypographyDashes">Server default for model thinking (--reasoning). Auto leaves the flag out so the template decides. Chats can override it per message.</string>
+    <string name="reasoning_effort_title">Reasoning effort</string>
+    <string name="reasoning_effort_default">Default</string>
+    <string name="reasoning_effort_minimal">Minimal</string>
+    <string name="reasoning_effort_low">Low</string>
+    <string name="reasoning_effort_medium">Medium</string>
+    <string name="reasoning_effort_high">High</string>
+    <string name="reasoning_effort_xhigh">Extra high</string>
+    <string name="reasoning_effort_max">Max</string>
+    <string name="reasoning_effort_desc" tools:ignore="TypographyDashes">How much the model thinks (--reasoning-effort). Default keeps the template value; not every model supports every level.</string>
+    <string name="chat_thinking_mode_title">Thinking</string>
+    <string name="chat_thinking_mode_default">Template default</string>
+    <string name="chat_thinking_effort_hint">Applies from the next message and overrides the server reasoning settings.</string>
+</resources>

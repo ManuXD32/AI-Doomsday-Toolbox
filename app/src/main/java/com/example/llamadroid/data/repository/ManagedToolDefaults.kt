@@ -36,7 +36,11 @@ internal fun normalizedManagedToolDefaults(raw: String?): String {
         return json.toString()
     }
     val isLegacyCeiling = NativeChatToolConfig.fromApiParams(raw).toParamMap() == easyChatAllowedTools().toParamMap()
-    return if (isLegacyCeiling) plainDisabledToolsJson() else json.toString()
+    if (!isLegacyCeiling) return json.toString()
+    // Only the tool keys are legacy: samplers, thinking and the other chat defaults the user saved stay.
+    val disabled = JSONObject(easyChatDisabledTools().toParamMap())
+    disabled.keys().forEach { key -> json.put(key, disabled.get(key)) }
+    return json.toString()
 }
 
 /** Value to write back on save: the normalized defaults, marked so an all-true choice is never re-read as legacy. */

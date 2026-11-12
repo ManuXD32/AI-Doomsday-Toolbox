@@ -97,4 +97,37 @@ class SettingsRepositoryProfileDraftTest {
         assertEquals(globalContextBefore, global.contextSize.value)
         assertEquals(globalModelBefore, SettingsRepository(app).selectedModelPath.value)
     }
+
+    @Test
+    fun `saving an unchanged restored profile is identical for a large context and projector`() {
+        val app = RuntimeEnvironment.getApplication()
+        val profile = LlamaServerLaunchProfile(
+            modelPath = "/models/v.gguf",
+            mmprojPath = "/models/v-mmproj.gguf",
+            visionEnabled = true,
+            contextSize = 32768,
+            threads = 6,
+            batchSize = 1024,
+            physicalBatchSize = 256,
+            parallel = 2,
+            cacheRam = 2048,
+            temperature = 0.3f,
+            flashAttention = true,
+            customFlags = "--slots",
+            reasoningPreserve = false
+        )
+        val draft = SettingsRepository(app, draftPrefs, isProfileDraft = true)
+        LlamaServerLaunchProfile.restore(profile, draft)
+        // A second repository on the same file (rotation/process restore) must read the same values.
+        val reopened = SettingsRepository(app, draftPrefs, isProfileDraft = true)
+        val captured = LlamaServerLaunchProfile.capture(reopened)
+
+        assertEquals(profile.contextSize, captured.contextSize)
+        assertEquals(profile.mmprojPath, captured.mmprojPath)
+        assertEquals(profile.visionEnabled, captured.visionEnabled)
+        assertEquals(profile.parallel, captured.parallel)
+        assertEquals(profile.cacheRam, captured.cacheRam)
+        assertEquals(profile.temperature, captured.temperature)
+        assertEquals(profile.reasoningPreserve, captured.reasoningPreserve)
+    }
 }

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_generation_error_toast">Generation stopped: %1$s</string>
+</resources>

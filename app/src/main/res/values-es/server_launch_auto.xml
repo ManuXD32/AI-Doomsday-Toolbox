@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="llm_temperature_auto">Auto</string>
+    <string name="llm_temperature_auto_hint">Auto no envía ninguna temperatura al iniciar, así que se aplica el valor por defecto de llama.cpp o del modelo.</string>
+    <string name="llm_reasoning_preserve">Conservar el razonamiento</string>
+    <string name="llm_reasoning_preserve_desc">Conserva el razonamiento del modelo en el historial para que las respuestas siguientes reutilicen la caché; usa más contexto.</string>
+</resources>

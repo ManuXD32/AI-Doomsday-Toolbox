@@ -846,6 +846,7 @@ class SdArtifactInspector {
                 else -> null
             }
             SdModelFamily.LTX_VIDEO -> when {
+                isLtx09Signature(tensorNames) -> LTX_09_VARIANT
                 metadataText.contains("2.5") -> "2.5"
                 metadataText.contains("2.3") -> "2.3"
                 else -> null
@@ -853,6 +854,22 @@ class SdArtifactInspector {
             else -> null
         }
         return family to variant
+    }
+
+    /**
+     * LTX-Video 0.9.x: the engine routes any non-PixArt checkpoint with
+     * `adaln_single.emb.timestep_embedder.linear_1.bias` to LTXAV
+     * (model_loader.cpp:561-568), but LTXAVModelBlock always builds
+     * `audio_patchify_proj` (ltxv.hpp:1356) and reads its shape (ltxv.hpp:179),
+     * which 0.9 transformers do not have. PixArt is excluded as the engine does
+     * (`pos_embed.proj.weight` + `adaln_single.linear.weight`, model_loader.cpp:563-566).
+     */
+    internal fun isLtx09Signature(tensorNames: List<String>): Boolean {
+        fun has(fragment: String): Boolean = tensorNames.any { it.contains(fragment) }
+        return has("model.diffusion_model.adaln_single.emb.timestep_embedder.linear_1.bias") &&
+            has("model.diffusion_model.patchify_proj.weight") &&
+            !has("model.diffusion_model.audio_patchify_proj.weight") &&
+            !has("model.diffusion_model.pos_embed.proj.weight")
     }
 
     /**
@@ -1167,6 +1184,9 @@ class SdArtifactInspector {
     private class InvalidArtifactException(message: String) : IOException(message)
 
     companion object {
+        /** Variant token written for LTX-Video 0.9.x; the profile resolver marks it unsupported. */
+        const val LTX_09_VARIANT = "0.9"
+
         /** `bigG` as a word-ish token; excludes words such as "bigger". */
         private val BIG_G_NAME = Regex("bigg(?![a-z])")
         const val MAX_SAFETENSORS_HEADER_BYTES: Long = 32L * 1024L * 1024L

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="easy_image_ram_refused">Not enough free memory for this image: it needs about %1$s but only %2$s is free. Close other apps or choose a smaller model.</string>
+    <string name="easy_image_ram_downscaled">Low memory: creating this image at %1$s with tiled decoding instead.</string>
+    <string name="easy_image_ram_try_anyway">Try anyway</string>
+</resources>

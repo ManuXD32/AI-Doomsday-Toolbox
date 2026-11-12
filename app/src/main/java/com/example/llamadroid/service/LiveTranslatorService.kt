@@ -116,6 +116,7 @@ class LiveTranslatorService : Service() {
                 val sessionId = intent.getLongExtra(EXTRA_SESSION_ID, -1L)
                 if (templateId <= 0L) {
                     publishError(getString(R.string.live_translator_error_missing_template))
+                    if (activeJob?.isActive != true) ForegroundStart.satisfyAndStop(this@LiveTranslatorService)
                     stopSelf(startId)
                 } else if (activeJob?.isActive == true) {
                     publishError(getString(R.string.live_translator_error_already_running))

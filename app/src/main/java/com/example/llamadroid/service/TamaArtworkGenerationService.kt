@@ -46,6 +46,8 @@ class TamaArtworkGenerationService : Service() {
         if (intent?.action == ACTION_PROCESS_QUEUE && processingJob?.isActive != true) {
             processingJob = serviceScope.launch {
                 processQueue()
+                // Empty queue: the service never went foreground, but startForegroundService() demands it.
+                if (notificationTaskId == null) ForegroundStart.satisfyAndStop(this@TamaArtworkGenerationService)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 notificationTaskId?.let { UnifiedNotificationManager.dismissTask(it) }
                 stopSelf()

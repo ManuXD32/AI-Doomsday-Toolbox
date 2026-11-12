@@ -28,9 +28,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.llamadroid.service.DistributedService
+import com.example.llamadroid.service.DistributedPerf
+import com.example.llamadroid.service.DistributedPerfSettings
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.Dispatchers
@@ -57,12 +60,16 @@ import androidx.compose.material.icons.filled.CloseFullscreen
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Public
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import com.example.llamadroid.service.WorkerMemoryBudget
+import com.example.llamadroid.ui.components.AppAdvancedSection
 import com.example.llamadroid.ui.components.AppChromeDefaults
+import com.example.llamadroid.ui.components.AppStateKind
+import com.example.llamadroid.ui.components.AppTaskActionFooter
+import com.example.llamadroid.ui.distributed.common.DistributedHowItWorksStrip
+import com.example.llamadroid.ui.distributed.common.DistributedStatusPanel
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
@@ -80,6 +87,8 @@ fun WorkerModeScreen(navController: NavController) {
     
     val isRunning by DistributedService.isRunning.collectAsStateWithLifecycle()
     val localIp by DistributedService.localIp.collectAsStateWithLifecycle()
+    val lanIp by DistributedService.lanIp.collectAsStateWithLifecycle()
+    val vpnIp by DistributedService.vpnIp.collectAsStateWithLifecycle()
     val workerPort by DistributedService.workerPort.collectAsStateWithLifecycle()
     val connectionCount by DistributedService.connectionCount.collectAsStateWithLifecycle()
 
@@ -87,7 +96,10 @@ fun WorkerModeScreen(navController: NavController) {
     // The screen keeps the flow reference stable and lets each card collect independently.
     val memoryTelemetry = remember(context) { MemoryTelemetry.observe(context) }
     val workerControls = remember {
-        WorkerControlState(DistributedService.workerRamMB.value.toLong().coerceAtLeast(0L))
+        WorkerControlState(DistributedService.workerRamMB.value.toLong().coerceAtLeast(0L)).also {
+            it.enableCache = DistributedPerfSettings.workerCacheEnabled(context)
+            it.rpcDebug = DistributedPerfSettings.rpcDebugEnabled(context)
+        }
     }
     
     // Get device name (try user-set name first, fallback to model)
@@ -100,9 +112,12 @@ fun WorkerModeScreen(navController: NavController) {
     
     // QR Code generation
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    DisposableEffect(qrBitmap) {
+    // Recycle only when the screen leaves composition: recycling on every key change could free a
+    // bitmap the previous frame is still drawing ("trying to use a recycled bitmap").
+    val latestQrBitmap by rememberUpdatedState(qrBitmap)
+    DisposableEffect(Unit) {
         onDispose {
-            qrBitmap?.let { bitmap ->
+            latestQrBitmap?.let { bitmap ->
                 if (!bitmap.isRecycled) bitmap.recycle()
             }
         }
@@ -164,62 +179,70 @@ fun WorkerModeScreen(navController: NavController) {
     }
     
     AppScreenScaffold(
-        title = stringResource(R.string.dist_worker_mode),
-        onBack = { navController.popBackStack() }
+        title = stringResource(R.string.dist_ui_w_title),
+        onBack = { navController.popBackStack() },
+        bottomBar = {
+            AppTaskActionFooter {
+                WorkerStartStopButton(
+                    context = context,
+                    memoryTelemetry = memoryTelemetry,
+                    isRunning = isRunning,
+                    controls = workerControls,
+                    onAction = { walkthroughTargets?.recordEvent("distributed.worker") }
+                )
+            }
+        }
     ) { _ ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(scrollState)
-                .padding(24.dp)
+                .padding(horizontal = 20.dp, vertical = 12.dp)
                 .walkthroughTarget("distributed.worker"),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(20.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Status indicator with connection count
-            StatusCard(isRunning = isRunning, connectionCount = connectionCount, ip = localIp, port = workerPort, deviceName = deviceName)
-            
-            WorkerMemoryCard(
+            DistributedHowItWorksStrip(
+                steps = listOf(
+                    stringResource(R.string.dist_ui_w_how_1),
+                    stringResource(R.string.dist_ui_w_how_2),
+                    stringResource(R.string.dist_ui_w_how_3)
+                )
+            )
+
+            WorkerStatusSection(
                 memoryTelemetry = memoryTelemetry,
                 isRunning = isRunning,
+                connectionCount = connectionCount,
+                deviceName = deviceName,
                 appliedBudgetFlow = DistributedService.workerMemoryBudget,
                 controls = workerControls
             )
-            WorkerRamConfigurationCard(
-                context = context,
-                memoryTelemetry = memoryTelemetry,
-                isRunning = isRunning,
-                workerRamFlow = DistributedService.workerRamMB,
-                controls = workerControls
-            )
-            
-            // Connection Info (Merged into StatusCard conceptually check below)
-            // Keeping separated QR card for now but simplified logic
-            
-            // QR Code for Master to scan
+
+            // QR code and address for the main device.
             if (isRunning && localIp != null) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface
-                    )
+                    shape = AppChromeDefaults.CardShape,
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(20.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = stringResource(R.string.dist_scan_to_connect),
+                            text = stringResource(R.string.dist_ui_w_connect_title),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
-                        
-                        Spacer(modifier = Modifier.height(12.dp))
-                        
-                        // QR Code
+                        Text(
+                            text = stringResource(R.string.dist_ui_w_connect_message),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
                         Card(
                             colors = CardDefaults.cardColors(containerColor = Color.White),
                             shape = RoundedCornerShape(12.dp)
@@ -239,53 +262,66 @@ fun WorkerModeScreen(navController: NavController) {
                                 CircularProgressIndicator(modifier = Modifier.size(32.dp))
                             }
                         }
-                        
-                        Spacer(modifier = Modifier.height(8.dp))
-                        
                         Text(
-                            text = stringResource(R.string.dist_worker_tip_master),
+                            text = stringResource(R.string.dist_ui_w_connect_address),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center
                         )
-                        
                         Text(
                             text = "$localIp:$workerPort",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary,
-                             modifier = Modifier.padding(top = 4.dp)
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
+                        if (vpnIp != null) {
+                            Text(
+                                text = stringResource(R.string.dist_r3_w_vpn_address_label),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (vpnIp != null && lanIp != null && lanIp != localIp) {
+                            Text(
+                                text = stringResource(R.string.dist_r3_w_lan_address_label),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "$lanIp:$workerPort",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
             }
-            
-            Spacer(modifier = Modifier.height(8.dp))
 
-            // Master WebUI Monitor (Always active foreground view)
-            // if (isRunning) {  <-- Removed check, now always visible
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface
-                    )
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Public, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                stringResource(R.string.dist_web_monitor),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                        
+            WorkerRamConfigurationCard(
+                context = context,
+                memoryTelemetry = memoryTelemetry,
+                isRunning = isRunning,
+                workerRamFlow = DistributedService.workerRamMB,
+                controls = workerControls
+            )
+
+            WorkerAdvancedSection(
+                context = context,
+                isRunning = isRunning,
+                workerPort = workerPort,
+                controls = workerControls
+            )
+
+            // Web monitor of the main device (collapsed by default).
+            AppAdvancedSection(title = stringResource(R.string.dist_ui_w_monitor_title)) {
                         if (!showWebMonitor) {
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
-                                stringResource(R.string.dist_web_monitor_desc),
+                                stringResource(R.string.dist_ui_w_monitor_desc),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -295,7 +331,7 @@ fun WorkerModeScreen(navController: NavController) {
                                 OutlinedTextField(
                                     value = masterIp,
                                     onValueChange = { masterIp = it },
-                                    label = { Text(stringResource(R.string.dist_master_ip)) },
+                                    label = { Text(stringResource(R.string.dist_ui_w_monitor_address)) },
                                     modifier = Modifier.weight(1f),
                                     singleLine = true
                                 )
@@ -433,21 +469,9 @@ fun WorkerModeScreen(navController: NavController) {
                                 }
                             }
                         }
-                    }
-                }
-            
-            Spacer(modifier = Modifier.height(8.dp))
-            
-            WorkerStartStopButton(
-                context = context,
-                memoryTelemetry = memoryTelemetry,
-                isRunning = isRunning,
-                controls = workerControls,
-                onAction = { walkthroughTargets?.recordEvent("distributed.worker") }
-            )
+            }
         }
     }
-
 
     // Full Screen Overlay
     if (isFullScreen && showWebMonitor) {
@@ -587,6 +611,8 @@ private fun WebView.configureWorkerMonitor(allowedUrl: String) {
         @Suppress("DEPRECATION")
         override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean =
             url?.let { !hasSameWebOrigin(allowedUrl, it) } ?: true
+
+        override fun onRenderProcessGone(view: WebView?, detail: android.webkit.RenderProcessGoneDetail?): Boolean = true
     }
 }
 
@@ -622,11 +648,12 @@ private fun WorkerMemoryCard(
 ) {
     val memory by memoryTelemetry.collectAsStateWithLifecycle()
     val appliedBudget by appliedBudgetFlow.collectAsStateWithLifecycle()
-    val budget = remember(memory.totalBytes, memory.availableBytes, controls.requestedRamMiB) {
+    val budget = remember(memory.totalBytes, memory.availableBytes, controls.requestedRamMiB, controls.overrideAccepted) {
         WorkerMemoryBudget.fromBytes(
             totalBytes = memory.totalBytes,
             availableBytes = memory.availableBytes,
-            requestedMiB = controls.requestedRamMiB
+            requestedMiB = controls.requestedRamMiB,
+            overrideAccepted = controls.overrideAccepted
         )
     }
     // Device usage stays live; the allocation already applied to a running worker stays fixed.
@@ -680,11 +707,11 @@ private fun WorkerMemoryCard(
                 valueColor = MaterialTheme.colorScheme.primary
             )
             WorkerMemoryMetric(
-                label = stringResource(R.string.dist_worker_memory_reserved),
+                label = stringResource(R.string.dist_ui_w_mem_reserved),
                 valueMiB = displayedBudget.reservedMiB
             )
             WorkerMemoryMetric(
-                label = stringResource(R.string.dist_worker_memory_contribution),
+                label = stringResource(R.string.dist_ui_w_mem_lending),
                 valueMiB = if (isRunning) appliedBudget.contributionMiB else displayedBudget.contributionMiB,
                 valueColor = MaterialTheme.colorScheme.primary
             )
@@ -712,11 +739,12 @@ private fun WorkerRamConfigurationCard(
     val memory by memoryTelemetry.collectAsStateWithLifecycle()
     val workerRamMB by workerRamFlow.collectAsStateWithLifecycle()
     var ramFieldFocused by remember { mutableStateOf(false) }
-    val budget = remember(memory.totalBytes, memory.availableBytes, controls.requestedRamMiB) {
+    val budget = remember(memory.totalBytes, memory.availableBytes, controls.requestedRamMiB, controls.overrideAccepted) {
         WorkerMemoryBudget.fromBytes(
             totalBytes = memory.totalBytes,
             availableBytes = memory.availableBytes,
-            requestedMiB = controls.requestedRamMiB
+            requestedMiB = controls.requestedRamMiB,
+            overrideAccepted = controls.overrideAccepted
         )
     }
     val sanitizedRamMiB = budget.contributionMiB
@@ -748,7 +776,8 @@ private fun WorkerRamConfigurationCard(
                         DistributedService.setWorkerRam(
                             context = context,
                             ramMB = requestedMiB.coerceAtLeast(0L)
-                                .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                                .coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                            overrideAccepted = controls.overrideAccepted
                         )
                     }
                 }
@@ -761,7 +790,8 @@ private fun WorkerRamConfigurationCard(
                 DistributedService.setWorkerRam(
                     context = context,
                     ramMB = latestRequestedRamMiB.coerceAtLeast(0L)
-                        .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                        .coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                    overrideAccepted = controls.overrideAccepted
                 )
             }
         }
@@ -776,9 +806,14 @@ private fun WorkerRamConfigurationCard(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
-                text = stringResource(R.string.dist_ram_to_share),
+                text = stringResource(R.string.dist_ui_w_share_title),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = stringResource(R.string.dist_ui_w_share_explain),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -797,6 +832,7 @@ private fun WorkerRamConfigurationCard(
                         controls.ramTextValue = newValue
                         newValue.toLongOrNull()?.let { requested ->
                             controls.requestedRamMiB = requested.coerceAtLeast(0L)
+                            controls.overrideAccepted = requested > budget.maximumMiB
                         }
                     },
                     label = { Text(stringResource(R.string.agent_unit_mb)) },
@@ -812,6 +848,7 @@ private fun WorkerRamConfigurationCard(
                 onValueChange = { value ->
                     val requested = value.toLong().coerceIn(0L, sliderMaximumMiB)
                     controls.requestedRamMiB = requested
+                    controls.overrideAccepted = false
                     controls.ramTextValue = requested.toString()
                 },
                 valueRange = 0f..sliderMaximumMiB.toFloat(),
@@ -840,6 +877,25 @@ private fun WorkerRamConfigurationCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            Text(
+                text = stringResource(
+                    R.string.dist_r3_w_ram_override_hint,
+                    budget.overrideCapMiB.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (budget.exceedsSafeMaximum) {
+                Text(
+                    text = stringResource(
+                        R.string.dist_r3_w_ram_override_warning,
+                        budget.maximumMiB.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                        budget.overrideCapMiB.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
             if (!budget.canLaunch) {
                 Text(
                     text = stringResource(
@@ -863,52 +919,10 @@ private fun WorkerRamConfigurationCard(
             ) {
                 Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.onTertiaryContainer)
                 Text(
-                    text = stringResource(R.string.dist_worker_ram_budget_warning),
+                    text = stringResource(R.string.dist_ui_w_share_note),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onTertiaryContainer
                 )
-            }
-            Text(
-                text = stringResource(R.string.dist_threads_count, controls.threadsValue),
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Medium
-            )
-            Slider(
-                value = controls.threadsValue.toFloat(),
-                onValueChange = { controls.threadsValue = it.toInt() },
-                valueRange = 1f..8f,
-                steps = 6,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = stringResource(R.string.dist_enable_local_cache),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Text(
-                        text = stringResource(R.string.dist_local_cache_desc),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Switch(
-                    checked = controls.enableCache,
-                    onCheckedChange = { controls.enableCache = it }
-                )
-            }
-            OutlinedButton(
-                onClick = { DistributedService.clearWorkerCache(context) },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Default.Delete, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(stringResource(R.string.dist_clear_worker_cache))
             }
         }
     }
@@ -923,11 +937,12 @@ private fun WorkerStartStopButton(
     onAction: () -> Unit = {}
 ) {
     val memory by memoryTelemetry.collectAsStateWithLifecycle()
-    val budget = remember(memory.totalBytes, memory.availableBytes, controls.requestedRamMiB) {
+    val budget = remember(memory.totalBytes, memory.availableBytes, controls.requestedRamMiB, controls.overrideAccepted) {
         WorkerMemoryBudget.fromBytes(
             totalBytes = memory.totalBytes,
             availableBytes = memory.availableBytes,
-            requestedMiB = controls.requestedRamMiB
+            requestedMiB = controls.requestedRamMiB,
+            overrideAccepted = controls.overrideAccepted
         )
     }
     Button(
@@ -941,7 +956,8 @@ private fun WorkerStartStopButton(
                 val savedBudget = DistributedService.setWorkerRam(
                     context = context,
                     ramMB = controls.requestedRamMiB.coerceAtLeast(0L)
-                        .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                        .coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                    overrideAccepted = controls.overrideAccepted
                 )
                 if (savedBudget.canLaunch) {
                     DistributedService.startWorker(
@@ -970,8 +986,8 @@ private fun WorkerStartStopButton(
         )
         Spacer(modifier = Modifier.width(8.dp))
         Text(
-            text = if (isRunning) stringResource(R.string.dist_stop_worker)
-            else stringResource(R.string.dist_start_worker),
+            text = if (isRunning) stringResource(R.string.dist_ui_w_stop)
+            else stringResource(R.string.dist_ui_w_start),
             style = MaterialTheme.typography.titleMedium
         )
     }
@@ -980,8 +996,11 @@ private fun WorkerStartStopButton(
 private class WorkerControlState(initialRamMiB: Long) {
     var requestedRamMiB by mutableLongStateOf(initialRamMiB.coerceAtLeast(0L))
     var ramTextValue by mutableStateOf(initialRamMiB.coerceAtLeast(0L).toString())
+    /** True only when the user typed a value above the safe maximum; persisted by the service. */
+    var overrideAccepted by mutableStateOf(DistributedService.workerOverrideAccepted.value)
     var threadsValue by mutableIntStateOf(4)
-    var enableCache by mutableStateOf(false)
+    var enableCache by mutableStateOf(DistributedPerf.DEFAULT_WORKER_CACHE)
+    var rpcDebug by mutableStateOf(DistributedPerf.DEFAULT_RPC_DEBUG)
 }
 
 @Composable
@@ -1014,68 +1033,188 @@ private fun WorkerMemoryMetric(
     }
 }
 
+
+/** Plain-language status panel followed by the live memory card. */
 @Composable
-private fun StatusCard(isRunning: Boolean, connectionCount: Int, ip: String?, port: Int, deviceName: String) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = when {
-                connectionCount > 0 -> MaterialTheme.colorScheme.primaryContainer // Connected
-                isRunning -> MaterialTheme.colorScheme.tertiaryContainer // Listening
-                else -> MaterialTheme.colorScheme.surfaceVariant // Idle
-            }
+private fun WorkerStatusSection(
+    memoryTelemetry: StateFlow<MemoryTelemetrySnapshot>,
+    isRunning: Boolean,
+    connectionCount: Int,
+    deviceName: String,
+    appliedBudgetFlow: StateFlow<WorkerMemoryBudget>,
+    controls: WorkerControlState
+) {
+    val memory by memoryTelemetry.collectAsStateWithLifecycle()
+    val appliedBudget by appliedBudgetFlow.collectAsStateWithLifecycle()
+    val budget = remember(memory.totalBytes, memory.availableBytes, controls.requestedRamMiB, controls.overrideAccepted) {
+        WorkerMemoryBudget.fromBytes(
+            totalBytes = memory.totalBytes,
+            availableBytes = memory.availableBytes,
+            requestedMiB = controls.requestedRamMiB,
+            overrideAccepted = controls.overrideAccepted
         )
-    ) {
+    }
+    val sharedMiB = if (isRunning) appliedBudget.contributionMiB else budget.contributionMiB
+    val sharedLabel = stringResource(
+        R.string.dist_worker_memory_value,
+        sharedMiB.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        when {
+            isRunning && connectionCount > 0 -> DistributedStatusPanel(
+                kind = AppStateKind.Success,
+                title = stringResource(R.string.dist_ui_w_status_connected_title),
+                message = stringResource(R.string.dist_ui_w_status_connected_message, sharedLabel)
+            )
+            isRunning -> DistributedStatusPanel(
+                kind = AppStateKind.Running,
+                title = stringResource(R.string.dist_ui_w_status_waiting_title),
+                message = stringResource(R.string.dist_ui_w_status_waiting_message, sharedLabel, deviceName)
+            )
+            !budget.canLaunch && memory.totalBytes > 0L -> DistributedStatusPanel(
+                kind = AppStateKind.Blocked,
+                title = stringResource(R.string.dist_ui_w_status_blocked_title),
+                message = stringResource(
+                    R.string.dist_ui_w_status_blocked_message,
+                    WorkerMemoryBudget.MINIMUM_VIABLE_MIB.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                )
+            )
+            else -> DistributedStatusPanel(
+                kind = AppStateKind.Empty,
+                title = stringResource(R.string.dist_ui_w_status_idle_title),
+                message = stringResource(R.string.dist_ui_w_status_idle_message)
+            )
+        }
+        WorkerMemoryCard(
+            memoryTelemetry = memoryTelemetry,
+            isRunning = isRunning,
+            appliedBudgetFlow = appliedBudgetFlow,
+            controls = controls
+        )
+    }
+}
+
+/** Threads, local cache, RPC debug and port: expert controls, collapsed by default. */
+@Composable
+private fun WorkerAdvancedSection(
+    context: Context,
+    isRunning: Boolean,
+    workerPort: Int,
+    controls: WorkerControlState
+) {
+    val cacheSizeBytes by DistributedService.workerCacheSizeBytes.collectAsStateWithLifecycle()
+    LaunchedEffect(isRunning) {
+        withContext(Dispatchers.IO) { DistributedService.refreshWorkerCacheSize(context) }
+    }
+    AppAdvancedSection(title = stringResource(R.string.dist_ui_w_adv_title)) {
+        Text(
+            text = stringResource(R.string.dist_ui_w_adv_locked_note),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = stringResource(R.string.dist_ui_w_adv_threads, controls.threadsValue),
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Medium
+        )
+        Slider(
+            value = controls.threadsValue.toFloat(),
+            onValueChange = { controls.threadsValue = it.toInt() },
+            valueRange = 1f..8f,
+            steps = 6,
+            enabled = !isRunning,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Text(
+            text = stringResource(R.string.dist_ui_w_adv_threads_desc),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(20.dp),
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Icon
-            Box(contentAlignment = Alignment.Center) {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = when {
-                        connectionCount > 0 -> "🔗"
-                        isRunning -> "📡"
-                        else -> "💤"
-                    },
-                    style = MaterialTheme.typography.headlineMedium
-                )
-                 if (isRunning && connectionCount == 0) {
-                     // Add breathing animation or indicator here if desired
-                 }
-            }
-            
-            Spacer(modifier = Modifier.width(16.dp))
-            
-            Column {
-                Text(
-                    text = when {
-                        connectionCount > 0 -> stringResource(R.string.dist_master_connected)
-                        isRunning -> stringResource(R.string.dist_worker_active) // "Listening..."
-                        else -> stringResource(R.string.dist_ready_to_start)
-                    },
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
+                    text = stringResource(R.string.dist_ui_w_adv_cache),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = when {
-                        connectionCount > 0 -> stringResource(R.string.dist_receiving_layers)
-                        isRunning -> stringResource(
-                            R.string.worker_topology_worker_listening,
-                            ip ?: "—",
-                            port,
-                            deviceName
-                        )
-                        else -> stringResource(R.string.dist_configure_worker_ram)
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
+                    text = stringResource(R.string.dist_ui_w_adv_cache_desc),
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+            Switch(
+                checked = controls.enableCache,
+                enabled = !isRunning,
+                onCheckedChange = {
+                    controls.enableCache = it
+                    DistributedPerfSettings.setWorkerCacheEnabled(context, it)
+                }
+            )
         }
+        Text(
+            text = stringResource(
+                R.string.dist_ui_w_adv_cache_size,
+                android.text.format.Formatter.formatShortFileSize(context, cacheSizeBytes)
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        OutlinedButton(
+            onClick = {
+                DistributedService.clearWorkerCache(context)
+                DistributedService.refreshWorkerCacheSize(context)
+            },
+            enabled = !isRunning,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.Delete, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = stringResource(R.string.dist_ui_w_adv_cache_clear),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.dist_perf_rpc_debug),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = stringResource(R.string.dist_perf_rpc_debug_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = controls.rpcDebug,
+                enabled = !isRunning,
+                onCheckedChange = {
+                    controls.rpcDebug = it
+                    DistributedPerfSettings.setRpcDebugEnabled(context, it)
+                }
+            )
+        }
+        Text(
+            text = stringResource(R.string.dist_ui_w_adv_port, workerPort),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

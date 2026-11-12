@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="dist_r3_plan_optimal">Optimal for network</string>
+    <string name="dist_r3_plan_optimal_desc">This phone first, then as few and as large helpers as needed. Skips helpers when the model fits here.</string>
+    <string name="dist_r3_plan_ram">Proportional to memory</string>
+    <string name="dist_r3_plan_ram_desc">Every selected device gets a share in proportion to its memory.</string>
+    <string name="dist_r3_plan_percent">Fixed percent per device</string>
+    <string name="dist_r3_plan_percent_desc">You choose the percent of the model each device holds. Values are used exactly.</string>
+    <string name="dist_r3_plan_layers">Layers per device</string>
+    <string name="dist_r3_plan_layers_desc">You choose how many layers each device holds. Values are used exactly.</string>
+    <string name="dist_r3_split_layers_suffix">layers</string>
+    <string name="dist_r3_split_total_percent">Total: %1$d %%</string>
+    <string name="dist_r3_split_total_layers">Layers: %1$d / %2$d</string>
+    <string name="dist_r3_split_total_layers_unknown">Layers: %1$d</string>
+    <string name="dist_r3_split_err_value">Enter a whole number of at least 1 for every device.</string>
+    <string name="dist_r3_split_err_total_percent">The percentages must add up to 100 %% (now %1$d %%).</string>
+    <string name="dist_r3_split_err_total_layers">The layers must add up to %1$d (now %2$d).</string>
+    <string name="dist_r3_split_err_zero_layers">%1$s would get no layers. Raise its share.</string>
+    <string name="dist_r3_split_fix_first">Fix the split values in the advanced settings before starting.</string>
+    <string name="dist_r3_split_needs_distributed">Manual values apply when the model is spread across several devices.</string>
+</resources>

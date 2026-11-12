@@ -17,7 +17,9 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.NoteAdd
+import androidx.compose.material.icons.filled.ViewInAr
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -41,6 +43,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.llamadroid.R
 import com.example.llamadroid.service.NativeChatWorkspaceSupport
+import com.example.llamadroid.worlds.WorldPageBuilder
+import com.example.llamadroid.worlds.ui.WorldSourceViewerDialog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -59,7 +63,19 @@ fun NativeChatWorkspaceDialog(context: Context, chatId: Long, onDismiss: () -> U
     var showCreate by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
+    var showWorld by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+
+    if (showWorld) {
+        WorldSourceViewerDialog(
+            source = content,
+            savedId = null,
+            chatId = chatId,
+            messageId = null,
+            onSaved = {},
+            onDismiss = { showWorld = false }
+        )
+    }
 
     LaunchedEffect(directory, refresh) {
         runCatching {
@@ -91,17 +107,17 @@ fun NativeChatWorkspaceDialog(context: Context, chatId: Long, onDismiss: () -> U
                     }
                     OutlinedTextField(
                         value = content,
-                        onValueChange = { if (it.length <= NativeChatWorkspaceSupport.MAX_MUTATION_CHARS) content = it },
+                        onValueChange = { if (it.length <= NativeChatWorkspaceSupport.MAX_USER_WRITE_BYTES) content = it },
                         modifier = Modifier.fillMaxWidth().weight(1f),
                         label = { Text(context.getString(R.string.native_chat_workspace_content)) },
-                        supportingText = { Text("${content.length}/${NativeChatWorkspaceSupport.MAX_MUTATION_CHARS}") }
+                        supportingText = { Text("${content.length}/${NativeChatWorkspaceSupport.MAX_USER_WRITE_BYTES}") }
                     )
                     Button(
                         onClick = {
                             scope.launch {
                                 runCatching {
                                     withContext(Dispatchers.IO) {
-                                        NativeChatWorkspaceSupport.write(context, chatId, selectedFile.orEmpty(), content, false)
+                                        NativeChatWorkspaceSupport.writeUser(context, chatId, selectedFile.orEmpty(), content)
                                     }
                                 }.onSuccess { refresh += 1; error = null }
                                     .onFailure { error = context.getString(R.string.native_chat_workspace_io_error) }
@@ -109,6 +125,21 @@ fun NativeChatWorkspaceDialog(context: Context, chatId: Long, onDismiss: () -> U
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) { Text(context.getString(R.string.action_save)) }
+                    if (selectedFile.orEmpty().endsWith(".html", ignoreCase = true)) {
+                        val detectedWorld = remember(content) { WorldPageBuilder.detect(content) }
+                        OutlinedButton(
+                            onClick = { showWorld = true },
+                            enabled = detectedWorld != null,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(
+                                if (detectedWorld?.isThree == false) Icons.Default.Language else Icons.Default.ViewInAr,
+                                contentDescription = null
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(context.getString(R.string.worlds_ui_run_html), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         IconButton(
@@ -166,10 +197,13 @@ fun NativeChatWorkspaceDialog(context: Context, chatId: Long, onDismiss: () -> U
                                         scope.launch {
                                             runCatching {
                                                 withContext(Dispatchers.IO) {
-                                                    NativeChatWorkspaceSupport.read(context, chatId, path)
+                                                    // Raw text: `read` returns a numbered view meant for the model.
+                                                    val file = NativeChatWorkspaceSupport.resolve(context, chatId, path)
+                                                    require(file.isFile && file.length() <= 1_048_576L) { "Unreadable file." }
+                                                    file.readText(Charsets.UTF_8)
                                                 }
                                             }.onSuccess {
-                                                content = it.substringBefore("\n[truncated;")
+                                                content = it
                                                 selectedFile = path
                                                 error = null
                                             }.onFailure { error = context.getString(R.string.native_chat_workspace_io_error) }

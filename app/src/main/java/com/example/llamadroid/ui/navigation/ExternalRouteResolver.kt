@@ -73,6 +73,8 @@ object ExternalRouteResolver {
         Screen.SdDistributedHub.route,
         Screen.SdDistributedWorker.route,
         Screen.SdDistributedMaster.route,
+        Screen.SdDistributedImages.route,
+        Screen.SdDistributedVideo.route,
         Screen.SdDistributedNetwork.route,
         Screen.SdDistributedRunConfig.route,
         Screen.SdDistributedGallery.route,

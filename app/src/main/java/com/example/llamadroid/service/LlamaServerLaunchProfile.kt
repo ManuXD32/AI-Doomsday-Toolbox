@@ -80,7 +80,8 @@ data class LlamaServerLaunchProfile(
     /** Optional CPU threads used for batch and prompt processing. */
     val threadsBatch: Int? = null,
     val contextSize: Int = 8192,
-    val temperature: Float = 0.7f,
+    /** Launch temperature; null is Auto (no `--temp` flag). */
+    val temperature: Float? = null,
     val kvCacheEnabled: Boolean = false,
     val kvCacheTypeK: String = "f16",
     val kvCacheTypeV: String = "f16",
@@ -103,6 +104,12 @@ data class LlamaServerLaunchProfile(
     val idleStopSeconds: Int? = null,
     val customFlags: String? = null,
     val flashAttention: Boolean = false,
+    /** Keep the model's reasoning in history (`--reasoning-preserve`); on by default. */
+    val reasoningPreserve: Boolean = true,
+    /** Server `--reasoning` mode: auto (no flag), on or off. */
+    val reasoningMode: String = LlamaReasoning.MODE_AUTO,
+    /** Server `--reasoning-effort`: default (no flag) or minimal..max. */
+    val reasoningEffort: String = LlamaReasoning.EFFORT_DEFAULT,
     /** OpenCL-only placement policy for this launch profile. */
     val openClCpuTargetGpuDraft: Boolean = false,
     /**
@@ -217,7 +224,10 @@ data class LlamaServerLaunchProfile(
             sleepIdleSeconds = sleepIdleSeconds,
             customFlags = customFlags,
             flashAttention = flashAttention,
-            openClCpuTargetGpuDraft = openClCpuTargetGpuDraft
+            openClCpuTargetGpuDraft = openClCpuTargetGpuDraft,
+            reasoningPreserve = reasoningPreserve,
+            reasoningMode = reasoningMode,
+            reasoningEffort = reasoningEffort
         )
     }
 
@@ -256,7 +266,7 @@ data class LlamaServerLaunchProfile(
             physicalBatchSize = settings.serverPhysicalBatchSize.value,
             threadsBatch = settings.serverThreadsBatch.value,
             contextSize = settings.contextSize.value,
-            temperature = settings.temperature.value,
+            temperature = settings.temperature.value.takeIf { it >= 0f },
             kvCacheEnabled = settings.serverKvCacheEnabled.value,
             kvCacheTypeK = settings.serverKvCacheTypeK.value,
             kvCacheTypeV = settings.serverKvCacheTypeV.value,
@@ -275,6 +285,9 @@ data class LlamaServerLaunchProfile(
             sleepIdleSeconds = settings.serverSleepIdleSeconds.value.takeIf { it >= 0 },
             customFlags = settings.customFlags.value.takeIf { it.isNotBlank() },
             flashAttention = settings.flashAttentionEnabled.value,
+            reasoningPreserve = settings.llamaReasoningPreserve.value,
+            reasoningMode = settings.llamaReasoningMode.value,
+            reasoningEffort = settings.llamaReasoningEffort.value,
             openClCpuTargetGpuDraft = settings.llamaOpenClCpuTargetGpuDraft.value,
             nativeBinarySelection = settings.llmNativeBinarySelection.value,
             nativeToolsEnabled = settings.llamaNativeToolsEnabled.value,
@@ -576,7 +589,7 @@ data class LlamaServerLaunchProfile(
             settings.setServerPhysicalBatchSize(profile.physicalBatchSize)
             settings.setServerThreadsBatch(profile.threadsBatch)
             settings.setContextSize(profile.contextSize)
-            settings.setTemperature(profile.temperature)
+            settings.setTemperature(profile.temperature ?: -1f)
             settings.setServerKvCacheEnabled(profile.kvCacheEnabled)
             settings.setServerKvCacheTypeK(profile.kvCacheTypeK)
             settings.setServerKvCacheTypeV(profile.kvCacheTypeV)
@@ -594,6 +607,9 @@ data class LlamaServerLaunchProfile(
             settings.setServerSleepIdleSeconds(profile.sleepIdleSeconds)
             settings.setCustomFlags(profile.customFlags.orEmpty())
             settings.setFlashAttentionEnabled(profile.flashAttention)
+            settings.setLlamaReasoningPreserve(profile.reasoningPreserve)
+            settings.setLlamaReasoningMode(profile.reasoningMode)
+            settings.setLlamaReasoningEffort(profile.reasoningEffort)
             settings.setLlamaOpenClCpuTargetGpuDraft(profile.openClCpuTargetGpuDraft)
             profile.nativeBinarySelection
                 ?.takeIf { it.isNotBlank() }
@@ -627,4 +643,19 @@ data class LlamaServerLaunchProfile(
             settings.setNgramMapK4VMinHits(profile.ngramMapK4VMinHits)
         }
     }
+}
+
+/**
+ * Patched chat template (path) that lets "Keep reasoning" work for models whose own template drops
+ * earlier reasoning, or null when preserving is off or no patch is needed. The launch command only
+ * adds it when the user's custom flags do not already set a template. Reads the GGUF, so call it off
+ * the main thread; a failure never blocks the launch.
+ */
+internal fun resolvePreservedChatTemplate(
+    context: android.content.Context,
+    modelPath: String,
+    reasoningPreserve: Boolean
+): String? {
+    if (!reasoningPreserve || modelPath.isBlank()) return null
+    return runCatching { ChatTemplatePatch.preparedTemplateFile(context, modelPath)?.absolutePath }.getOrNull()
 }

@@ -5,7 +5,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.TrafficStats
 import android.os.IBinder
+import android.os.Process
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import com.example.llamadroid.R
 import com.example.llamadroid.data.binary.BinaryRepository
@@ -16,6 +19,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -121,7 +126,7 @@ class RpcWorkerActivityTracker(private val deviceOrder: Map<String, String>) {
             else -> emptySet()
         }
         val status = if (explicitFailure) RpcWorkerStatus.FAILED else RpcWorkerStatus.ONLINE
-        return addresses.map { RpcWorkerActivity(it, status, line.take(180)) }
+        return addresses.map { RpcWorkerActivity(it, status, DistributedConnectivity.sanitizeLine(line).take(180)) }
     }
 }
 
@@ -131,6 +136,7 @@ object DistributedMasterRuntimeState {
     const val EXTRA_VALUE = "value"
     const val KIND_STATE = "state"
     const val KIND_LOG = "log"
+    const val KIND_TRANSFER = "transfer"
 
     private val attached = AtomicBoolean(false)
     private val _state = MutableStateFlow<ServerState>(ServerState.Stopped)
@@ -148,9 +154,11 @@ object DistributedMasterRuntimeState {
                     KIND_STATE -> {
                         _state.value = decodeState(value)
                         if (_state.value is ServerState.Stopped || _state.value is ServerState.Error) {
+                            DistributedTransferTracker.clear()
                             DistributedService.stopMasterMode()
                         }
                     }
+                    KIND_TRANSFER -> DistributedTransferTracker.receive(value)
                     KIND_LOG -> {
                         _logs.value = (_logs.value + value).takeLast(500)
                         tracker.consume(value).forEach { activity ->
@@ -177,6 +185,7 @@ object DistributedMasterRuntimeState {
             DistributedService.updateWorkerRpcStatus(worker.address, RpcWorkerStatus.CONNECTING)
         }
         _logs.value = emptyList()
+        DistributedTransferTracker.clear()
     }
 
     private fun decodeState(value: String): ServerState = when {
@@ -204,6 +213,7 @@ class DistributedMasterLlamaService : Service() {
                 val launch = ResolvedDistributedLaunch.decode(intent.getStringExtra(EXTRA_RESOLVED_LAUNCH))
                 if (launch == null) {
                     publishState("error:Invalid distributed launch profile")
+                    ForegroundStart.satisfyAndStop(this@DistributedMasterLlamaService)
                     stopSelf(startId)
                     return START_NOT_STICKY
                 }
@@ -227,16 +237,68 @@ class DistributedMasterLlamaService : Service() {
             require(!NativeProcessCleanup.hasSameUidPortListenerSync(launch.endpointPort)) {
                 getString(R.string.dist_port_conflicts_live_runtime, launch.endpointPort)
             }
-            controller.start(
+            val nameFor = { address: String ->
+                DistributedService.workers.value
+                    .firstOrNull { "${it.ip}:${it.port}" == address }?.deviceName ?: address
+            }
+            val unreachableLine = { name: String, address: String ->
+                getString(R.string.dist_r3_helper_unreachable, name, address)
+            }
+            val hint = getString(R.string.dist_r3_connect_hint)
+            DistributedConnectivity.preflightFailure(
+                launch.profile.config.rpcWorkers, nameFor, unreachableLine, hint
+            )?.let { blocked ->
+                publishState("error:$blocked")
+                return@runCatching
+            }
+            val recent = ArrayDeque<String>()
+            val sampler = DistributedTransferTracker.expectedFor(launch)
+                .takeIf { it.isNotEmpty() }?.let(::DistributedTransferSampler)
+            val ready = AtomicBoolean(false)
+            var samplerJob: Job? = null
+            if (sampler != null) {
+                samplerJob = scope.launch {
+                    val uid = Process.myUid()
+                    while (isActive && !ready.get()) {
+                        publish(
+                            DistributedMasterRuntimeState.KIND_TRANSFER,
+                            DistributedTransferTracker.encode(
+                                sampler.sample(TrafficStats.getUidTxBytes(uid), SystemClock.elapsedRealtime())
+                            )
+                        )
+                        delay(500L)
+                    }
+                }
+            }
+            var pendingError: String? = null
+            val result = controller.start(
                 binaryPath = launch.binaryPath,
                 config = launch.profile.config,
                 filesDir = filesDir,
                 runtimeWorkingDir = runtimeDir,
                 customArgs = launch.argv,
                 runtimeGenerationId = System.currentTimeMillis(),
-                onLog = { publishLog(it) },
-                onState = { state -> publishState(encodeState(state)) },
+                onLog = { line ->
+                    synchronized(recent) {
+                        recent.addLast(line)
+                        if (recent.size > 200) recent.removeFirst()
+                    }
+                    publishLog(line)
+                },
+                onState = { state ->
+                    // Errors are held back so the final message can use the exit code and the log tail.
+                    if (state is ServerState.Error) pendingError = state.message
+                    else publishState(encodeState(state))
+                },
                 onReady = {
+                    ready.set(true)
+                    if (sampler != null) scope.launch {
+                        samplerJob?.cancelAndJoin()
+                        publish(
+                            DistributedMasterRuntimeState.KIND_TRANSFER,
+                            DistributedTransferTracker.encode(sampler.finish())
+                        )
+                    }
                     scope.launch {
                         while (isActive && controller.isAlive()) {
                             publishState("running:${launch.endpointPort}")
@@ -247,9 +309,25 @@ class DistributedMasterLlamaService : Service() {
                 onClearServerLogs = null,
                 onServerLog = null
             )
+            samplerJob?.cancel()
+            pendingError?.let { raw ->
+                val tail = synchronized(recent) { recent.toList() } + result.recentOutput
+                val readable = DistributedConnectivity.readableRuntimeError(
+                    lines = tail,
+                    exitCode = result.exitCode,
+                    nameFor = nameFor,
+                    unreachableLine = unreachableLine,
+                    hint = hint,
+                    abort = getString(R.string.dist_r3_server_abort),
+                    abortWithLine = { getString(R.string.dist_r3_server_abort_line, it) }
+                )
+                publishState("error:" + DistributedConnectivity.sanitizeLine(readable ?: raw))
+            }
         }.onFailure { error ->
             DebugLog.log("DistributedMasterLlamaService: ${error.message}")
-            publishState("error:${error.message ?: "Distributed server failed"}")
+            publishState(
+                "error:" + DistributedConnectivity.sanitizeLine(error.message ?: "Distributed server failed")
+            )
         }
         releaseRuntime()
         stopSelf(startId)

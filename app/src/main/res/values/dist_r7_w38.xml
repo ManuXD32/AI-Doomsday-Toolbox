@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="dist_r7_log_clear">Clear log</string>
+    <string name="dist_r7_log_clear_title">Clear this log?</string>
+    <string name="dist_r7_log_clear_confirm">Clear</string>
+    <string name="dist_r7_log_cleared">Log cleared</string>
+</resources>

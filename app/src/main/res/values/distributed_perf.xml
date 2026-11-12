@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="dist_perf_rpc_debug">RPC debug logging</string>
+    <string name="dist_perf_rpc_debug_desc">Logs every RPC call. Slows down generation; leave off unless diagnosing a worker. Applies on the next worker start.</string>
+    <string name="dist_perf_ubatch">Physical batch size (ubatch)</string>
+    <string name="dist_perf_rtt_ms">RTT %1$s ms</string>
+    <string name="dist_perf_rtt_unknown">RTT unknown</string>
+    <string name="dist_perf_advert_ram_cores">%1$s MiB free, %2$s cores</string>
+    <string name="dist_perf_advert_ram">%1$s MiB free</string>
+    <string name="dist_perf_warn_tiny_share">%1$s would hold only %2$s of the layers. Its network hop likely costs more than it helps; consider removing it.</string>
+    <string name="dist_perf_warn_fits_master">The model fits in this phone\'s RAM budget. Workers are not used, because every worker adds a network round trip per token.</string>
+    <string name="dist_perf_warn_network_bound">Network time per token (about %1$s ms) is large compared with estimated compute (about %2$s ms). Expect slow generation; use a faster link or fewer workers.</string>
+    <string name="dist_perf_warn_insufficient_ram">The selected devices do not have enough RAM for this model. Layers were spread in proportion to RAM and loading may fail.</string>
+</resources>

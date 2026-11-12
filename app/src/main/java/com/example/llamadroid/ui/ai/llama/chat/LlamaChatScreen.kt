@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
@@ -263,10 +264,15 @@ fun LlamaChatScreen(
     val scope = rememberCoroutineScope()
 
     // Error Handling (Toasts)
+    val toastResources = LocalResources.current
     LaunchedEffect(generationState) {
         (generationState as? LlamaClientService.GenerationState.Error)?.let { errorState ->
             if (errorState.chatId == -1L || errorState.chatId == chatId) {
-                Toast.makeText(context, errorState.message, Toast.LENGTH_LONG).show()
+                Toast.makeText(
+                    context,
+                    toastResources.getString(R.string.chat_generation_error_toast, errorState.message.trim().take(160)),
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
     }

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="worlds_diag_open">World diagnostics</string>
+    <string name="worlds_diag_title">World diagnostics</string>
+    <string name="worlds_diag_page_loaded">Page loaded: %1$s</string>
+    <string name="worlds_diag_view_size">View size (px): %1$d × %2$d</string>
+    <string name="worlds_diag_served">Assets served: %1$d</string>
+    <string name="worlds_diag_yes">yes</string>
+    <string name="worlds_diag_no">no</string>
+    <string name="worlds_diag_problems">Missing or blocked requests</string>
+    <string name="worlds_diag_console">Console messages</string>
+    <string name="worlds_diag_none">None</string>
+    <string name="worlds_diag_copy">Copy all</string>
+    <string name="worlds_diag_copied">Diagnostics copied</string>
+    <string name="worlds_diag_close">Close</string>
+    <string name="worlds_diag_crashed">The 3D renderer stopped unexpectedly. Close this view and open the world again.</string>
+</resources>

@@ -64,6 +64,7 @@ class TamaDeepDreamService : Service() {
             val signature = intent.getStringExtra(EXTRA_SIGNATURE)
             val force = intent.getBooleanExtra(EXTRA_FORCE, false)
             if (petId.isNullOrBlank()) {
+                if (processingJob?.isActive != true) ForegroundStart.satisfyAndStop(this@TamaDeepDreamService)
                 stopSelf(startId)
                 return START_NOT_STICKY
             }

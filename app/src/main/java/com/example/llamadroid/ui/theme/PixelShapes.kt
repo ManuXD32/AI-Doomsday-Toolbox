@@ -55,7 +55,11 @@ class PixelCornerShape(
         val bottomLeft = if (ltr) bottomStart else bottomEnd
         val w = size.width
         val h = size.height
-        if (topLeft + topRight + bottomRight + bottomLeft <= 0f) {
+        // Compose hit-tests a clipped layer that has a path outline by intersecting the path with a 0.01 px
+        // square around the pointer. From 8192 px on, that square collapses in float precision and every tap
+        // below that line is dropped (a dead "Start" button at the bottom of a very tall card). Containers that
+        // large are clipped as a plain rectangle instead.
+        if (topLeft + topRight + bottomRight + bottomLeft <= 0f || maxOf(w, h) > MAX_PATH_OUTLINE_PX) {
             return Outline.Rectangle(Rect(0f, 0f, w, h))
         }
         val count = steps.coerceAtLeast(1)
@@ -89,6 +93,9 @@ class PixelCornerShape(
         return Outline.Generic(path)
     }
 }
+
+/** Largest side, in pixels, for which [PixelCornerShape] still returns its stepped path outline. */
+internal const val MAX_PATH_OUTLINE_PX = 8000f
 
 /** Material shape scale used while the pixel theme is active. */
 val PixelShapes = Shapes(

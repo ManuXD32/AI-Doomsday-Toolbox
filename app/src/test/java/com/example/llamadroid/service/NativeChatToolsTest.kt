@@ -355,6 +355,7 @@ class NativeChatToolsTest {
                 // Workspace list/read come with any enabled chat tools (attachments live in the workspace).
                 NativeChatToolRuntime.TOOL_LIST_WORKSPACE_FILES,
                 NativeChatToolRuntime.TOOL_READ_WORKSPACE_FILE,
+                NativeChatWorkspaceEdits.TOOL_SEARCH,
                 NativeChatToolRuntime.TOOL_KB_SEARCH,
                 NativeChatToolRuntime.TOOL_KB_READ_CHUNK,
                 NativeChatToolRuntime.TOOL_KB_READ_SOURCE,
@@ -397,6 +398,7 @@ class NativeChatToolsTest {
                 // Workspace list/read come with any enabled chat tools (attachments live in the workspace).
                 NativeChatToolRuntime.TOOL_LIST_WORKSPACE_FILES,
                 NativeChatToolRuntime.TOOL_READ_WORKSPACE_FILE,
+                NativeChatWorkspaceEdits.TOOL_SEARCH,
                 NativeChatToolRuntime.TOOL_KB_SEARCH,
                 NativeChatToolRuntime.TOOL_KB_READ_CHUNK,
                 NativeChatToolRuntime.TOOL_KB_READ_SOURCE,

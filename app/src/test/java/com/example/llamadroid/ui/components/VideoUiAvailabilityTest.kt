@@ -81,7 +81,8 @@ class VideoUiAvailabilityTest {
         assertEquals(null, cleared.highNoiseSteps)
         assertEquals(null, cleared.highNoiseCfgScale)
         assertEquals(null, cleared.audioCodec)
-        assertEquals(false, cleared.useTae)
+        // HunyuanVideo accepts a 32-channel TAE since 0.999998, so the TAE choice is kept.
+        assertEquals(true, cleared.useTae)
         assertEquals(SdVideoPromptFormat.PLAIN, cleared.promptFormat)
     }
 }

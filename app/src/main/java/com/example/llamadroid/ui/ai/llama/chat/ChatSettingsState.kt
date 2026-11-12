@@ -9,6 +9,7 @@ import com.example.llamadroid.data.model.normalizeLiteRtBackend
 import com.example.llamadroid.service.LITERT_PARAM_MAX_OUTPUT_TOKENS
 import com.example.llamadroid.service.LITERT_PARAM_MTP_ENABLED
 import com.example.llamadroid.service.NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS
+import com.example.llamadroid.service.LlamaReasoning
 import com.example.llamadroid.service.NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS_ENABLED
 import com.example.llamadroid.service.NativeChatImageToolParams
 import com.example.llamadroid.service.NativeChatSdImageToolParams
@@ -45,6 +46,10 @@ internal class ChatSettingsState {
     var samplerErrorMessage by mutableStateOf<String?>(null)
     init { resetSamplersToAuto() }
     var enableThinking by mutableStateOf(parseParam(null, "enable_thinking", true))
+    /** llama-server thinking choice: template default (omit kwarg) / on / off; see [LlamaReasoning]. */
+    var thinkingMode by mutableStateOf(LlamaReasoning.THINKING_ON)
+    /** Per-request `reasoning_effort` ("default" omits it). */
+    var reasoningEffort by mutableStateOf(LlamaReasoning.EFFORT_DEFAULT)
     var liteRtMtpEnabled by mutableStateOf(parseParam(null, LITERT_PARAM_MTP_ENABLED, false))
     var maxOutputTokensEnabled by mutableStateOf(parseParam(null, NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS_ENABLED, false))
     var maxOutputTokens by mutableIntStateOf( parseParam( null, NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS, parseParam(null, LITERT_PARAM_MAX_OUTPUT_TOKENS, 1024) ).coerceAtLeast(1) )
@@ -255,6 +260,10 @@ internal class ChatSettingsState {
         samplerErrorField = null
         samplerErrorMessage = null
         enableThinking = parseParam(params, "enable_thinking", true)
+        parseParamMap(params).let { map ->
+            thinkingMode = LlamaReasoning.chatThinkingMode(map)
+            reasoningEffort = LlamaReasoning.chatEffort(map) ?: LlamaReasoning.EFFORT_DEFAULT
+        }
         liteRtMtpEnabled = parseParam(params, LITERT_PARAM_MTP_ENABLED, false)
         maxOutputTokensEnabled = parseParam(params, NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS_ENABLED, false)
         maxOutputTokens = parseParam(
@@ -263,7 +272,6 @@ internal class ChatSettingsState {
             parseParam(params, LITERT_PARAM_MAX_OUTPUT_TOKENS, 1024)
         ).coerceAtLeast(1)
         seedText = parseOptionalIntParam(params, "seed")
-        enableThinking = parseParam(params, "enable_thinking", true)
         liteRtMaxTokens = (contextSize?.takeIf { it > 0 } ?: liteRtDefaultContext)
             .coerceIn(liteRtContextRange)
         liteRtSystemPrompt = systemPrompt.orEmpty()
@@ -603,7 +611,17 @@ internal class ChatSettingsState {
             }
             map["enable_thinking"] = enableThinking
         } else {
-            map["enable_thinking"] = enableThinking
+            // enable_thinking stays a bool for every consumer; "Template default" is stored as true and the
+            // request builders omit the kwarg when thinking_mode is "default".
+            // Writers that only set enableThinking (the watch gateway, older call sites) must win over a stale mode.
+            val mode = when {
+                !enableThinking -> LlamaReasoning.THINKING_OFF
+                thinkingMode == LlamaReasoning.THINKING_OFF -> LlamaReasoning.THINKING_ON
+                else -> thinkingMode
+            }
+            map["enable_thinking"] = mode != LlamaReasoning.THINKING_OFF
+            map[LlamaReasoning.PARAM_THINKING_MODE] = mode
+            map[LlamaReasoning.PARAM_REASONING_EFFORT] = reasoningEffort
         }
         map.putAll(config.toParamMap())
         // Delegation keys last: KEY_ENABLED is shared with the tool config and must not be stale.

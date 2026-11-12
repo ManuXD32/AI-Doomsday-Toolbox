@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="llm_temperature_auto">Auto</string>
+    <string name="llm_temperature_auto_hint">Auto does not send a temperature at launch, so llama.cpp or the model default applies.</string>
+    <string name="llm_reasoning_preserve">Keep reasoning</string>
+    <string name="llm_reasoning_preserve_desc">Keeps the model\'s thinking in history so follow-ups reuse the cache; uses more context.</string>
+</resources>

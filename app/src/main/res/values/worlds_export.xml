@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="worlds_export_action">Export HTML</string>
+    <string name="worlds_export_done">World exported</string>
+    <string name="worlds_export_failed">Could not export the world</string>
+</resources>

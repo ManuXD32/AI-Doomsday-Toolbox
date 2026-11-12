@@ -13,4 +13,5 @@
     <string name="spe_discard_keep">Seguir editando</string>
     <string name="server_defaults_title">Valores iniciales de los chats nuevos</string>
     <string name="server_defaults_desc">Los chats nuevos creados con este servidor empiezan con estas opciones: los mismos ajustes que tiene cualquier chat. Cada chat guarda su propia copia y puede cambiarla después.</string>
+    <string name="spe_profile_missing">No se pudieron leer los ajustes guardados de este servidor, así que guardar está desactivado para no sobrescribirlos con valores por defecto. Elimina el servidor y créalo de nuevo.</string>
 </resources>

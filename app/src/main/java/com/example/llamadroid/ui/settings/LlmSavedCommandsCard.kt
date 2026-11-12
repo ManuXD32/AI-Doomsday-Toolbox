@@ -284,7 +284,13 @@ internal fun LlmSavedCommandsCard(settingsRepo: SettingsRepository, effectiveDra
                                         }
                                         IconButton(onClick = { 
                                             scope.launch {
-                                                db.savedCommandDao().deleteCommand(cmd)
+                                                // A server card still points at this preset; deleting it would make that
+                                                // server's editor lose its saved options.
+                                                if (db.llamaServerCardDao().countOtherCardsUsingPreset(cmd.id, -1L) > 0) {
+                                                    android.widget.Toast.makeText(context, resources.getString(R.string.saved_command_in_use_by_server), android.widget.Toast.LENGTH_LONG).show()
+                                                } else {
+                                                    db.savedCommandDao().deleteCommand(cmd)
+                                                }
                                             }
                                         }) {
                                             Icon(Icons.Default.Delete, stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error)

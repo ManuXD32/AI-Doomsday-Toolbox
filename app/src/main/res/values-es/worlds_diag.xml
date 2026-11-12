@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="worlds_diag_open">Diagnóstico del mundo</string>
+    <string name="worlds_diag_title">Diagnóstico del mundo</string>
+    <string name="worlds_diag_page_loaded">Página cargada: %1$s</string>
+    <string name="worlds_diag_view_size">Tamaño de la vista (px): %1$d × %2$d</string>
+    <string name="worlds_diag_served">Recursos servidos: %1$d</string>
+    <string name="worlds_diag_yes">sí</string>
+    <string name="worlds_diag_no">no</string>
+    <string name="worlds_diag_problems">Peticiones ausentes o bloqueadas</string>
+    <string name="worlds_diag_console">Mensajes de consola</string>
+    <string name="worlds_diag_none">Ninguno</string>
+    <string name="worlds_diag_copy">Copiar todo</string>
+    <string name="worlds_diag_copied">Diagnóstico copiado</string>
+    <string name="worlds_diag_close">Cerrar</string>
+    <string name="worlds_diag_crashed">El renderizador 3D se detuvo de forma inesperada. Cierra esta vista y abre el mundo de nuevo.</string>
+</resources>

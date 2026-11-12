@@ -141,7 +141,7 @@ fun StatsScreen(navController: NavController) {
         actions = {
             IconButton(onClick = {
                 exportRange = rangeStart to rangeEnd
-                documentLauncher.launch("system-stats-${rangeEnd}.json")
+                documentLauncher.launchSafely(context, "system-stats-${rangeEnd}.json")
             }) {
                 Icon(Icons.Default.Download, contentDescription = stringResource(R.string.stats_export))
             }

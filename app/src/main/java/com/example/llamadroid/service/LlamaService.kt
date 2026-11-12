@@ -321,6 +321,7 @@ class LlamaService : Service() {
                 )
             if (leaseRejected) {
                 DebugLog.log("LlamaService: rejected action=$action while the GGUF OCR lease is active")
+                ForegroundStart.satisfyAndStop(this@LlamaService)
                 stopSelfResult(startId)
                 return START_NOT_STICKY
             }
@@ -665,11 +666,18 @@ class LlamaService : Service() {
             isOcrProfile -> 4096
             else -> settingsRepo.contextSize.value
         }
-        val temperature = distributedConfig?.temperature ?: localLaunchProfile?.temperature ?: temperatureOverride ?: when {
+        // Null is Auto: no --temp flag. A saved profile's Auto must not fall through to other sources.
+        val temperature: Float? = when {
+            distributedConfig != null -> distributedConfig.temperature
+            localLaunchProfile != null -> localLaunchProfile.temperature
+            temperatureOverride != null -> temperatureOverride.takeIf { it >= 0f }
             isMasterProfile -> DistributedService.masterTemperature.value
             isOcrProfile -> 0.0f
-            else -> settingsRepo.temperature.value
+            else -> settingsRepo.temperature.value.takeIf { it >= 0f }
         }
+        val reasoningPreserve = localLaunchProfile?.reasoningPreserve ?: settingsRepo.llamaReasoningPreserve.value
+        val reasoningMode = localLaunchProfile?.reasoningMode ?: settingsRepo.llamaReasoningMode.value
+        val reasoningEffort = localLaunchProfile?.reasoningEffort ?: settingsRepo.llamaReasoningEffort.value
         val host = distributedConfig?.host ?: hostOverride ?: when {
             isMasterProfile || isOcrProfile -> "127.0.0.1"
             settingsRepo.remoteAccess.value -> "0.0.0.0"
@@ -1342,7 +1350,12 @@ class LlamaService : Service() {
                     swaFull = swaFull,
                     sleepIdleSeconds = sleepIdleSeconds,
                     customFlags = customFlags,
-                    flashAttention = flashAttention
+                    flashAttention = flashAttention,
+                    reasoningPreserve = reasoningPreserve.takeIf { !isMasterProfile && !isOcrProfile && !isEmbedding },
+                    reasoningMode = reasoningMode.takeIf { !isMasterProfile && !isOcrProfile && !isEmbedding },
+                    reasoningEffort = reasoningEffort.takeIf { !isMasterProfile && !isOcrProfile && !isEmbedding },
+                    chatTemplateFile = if (isMasterProfile || isOcrProfile || isEmbedding) null
+                        else resolvePreservedChatTemplate(this@LlamaService, modelPath, reasoningPreserve)
                 )).let { baseConfig ->
                     if (!nativeVideoEnabled) {
                         baseConfig

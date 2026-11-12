@@ -168,10 +168,10 @@ class NativeChatKvCacheCoordinator(context: Context) {
     /**
      * Runs a background utility request (page summarizer, helper prompts) on a slot that does not
      * disturb a chat's state. The request body must carry `id_slot = slotId` when [block] gets a
-     * non-null id. Preference: a never-held slot; otherwise a slot whose holder has no live turn,
-     * whose dirty state is saved first (as the swap does) and which is then marked so the holder's
-     * state is restored on its next request (a "utility" holder). Works with a single slot.
-     * Remote, non-llama-server, slotless or unreachable servers run `block(null)`. The whole
+     * non-null id. Slots a chat owns or last used are never chosen; preference: a never-held slot,
+     * otherwise a slot whose non-chat holder has no live turn (saved first). When no such slot exists
+     * (single-slot server, or every slot belongs to a chat) [block] runs with null and no `id_slot`.
+     * Remote, non-llama-server, slotless or unreachable servers also run `block(null)`. The whole
      * [block] runs under the slot lock, so it never interleaves with a chat request on that slot.
      */
     suspend fun <T> withUtilitySlot(
@@ -190,7 +190,8 @@ class NativeChatKvCacheCoordinator(context: Context) {
             .associate { it.key.substringAfterLast('#').toInt() to inUseStems.containsKey(it.value.key.fileStem) }
         val reserved = LlamaSlotManager.snapshotAssignments()
             .filter { it.owner.allocationKey == endpoint }.mapTo(mutableSetOf()) { it.slotId }
-        val choice = chooseUtilitySlot(facts.totalSlots, held, reserved) ?: return block(null)
+        val choice = chooseUtilitySlot(facts.totalSlots, held, reserved, chatOwnedSlots(baseUrl))
+            ?: return block(null)
         val counter = activeRequests.computeIfAbsent(endpoint) { AtomicInteger() }
         counter.incrementAndGet()
         try {
@@ -252,11 +253,33 @@ class NativeChatKvCacheCoordinator(context: Context) {
             if (!force && withContext(Dispatchers.IO) { fileStatus(server, key, serverFacts) } == KvFileStatus.VALID) {
                 return KvBasePrepareResult.Ready(withContext(Dispatchers.IO) { store.sizeBytes(key) }, reused = true)
             }
+            baseBuildBlockedReason(serverFacts.totalSlots, chatOwnedSlots(baseUrl, includeBaseBuilds = false))
+                ?.let { return KvBasePrepareResult.Failed(it) }
             if (force) withContext(Dispatchers.IO) { keyMutex(key).withLock { store.delete(key) } }
             return runBaseBuild(baseUrl, server, key, onStatus, send)
         } finally {
             baseBuilds.remove(key.fileStem)
         }
+    }
+
+    /**
+     * Slots of [baseUrl] that a chat owns (assigned) or last used (holder). Base builds and utility
+     * requests must stay off them. With [includeBaseBuilds] false, assignments of base-prepare owners
+     * are ignored so a finished build does not make its own slot look taken.
+     */
+    private fun chatOwnedSlots(baseUrl: String, includeBaseBuilds: Boolean = true): Set<Int> {
+        val endpoint = normalize(baseUrl)
+        val slots = mutableSetOf<Int>()
+        holders.entries
+            .filter { it.key.startsWith("$endpoint#") && it.value.key is KvCacheKey.Chat && it.value.key != UTILITY_KEY }
+            .forEach { entry -> entry.key.substringAfterLast('#').toIntOrNull()?.let(slots::add) }
+        LlamaSlotManager.snapshotAssignments()
+            .filter {
+                it.owner.allocationKey == endpoint &&
+                    (includeBaseBuilds || !it.owner.conversationId.startsWith("base-prepare:"))
+            }
+            .forEach { slots += it.slotId }
+        return slots
     }
 
     /** Leases a slot, runs the prefix request and saves it explicitly under the same slot lock. */
@@ -272,6 +295,11 @@ class NativeChatKvCacheCoordinator(context: Context) {
         withSlot(baseUrl, server, spec, onStatus) { lease ->
             lease.request { slot ->
                 if (slot == null) return@request
+                if (slot in chatOwnedSlots(baseUrl, includeBaseBuilds = false)) {
+                    // The allocator shared a chat's slot; building here would evict its cached prefix.
+                    outcome = KvBasePrepareResult.Failed(KvBaseFailure.NO_FREE_SLOT)
+                    return@request
+                }
                 outcome = try {
                     send(slot)
                     val after = withContext(Dispatchers.IO) { readFacts(baseUrl) }

@@ -21,7 +21,9 @@ import com.example.llamadroid.onnx.OnnxImageGenConfig
 import com.example.llamadroid.onnx.OnnxImageGenMode
 import com.example.llamadroid.sd.SdComponentRole
 import com.example.llamadroid.sd.SdMainLayout
+import com.example.llamadroid.sd.SdRamClass
 import com.example.llamadroid.sd.matchesSdFamily
+import com.example.llamadroid.sd.resolveSdFamilySpec
 import com.example.llamadroid.sd.resolveSdPipeline
 import com.example.llamadroid.sd.sdArtifactInspection
 import com.example.llamadroid.service.SDConfig
@@ -147,12 +149,13 @@ fun buildEasySdConfig(
     context: Context,
     selection: EasyImageSelection,
     prompt: String,
-    size: Pair<Int, Int>
+    size: Pair<Int, Int>,
+    vaeTiling: Boolean = false
 ): SDConfig {
     val preset = selection.preset
     val main = selection.main
     val layout = main.sdArtifactLayout?.let(SdMainLayout::fromStoredValue)
-    val pipelineLayout = runCatching {
+    val pipeline = runCatching {
         resolveSdPipeline(
             SDConfig(
                 modelPath = main.path, prompt = "", outputPath = "",
@@ -166,8 +169,14 @@ fun buildEasySdConfig(
                 llmVisionPath = selection.components[EasySdSlot.LLM_VISION]?.path
             ),
             main.sdArtifactInspection()
-        ).mainLayout
-    }.getOrNull() ?: layout
+        )
+    }.getOrNull()
+    val pipelineLayout = pipeline?.mainLayout ?: layout
+    // Easy runs memory-map the weights when the family supports it (same rule as SdCliSupport,
+    // which only emits --mmap when spec.supportsMmap): pages load lazily and stay reclaimable.
+    val mmapSupported = pipeline?.family?.let {
+        (pipeline.spec ?: resolveSdFamilySpec(it, pipeline.variant)).supportsMmap
+    } ?: false
     val outputDir = File(easyOutputRoot(context), "sd").apply { mkdirs() }
     val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
     return SDConfig(
@@ -195,10 +204,22 @@ fun buildEasySdConfig(
         t5xxlPath = selection.components[EasySdSlot.T5XXL]?.path,
         llmPath = selection.components[EasySdSlot.LLM]?.path,
         llmVisionPath = selection.components[EasySdSlot.LLM_VISION]?.path,
-        // Fixed Easy defaults: tile the VAE for large canvases, no RAM cap.
-        vaeTiling = maxOf(size.first, size.second) >= 768
+        // Fixed Easy defaults: tile the VAE for large canvases; SdRamGate vets the RAM before launch.
+        vaeTiling = vaeTiling || maxOf(size.first, size.second) >= 768,
+        mmap = mmapSupported
     )
 }
+
+/** Memory class used by [SdRamGate] for an Easy image kind. */
+fun easyImageRamClass(kind: EasyImageKind): SdRamClass = when (kind) {
+    EasyImageKind.SDXL_TURBO -> SdRamClass.SDXL
+    EasyImageKind.FLUX_SCHNELL -> SdRamClass.FLUX
+    EasyImageKind.SD15_SDCPP, EasyImageKind.ONNX_SD15 -> SdRamClass.SD15
+}
+
+/** Total weight bytes of the main model plus its installed companion files. */
+fun easyImageWeightBytes(selection: EasyImageSelection): Long =
+    selection.main.sizeBytes + selection.components.values.sumOf { it.sizeBytes }
 
 /** Builds the ONNX launch config with the Easy preset; mirrors OnnxImageGenScreen's TXT2IMG path. */
 fun buildEasyOnnxConfig(

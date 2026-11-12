@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="dist_r3_w_vpn_address_label">VPN address</string>
+    <string name="dist_r3_w_lan_address_label">Wi-Fi address</string>
+    <string name="dist_r3_w_ram_override_warning">Android may close other apps or this helper if memory runs out. Safe maximum: %1$d MB, limit: %2$d MB.</string>
+    <string name="dist_r3_w_ram_override_hint">Values above the slider range are allowed up to %1$d MB (total memory minus 1024 MB).</string>
+</resources>

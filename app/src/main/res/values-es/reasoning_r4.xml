@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="reasoning_mode_title">Razonamiento</string>
+    <string name="reasoning_mode_auto">Auto</string>
+    <string name="reasoning_mode_on">Activado</string>
+    <string name="reasoning_mode_off">Desactivado</string>
+    <string name="reasoning_mode_desc" tools:ignore="TypographyDashes">Valor del servidor para el razonamiento del modelo (--reasoning). Auto omite la opción y decide la plantilla. Cada chat puede cambiarlo por mensaje.</string>
+    <string name="reasoning_effort_title">Esfuerzo de razonamiento</string>
+    <string name="reasoning_effort_default">Predeterminado</string>
+    <string name="reasoning_effort_minimal">Mínimo</string>
+    <string name="reasoning_effort_low">Bajo</string>
+    <string name="reasoning_effort_medium">Medio</string>
+    <string name="reasoning_effort_high">Alto</string>
+    <string name="reasoning_effort_xhigh">Muy alto</string>
+    <string name="reasoning_effort_max">Máximo</string>
+    <string name="reasoning_effort_desc" tools:ignore="TypographyDashes">Cuánto razona el modelo (--reasoning-effort). Predeterminado conserva el valor de la plantilla; no todos los modelos admiten todos los niveles.</string>
+    <string name="chat_thinking_mode_title">Razonamiento</string>
+    <string name="chat_thinking_mode_default">Predeterminado de la plantilla</string>
+    <string name="chat_thinking_effort_hint">Se aplica desde el siguiente mensaje y sustituye los ajustes de razonamiento del servidor.</string>
+</resources>

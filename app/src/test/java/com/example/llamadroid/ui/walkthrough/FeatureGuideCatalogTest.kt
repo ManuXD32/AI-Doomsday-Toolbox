@@ -142,7 +142,7 @@ class FeatureGuideCatalogTest {
             "offline" to routes("kiwix_hub", Screen.ZimManager.route, Screen.KiwixViewer.route),
             "servers" to routes(Screen.AiServersHub.route, Screen.FileServer.route, Screen.OllamaManager.route),
             "distributed" to routes(Screen.DistributedHub.route, Screen.WorkerMode.route, Screen.MasterMode.route, Screen.NetworkVisualization.route),
-            "media_runtime" to routes(Screen.SdDistributedHub.route, Screen.SdDistributedWorker.route, Screen.SdDistributedMaster.route, Screen.SdDistributedNetwork.route, Screen.SdDistributedRunConfig.route, Screen.SdDistributedGallery.route),
+            "media_runtime" to routes(Screen.SdDistributedHub.route, Screen.SdDistributedWorker.route, Screen.SdDistributedMaster.route, Screen.SdDistributedImages.route, Screen.SdDistributedVideo.route, Screen.SdDistributedNetwork.route, Screen.SdDistributedRunConfig.route, Screen.SdDistributedGallery.route),
             "benchmark" to routes(Screen.Benchmark.route, Screen.BenchmarkHistory.route),
             "training" to routes(Screen.QuadtrixTrainer.route, Screen.QuadtrixWebUi.route),
             "termux" to routes(Screen.Termux.route, Screen.TermuxWebView.route, Screen.TermuxFileManager.route),

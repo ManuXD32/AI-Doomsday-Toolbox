@@ -17,6 +17,7 @@ import com.example.llamadroid.sd.SdVideoComponentRole
 import com.example.llamadroid.sd.SdVideoInputException
 import com.example.llamadroid.sd.SdVideoPrerequisiteException
 import com.example.llamadroid.sd.SdVideoWorkflowException
+import com.example.llamadroid.sd.SdVideoFamily
 import com.example.llamadroid.sd.SdVideoWorkflowErrorCode
 import com.example.llamadroid.sd.activeInOrder
 import com.example.llamadroid.util.AccelerationWorkload
@@ -533,29 +534,35 @@ class VideoGenerationService : Service() {
                 }
             }
 
+            val watchdog = SdHelperWatchdog.startFor(this@VideoGenerationService, config.distributedRuntime, useDistributedStateHolder, sdProcess)
             try {
                 BufferedOutputStream(FileOutputStream(processLogFile, false)).use { processLog ->
                     val stdoutJob = launch(Dispatchers.IO) {
-                        consumeBoundedProcessOutput(
-                            input = sdProcess.inputStream,
-                            rawLogOutput = processLog,
-                            onLogLine = { line -> handleSamplingOutput(line, appendToLog = true) },
-                            onProgress = { progress -> handleSamplingOutput(progress, appendToLog = false) }
-                        )
+                        SdHelperWatchdog.consumeUnlessHelperLost(watchdog) {
+                            consumeBoundedProcessOutput(
+                                input = sdProcess.inputStream,
+                                rawLogOutput = processLog,
+                                onLogLine = { line -> handleSamplingOutput(line, appendToLog = true) },
+                                onProgress = { progress -> handleSamplingOutput(progress, appendToLog = false) }
+                            )
+                        }
                     }
                     val stderrJob = launch(Dispatchers.IO) {
-                        consumeBoundedProcessOutput(
-                            input = sdProcess.errorStream,
-                            rawLogOutput = processLog,
-                            onLogLine = { line -> handleSamplingOutput(line, appendToLog = true) },
-                            onProgress = { progress -> handleSamplingOutput(progress, appendToLog = false) }
-                        )
+                        SdHelperWatchdog.consumeUnlessHelperLost(watchdog) {
+                            consumeBoundedProcessOutput(
+                                input = sdProcess.errorStream,
+                                rawLogOutput = processLog,
+                                onLogLine = { line -> handleSamplingOutput(line, appendToLog = true) },
+                                onProgress = { progress -> handleSamplingOutput(progress, appendToLog = false) }
+                            )
+                        }
                     }
                     val sdExitCode = sdProcess.waitFor()
                     stdoutJob.join()
                     stderrJob.join()
                     publishPendingSamplingSnapshot(force = true)
                     modeProcesses.remove(lane)
+                    watchdog?.lostMessage(this@VideoGenerationService)?.let { throw IllegalStateException(it) }
                     if (sdExitCode != 0) {
                         val acceleratorBinary = DeviceAcceleration.isAcceleratorBinary(candidateBinary)
                         throw videoNativeFailureException(
@@ -572,6 +579,7 @@ class VideoGenerationService : Service() {
                 }
             } finally {
                 etaTickerJob.cancel()
+                watchdog?.stop()
             }
 
             return resolveGeneratedNativeOutput(outputAvi)
@@ -789,8 +797,13 @@ class VideoGenerationService : Service() {
             }
         }.joinToString(" ").ifBlank { getString(R.string.error_generic) }
         is SdVideoWorkflowException -> when (error.code) {
+            // Only LTX-Video 0.9.x resolves to an unsupported LTX profile.
             SdVideoWorkflowErrorCode.NATIVE_WORKFLOW_UNSUPPORTED ->
-                getString(R.string.video_runtime_native_workflow_unsupported)
+                if (error.family == SdVideoFamily.LTX_VIDEO) {
+                    getString(R.string.video_ltx09_unsupported)
+                } else {
+                    getString(R.string.video_runtime_native_workflow_unsupported)
+                }
             else -> getString(R.string.video_runtime_invalid_workflow)
         }
         is SdVideoInputException -> when (error.code) {

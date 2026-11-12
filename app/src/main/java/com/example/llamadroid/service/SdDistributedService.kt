@@ -8,6 +8,8 @@ import androidx.core.content.ContextCompat
 import com.example.llamadroid.R
 import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.util.DebugLog
+import com.example.llamadroid.util.DeviceAddresses
+import com.example.llamadroid.util.NsdHelper
 import com.example.llamadroid.util.WakeLockManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,7 +25,6 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
 import java.net.InetSocketAddress
-import java.net.NetworkInterface
 import java.net.Socket
 
 data class SdDistributedWorkerRuntime(
@@ -52,6 +53,11 @@ class SdDistributedService : Service() {
 
     companion object {
         private const val TAG = "SdDistributedService"
+        const val CONFIRMED_PROBE_INTERVAL_MS = 30_000L
+
+        /** Pure: probe offline/unknown workers every tick, confirmed-online ones only every 30 s. */
+        internal fun shouldProbeWorker(isConnected: Boolean, lastSeenAt: Long, nowMs: Long): Boolean =
+            !isConnected || nowMs - lastSeenAt >= CONFIRMED_PROBE_INTERVAL_MS
         const val RPC_DEFAULT_PORT = 50062
         const val ACTION_START_WORKER = "com.example.llamadroid.sd.START_WORKER"
         const val ACTION_STOP_WORKER = "com.example.llamadroid.sd.STOP_WORKER"
@@ -93,6 +99,19 @@ class SdDistributedService : Service() {
 
         private val _localIp = MutableStateFlow<String?>(null)
         val localIp: StateFlow<String?> = _localIp.asStateFlow()
+
+        private val _lanIp = MutableStateFlow<String?>(null)
+        /** Wi-Fi/LAN address, shown as a second line when a VPN address is [localIp]. */
+        val lanIp: StateFlow<String?> = _lanIp.asStateFlow()
+
+        private val _vpnIp = MutableStateFlow<String?>(null)
+
+        private val _discoveredWorkers = MutableStateFlow<List<SdDiscoveredWorker>>(emptyList())
+        /** Media workers found over NSD (`_adt-sd._tcp.`); fed while [startDiscovery] is active. */
+        val discoveredWorkers: StateFlow<List<SdDiscoveredWorker>> = _discoveredWorkers.asStateFlow()
+
+        private var nsdHelper: NsdHelper? = null
+        private var discoveryJob: Job? = null
 
         private val _connectionCount = MutableStateFlow(0)
         val connectionCount: StateFlow<Int> = _connectionCount.asStateFlow()
@@ -207,6 +226,11 @@ class SdDistributedService : Service() {
                                 lastSeenAt = System.currentTimeMillis()
                             )
                         }
+                        // Each probe is a TCP connect that the worker's rpc-server logs as a connection pair;
+                        // once a worker is confirmed online, re-check it only every CONFIRMED_PROBE_INTERVAL_MS.
+                        if (!shouldProbeWorker(worker.isConnected, worker.lastSeenAt, System.currentTimeMillis())) {
+                            return@map worker
+                        }
                         val connected = canReach(worker.host, worker.port)
                         worker.copy(
                             isConnected = connected,
@@ -227,8 +251,21 @@ class SdDistributedService : Service() {
                 true
             }.getOrDefault(false)
 
+        /** Bytes stored in the Media worker RPC cache on disk (blocking; call off the main thread). */
+        fun workerCacheSizeBytes(context: Context): Long = runCatching {
+            workerCacheRoot(context).walkTopDown().filter { it.isFile }.sumOf { it.length() }
+        }.getOrDefault(0L)
+
         private fun workerCacheRoot(context: Context): File =
             File(context.filesDir, "sd_rpc_worker_cache").apply { mkdirs() }
+
+        /** Appends a timestamped line to the shared Media log (used by the master UI for start/failure lines). */
+        fun appendLog(message: String) = addLog(message)
+
+        /** Empties the in-memory Media log view; the app-wide DebugLog is untouched. */
+        fun clearLogs() {
+            _logs.value = emptyList()
+        }
 
         private fun addLog(message: String) {
             val line = "${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())}  $message"
@@ -236,13 +273,44 @@ class SdDistributedService : Service() {
             DebugLog.log("[$TAG] $message")
         }
 
-        private fun detectLocalIp(): String? {
-            return runCatching {
-                NetworkInterface.getNetworkInterfaces().asSequence()
-                    .flatMap { it.inetAddresses.asSequence() }
-                    .firstOrNull { !it.isLoopbackAddress && it.hostAddress?.contains(':') == false }
-                    ?.hostAddress
-            }.getOrNull()
+        /** Refreshes the VPN/LAN addresses; [localIp] is the VPN address when there is one. */
+        private fun refreshAddresses(context: Context) {
+            val addresses = DeviceAddresses.current(context.applicationContext)
+            val vpn = DeviceAddresses.vpnIp(addresses)
+            val lan = DeviceAddresses.lanIp(addresses)
+            _vpnIp.value = vpn
+            _lanIp.value = lan
+            _localIp.value = vpn ?: lan
+        }
+
+        private fun ensureNsdHelper(context: Context): NsdHelper =
+            nsdHelper ?: NsdHelper(
+                context.applicationContext,
+                SdWorkerAdvert.SERVICE_TYPE,
+                SdWorkerAdvert.SERVICE_NAME_PREFIX
+            ).also { nsdHelper = it }
+
+        /** Starts NSD discovery of Media workers; results appear in [discoveredWorkers]. */
+        fun startDiscovery(context: Context) {
+            refreshAddresses(context)
+            val helper = ensureNsdHelper(context)
+            helper.startDiscovery()
+            discoveryJob?.cancel()
+            discoveryJob = monitorScope.launch {
+                helper.discoveredServices.collect { services ->
+                    val localHasVpn = _vpnIp.value != null
+                    _discoveredWorkers.value = services.mapNotNull { service ->
+                        val ip = service.host?.hostAddress ?: return@mapNotNull null
+                        SdWorkerAdvert.parse(service.serviceName, ip, service.port, service.attributes, localHasVpn)
+                    }
+                }
+            }
+        }
+
+        fun stopDiscovery() {
+            discoveryJob?.cancel()
+            discoveryJob = null
+            nsdHelper?.stopDiscovery()
         }
     }
 
@@ -302,7 +370,7 @@ class SdDistributedService : Service() {
         _workerDeviceName.value = deviceName
         _workerBackendDevice.value = ""
         _workerCacheEnabled.value = cacheEnabled
-        _localIp.value = detectLocalIp()
+        refreshAddresses(applicationContext)
         _connectionCount.value = 0
 
         if (!startForegroundIfNeeded(getString(R.string.sd_dist_worker_notification_title))) return
@@ -347,10 +415,23 @@ class SdDistributedService : Service() {
                 processBuilder.environment()["HOME"] = applicationContext.filesDir.absolutePath
                 processBuilder.environment()["TMPDIR"] = applicationContext.cacheDir.absolutePath
                 processBuilder.environment()["XDG_CACHE_HOME"] = workerCacheRoot(applicationContext).absolutePath
-                processBuilder.environment()["GGML_RPC_DEBUG"] = "1"
+                // Per-call debug logging slows every RPC; shared opt-in toggle with the LLM worker.
+                DistributedPerf.rpcDebugEnvValue(DistributedPerfSettings.rpcDebugEnabled(applicationContext))?.let {
+                    processBuilder.environment()[DistributedPerf.ENV_RPC_DEBUG] = it
+                }
 
                 rpcProcess = processBuilder.start()
                 _isWorkerRunning.value = true
+                ensureNsdHelper(applicationContext).registerService(
+                    port,
+                    deviceName,
+                    SdWorkerAdvert.buildTxt(
+                        ramFreeMb = ramMB,
+                        cores = Runtime.getRuntime().availableProcessors(),
+                        appVersion = com.example.llamadroid.BuildConfig.VERSION_NAME,
+                        vpnIp = _vpnIp.value
+                    )
+                )
                 notificationTaskId?.let {
                     UnifiedNotificationManager.updateProgress(
                         it,
@@ -365,6 +446,7 @@ class SdDistributedService : Service() {
             } finally {
                 _isWorkerRunning.value = false
                 rpcProcess = null
+                nsdHelper?.unregisterService()
                 WakeLockManager.release(TAG)
                 WakeLockManager.releaseWifiLock(TAG)
                 notificationTaskId?.let { UnifiedNotificationManager.dismissTask(it) }
@@ -396,6 +478,7 @@ class SdDistributedService : Service() {
     private fun stopWorkerMode() {
         rpcProcess?.destroy()
         rpcProcess = null
+        nsdHelper?.unregisterService()
         _isWorkerRunning.value = false
         _connectionCount.value = 0
         WakeLockManager.release(TAG)

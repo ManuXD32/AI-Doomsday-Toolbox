@@ -248,7 +248,8 @@ internal class HarnessLanWebProxy(
         running = false
         runCatching { serverSocket?.close() }
         serverSocket = null
-        clients.toList().forEach { runCatching { it.close() } }
+        // Iterating a synchronizedSet needs its lock: worker threads remove their client while stop() runs.
+        synchronized(clients) { clients.toList() }.forEach { runCatching { it.close() } }
         clients.clear()
         workers?.shutdownNow()
         workers = null

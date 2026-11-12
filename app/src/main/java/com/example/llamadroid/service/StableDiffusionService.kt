@@ -933,6 +933,7 @@ class StableDiffusionService : Service() {
             }
         }
 
+        val watchdog = SdHelperWatchdog.startFor(this@StableDiffusionService, config.distributedRuntime, useDistributedStateHolder, process)
         try {
             process.inputStream.bufferedReader().use { reader ->
                 var line = reader.readLine()
@@ -959,9 +960,13 @@ class StableDiffusionService : Service() {
                     line = reader.readLine()
                 }
             }
+        } catch (e: java.io.IOException) {
+            if (watchdog?.lost != true) throw e
         } finally {
             etaTickerJob.cancel()
+            watchdog?.stop()
         }
+        watchdog?.lostMessage(this@StableDiffusionService)?.let { throw IllegalStateException(it) }
 
         val exitCode = process.waitFor()
         DebugLog.log("[StableDiffusionService] Process exited with code $exitCode")
@@ -1154,6 +1159,7 @@ class StableDiffusionService : Service() {
             }
         }
 
+        val watchdog = SdHelperWatchdog.startFor(this@StableDiffusionService, config.distributedRuntime, useDistributedStateHolder, process)
         try {
             process.inputStream.bufferedReader().use { reader ->
                 var line = reader.readLine()
@@ -1179,9 +1185,13 @@ class StableDiffusionService : Service() {
                     line = reader.readLine()
                 }
             }
+        } catch (e: java.io.IOException) {
+            if (watchdog?.lost != true) throw e
         } finally {
             etaTickerJob.cancel()
+            watchdog?.stop()
         }
+        watchdog?.lostMessage(this@StableDiffusionService)?.let { throw IllegalStateException(it) }
 
         val exitCode = process.waitFor()
         DebugLog.log("[StableDiffusionService] Upscale process exited with code $exitCode")

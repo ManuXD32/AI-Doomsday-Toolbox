@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sd_r4_images_title">Distributed images</string>
+    <string name="sd_r4_images_subtitle">Choose helpers, an image model and a prompt. Everything else is optional.</string>
+    <string name="sd_r4_video_title">Distributed video</string>
+    <string name="sd_r4_video_subtitle">Choose helpers, a video model and a prompt. Everything else is optional.</string>
+    <string name="sd_r4_hub_images_desc">Make images with your helpers: text to image, image to image, upscale and ADetailer.</string>
+    <string name="sd_r4_hub_video_desc">Make video clips with your helpers: text to video and image to video.</string>
+    <string name="sd_r4_open_images">Open images</string>
+    <string name="sd_r4_open_video">Open video</string>
+
+    <string name="sd_r4_run_title">Current run</string>
+    <string name="sd_r4_run_idle">No run yet. Start one from Distributed images or Distributed video and its progress will appear here.</string>
+    <string name="sd_r4_run_running">Running</string>
+    <string name="sd_r4_run_complete">Done</string>
+    <string name="sd_r4_run_failed">Failed</string>
+    <string name="sd_r4_run_eta">Time left: about %1$s</string>
+    <string name="sd_r4_phase_loading">Loading models</string>
+    <string name="sd_r4_phase_text_encoding">Text encoding</string>
+    <string name="sd_r4_phase_diffusion">Diffusion</string>
+    <string name="sd_r4_phase_vae_decoding">VAE decoding</string>
+    <string name="sd_r4_phase_video_frames">Video frames</string>
+    <string name="sd_r4_phase_saving">Saving</string>
+    <string name="sd_r4_phase_step">Step %1$d/%2$d · %3$s s/it</string>
+    <string name="sd_r4_phase_step_plain">Step %1$d/%2$d</string>
+    <string name="sd_r4_phase_batch">Item %1$d/%2$d</string>
+    <string name="sd_r4_phase_frames">Frames: %1$d</string>
+    <string name="sd_r4_transfer_title">Weights sent to helpers</string>
+    <string name="sd_r4_transfer_none">No weight transfer to track for this placement.</string>
+    <string name="sd_r4_placement_title">Who runs what</string>
+    <string name="sd_r4_placement_row">%1$s: %2$s</string>
+    <string name="sd_r4_placement_share">%1$s (%2$d%%)</string>
+    <string name="sd_r4_placement_none">no module assigned</string>
+    <string name="sd_r4_placement_master">This device</string>
+    <string name="sd_r4_log_title">Generator output</string>
+</resources>

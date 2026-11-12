@@ -38,6 +38,8 @@ data class LlamaChatRequest(
     @SerializedName("sse_ping_interval") val ssePingInterval: Int = 2,
     @SerializedName("stop") val stop: List<String>? = null,
     @SerializedName("chat_template_kwargs") val chat_template_kwargs: Map<String, Any>? = null,
+    /** Per-request llama.cpp reasoning effort (minimal..max); null/omitted keeps the server default. */
+    @SerializedName("reasoning_effort") val reasoning_effort: String? = null,
     /** Pinned llama-server slot for per-chat KV persistence; omitted when null. */
     @SerializedName("id_slot") val idSlot: Int? = null,
     @SerializedName("cache_prompt") val cachePrompt: Boolean? = null,
@@ -66,7 +68,9 @@ data class LlamaStreamOptions(
 @Keep
 data class LlamaChatMessage(
     @SerializedName("role") val role: String,
-    @SerializedName("content") val content: Any // String or List<Map> for multimodal turns
+    @SerializedName("content") val content: Any, // String or List<Map> for multimodal turns
+    /** Prior assistant thinking, replayed so templates that keep reasoning produce a stable prefix. */
+    @SerializedName("reasoning_content") val reasoningContent: String? = null
 )
 
 @Keep

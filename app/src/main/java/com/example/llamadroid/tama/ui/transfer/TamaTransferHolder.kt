@@ -65,7 +65,7 @@ object TamaTransferHolder {
             farmRepository = farmRepository,
             settingsRepo = SettingsRepository(appContext)
         )
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + com.example.llamadroid.util.startupExceptionHandler("TAMA_TRANSFER"))
         val coordinator = PetTransferCoordinator(
             engine = TamaGameEnginePetTransferEngine(engine),
             store = PetTransferStore(database.transferStateDao()),

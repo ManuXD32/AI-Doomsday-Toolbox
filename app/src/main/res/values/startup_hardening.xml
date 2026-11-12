@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="startup_settings_unavailable">This device cannot open that settings screen. Open Android Settings manually.</string>
+    <string name="startup_folder_picker_unavailable">This device has no folder picker available.</string>
+    <string name="startup_folder_permission_failed">Could not keep access to that folder. Choose another folder.</string>
+</resources>

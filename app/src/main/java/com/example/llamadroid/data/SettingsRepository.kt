@@ -5,6 +5,7 @@ import androidx.core.content.edit
 import android.content.Context
 import android.content.SharedPreferences
 import com.example.llamadroid.data.model.LITERT_BACKEND_AUTO
+import com.example.llamadroid.service.LlamaReasoning
 import com.example.llamadroid.data.model.normalizeLiteRtBackend
 import com.example.llamadroid.data.db.AgentRuntimeProfile
 import com.example.llamadroid.data.runtime.AgentRuntimeDispatchSettings
@@ -1033,12 +1034,45 @@ class SettingsRepository(
     }
     
     // Temperature
-    private val _temperature = MutableStateFlow(prefs.getFloat("temperature", 0.7f))
+    // Launch temperature for llama-server; a negative value (-1) means Auto (no --temp flag).
+    private val _temperature = MutableStateFlow(prefs.getFloat("temperature", -1f))
     val temperature = _temperature.asStateFlow()
     
     fun setTemperature(temp: Float) {
         prefs.edit().putFloat("temperature", temp).apply()
         _temperature.value = temp
+    }
+
+    // Keep the model's reasoning in history (llama.cpp --reasoning-preserve); on by default.
+    private val _llamaReasoningPreserve = MutableStateFlow(prefs.getBoolean("llama_reasoning_preserve", true))
+    val llamaReasoningPreserve = _llamaReasoningPreserve.asStateFlow()
+
+    fun setLlamaReasoningPreserve(enabled: Boolean) {
+        prefs.edit { putBoolean("llama_reasoning_preserve", enabled) }
+        _llamaReasoningPreserve.value = enabled
+    }
+
+    // Server `--reasoning` (auto/on/off) and `--reasoning-effort`; "auto"/"default" emit no flag.
+    private val _llamaReasoningMode = MutableStateFlow(
+        LlamaReasoning.normalizeMode(prefs.getString("llama_reasoning_mode", null))
+    )
+    val llamaReasoningMode = _llamaReasoningMode.asStateFlow()
+
+    fun setLlamaReasoningMode(mode: String) {
+        val value = LlamaReasoning.normalizeMode(mode)
+        prefs.edit { putString("llama_reasoning_mode", value) }
+        _llamaReasoningMode.value = value
+    }
+
+    private val _llamaReasoningEffort = MutableStateFlow(
+        LlamaReasoning.normalizeEffort(prefs.getString("llama_reasoning_effort", null))
+    )
+    val llamaReasoningEffort = _llamaReasoningEffort.asStateFlow()
+
+    fun setLlamaReasoningEffort(effort: String) {
+        val value = LlamaReasoning.normalizeEffort(effort)
+        prefs.edit { putString("llama_reasoning_effort", value) }
+        _llamaReasoningEffort.value = value
     }
 
     // Auto Mode (Auto-approve plans and file writes)

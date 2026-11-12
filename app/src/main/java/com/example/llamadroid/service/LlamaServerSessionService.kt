@@ -49,6 +49,7 @@ class LlamaServerSessionService : Service() {
         if (sessionId.isBlank() && intent?.action != ACTION_START) {
             // Blank-session STOP/CLEAR/REMOVE (or unknown/null intent) would otherwise leave a fresh
             // startForegroundService() launch without startForeground() or stopSelf().
+            satisfyContractIfNotForeground()
             recycleWhenIdle(startId)
             return START_NOT_STICKY
         }
@@ -58,6 +59,7 @@ class LlamaServerSessionService : Service() {
                 val leaseToken = intent.getStringExtra(EXTRA_LEASE_TOKEN)
                 if (sessionId.isBlank() || profile == null) {
                     DebugLog.log("LlamaServerSessionService: rejected start with missing session/profile")
+                    satisfyContractIfNotForeground()
                     recycleWhenIdle(startId)
                 } else if (LlamaOcrExclusiveLeaseStore.rejectsSessionCommand(
                         applicationContext,
@@ -66,6 +68,7 @@ class LlamaServerSessionService : Service() {
                     )
                 ) {
                     DebugLog.log("LlamaServerSessionService[$sessionId]: rejected start while OCR lease is active")
+                    satisfyContractIfNotForeground()
                     recycleWhenIdle(startId)
                 } else {
                     if (!ensureForeground()) {
@@ -140,6 +143,11 @@ class LlamaServerSessionService : Service() {
         notificationTaskId?.let(UnifiedNotificationManager::dismissTask)
         notificationTaskId = null
         super.onDestroy()
+    }
+
+    /** A rejected launch must still call startForeground once, or Android kills the app. */
+    private fun satisfyContractIfNotForeground() {
+        if (notificationTaskId == null) ForegroundStart.satisfyAndStop(this@LlamaServerSessionService)
     }
 
     private fun ensureForeground(): Boolean {

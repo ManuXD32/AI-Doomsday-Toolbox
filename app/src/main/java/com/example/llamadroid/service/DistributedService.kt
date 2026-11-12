@@ -6,6 +6,7 @@ import android.app.ActivityManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import androidx.core.content.edit
 import android.os.IBinder
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,7 +23,6 @@ import java.io.InputStreamReader
 import java.net.InetSocketAddress
 import java.net.Socket
 
-import java.net.NetworkInterface
 import com.example.llamadroid.util.MemoryTelemetry
 import com.example.llamadroid.service.UnifiedNotificationManager.TaskType
 import com.example.llamadroid.LlamaApplication
@@ -62,7 +62,15 @@ data class WorkerInfo(
     val realRamUsageMB: Float? = null, // Real RAM usage from server logs
     val rpcStatus: RpcWorkerStatus = RpcWorkerStatus.UNKNOWN,
     val lastConfirmedAtMs: Long? = null,
-    val statusDetail: String? = null
+    val statusDetail: String? = null,
+    /** Median of the last 5 timed probe connects, in ms; null until a probe succeeded. */
+    val rttMs: Long? = null,
+    /** Raw probe samples (newest last, at most 5); internal to the median computation. */
+    val rttSamplesMs: List<Long> = emptyList(),
+    /** RAM the worker advertised over NSD (`ram_free_mb`); null for manual or legacy workers. */
+    val advertisedRamMb: Int? = null,
+    val advertisedCores: Int? = null,
+    val advertisedAppVersion: String? = null
 )
 
 /**
@@ -94,6 +102,7 @@ class DistributedService : Service() {
         const val EXTRA_CACHE = "cache"
         private const val WORKER_MEMORY_PREFS = "distributed_worker_profile"
         private const val WORKER_MEMORY_KEY = "ram_mb"
+        private const val WORKER_OVERRIDE_KEY = "ram_override_accepted"
         private const val DEFAULT_WORKER_RAM_MB = 4096
         
         // State exposed to UI
@@ -112,11 +121,16 @@ class DistributedService : Service() {
         private val _workerRamMB = MutableStateFlow(loadSavedWorkerRamMiB())
         val workerRamMB: StateFlow<Int> = _workerRamMB.asStateFlow()
 
+        private val _workerOverrideAccepted = MutableStateFlow(loadSavedOverrideAccepted())
+        /** True when the user explicitly chose a contribution above the safe maximum. */
+        val workerOverrideAccepted: StateFlow<Boolean> = _workerOverrideAccepted.asStateFlow()
+
         private val _workerMemoryBudget = MutableStateFlow(
             WorkerMemoryBudget.calculate(
                 totalMiB = 0L,
                 availableMiB = 0L,
-                requestedMiB = _workerRamMB.value.toLong()
+                requestedMiB = _workerRamMB.value.toLong(),
+                overrideAccepted = _workerOverrideAccepted.value
             )
         )
         /** Latest sanitized worker-memory snapshot, including the actual applied contribution. */
@@ -126,7 +140,18 @@ class DistributedService : Service() {
         val masterRamMB: StateFlow<Int> = _masterRamMB.asStateFlow()
         
         private val _localIp = MutableStateFlow<String?>(null)
+        /** Address shown/advertised for this worker: the VPN address when present, else the LAN one. */
         val localIp: StateFlow<String?> = _localIp.asStateFlow()
+
+        private val _lanIp = MutableStateFlow<String?>(null)
+        /** Wi-Fi/LAN address, shown as a second line when it differs from [localIp] (VPN active). */
+        val lanIp: StateFlow<String?> = _lanIp.asStateFlow()
+
+        private val _vpnIp = MutableStateFlow<String?>(null)
+        val vpnIp: StateFlow<String?> = _vpnIp.asStateFlow()
+
+        /** NSD TXT key carrying the worker's VPN address. */
+        const val TXT_VPN_IP = "vpn_ip"
         
         // Connection count for worker mode - tracks how many masters have connected
         private val _connectionCount = MutableStateFlow(0)
@@ -176,10 +201,6 @@ class DistributedService : Service() {
         // Inference running status
         private val _inferenceRunning = MutableStateFlow(false)
         val inferenceRunning: StateFlow<Boolean> = _inferenceRunning.asStateFlow()
-        
-        // Transfer progress (0-100) for layer transfer to workers
-        private val _transferProgress = MutableStateFlow(0)
-        val transferProgress: StateFlow<Int> = _transferProgress.asStateFlow()
         
         // RPC debug logs (captured from rpc-server stdout)
         private const val MAX_RPC_LOGS = 1000
@@ -910,10 +931,6 @@ class DistributedService : Service() {
             _inferenceRunning.value = running
         }
         
-        fun setTransferProgress(progress: Int) {
-            _transferProgress.value = progress.coerceIn(0, 100)
-        }
-        
         // Helper to get worker RPC addresses for master
         fun getWorkerAddresses(): List<String> {
             return _workers.value
@@ -946,7 +963,15 @@ class DistributedService : Service() {
             } else {
                 // Add new - default isConnected to FALSE to prevent false positives until verified
                 DebugLog.log("[$TAG] Manually added worker: $deviceName at $ip:$port with ${ramMB}MB RAM, proportion=${proportion?.let { "${(it*100).toInt()}%" } ?: "auto"}")
-                current.add(WorkerInfo(ip, port, deviceName, ramMB, null, false, true, null, proportion))
+                val advert = _workerAdverts.value["$ip:$port"]
+                current.add(
+                    WorkerInfo(
+                        ip, port, deviceName, ramMB, null, false, true, null, proportion,
+                        advertisedRamMb = advert?.ramFreeMb,
+                        advertisedCores = advert?.cores,
+                        advertisedAppVersion = advert?.appVersion
+                    )
+                )
             }
             _workers.value = current
         }
@@ -1011,18 +1036,20 @@ class DistributedService : Service() {
          */
         fun calculateWorkerMemoryBudget(
             context: Context,
-            requestedMiB: Long = _workerRamMB.value.toLong()
+            requestedMiB: Long = _workerRamMB.value.toLong(),
+            overrideAccepted: Boolean = _workerOverrideAccepted.value
         ): WorkerMemoryBudget {
             val memoryManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
             if (memoryManager == null) {
-                return WorkerMemoryBudget.calculate(0L, 0L, requestedMiB)
+                return WorkerMemoryBudget.calculate(0L, 0L, requestedMiB, overrideAccepted)
             }
             val memoryInfo = ActivityManager.MemoryInfo()
             memoryManager.getMemoryInfo(memoryInfo)
             return WorkerMemoryBudget.fromBytes(
                 totalBytes = memoryInfo.totalMem,
                 availableBytes = memoryInfo.availMem,
-                requestedMiB = requestedMiB
+                requestedMiB = requestedMiB,
+                overrideAccepted = overrideAccepted
             )
         }
 
@@ -1041,11 +1068,15 @@ class DistributedService : Service() {
          * Changes are ignored while the worker is active so an applied process budget cannot be
          * changed by a later UI recomposition.
          */
-        fun setWorkerRam(context: Context, ramMB: Int): WorkerMemoryBudget {
+        fun setWorkerRam(
+            context: Context,
+            ramMB: Int,
+            overrideAccepted: Boolean = _workerOverrideAccepted.value
+        ): WorkerMemoryBudget {
             if (_isRunning.value || _mode.value == DistributedMode.WORKER) {
                 return _workerMemoryBudget.value
             }
-            val budget = calculateWorkerMemoryBudget(context, ramMB.toLong())
+            val budget = calculateWorkerMemoryBudget(context, ramMB.toLong(), overrideAccepted)
             publishWorkerMemoryBudget(budget)
             return budget
         }
@@ -1054,6 +1085,10 @@ class DistributedService : Service() {
             val contributionMiB = budget.contributionMiB.coerceIn(0L, Int.MAX_VALUE.toLong())
             val normalizedBudget = budget.copy(contributionMiB = contributionMiB)
             _workerMemoryBudget.value = normalizedBudget
+            if (_workerOverrideAccepted.value != budget.overrideAccepted) {
+                _workerOverrideAccepted.value = budget.overrideAccepted
+                workerPrefs()?.edit { putBoolean(WORKER_OVERRIDE_KEY, budget.overrideAccepted) }
+            }
             val previousContributionMiB = _workerRamMB.value.toLong()
             _workerRamMB.value = contributionMiB.toInt()
             if (WorkerRamPersistencePolicy.shouldPersist(
@@ -1075,12 +1110,15 @@ class DistributedService : Service() {
             LlamaApplication.instance.getSharedPreferences(WORKER_MEMORY_PREFS, Context.MODE_PRIVATE)
         }.getOrNull()
 
+        private fun loadSavedOverrideAccepted(): Boolean =
+            workerPrefs()?.getBoolean(WORKER_OVERRIDE_KEY, false) ?: false
+
         private fun loadSavedWorkerRamMiB(): Int =
             workerPrefs()?.getInt(WORKER_MEMORY_KEY, DEFAULT_WORKER_RAM_MB)?.coerceAtLeast(0)
                 ?: DEFAULT_WORKER_RAM_MB
         
         // Static helper methods to start/stop via intents
-        fun startWorker(context: Context, port: Int = RPC_DEFAULT_PORT, ramMB: Int = _workerRamMB.value, threads: Int = 4, enableCache: Boolean = false) {
+        fun startWorker(context: Context, port: Int = RPC_DEFAULT_PORT, ramMB: Int = _workerRamMB.value, threads: Int = 4, enableCache: Boolean = DistributedPerf.DEFAULT_WORKER_CACHE) {
             if (_isRunning.value || _mode.value == DistributedMode.WORKER) return
             val budget = calculateWorkerMemoryBudget(context, ramMB.toLong())
             publishWorkerMemoryBudget(budget)
@@ -1113,6 +1151,7 @@ class DistributedService : Service() {
                 if (root.exists()) root.deleteRecursively()
                 root.mkdirs()
                 addRpcLog(context.getString(com.example.llamadroid.R.string.dist_worker_cache_cleared))
+                refreshWorkerCacheSize(context)
                 true
             }.getOrElse { error ->
                 addRpcLog(
@@ -1150,11 +1189,65 @@ class DistributedService : Service() {
                 nsdCollectionJob = CoroutineScope(Dispatchers.IO).launch {
                     nsdHelper!!.discoveredServices.collect { services ->
                         _discoveredServices.value = services
+                        applyAdverts(services)
                     }
                 }
             }
         }
         
+        /** Adverts parsed from NSD TXT records, keyed by `ip:port`. Absent when a worker sends none. */
+        private val _workerAdverts = MutableStateFlow<Map<String, WorkerAdvert>>(emptyMap())
+        val workerAdverts: StateFlow<Map<String, WorkerAdvert>> = _workerAdverts.asStateFlow()
+
+        /** Advert for a discovered service, or [WorkerAdvert.EMPTY] when it sent no TXT data. */
+        fun advertFor(service: android.net.nsd.NsdServiceInfo): WorkerAdvert =
+            _workerAdverts.value["${service.host?.hostAddress}:${service.port}"]
+                ?: WorkerAdvert.parse(service.attributes)
+
+        /**
+         * IP to use as the RPC endpoint for a discovered worker: its advertised `vpn_ip` when this
+         * device also has a VPN address, otherwise the address NSD resolved.
+         */
+        fun endpointIpFor(service: android.net.nsd.NsdServiceInfo): String {
+            val resolved = service.host?.hostAddress.orEmpty()
+            val advertised = service.attributes?.get(TXT_VPN_IP)?.toString(Charsets.UTF_8)
+            return com.example.llamadroid.util.DeviceAddresses.chooseWorkerEndpoint(
+                resolvedIp = resolved,
+                advertisedVpnIp = advertised,
+                localHasVpn = _vpnIp.value != null
+            )
+        }
+
+        private fun applyAdverts(services: List<android.net.nsd.NsdServiceInfo>) {
+            val adverts = services.associate { service ->
+                "${service.host?.hostAddress}:${service.port}" to WorkerAdvert.parse(service.attributes)
+            }
+            _workerAdverts.value = adverts
+            _workers.value = _workers.value.map { worker ->
+                val advert = adverts["${worker.ip}:${worker.port}"] ?: return@map worker
+                worker.copy(
+                    advertisedRamMb = advert.ramFreeMb,
+                    advertisedCores = advert.cores,
+                    advertisedAppVersion = advert.appVersion
+                )
+            }
+        }
+
+        /** Median probe RTT per worker address (`ip:port`) for the planner's network estimate. */
+        fun workerRttByAddress(): Map<String, Long> = _workers.value
+            .mapNotNull { w -> w.rttMs?.let { "${w.ip}:${w.port}" to it } }
+            .toMap()
+
+        private val _workerCacheSizeBytes = MutableStateFlow(0L)
+        /** Size of the LLM worker tensor cache on disk; call [refreshWorkerCacheSize] to update. */
+        val workerCacheSizeBytes: StateFlow<Long> = _workerCacheSizeBytes.asStateFlow()
+
+        fun refreshWorkerCacheSize(context: Context) {
+            _workerCacheSizeBytes.value = runCatching {
+                workerCacheRoot(context).walkTopDown().filter { it.isFile }.sumOf { it.length() }
+            }.getOrDefault(0L)
+        }
+
         fun startDiscovery(context: Context) {
             ensureNsdHelper(context)
             nsdHelper?.startDiscovery()
@@ -1182,12 +1275,16 @@ class DistributedService : Service() {
                     
                     // Perform network checks (blocking, takes time)
                     // Map IP:Port -> IsOnline
+                    val rtts = HashMap<String, Long>()
                     val results = currentWorkersSnapshot.associate { worker ->
                         val isOnline = try {
                             // Primary Check: Heartbeat on Port + 1
                             val socket = Socket()
                             // Explicitly verify accessibility with short timeout
+                            val startNs = System.nanoTime()
                             socket.connect(InetSocketAddress(worker.ip, worker.port + 1), 1500)
+                            // TCP connect time approximates one network round trip (SYN/SYN-ACK).
+                            rtts["${worker.ip}:${worker.port}"] = (System.nanoTime() - startNs) / 1_000_000L
                             socket.close()
                             true
                         } catch (e: Exception) {
@@ -1218,12 +1315,19 @@ class DistributedService : Service() {
                             if (worker.isConnected != newStatus) {
                                 DebugLog.log("[$TAG] Worker ${worker.deviceName} (${worker.ip}) changed status to: ${if(newStatus) "ONLINE" else "OFFLINE"}")
                             }
-                            if (probedOnline) worker.copy(
-                                isConnected = true,
-                                rpcStatus = RpcWorkerStatus.ONLINE,
-                                lastConfirmedAtMs = System.currentTimeMillis(),
-                                statusDetail = "Network probe confirmed"
-                            ) else worker
+                            if (probedOnline) {
+                                // Only heartbeat-port connects are timed; the RPC-port fallback is not.
+                                val samples = rtts[key]?.let { DistributedPerf.appendRttSample(worker.rttSamplesMs, it) }
+                                    ?: worker.rttSamplesMs
+                                worker.copy(
+                                    isConnected = true,
+                                    rpcStatus = RpcWorkerStatus.ONLINE,
+                                    lastConfirmedAtMs = System.currentTimeMillis(),
+                                    statusDetail = "Network probe confirmed",
+                                    rttSamplesMs = samples,
+                                    rttMs = DistributedPerf.medianRttMs(samples)
+                                )
+                            } else worker
                         } else {
                             worker // Worker was added while we were checking, keep as is
                         }
@@ -1263,7 +1367,7 @@ class DistributedService : Service() {
                 val port = intent.getIntExtra(EXTRA_PORT, RPC_DEFAULT_PORT)
                 val ramMB = intent.getIntExtra(EXTRA_RAM_MB, _workerRamMB.value)
                 val threads = intent.getIntExtra(EXTRA_THREADS, 4)
-                val enableCache = intent.getBooleanExtra(EXTRA_CACHE, false)
+                val enableCache = intent.getBooleanExtra(EXTRA_CACHE, DistributedPerf.DEFAULT_WORKER_CACHE)
                 startWorkerMode(port, ramMB, threads, enableCache)
             }
             ACTION_STOP_WORKER -> {
@@ -1298,7 +1402,7 @@ class DistributedService : Service() {
     /**
      * Start worker mode - run rpc-server binary
      */
-    private fun startWorkerMode(port: Int, ramMB: Int, threads: Int = 4, enableCache: Boolean = false) {
+    private fun startWorkerMode(port: Int, ramMB: Int, threads: Int = 4, enableCache: Boolean = DistributedPerf.DEFAULT_WORKER_CACHE) {
         // The watchdog restarts a crashed process while keeping WORKER mode set, so the
         // process-running flag is the launch guard here. Public setters still reject changes
         // whenever WORKER mode is active.
@@ -1335,6 +1439,9 @@ class DistributedService : Service() {
             .coerceAtMost(Int.MAX_VALUE.toLong())
             .toInt()
         
+        // Refresh addresses so a VPN connected after onCreate is advertised.
+        updateLocalIp()
+
         // Register service via NSD
         val deviceName = try {
             android.provider.Settings.Global.getString(contentResolver, "device_name")
@@ -1342,10 +1449,14 @@ class DistributedService : Service() {
         
         // Use companion helper
         ensureNsdHelper(applicationContext)
-        nsdHelper?.registerService(port, deviceName)
-        
-        ensureNsdHelper(applicationContext)
-        nsdHelper?.registerService(port, deviceName)
+        val advert = WorkerAdvert(
+            ramFreeMb = appliedRamMB.takeIf { it > 0 },
+            cores = Runtime.getRuntime().availableProcessors(),
+            appVersion = com.example.llamadroid.BuildConfig.VERSION_NAME
+        )
+        val txt = advert.toAttributes().toMutableMap()
+        _vpnIp.value?.let { txt[TXT_VPN_IP] = it }
+        nsdHelper?.registerService(port, deviceName, txt)
 
         // Start foreground service with notification
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
@@ -1443,7 +1554,10 @@ class DistributedService : Service() {
                 processBuilder.environment()["XDG_DATA_HOME"] = filesDir
                 processBuilder.environment()["XDG_CONFIG_HOME"] = filesDir
                 
-                processBuilder.environment()["GGML_RPC_DEBUG"] = "1"  // Enable debug logging
+                // A debug line per RPC call per token slows decoding; opt-in only.
+                DistributedPerf.rpcDebugEnvValue(DistributedPerfSettings.rpcDebugEnabled(applicationContext))?.let {
+                    processBuilder.environment()[DistributedPerf.ENV_RPC_DEBUG] = it
+                }
                 
                 // Set working directory
                 processBuilder.directory(java.io.File(filesDir))
@@ -1619,20 +1733,12 @@ class DistributedService : Service() {
     
     private fun updateLocalIp() {
         try {
-            val interfaces = NetworkInterface.getNetworkInterfaces()
-            while (interfaces.hasMoreElements()) {
-                val iface = interfaces.nextElement()
-                if (iface.isLoopback || !iface.isUp) continue
-                
-                val addresses = iface.inetAddresses
-                while (addresses.hasMoreElements()) {
-                    val addr = addresses.nextElement()
-                    if (!addr.isLoopbackAddress && addr is java.net.Inet4Address) {
-                        _localIp.value = addr.hostAddress
-                        return
-                    }
-                }
-            }
+            val addresses = com.example.llamadroid.util.DeviceAddresses.current(applicationContext)
+            val vpn = com.example.llamadroid.util.DeviceAddresses.vpnIp(addresses)
+            val lan = com.example.llamadroid.util.DeviceAddresses.lanIp(addresses)
+            _vpnIp.value = vpn
+            _lanIp.value = lan
+            _localIp.value = vpn ?: lan
         } catch (e: Exception) {
             DebugLog.log("[$TAG] Error getting local IP: ${e.message}")
         }

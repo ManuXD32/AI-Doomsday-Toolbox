@@ -56,8 +56,45 @@ class SdTaeCompatibilityTest {
         assertEquals(SdTaeCheck.Ok, SdTaeCompatibility.check(lingbot, 16))
         assertEquals(SdTaeCheck.Ok, SdTaeCompatibility.check(a14b, 16))
         assertEquals(SdTaeCheck.Mismatch(48, 16), SdTaeCompatibility.check(ti2v, 16))
-        assertEquals(SdTaeCheck.NotSupported, SdTaeCompatibility.check(ltx, 16))
+        assertEquals(SdTaeCheck.Mismatch(128, 16), SdTaeCompatibility.check(ltx, 16))
+        assertEquals(SdTaeCheck.NotSupported, SdTaeCompatibility.check(SdVideoFamilyProfiles.SVD, 16))
         assertEquals(SdTaeCheck.Unknown, SdTaeCompatibility.check(lingbot, null))
+    }
+
+    @Test
+    fun ltxHunyuanMiniMaxTaeChannels() {
+        val hunyuan = SdVideoFamilyProfiles.resolve(SdVideoFamily.HUNYUAN_VIDEO)
+        val minimax = SdVideoFamilyProfiles.resolve(SdVideoFamily.MINIMAX_H3)
+        assertEquals(SdTaeCheck.Ok, SdTaeCompatibility.check(ltx, 128))
+        assertEquals(SdTaeCheck.Ok, SdTaeCompatibility.check(hunyuan, 32))
+        assertEquals(SdTaeCheck.Mismatch(32, 16), SdTaeCompatibility.check(hunyuan, 16))
+        assertEquals(SdTaeCheck.Ok, SdTaeCompatibility.check(minimax, 24))
+        assertEquals(SdTaeCheck.Mismatch(24, 48), SdTaeCompatibility.check(minimax, 48))
+        assertEquals(SdTaeCheck.Unknown, SdTaeCompatibility.check(minimax, null))
+        assertEquals(SdTaeCheck.NotSupported, SdTaeCompatibility.check(SdVideoFamilyProfiles.ANIMATEDIFF, 16))
+    }
+
+    @Test
+    fun ltx09ClassifierAndProfile() {
+        val p = "model.diffusion_model."
+        val ltx09 = listOf(
+            p + "adaln_single.emb.timestep_embedder.linear_1.bias",
+            p + "patchify_proj.weight",
+            p + "caption_projection.linear_1.weight",
+            p + "transformer_blocks.27.attn1.to_q.weight"
+        )
+        val ltx23 = ltx09 + listOf(p + "audio_patchify_proj.weight", p + "av_ca_a2v_gate_adaln_single.linear.weight")
+        val pixart = ltx09 + listOf(p + "pos_embed.proj.weight", p + "adaln_single.linear.weight")
+        val inspector = SdArtifactInspector()
+        assertTrue(inspector.isLtx09Signature(ltx09))
+        assertFalse(inspector.isLtx09Signature(ltx23))
+        assertFalse(inspector.isLtx09Signature(pixart))
+        assertFalse(inspector.isLtx09Signature(emptyList()))
+
+        val profile = SdVideoFamilyProfiles.resolve(SdVideoFamily.LTX_VIDEO, SdArtifactInspector.LTX_09_VARIANT)
+        assertFalse(profile.nativeWorkflowSupported)
+        assertTrue(SdVideoFamilyProfiles.resolve(SdVideoFamily.LTX_VIDEO, "2.3").nativeWorkflowSupported)
+        assertTrue(SdVideoFamilyProfiles.resolve(SdVideoFamily.LTX_VIDEO, "2.5").nativeWorkflowSupported)
     }
 
     @Test

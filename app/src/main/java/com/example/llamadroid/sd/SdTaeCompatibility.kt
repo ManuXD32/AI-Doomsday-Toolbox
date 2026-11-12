@@ -58,8 +58,11 @@ object SdTaeCompatibility {
     fun expectedLatentChannels(profile: SdVideoFamilyProfile): Int? = when (profile.decoderCompatibility) {
         SdVideoDecoderCompatibility.TAEHV_WAN21 -> 16
         SdVideoDecoderCompatibility.TAEHV_WAN22 -> 48
-        SdVideoDecoderCompatibility.NATIVE_VAE_ONLY,
-        SdVideoDecoderCompatibility.LTX_CONV_VIDEO_VAE -> null
+        // Engine TAEHV z_channels per family: tae.hpp:551-553 (Hunyuan 32), :554-558 (LTXAV 128), :559-562 (MiniMax 24).
+        SdVideoDecoderCompatibility.TAEHV_HUNYUAN -> 32
+        SdVideoDecoderCompatibility.LTX_CONV_VIDEO_VAE -> 128
+        SdVideoDecoderCompatibility.TAEHV_MINIMAX_H3 -> 24
+        SdVideoDecoderCompatibility.NATIVE_VAE_ONLY -> null
     }
 
     /** Call only when a TAE is selected. */

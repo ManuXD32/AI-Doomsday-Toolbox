@@ -57,6 +57,10 @@ import androidx.navigation.NavController
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
 import com.example.llamadroid.service.DistributedMasterLlamaService
+import com.example.llamadroid.service.DistributedConnectivity
+import com.example.llamadroid.service.DistributedTransferMath
+import com.example.llamadroid.service.DistributedTransferTracker
+import com.example.llamadroid.service.HelperTransfer
 import com.example.llamadroid.service.DistributedMasterRuntimeState
 import com.example.llamadroid.service.DistributedMode
 import com.example.llamadroid.service.DistributedService
@@ -94,7 +98,7 @@ fun NetworkVisualizationScreen(navController: NavController) {
     val rpcLayerCount by DistributedService.rpcLayerCount.collectAsStateWithLifecycle()
     val modelSizeMB by DistributedService.modelSizeMB.collectAsStateWithLifecycle()
     val inferenceRunning by DistributedService.inferenceRunning.collectAsStateWithLifecycle()
-    val transferProgress by DistributedService.transferProgress.collectAsStateWithLifecycle()
+    val transfers by DistributedTransferTracker.transfers.collectAsStateWithLifecycle()
     val rpcLogs by DistributedService.rpcLogs.collectAsStateWithLifecycle()
     val lastCommand by DistributedService.lastCommand.collectAsStateWithLifecycle()
 
@@ -133,7 +137,8 @@ fun NetworkVisualizationScreen(navController: NavController) {
                 masterShare = masterShare,
                 masterLayers = masterLayers,
                 modelSizeMB = modelSizeMB,
-                totalClusterRam = totalClusterRam
+                totalClusterRam = totalClusterRam,
+                transfers = transfers
             )
             if (modelLayerCount > 0) {
                 ModelAllocationCard(
@@ -145,7 +150,6 @@ fun NetworkVisualizationScreen(navController: NavController) {
                     rpcShare = rpcShare
                 )
             }
-            if (transferProgress in 1..99) TransferCard(transferProgress)
             ClusterMemoryCard(masterRamMB, totalClusterRam, workers)
             RpcLogsCard(rpcLogs)
             if (!lastCommand.isNullOrBlank()) CommandCard(lastCommand.orEmpty())
@@ -222,7 +226,8 @@ private fun TopologyGraphCard(
     masterShare: Int,
     masterLayers: Int,
     modelSizeMB: Long,
-    totalClusterRam: Int
+    totalClusterRam: Int,
+    transfers: List<HelperTransfer>
 ) {
     AppSectionCard {
         AppSectionTitle(
@@ -243,7 +248,7 @@ private fun TopologyGraphCard(
                 masterShare,
                 masterLayers
             ),
-            detail = null
+            details = emptyList()
         )
         if (workers.isEmpty()) {
             AppEmptyTopologyState()
@@ -252,6 +257,9 @@ private fun TopologyGraphCard(
                 Column {
                     TopologyConnector(workerStatus(worker))
                     WorkerNodeCard(index, worker, modelSizeMB, totalClusterRam)
+                    transfers.firstOrNull { it.address == "${worker.ip}:${worker.port}" }?.let {
+                        HelperTransferBar(it, Modifier.padding(top = 6.dp))
+                    }
                 }
             }
         }
@@ -319,14 +327,17 @@ private fun WorkerNodeCard(
         DateUtils.getRelativeTimeSpanString(it, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS)
             .toString()
     }
-    val details = buildList {
-        add(stringResource(R.string.worker_topology_layers, layers))
-        add(stringResource(R.string.worker_topology_identifier) + ": " + identifier)
+    val statusLines = buildList {
         lastConfirmed?.let { add(stringResource(R.string.worker_topology_last_confirmed, it)) }
         worker.statusDetail?.takeIf { it.isNotBlank() }?.let {
-            add(stringResource(R.string.worker_topology_status_detail, it.take(160)))
+            add(stringResource(R.string.worker_topology_status_detail, DistributedConnectivity.sanitizeLine(it).take(160)))
         }
     }.joinToString("\n")
+    val details = buildList {
+        add(stringResource(R.string.dist_r3_topology_layers_label) to layers)
+        add(stringResource(R.string.worker_topology_identifier) to identifier)
+        if (statusLines.isNotEmpty()) add(stringResource(R.string.dist_r3_topology_status_label) to statusLines)
+    }
     TopologyNodeCard(
         icon = androidx.compose.material.icons.Icons.Default.Memory,
         title = stringResource(R.string.worker_topology_worker_name, index + 1, worker.deviceName),
@@ -339,7 +350,7 @@ private fun WorkerNodeCard(
             share,
             ramDetail
         ),
-        detail = details
+        details = details
     )
 }
 
@@ -351,7 +362,7 @@ private fun TopologyNodeCard(
     status: String,
     statusColor: Color,
     metrics: String,
-    detail: String?
+    details: List<Pair<String, String>>
 ) {
     MediaTopologyNode(
         title = title,
@@ -359,7 +370,7 @@ private fun TopologyNodeCard(
         fields = buildList {
             add(stringResource(R.string.worker_topology_endpoint) to endpoint)
             add(stringResource(R.string.worker_topology_memory_title) to metrics)
-            detail?.let { add(stringResource(R.string.worker_topology_identifier) to it) }
+            addAll(details)
         }
     )
 }
@@ -436,19 +447,37 @@ private fun ModelAllocationCard(
     }
 }
 
+/** Per-helper weight-transfer bar with bytes, rate and ETA, or the cache-hit notice. */
 @Composable
-private fun TransferCard(progress: Int) {
-    AppSectionCard {
-        AppSectionTitle(title = stringResource(R.string.worker_topology_transfer_title))
+internal fun HelperTransferBar(transfer: HelperTransfer, modifier: Modifier = Modifier) {
+    val sent = DistributedTransferMath.formatMegabytes(transfer.sentBytes)
+    val expected = DistributedTransferMath.formatMegabytes(transfer.expectedBytes)
+    val label = when {
+        transfer.finished && transfer.fromCache -> stringResource(R.string.dist_r4_transfer_cache)
+        transfer.finished -> stringResource(R.string.dist_r4_transfer_done, expected)
+        transfer.active && transfer.bytesPerSec > 0L -> stringResource(
+            R.string.dist_r4_transfer_receiving,
+            sent,
+            expected,
+            DistributedTransferMath.formatRate(transfer.bytesPerSec),
+            DistributedTransferMath.formatEta(transfer.etaSeconds)
+        )
+        transfer.active -> stringResource(R.string.dist_r4_transfer_receiving_plain, sent, expected)
+        else -> stringResource(R.string.dist_r4_transfer_waiting, expected)
+    }
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         LinearProgressIndicator(
-            progress = { progress.coerceIn(0, 100) / 100f },
+            progress = { transfer.fraction },
             modifier = Modifier.fillMaxWidth(),
-            color = MaterialTheme.colorScheme.tertiary
+            color = if (transfer.finished) MaterialTheme.colorScheme.secondary
+            else MaterialTheme.colorScheme.tertiary
         )
         Text(
-            text = stringResource(R.string.worker_topology_transfer_progress, progress),
+            text = label,
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }

@@ -137,7 +137,7 @@ object PhoneWearGateway {
     private const val WEAR_TOOL_WEB = "web_search"
     private const val WEAR_TOOL_IMAGES = "image_generation"
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + com.example.llamadroid.util.startupExceptionHandler("WEAR_GATEWAY"))
     private val revision = AtomicLong(0L)
     private val processedGenerations = Collections.synchronizedSet(mutableSetOf<String>())
     private val messageListeners = ConcurrentHashMap<String, Long>()
@@ -169,6 +169,16 @@ object PhoneWearGateway {
     }
 
     fun start(context: Context) {
+        try {
+            startInternal(context)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            DebugLog.log("[WEAR] gateway start failed ${e.javaClass.simpleName}: ${e.message.orEmpty().take(160)}")
+        }
+    }
+
+    private fun startInternal(context: Context) {
         if (started) return
         synchronized(this) {
             if (started) return
@@ -481,7 +491,7 @@ private class WearRequestRouter(
     /** Chat each watch generation request runs on, so Cancel stops that chat only. */
     private val generationChatIds: ConcurrentHashMap<String, Long>
 ) {
-    private val quickChatStartScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val quickChatStartScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + com.example.llamadroid.util.startupExceptionHandler("WEAR_GATEWAY"))
 
     private companion object {
         private const val QUICK_CHAT_START_WAIT_MS = 14_000L
@@ -1383,7 +1393,7 @@ private class WearRequestRouter(
                 appContext.getString(R.string.wear_translator_open_phone_message)
             )
         }
-        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+        CoroutineScope(SupervisorJob() + Dispatchers.IO + com.example.llamadroid.util.startupExceptionHandler("WEAR_GATEWAY")).launch {
             delay(500L)
             publisher.publishTranslatorState(currentTranslatorState())
         }
@@ -1425,7 +1435,7 @@ private class WearRequestRouter(
 
     private suspend fun handleTranslatorStop(request: TranslatorCommandRequest): ByteArray {
         appContext.startService(LiveTranslatorService.stopIntent(appContext))
-        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+        CoroutineScope(SupervisorJob() + Dispatchers.IO + com.example.llamadroid.util.startupExceptionHandler("WEAR_GATEWAY")).launch {
             delay(500L)
             publisher.publishTranslatorState(currentTranslatorState())
         }
@@ -1435,7 +1445,7 @@ private class WearRequestRouter(
     private suspend fun handleTranslatorSpeaker(request: TranslatorCommandRequest): ByteArray {
         val speaker = requireNotNull(request.speaker) { appContext.getString(R.string.wear_bridge_invalid_id) }
         appContext.startService(LiveTranslatorService.setNextSpeakerIntent(appContext, speaker))
-        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+        CoroutineScope(SupervisorJob() + Dispatchers.IO + com.example.llamadroid.util.startupExceptionHandler("WEAR_GATEWAY")).launch {
             delay(300L)
             publisher.publishTranslatorState(currentTranslatorState())
         }
@@ -1443,7 +1453,7 @@ private class WearRequestRouter(
     }
 
     private fun handleTtsGenerate(request: TtsGenerateRequest): ByteArray {
-        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+        CoroutineScope(SupervisorJob() + Dispatchers.IO + com.example.llamadroid.util.startupExceptionHandler("WEAR_GATEWAY")).launch {
             runCatching {
                 val model = AppDatabase.getDatabase(appContext).modelDao()
                     .getModelsByType(ModelType.ONNX_TTS)
@@ -1822,7 +1832,7 @@ private class WearRequestRouter(
             generationChatIds.remove(requestId)
             return false
         }
-        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch generationCollector@{
+        CoroutineScope(SupervisorJob() + Dispatchers.IO + com.example.llamadroid.util.startupExceptionHandler("WEAR_GATEWAY")).launch generationCollector@{
             var observedFreshGeneration = false
             NativeChatGenerationStates.flowFor(chatId)
                 .filter { state ->
@@ -1903,14 +1913,14 @@ private class WearRequestRouter(
         val requestedAt = System.currentTimeMillis()
         var sequence = 0L
         tamaAgentService.sendMessage(pet, text, audioPath, audioDurationMs) { chunk ->
-            CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            CoroutineScope(SupervisorJob() + Dispatchers.IO + com.example.llamadroid.util.startupExceptionHandler("WEAR_GATEWAY")).launch {
                 deltaEmitter.emit(
                     replyNodeId,
                     GenerationDelta(requestId, "tama", petId, ++sequence, chunk.wearLimit(2_000), updatedAtEpochMs = System.currentTimeMillis())
                 )
             }
         }
-        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+        CoroutineScope(SupervisorJob() + Dispatchers.IO + com.example.llamadroid.util.startupExceptionHandler("WEAR_GATEWAY")).launch {
             delay(1_200L)
             val lastAssistant = tamaDatabase.tamaDao().getChatHistory(petId)
                 .lastOrNull { it.role == "assistant" && it.timestamp >= requestedAt }
@@ -2479,7 +2489,7 @@ class WearServerStartConfirmationActivity : Activity() {
             .setTitle(R.string.wear_server_confirm_title)
             .setMessage(R.string.wear_server_confirm_message)
             .setPositiveButton(R.string.wear_server_confirm_action) { _, _ ->
-                CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                CoroutineScope(SupervisorJob() + Dispatchers.IO + com.example.llamadroid.util.startupExceptionHandler("WEAR_GATEWAY")).launch {
                     val result = PhoneWearGateway.confirmServerStart(applicationContext, requestId)
                     if (result == null) {
                         withContext(Dispatchers.Main) {

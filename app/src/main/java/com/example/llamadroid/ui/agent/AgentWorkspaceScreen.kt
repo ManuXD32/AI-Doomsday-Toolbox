@@ -2705,6 +2705,11 @@ private fun AgentWorkspacePreviewTab(
                                         super.onPageStarted(view, url, favicon)
                                     }
 
+                                    override fun onRenderProcessGone(
+                                        view: WebView?,
+                                        detail: android.webkit.RenderProcessGoneDetail?
+                                    ): Boolean = true // keep the app alive; onRelease destroys the dead view
+
                                     override fun onPageFinished(view: WebView?, url: String?) {
                                         super.onPageFinished(view, url)
                                         if (view != null && url != null && isAllowedAgentPreviewUrl(url, origin)) {

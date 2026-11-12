@@ -11,7 +11,10 @@ object NativeChatWorkspaceSupport {
     const val MAX_MUTATION_CHARS = 16_384
     const val MAX_MUTATION_BYTES = 16_384
     const val MAX_READ_CHARS = 24_000
+    /** Limit for saves typed by the user in the workspace editor (the model tools keep the 16 KiB batch cap). */
+    const val MAX_USER_WRITE_BYTES = 2 * 1024 * 1024
     private const val MAX_EDIT_FILE_BYTES = 1_048_576L
+    private const val LIST_LINE_COUNT_MAX_BYTES = 262_144L
     private val fileLock = Any()
 
     fun root(context: Context, chatId: Long): File {
@@ -55,8 +58,11 @@ object NativeChatWorkspaceSupport {
         return target
     }
 
-    fun resolve(context: Context, chatId: Long, relativePath: String): File {
-        val root = root(context, chatId).canonicalFile
+    fun resolve(context: Context, chatId: Long, relativePath: String): File =
+        resolveUnder(root(context, chatId).canonicalFile, relativePath)
+
+    /** Path-safety core of [resolve]: [root] must be canonical. */
+    internal fun resolveUnder(root: File, relativePath: String): File {
         val normalized = relativePath.trim().trimStart('/').ifBlank { "." }
         require(normalized.split('/').none { it == ".." }) { "Workspace paths cannot contain `..`." }
         val file = File(root, normalized).canonicalFile
@@ -72,18 +78,48 @@ object NativeChatWorkspaceSupport {
         return directory.listFiles().orEmpty()
             .sortedWith(compareBy<File>({ !it.isDirectory }, { it.name.lowercase() }))
             .take(200)
-            .joinToString("\n") { "${if (it.isDirectory) "[dir]" else "[file]"} ${it.name}" }
+            .joinToString("\n") {
+                if (it.isDirectory) "[dir] ${it.name}"
+                else "[file] ${it.name}" + lineCountSuffix(it)
+            }
             .ifBlank { "[empty directory]" }
     }
 
-    fun read(context: Context, chatId: Long, path: String): String {
+    private fun lineCountSuffix(file: File): String =
+        if (file.length() <= LIST_LINE_COUNT_MAX_BYTES) {
+            runCatching { " (${NativeChatWorkspaceEdits.lineCount(file)} lines)" }.getOrDefault("")
+        } else {
+            " (${file.length() / 1024} KB)"
+        }
+
+    /** Numbered ranged read; with no range, the first 300 lines. */
+    fun read(context: Context, chatId: Long, path: String, startLine: Int? = null, endLine: Int? = null): String {
         val file = resolve(context, chatId, path)
         require(file.exists() && file.isFile) { "Workspace file not found: $path" }
-        val text = readBounded(file, MAX_READ_CHARS)
-        return buildString {
-            append(text.first)
-            if (text.second) append("\n[truncated; use a more focused file or split the content]")
+        return NativeChatWorkspaceEdits.readRange(readEditable(file, "read"), path, startLine, endLine)
+    }
+
+    fun search(context: Context, chatId: Long, path: String, query: String, maxResults: Int?, regex: Boolean): String {
+        val file = resolve(context, chatId, path)
+        require(file.exists() && file.isFile) { "Workspace file not found: $path" }
+        return NativeChatWorkspaceEdits.search(readEditable(file, "search"), path, query, maxResults, regex)
+    }
+
+    fun replaceInFile(context: Context, chatId: Long, path: String, oldText: String, newText: String, replaceAll: Boolean): String {
+        val file = resolve(context, chatId, path)
+        require(file.exists() && file.isFile) { "Workspace file not found: $path" }
+        return synchronized(fileLock) {
+            val outcome = NativeChatWorkspaceEdits.replaceInText(readEditable(file, "edit"), path, oldText, newText, replaceAll)
+            val bytes = outcome.updatedText.toByteArray(Charsets.UTF_8)
+            require(bytes.size <= MAX_EDIT_FILE_BYTES) { "The edited file would exceed 1 MiB; split it first." }
+            replaceFile(file, bytes)
+            outcome.message
         }
+    }
+
+    private fun readEditable(file: File, verb: String): String {
+        require(file.length() <= MAX_EDIT_FILE_BYTES) { "File is larger than 1 MiB and cannot be used to $verb in memory; split it first." }
+        return file.readText(Charsets.UTF_8)
     }
 
     fun write(context: Context, chatId: Long, path: String, content: String, append: Boolean): String {
@@ -95,9 +131,24 @@ object NativeChatWorkspaceSupport {
         require(file != root(context, chatId).canonicalFile) { "A file path is required." }
         synchronized(fileLock) {
             ensureParent(file)
+            val oldLength = if (file.isFile) file.length() else 0L
             if (append) file.appendBytes(contentBytes) else replaceFile(file, contentBytes)
+            if (file.length() > MAX_EDIT_FILE_BYTES) {
+                return "${if (append) "Appended" else "Wrote"} ${contentBytes.size} bytes to $path (file is larger than 1 MiB; no echo)."
+            }
+            val text = file.readText(Charsets.UTF_8)
+            return if (append) NativeChatWorkspaceEdits.echoAppend(path, contentBytes.size, oldLength, text)
+            else NativeChatWorkspaceEdits.echoWrite(path, contentBytes.size, text)
         }
-        return "${if (append) "Appended" else "Wrote"} ${contentBytes.size} bytes to $path."
+    }
+
+    /** Saves editor text typed by the user: same path safety and atomic replace as [write], 2 MiB limit. */
+    fun writeUser(context: Context, chatId: Long, path: String, text: String) {
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        require(bytes.size <= MAX_USER_WRITE_BYTES) { "File exceeds the 2 MiB editor limit." }
+        val file = resolve(context, chatId, path)
+        require(file != root(context, chatId).canonicalFile) { "A file path is required." }
+        synchronized(fileLock) { replaceFile(file, bytes) }
     }
 
     fun editLines(context: Context, chatId: Long, path: String, startLine: Int, endLine: Int, content: String): String {
@@ -108,7 +159,7 @@ object NativeChatWorkspaceSupport {
         val file = resolve(context, chatId, path)
         require(file.exists() && file.isFile) { "Workspace file not found: $path" }
         require(file.length() <= MAX_EDIT_FILE_BYTES) { "File is too large for an in-memory line edit; split it first." }
-        synchronized(fileLock) {
+        return synchronized(fileLock) {
             val edited = AgentRuntimeSupport.computeEditedFileContent(
                 file.readText(Charsets.UTF_8),
                 startLine,
@@ -116,8 +167,8 @@ object NativeChatWorkspaceSupport {
                 content
             )
             replaceFile(file, edited.updatedContent.toByteArray(Charsets.UTF_8))
+            NativeChatWorkspaceEdits.echoLines(path, startLine, endLine, edited.insertedLineCount, edited.updatedContent)
         }
-        return "Replaced lines $startLine-$endLine in $path."
     }
 
     fun applyPatch(context: Context, chatId: Long, patch: String): String {

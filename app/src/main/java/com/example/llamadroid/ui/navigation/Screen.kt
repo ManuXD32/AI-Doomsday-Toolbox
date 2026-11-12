@@ -44,6 +44,10 @@ sealed class Screen(val route: String) {
     object AudioTranscription : Screen("audio_transcription") // WhisperCPP
     object VideoUpscaler : Screen("video_upscaler")           // Real-ESRGAN video upscaling
     object VideoInterpolation : Screen("video_interpolation") // RIFE video frame interpolation
+    object WorldLibrary : Screen("worlds_library")             // Saved 3D worlds (three.js scenes from chats)
+    object WorldViewer : Screen("world_viewer/{worldId}") {
+        fun createRoute(worldId: String): String = "world_viewer/$worldId"
+    }
     object NotesManager : Screen("notes_manager")             // Unified notes manager
     object KnowledgeBase : Screen("knowledge_base")           // User-managed retrieval knowledge bases
     object KnowledgeChunkReader : Screen("knowledge_chunk/{chunkId}") {
@@ -93,7 +97,9 @@ sealed class Screen(val route: String) {
     object NetworkVisualization : Screen("distributed_network") // Network visualization
     object SdDistributedHub : Screen("sd_distributed")        // Stable Diffusion media distributed hub
     object SdDistributedWorker : Screen("sd_distributed_worker") // Stable Diffusion RPC worker
-    object SdDistributedMaster : Screen("sd_distributed_master") // Stable Diffusion RPC master
+    object SdDistributedMaster : Screen("sd_distributed_master") // Legacy alias of the image main-device screen
+    object SdDistributedImages : Screen("sd_distributed_images") // Distributed images (main device, image settings)
+    object SdDistributedVideo : Screen("sd_distributed_video") // Distributed video (main device, video settings)
     object SdDistributedNetwork : Screen("sd_distributed_network") // Stable Diffusion topology
     object SdDistributedRunConfig : Screen("sd_distributed_run_config") // Stable Diffusion distributed runtime config
     object SdDistributedGallery : Screen("sd_distributed_gallery") // Stable Diffusion generated media gallery

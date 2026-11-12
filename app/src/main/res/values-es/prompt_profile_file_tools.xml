@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="llama_prompt_profile_file_tools_note">Activa las herramientas de archivos del espacio de trabajo en este chat.</string>
+</resources>
