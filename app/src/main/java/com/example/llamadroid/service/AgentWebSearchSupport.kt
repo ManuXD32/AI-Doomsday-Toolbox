@@ -157,6 +157,9 @@ private fun resolveDuckDuckGoResultUrl(rawHref: String): String? {
     return target.toASCIIString().takeIf { it.length <= 2_048 }
 }
 
+/** Public-http(s)-only gate shared by every search backend's result URLs. */
+internal fun sanitizeWebSearchResultUrl(rawUrl: String): String? = resolveDuckDuckGoResultUrl(rawUrl)
+
 private fun isPrivateAddressLiteral(host: String): Boolean {
     if (':' in host) {
         val address = host.substringBefore('%')

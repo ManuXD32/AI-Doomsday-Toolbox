@@ -172,7 +172,7 @@ fun TamaScreen(
     val activeStudySessionFeed = remember(pet?.id) {
         pet?.let { currentPet -> gameEngine.observeActiveStudySession(currentPet.id) } ?: flowOf(null)
     }
-    val activeStudySession by activeStudySessionFeed.collectAsState(initial = null)
+    val activeStudySession: TamaStudySessionEntity? by activeStudySessionFeed.collectAsState(initial = null)
     val questChecklistFeed = remember(pet?.id) {
         pet?.let { currentPet -> gameEngine.observeQuestChecklist(currentPet.id) }
             ?: flowOf<List<TamaQuestChecklistItemEntity>>(emptyList())

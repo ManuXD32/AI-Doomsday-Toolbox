@@ -106,13 +106,13 @@ fun AdventureScreen(
     val dungeonType = remember(dungeonTypeName) {
         runCatching { DungeonType.valueOf(dungeonTypeName) }.getOrDefault(DungeonType.CHAOS_REALM)
     }
-    val activePet by tamaDao.observeActivePet().collectAsState(initial = null)
+    val activePet: com.example.llamadroid.tama.db.TamaPetEntity? by tamaDao.observeActivePet().collectAsState(initial = null)
     val latestSessionFlow = remember(activePet?.id, dungeonType.name) {
         activePet?.id?.let { petId ->
             tamaDao.observeLatestAdventureSessionForDungeon(petId, dungeonType.name)
         } ?: flowOf(null)
     }
-    val sessionEntity by latestSessionFlow.collectAsState(initial = null)
+    val sessionEntity: AdventureSessionEntity? by latestSessionFlow.collectAsState(initial = null)
     val stagesFlow = remember(sessionEntity?.id) {
         sessionEntity?.id?.let(tamaDao::observeAdventureStages) ?: flowOf(emptyList())
     }

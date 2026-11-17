@@ -1,7 +1,13 @@
 package com.example.llamadroid.ui.ai.llama
 
 import android.content.Context
-import androidx.compose.foundation.clickable
+import android.content.ActivityNotFoundException
+import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,10 +24,14 @@ import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.NoteAdd
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.ViewInAr
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -43,6 +53,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.llamadroid.R
 import com.example.llamadroid.service.NativeChatWorkspaceSupport
+import com.example.llamadroid.ui.ai.llama.workspace.WorkspaceExport
+import com.example.llamadroid.ui.ai.llama.workspace.WorkspacePaths
 import com.example.llamadroid.worlds.WorldPageBuilder
 import com.example.llamadroid.worlds.ui.WorldSourceViewerDialog
 import kotlinx.coroutines.Dispatchers
@@ -52,8 +64,9 @@ import java.io.File
 
 private data class NativeWorkspaceEntry(val name: String, val isDirectory: Boolean)
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun NativeChatWorkspaceDialog(context: Context, chatId: Long, onDismiss: () -> Unit) {
+fun NativeChatWorkspaceDialog(context: Context, chatId: Long, onDismiss: () -> Unit, chatTitle: String? = null) {
     var directory by remember { mutableStateOf("") }
     var entries by remember { mutableStateOf<List<NativeWorkspaceEntry>>(emptyList()) }
     var selectedFile by remember { mutableStateOf<String?>(null) }
@@ -64,7 +77,60 @@ fun NativeChatWorkspaceDialog(context: Context, chatId: Long, onDismiss: () -> U
     var error by remember { mutableStateOf<String?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
     var showWorld by remember { mutableStateOf(false) }
+    var selection by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    var pendingTreeExport by remember { mutableStateOf<List<String>>(emptyList()) }
     val scope = rememberCoroutineScope()
+
+    fun toast(message: String) = Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+
+    fun export(paths: List<String>, tree: Uri?) {
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val items = WorkspacePaths.expandSelection(NativeChatWorkspaceSupport.root(context, chatId), paths)
+                    when {
+                        tree != null -> WorkspaceExport.saveToTree(context, tree, items)
+                        android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q ->
+                            WorkspaceExport.saveToDownloads(context, items, chatTitle, chatId)
+                        else -> 0 // API 26-28 always pass a picked folder (needsTreePicker)
+                    }
+                }
+            }.onSuccess { saved ->
+                val where = if (tree != null) context.getString(R.string.native_chat_workspace_chosen_folder)
+                else WorkspacePaths.downloadFolder(chatTitle, chatId).removePrefix("Download/").let { "Downloads/$it" }
+                toast(context.resources.getQuantityString(R.plurals.native_chat_workspace_saved, saved, saved, where))
+                selection = emptySet()
+            }.onFailure { toast(context.getString(R.string.native_chat_workspace_io_error)) }
+        }
+    }
+
+    val treePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
+        if (tree != null) export(pendingTreeExport, tree)
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text(context.getString(R.string.action_delete)) },
+            text = {
+                Text(context.resources.getQuantityString(R.plurals.native_chat_workspace_delete_confirm, selection.size, selection.size))
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val paths = selection.toList()
+                    confirmDelete = false
+                    scope.launch {
+                        runCatching {
+                            withContext(Dispatchers.IO) { WorkspaceExport.delete(NativeChatWorkspaceSupport.root(context, chatId), paths) }
+                        }.onSuccess { selection = emptySet(); refresh += 1; error = null }
+                            .onFailure { error = context.getString(R.string.native_chat_workspace_io_error) }
+                    }
+                }) { Text(context.getString(R.string.action_delete)) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text(context.getString(R.string.action_cancel)) } }
+        )
+    }
 
     if (showWorld) {
         WorldSourceViewerDialog(
@@ -76,6 +142,8 @@ fun NativeChatWorkspaceDialog(context: Context, chatId: Long, onDismiss: () -> U
             onDismiss = { showWorld = false }
         )
     }
+
+    LaunchedEffect(directory) { selection = emptySet() }
 
     LaunchedEffect(directory, refresh) {
         runCatching {
@@ -188,33 +256,81 @@ fun NativeChatWorkspaceDialog(context: Context, chatId: Long, onDismiss: () -> U
                             ) { Text(context.getString(R.string.action_create)) }
                         }
                     }
+                    if (selection.isNotEmpty()) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                context.resources.getQuantityString(R.plurals.native_chat_workspace_selected, selection.size, selection.size),
+                                modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis
+                            )
+                            TextButton(onClick = {
+                                selection = entries.map { WorkspacePaths.join(directory, it.name) }.toSet()
+                            }) { Text(context.getString(R.string.native_chat_workspace_select_all), maxLines = 1) }
+                            IconButton(onClick = {
+                                val paths = selection.toList()
+                                if (WorkspaceExport.needsTreePicker) { pendingTreeExport = paths; treePicker.launch(null) }
+                                else export(paths, null)
+                            }) { Icon(Icons.Default.Download, contentDescription = context.getString(R.string.action_download)) }
+                            IconButton(onClick = { confirmDelete = true }) {
+                                Icon(Icons.Default.Delete, contentDescription = context.getString(R.string.action_delete))
+                            }
+                        }
+                    }
                     LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f)) {
                         items(entries, key = { "${it.isDirectory}:${it.name}" }) { entry ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth().clickable {
-                                    val path = listOf(directory, entry.name).filter(String::isNotBlank).joinToString("/")
-                                    if (entry.isDirectory) directory = path else {
-                                        scope.launch {
-                                            runCatching {
-                                                withContext(Dispatchers.IO) {
-                                                    // Raw text: `read` returns a numbered view meant for the model.
-                                                    val file = NativeChatWorkspaceSupport.resolve(context, chatId, path)
-                                                    require(file.isFile && file.length() <= 1_048_576L) { "Unreadable file." }
-                                                    file.readText(Charsets.UTF_8)
-                                                }
-                                            }.onSuccess {
-                                                content = it
-                                                selectedFile = path
-                                                error = null
-                                            }.onFailure { error = context.getString(R.string.native_chat_workspace_io_error) }
-                                        }
+                            val entryPath = WorkspacePaths.join(directory, entry.name)
+                            val open: () -> Unit = {
+                                val path = entryPath
+                                if (entry.isDirectory) directory = path else {
+                                    scope.launch {
+                                        runCatching {
+                                            withContext(Dispatchers.IO) {
+                                                // Raw text: `read` returns a numbered view meant for the model.
+                                                val file = NativeChatWorkspaceSupport.resolve(context, chatId, path)
+                                                require(file.isFile && file.length() <= 1_048_576L) { "Unreadable file." }
+                                                file.readText(Charsets.UTF_8)
+                                            }
+                                        }.onSuccess {
+                                            content = it
+                                            selectedFile = path
+                                            error = null
+                                        }.onFailure { error = context.getString(R.string.native_chat_workspace_io_error) }
                                     }
-                                }.padding(vertical = 10.dp),
+                                }
+                            }
+                            val toggle: () -> Unit = {
+                                selection = if (entryPath in selection) selection - entryPath else selection + entryPath
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth().combinedClickable(
+                                    onClick = { if (selection.isNotEmpty()) toggle() else open() },
+                                    onLongClick = toggle
+                                ).padding(vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
+                                Checkbox(checked = entryPath in selection, onCheckedChange = { toggle() })
                                 Icon(if (entry.isDirectory) Icons.Default.Folder else Icons.Default.Description, contentDescription = null)
                                 Spacer(Modifier.width(12.dp))
-                                Text(entry.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(entry.name, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                if (!entry.isDirectory) {
+                                    IconButton(onClick = {
+                                        scope.launch {
+                                            runCatching {
+                                                withContext(Dispatchers.IO) { NativeChatWorkspaceSupport.resolve(context, chatId, entryPath) }
+                                            }.onSuccess { file ->
+                                                try {
+                                                    context.startActivity(
+                                                        android.content.Intent.createChooser(WorkspaceExport.openIntent(context, file), null)
+                                                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                    )
+                                                } catch (_: ActivityNotFoundException) {
+                                                    toast(context.getString(R.string.native_chat_workspace_no_app))
+                                                }
+                                            }.onFailure { error = context.getString(R.string.native_chat_workspace_io_error) }
+                                        }
+                                    }) {
+                                        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = context.getString(R.string.native_chat_workspace_open_with))
+                                    }
+                                }
                             }
                         }
                     }

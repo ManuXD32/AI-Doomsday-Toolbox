@@ -845,5 +845,6 @@ private fun curatedBundleModelTypeLabel(type: ModelType): String = when (type) {
     ModelType.LLAMA_TTS_COMPANION -> stringResource(R.string.model_promote_audio_tts)
     ModelType.SD_CHECKPOINT -> stringResource(R.string.quick_setup_type_image_model)
     ModelType.WHISPER -> stringResource(R.string.quick_setup_type_whisper)
+    ModelType.EMBEDDING -> stringResource(R.string.models_type_embedding)
     else -> type.name
 }

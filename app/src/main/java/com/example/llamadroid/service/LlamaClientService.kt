@@ -12,6 +12,8 @@ import com.example.llamadroid.data.api.LlamaChatRequest
 import com.example.llamadroid.service.compaction.NativeChatCompactionHooks
 import com.example.llamadroid.service.compaction.NativeChatContextFallback
 import com.example.llamadroid.service.compaction.NativeChatContextWindow
+import com.example.llamadroid.service.chat.AttachedImagePictures
+import com.example.llamadroid.service.chat.AttachedImageTurn
 import com.example.llamadroid.service.compaction.NativeChatTurnDecorators
 import com.example.llamadroid.data.api.LlamaChatMessage
 import com.example.llamadroid.data.api.LlamaChatResponse
@@ -56,12 +58,14 @@ import java.io.File
 import java.io.IOException
 import java.io.InputStreamReader
 import java.net.URI
+import com.example.llamadroid.service.chat.ToolImageResults
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import com.example.llamadroid.service.chat.ChatAdmissionController
 import com.example.llamadroid.service.chat.ChatAdmissionPlanner
 import com.example.llamadroid.service.chat.ChatGenerationScheduler
 import com.example.llamadroid.service.chat.ChatGenerationSession
+import com.example.llamadroid.service.chat.GenerationStartGate
 import com.example.llamadroid.service.chat.ChatPowerLocks
 import com.example.llamadroid.service.chat.LiteRtSamplerDefaults
 import com.example.llamadroid.service.chat.withExtendedSamplers
@@ -419,8 +423,27 @@ class LlamaClientService : Service() {
         videoPath: String?,
         pretranscribedAudioText: String? = null,
         forceAssistantTts: Boolean = false,
-        callMode: Boolean = false
+        callMode: Boolean = false,
+        waitedForStop: Boolean = false
     ) {
+        val existing = sessions[chatId]
+        val gate = GenerationStartGate.decide(
+            hasSession = existing != null,
+            // Also wait when the UI already shows the chat as finished (Completed is published before endSession).
+            stopRequested = existing != null && (existing.stopping.get() || stoppingChats.contains(chatId) ||
+                NativeChatGenerationStates.stateFor(chatId).let { it !is GenerationState.Generating && it !is GenerationState.Queued })
+        )
+        if (gate == GenerationStartGate.Decision.WAIT_THEN_START && existing != null && !waitedForStop) {
+            // A stopped session is still unwinding: let it finish, then start (instead of dropping the request).
+            serviceScope.launch {
+                withTimeoutOrNull(GenerationStartGate.WAIT_TIMEOUT_MS) { existing.job?.join() }
+                startGeneration(
+                    chatId, serverId, userMessage, imagePath, audioPath, videoPath,
+                    pretranscribedAudioText, forceAssistantTts, callMode, waitedForStop = true
+                )
+            }
+            return
+        }
         val session = ChatGenerationSession(chatId)
         var foregroundFailed = false
         val taskId = synchronized(foregroundLock) {
@@ -438,6 +461,11 @@ class LlamaClientService : Service() {
                 return
             }
             DebugLog.log("LlamaClientService: Generation already in progress for chat $chatId")
+            if (waitedForStop) {
+                // The stopped session did not finish in time: tell the user instead of dropping silently.
+                Companion.updateState(GenerationState.Error(getString(R.string.llama_generation_still_running), chatId))
+                return
+            }
             // Surface the in-flight start instead of silently dropping the second send.
             if (NativeChatGenerationStates.stateFor(chatId).let {
                     it is GenerationState.Generating && it.content.isEmpty() &&
@@ -575,10 +603,19 @@ class LlamaClientService : Service() {
                     )
                 }
 
+                val attachedImages = AttachedImageTurn(
+                    context = applicationContext,
+                    chatId = chatId,
+                    supportsVision = server.supportsVision,
+                    isLiteRt = server.isLiteRtEngine(),
+                    helperAllowed = database.llamaChatDao().getChatById(chatId)?.easyMode != true,
+                    onStatus = { updateLocalLlamaServerStartupStatus(chatId, it) }
+                )
                 val history = NativeChatTurnDecorators.apply(
                     applicationContext,
                     chatId,
-                    applyImageFallbackForServer(
+                    images = attachedImages,
+                    history = applyImageFallbackForServer(
                         chatId = chatId,
                         server = server,
                         messages = prepareHistoryForServer(
@@ -646,6 +683,8 @@ class LlamaClientService : Service() {
                         }
                     }
                 }
+                // Interactive cards: plain turns get the awareness text as the first system block (see ChatCardsPrompt).
+                val plainChat = com.example.llamadroid.service.chat.ChatCardsPrompt.forPlainTurn(chat, toolConfig)
                 val kvSlot = kvCache.withChatLease(
                     server = server,
                     chat = chat,
@@ -671,7 +710,7 @@ class LlamaClientService : Service() {
                     streamOllamaResponse(
                         chatId = chatId,
                         taskId = taskId,
-                        chat = chat,
+                        chat = plainChat,
                         server = server,
                         history = turnHistory,
                         assistantMsgId = assistantMsgId,
@@ -683,7 +722,7 @@ class LlamaClientService : Service() {
                     streamLiteRtLmResponse(
                         chatId = chatId,
                         taskId = taskId,
-                        chat = chat,
+                        chat = plainChat,
                         server = server,
                         history = turnHistory,
                         assistantMsgId = assistantMsgId,
@@ -699,7 +738,7 @@ class LlamaClientService : Service() {
                         streamLlamaServerResponse(
                             chatId = chatId,
                             taskId = taskId,
-                            chat = chat,
+                            chat = plainChat,
                             server = server,
                             history = compactedHistory,
                             assistantMsgId = assistantMsgId,
@@ -1965,11 +2004,12 @@ class LlamaClientService : Service() {
         }
         val tools = nativeChatToolRuntime.availableTools(effectiveToolConfig, customTools)
         if (tools.isEmpty()) {
+            val plainChat = com.example.llamadroid.service.chat.ChatCardsPrompt.forPlainTurn(chat, toolConfig)
             if (server.isOllamaEngine()) {
                 streamOllamaResponse(
                     chatId = chatId,
                     taskId = taskId,
-                    chat = chat,
+                    chat = plainChat,
                     server = server,
                     history = history,
                     assistantMsgId = assistantMsgId,
@@ -1981,7 +2021,7 @@ class LlamaClientService : Service() {
                 streamLiteRtLmResponse(
                     chatId = chatId,
                     taskId = taskId,
-                    chat = chat,
+                    chat = plainChat,
                     server = server,
                     history = history,
                     assistantMsgId = assistantMsgId,
@@ -1993,7 +2033,7 @@ class LlamaClientService : Service() {
                 streamLlamaServerResponse(
                     chatId = chatId,
                     taskId = taskId,
-                    chat = chat,
+                    chat = plainChat,
                     server = server,
                     history = history,
                     assistantMsgId = assistantMsgId,
@@ -2470,6 +2510,11 @@ class LlamaClientService : Service() {
                 sourceCitations += extractNativeChatSourceCitations(toolResult.content)
                 if (toolCall.name == NativeChatToolRuntime.TOOL_DEEP_RESEARCH) {
                     roundNotes += NativeChatTurnNotes.Note(NativeChatTurnNotes.DEEP_RESEARCH_DONE)
+                }
+                toolResult.viewImagePath?.takeIf { it.isNotBlank() }?.let { viewPath ->
+                    buildToolViewImageMessage(viewPath, toolCall.name, server)?.let { view ->
+                        roundNotes += NativeChatTurnNotes.Note(view.content, view.role, view.imagePath)
+                    }
                 }
                 toolResult.generatedImagePath
                     ?.takeIf { effectiveToolConfig.imageIterationEnabled && it.isNotBlank() }
@@ -3608,6 +3653,23 @@ class LlamaClientService : Service() {
         )
     }
 
+    private fun buildToolViewImageMessage(
+        imagePath: String,
+        toolName: String,
+        server: LlamaServerEntity
+    ): OllamaService.ChatMessage? {
+        if (!server.supportsVision) return null
+        val imageFile = File(imagePath)
+        if (!imageFile.isFile) return null
+        val encodedImage = runCatching { fileToBase64(imagePath) }.getOrNull() ?: return null
+        return OllamaService.ChatMessage(
+            role = "user",
+            content = ToolImageResults.noteText(imageFile.name, toolName),
+            images = if (server.isOllamaEngine()) listOf(encodedImage) else null,
+            imagePath = imagePath
+        )
+    }
+
     private fun buildGeneratedImageReviewMessage(
         imagePath: String,
         server: LlamaServerEntity
@@ -3758,6 +3820,7 @@ class LlamaClientService : Service() {
             )
         }
 
+        val attachedPictures = AttachedImagePictures.get(chat.id)
         history.forEach { message ->
             val steps = if (message.role == "assistant") NativeChatStepHistory.decode(message.stepsJson) else null
             if (steps != null) {
@@ -3765,9 +3828,13 @@ class LlamaClientService : Service() {
                 // templates that keep it reuse the cached prefix across turns.
                 val encodeImage: ((String) -> String?)? =
                     if (server.isOllamaEngine()) ({ path: String -> runCatching { fileToBase64(path) }.getOrNull() }) else null
-                messages += NativeChatStepHistory.expand(message.content, steps, true, encodeImage, message.thinking)
+                messages += NativeChatStepHistory.expand(message.content, steps, true, encodeImage, message.thinking, serverSeesImages = server.supportsVision)
                 return@forEach
             }
+            // LiteRT passes a single image per message; the plan only assigns one, to the latest user turn.
+            val litertPicture = if (message.role == "user" && server.isLiteRtEngine()) {
+                attachedPictures[message.id]?.firstOrNull()
+            } else null
             messages += OllamaService.ChatMessage(
                 role = message.role,
                 content = message.content,
@@ -3776,7 +3843,12 @@ class LlamaClientService : Service() {
                 } else {
                     null
                 },
-                imagePath = message.imagePath,
+                imagePath = message.imagePath ?: litertPicture,
+                imagePaths = if (message.role == "user" && !server.isLiteRtEngine() && server.supportsVision) {
+                    attachedPictures[message.id].orEmpty()
+                } else {
+                    emptyList()
+                },
                 audioPath = message.audioPath,
                 // Past reasoning is replayed; the template decides whether to render it.
                 thinking = message.thinking?.takeIf { message.role == "assistant" && it.isNotBlank() }
@@ -4208,9 +4280,16 @@ class LlamaClientService : Service() {
         toolExtensions.filter { it.isEnabled(config) }.mapNotNull { extension ->
             runCatching { extension.turnHint(config, latestUserText) }.getOrNull()?.takeIf { it.isNotBlank() }
         } + listOfNotNull(
+            com.example.llamadroid.chat.cards.ChatCardsTurnHint.forTurn(
+                config.cardsEnabled, com.example.llamadroid.chat.cards.ChatCardsDefaults.currentEnabledTypes(), latestUserText
+            ),
             // Per-chat file list (after the conversation, never in the cached prefix) so the model edits files in place.
-            chatId?.takeIf { config.fileToolsEnabled }?.let { id ->
-                runCatching { NativeChatWorkspaceEdits.workspaceHint(NativeChatWorkspaceSupport.rootIfPresent(applicationContext, id)) }.getOrNull()
+            chatId?.takeIf { config.toolsEnabled }?.let { id ->
+                runCatching {
+                    val root = NativeChatWorkspaceSupport.rootIfPresent(applicationContext, id)
+                    if (config.fileToolsEnabled) NativeChatWorkspaceEdits.workspaceHintWithList(root)
+                    else NativeChatWorkspaceSupport.filesCountHint(NativeChatWorkspaceSupport.countFiles(root))
+                }.getOrNull()
             }
         )
 

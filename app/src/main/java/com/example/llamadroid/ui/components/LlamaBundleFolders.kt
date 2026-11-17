@@ -8,13 +8,15 @@ import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.model.AudioCuratedBundleCatalog
 import com.example.llamadroid.data.model.BundleCategory
 import com.example.llamadroid.data.model.CuratedModelBundle
+import com.example.llamadroid.data.model.EmbeddingCuratedBundleCatalog
 import com.example.llamadroid.data.model.LlamaCuratedBundleCatalog
 import com.example.llamadroid.data.model.folderCategory
 
 @Composable
 fun LlamaBundleFolders(onUseBundle: (CuratedModelBundle, List<ModelEntity>, String) -> Unit) {
     val groups = remember {
-        (LlamaCuratedBundleCatalog.bundles + AudioCuratedBundleCatalog.bundles)
+        (LlamaCuratedBundleCatalog.bundles + AudioCuratedBundleCatalog.bundles +
+            EmbeddingCuratedBundleCatalog.bundles)
             .groupBy { it.folderCategory() }
     }
     val folders = BundleCategory.entries.mapNotNull { category ->
@@ -26,7 +28,7 @@ fun LlamaBundleFolders(onUseBundle: (CuratedModelBundle, List<ModelEntity>, Stri
             title = stringResource(category.titleRes),
             description = stringResource(R.string.bundle_folder_description),
             bundles = groups[category].orEmpty(),
-            onUseBundle = onUseBundle.takeIf { category !in setOf(BundleCategory.SPEECH, BundleCategory.MUSIC) }
+            onUseBundle = onUseBundle.takeIf { category !in setOf(BundleCategory.SPEECH, BundleCategory.MUSIC, BundleCategory.EMBEDDINGS) }
         )
     }
 }

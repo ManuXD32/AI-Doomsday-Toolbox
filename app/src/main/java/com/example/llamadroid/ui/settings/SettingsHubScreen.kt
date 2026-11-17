@@ -51,6 +51,7 @@ fun SettingsHubScreen(navController: NavController) {
         )),
         SettingsSection(R.string.settings_section_ai, listOf(
             SettingsEntry(R.string.settings_llm, R.string.settings_llm_desc, Icons.Default.ChatBubbleOutline, "settings_llm", AppSpriteKey.MODEL_LLM),
+            SettingsEntry(R.string.chat_global_settings_title, R.string.chat_global_settings_hub_desc, Icons.Default.ChatBubbleOutline, com.example.llamadroid.ui.settings.chat.ChatSettingsSection.ROUTE),
             SettingsEntry(R.string.settings_hub_imagegen, R.string.settings_imagegen_desc, Icons.Default.Image, "settings_imagegen", AppSpriteKey.MODEL_IMAGE),
             SettingsEntry(R.string.settings_hub_whisper, R.string.settings_whisper_desc, Icons.Default.MicNone, "settings_whisper", AppSpriteKey.MODEL_WHISPER),
             SettingsEntry(R.string.settings_upscaler, R.string.settings_upscaler_desc, Icons.Default.AutoAwesome, "settings_upscaler", AppSpriteKey.TOOL_UPSCALE),

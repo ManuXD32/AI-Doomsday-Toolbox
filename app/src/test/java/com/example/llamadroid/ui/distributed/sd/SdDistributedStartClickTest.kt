@@ -1,31 +1,18 @@
 package com.example.llamadroid.ui.distributed.sd
 
-import android.app.Application
 import androidx.activity.ComponentActivity
-import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.test.onAllNodesWithText
-import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
-import androidx.navigation.NavHostController
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.rememberNavController
-import androidx.test.core.app.ApplicationProvider
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.hasScrollAction
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.AppDatabase
-import com.example.llamadroid.data.db.ModelEntity
-import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.db.SdDistributedMasterSettingsEntity
-import com.example.llamadroid.data.db.SdDistributedWorkerEntity
+import com.example.llamadroid.service.SDMode
 import com.example.llamadroid.service.SdDistributedRunMonitor
 import com.example.llamadroid.service.SdRunKind
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
-import com.example.llamadroid.ui.navigation.Screen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -38,14 +25,12 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
-import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import org.robolectric.shadows.ShadowToast
 
 /**
- * Regression gate for "tapping Start work does nothing": hosts the real distributed master screen
- * and clicks the real button through pointer input, so anything covering it fails the test.
+ * Regression gate for "tapping Start does nothing": hosts the real [SdMasterScreen] (pixel theme,
+ * 360 dp) and clicks the real footer button through pointer input, so anything covering it fails.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -57,131 +42,57 @@ class SdDistributedStartClickTest {
     @get:Rule
     val tmp = TemporaryFolder()
 
-    private lateinit var app: Application
-    private var navController: NavHostController? = null
-    private var hosted by mutableStateOf(true)
-
-    private fun resetDatabaseSingleton() {
-        // AppDatabase caches its instance statically and Robolectric gives each test a fresh data directory, so
-        // drop the stale instance. It is not closed: a Room flow of the previous composition may still be finishing
-        // a query on the IO executor, and closing under it fails the next test with "connection pool has been closed".
-        val field = AppDatabase::class.java.getDeclaredField("INSTANCE")
-        field.isAccessible = true
-        field.set(null, null)
-    }
+    private lateinit var harness: SdMasterScreenHarness
 
     @Before
     fun setUp() {
-        app = ApplicationProvider.getApplicationContext()
-        SdDistributedRunMonitor.clear()
-        resetDatabaseSingleton()
+        harness = SdMasterScreenHarness(rule, tmp)
+        harness.setUp()
     }
 
     @After
-    fun tearDown() {
-        // Dispose the composition (stops Room flow collection) before dropping the database instance.
-        rule.runOnUiThread { hosted = false }
-        rule.waitForIdle()
-        SdDistributedRunMonitor.clear()
-        resetDatabaseSingleton()
+    fun tearDown() = harness.tearDown()
+
+    private fun openRunStep() {
+        harness.awaitLoaded()
+        rule.onNodeWithTag("sd_master_step_RUN").performClick()
+        rule.waitUntil(5_000) { rule.onNodeWithTag("sd_master_start").isDisplayedSafely() }
     }
 
-    private fun host(mode: SdMasterMode) {
-        rule.setContent {
-            if (hosted) {
-                val nav = rememberNavController()
-                navController = nav
-                NavHost(nav, startDestination = Screen.SdDistributedImages.route) {
-                    composable(Screen.SdDistributedImages.route) { SdDistributedMasterContent(nav, mode) }
-                    composable(Screen.SdDistributedNetwork.route) { Box {} }
-                }
-            }
-        }
-    }
+    private fun androidx.compose.ui.test.SemanticsNodeInteraction.isDisplayedSafely(): Boolean =
+        runCatching { assertExists(); true }.getOrDefault(false)
 
-    private fun currentRoute(): String? = rule.runOnUiThread { navController?.currentBackStackEntry?.destination?.route }
+    @Test
+    fun imagesWithoutModelExplainsAndJumpsToTheModelStep() {
+        harness.host(SdMasterMode.IMAGES)
+        openRunStep()
+        val message = harness.string(R.string.sd_dist_error_select_image_model)
 
-    private fun seedImageSetup(withHelper: Boolean) {
-        val model = tmp.newFile("sd15-test.safetensors").apply { writeText("x") }
-        val db = AppDatabase.getDatabase(app)
-        runBlocking(Dispatchers.IO) {
-            db.modelDao().insertModel(
-                ModelEntity(
-                    filename = model.name,
-                    path = model.absolutePath,
-                    sizeBytes = model.length(),
-                    type = ModelType.SD_CHECKPOINT,
-                    repoId = "local/sd15-test",
-                    isDownloaded = true,
-                    sdCapabilities = "txt2img,img2img",
-                    sdFamily = "checkpoint",
-                    sdVariant = "sd1"
-                )
-            )
-            if (withHelper) {
-                db.sdDistributedDao().upsertWorker(
-                    SdDistributedWorkerEntity(host = "10.2.0.3", port = 50062, ramMB = 4096, isEnabled = true)
-                )
-            }
-            db.sdDistributedDao().upsertMasterSettings(
-                SdDistributedMasterSettingsEntity(
-                    id = 1,
-                    imageModelPath = model.absolutePath,
-                    imagePrompt = "a cat",
-                    imageExpanded = true
-                )
-            )
-        }
-    }
+        // Start is never disabled: the tap itself explains what is missing.
+        rule.onNodeWithTag("sd_master_start").assertIsEnabled().performClick()
+        rule.waitUntil(5_000) { harness.hasText(message) }
 
-    private fun awaitStart(): String {
-        val start = rule.activity.getString(R.string.sd_dist_start_work)
-        rule.waitUntil(10_000) { rule.onAllNodesWithText(start).fetchSemanticsNodes().isNotEmpty() }
-        return start
-    }
-
-    private fun clickImageStartAndAssertRun() {
-        val start = awaitStart()
-        // Wait for the settings flow to be applied to the draft state (prompt field shows the seeded value).
-        rule.waitUntil(10_000) { rule.onAllNodesWithText("a cat").fetchSemanticsNodes().isNotEmpty() }
-        rule.onNodeWithText(start).performScrollTo().assertIsEnabled().performClick()
-        rule.waitForIdle()
-
-        val intent = shadowOf(app).nextStartedService
-        assertNotNull("Start did not start a service; toast=${ShadowToast.getTextOfLatestToast()}", intent)
-        assertEquals("com.example.llamadroid.action.START_SD_GENERATION", intent.action)
-        assertTrue(intent.getBooleanExtra("extra_sd_use_distributed_holder", false))
-        rule.waitUntil(5_000) { currentRoute() == Screen.SdDistributedNetwork.route }
-        assertEquals(Screen.SdDistributedNetwork.route, currentRoute())
+        rule.onNodeWithTag("sd_master_start_message").assertExists()
+        assertTrue(harness.hasText(harness.string(R.string.sd_r8_w07_workflow_title)))
+        assertTrue("A blocked Start must not start a service", harness.launcher.images.isEmpty())
+        assertEquals(null, SdDistributedRunMonitor.session.value)
     }
 
     @Test
-    fun imagesEmptyDatabaseShowsToastAndBand() {
-        host(SdMasterMode.IMAGES)
-        val message = rule.activity.getString(R.string.sd_dist_error_select_image_model)
-        val start = awaitStart()
-        rule.onNodeWithText(start).performScrollTo().assertIsEnabled().performClick()
-        rule.waitForIdle()
+    fun imagesWithModelAndHelperReachesTheLaunchSeam() {
+        harness.seedImageSetup(withHelper = true)
+        harness.host(SdMasterMode.IMAGES)
+        harness.awaitLoaded()
+        // Model and an enabled Helper: the flow opens on the Run step.
+        rule.waitUntil(5_000) { harness.hasText(harness.string(R.string.sd_r8_w08_prompt_title)) }
 
-        assertEquals(message, ShadowToast.getTextOfLatestToast())
-        rule.waitUntil(5_000) { rule.onAllNodesWithText(message).fetchSemanticsNodes().isNotEmpty() }
-        // Shown twice: the status panel at the top and the band directly above the Start button.
-        assertTrue(rule.onAllNodesWithText(message).fetchSemanticsNodes().size >= 2)
-        assertEquals(Screen.SdDistributedImages.route, currentRoute())
-    }
+        rule.onNodeWithTag("sd_master_start").assertIsEnabled().performClick()
+        rule.waitUntil(10_000) { harness.launcher.images.isNotEmpty() }
 
-    @Test
-    fun imagesValidSetupStartsServiceAndNavigates() {
-        seedImageSetup(withHelper = false)
-        host(SdMasterMode.IMAGES)
-        clickImageStartAndAssertRun()
-    }
-
-    @Test
-    fun imagesValidSetupWithRemoteHelperStartsServiceAndNavigates() {
-        seedImageSetup(withHelper = true)
-        host(SdMasterMode.IMAGES)
-        clickImageStartAndAssertRun()
+        val config = harness.launcher.images.single()
+        assertEquals(SDMode.TXT2IMG, config.mode)
+        assertEquals("a cat", config.prompt)
+        assertTrue(config.distributedRuntime.enabled)
         val session = SdDistributedRunMonitor.session.value
         assertNotNull("Run monitor session was not begun", session)
         assertEquals(SdRunKind.IMAGE, session!!.kind)
@@ -189,48 +100,49 @@ class SdDistributedStartClickTest {
     }
 
     @Test
-    fun videoEmptyDatabaseStartIsEnabledAndGivesToast() {
-        runBlocking(Dispatchers.IO) {
-            AppDatabase.getDatabase(app).sdDistributedDao()
-                .upsertMasterSettings(SdDistributedMasterSettingsEntity(id = 1, videoExpanded = true))
-        }
-        host(SdMasterMode.VIDEO)
-        val start = awaitStart()
-        rule.onNodeWithText(start).performScrollTo().assertIsEnabled().performClick()
-        rule.waitForIdle()
+    fun imagesWithModelOnlyRunsOnThisPhone() {
+        harness.seedImageSetup(withHelper = false)
+        harness.host(SdMasterMode.IMAGES)
+        openRunStep()
 
-        val toast = ShadowToast.getTextOfLatestToast()
-        assertNotNull("Video Start click produced no toast", toast)
-        assertTrue(toast.isNotBlank())
-        assertEquals(Screen.SdDistributedImages.route, currentRoute())
+        rule.onNodeWithTag("sd_master_start").performClick()
+        rule.waitUntil(10_000) { harness.launcher.images.isNotEmpty() }
+
+        assertEquals("a cat", harness.launcher.images.single().prompt)
     }
 
-    /** Robolectric has no SD binary, so a valid video setup is blocked by the binary probe with a visible toast. */
     @Test
-    fun videoValidSetupWithoutBinaryShowsBinaryToastAndStartsNoService() {
-        val model = tmp.newFile("video-diffusion.gguf").apply { writeText("x") }
-        runBlocking(Dispatchers.IO) {
-            AppDatabase.getDatabase(app).sdDistributedDao().upsertMasterSettings(
-                SdDistributedMasterSettingsEntity(
-                    id = 1,
-                    videoExpanded = true,
-                    videoPrompt = "a cat running",
-                    videoModelPath = model.absolutePath
-                )
-            )
-        }
-        host(SdMasterMode.VIDEO)
-        val start = awaitStart()
-        rule.onNodeWithText(start).performScrollTo().assertIsEnabled().performClick()
-        rule.waitForIdle()
+    fun startFooterStaysTappableAfterScrollingTheLongRunStep() {
+        harness.seedImageSetup(withHelper = true)
+        harness.host(SdMasterMode.IMAGES)
+        harness.awaitLoaded()
+        rule.waitUntil(5_000) { harness.hasText(harness.string(R.string.sd_r8_w08_prompt_title)) }
 
-        val toast = ShadowToast.getTextOfLatestToast()
-        val allowed = listOf(
-            rule.activity.getString(R.string.video_controls_binary_unavailable_selection),
-            rule.activity.getString(R.string.video_controls_binary_checking)
-        )
-        assertTrue("Unexpected toast: $toast", toast in allowed)
-        assertEquals(null, shadowOf(app).nextStartedService)
-        assertEquals(Screen.SdDistributedImages.route, currentRoute())
+        // Scroll to the last card of the step; the footer is outside the list and must still take the tap.
+        rule.onNode(hasScrollAction())
+            .performScrollToNode(androidx.compose.ui.test.hasText(harness.string(R.string.sd_r8_w08_links_title)))
+        rule.waitForIdle()
+        rule.onNodeWithTag("sd_master_start").assertIsEnabled().performClick()
+        rule.waitUntil(10_000) { harness.launcher.images.isNotEmpty() }
+
+        assertEquals(1, harness.launcher.images.size)
+    }
+
+    /** Robolectric has no SD binary, so a video run is refused with the binary message and nothing starts. */
+    @Test
+    fun videoWithoutBinaryShowsTheBinaryMessageAndStartsNothing() {
+        runBlocking(Dispatchers.IO) {
+            AppDatabase.getDatabase(harness.app).sdDistributedDao()
+                .upsertMasterSettings(SdDistributedMasterSettingsEntity(id = 1, videoPrompt = "a cat running"))
+        }
+        harness.host(SdMasterMode.VIDEO)
+        openRunStep()
+
+        rule.onNodeWithTag("sd_master_start").performClick()
+        val message = harness.string(R.string.video_controls_binary_unavailable_selection)
+        rule.waitUntil(10_000) { harness.hasText(message) }
+
+        assertTrue(harness.launcher.videos.isEmpty())
+        assertEquals(null, SdDistributedRunMonitor.session.value)
     }
 }

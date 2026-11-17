@@ -825,6 +825,7 @@ class DownloadService : Service() {
                         db.modelDao().insertModel(entity)
                     }
                     DebugLog.log("DownloadService: Saved $finalFilename to DB as ${pending.type}")
+                    com.example.llamadroid.ui.knowledge.autoSelectEmbeddingAfterDownload(applicationContext, entity)
                     DownloadProgressHolder.removeProgress(progressKey)
                     db.withTransaction {
                         pending.pendingArtifactId?.let { artifactId ->
@@ -1115,14 +1116,14 @@ class DownloadService : Service() {
                                 sourceUrl = finalUrl,
                                 onProgress = progressReporter
                             )
-                            db.withTransaction {
+                            val linkedEntity = db.withTransaction {
                                 pending.pendingArtifactId?.let { artifactId ->
                                     ensurePendingArtifactActive(db.modelLibraryDao(), artifactId)
                                 }
-                                val linkedEntity = linkAudioCompanion(db, entity)
-                                db.modelDao().insertModel(linkedEntity)
+                                linkAudioCompanion(db, entity).also { db.modelDao().insertModel(it) }
                             }
                             DebugLog.log("DownloadService: Saved $finalFilename to DB as ${pending.type}")
+                            com.example.llamadroid.ui.knowledge.autoSelectEmbeddingAfterDownload(applicationContext, linkedEntity)
                         }
                         DownloadProgressHolder.updateProgress(progressKey, 1f)
                         DownloadProgressHolder.updateStatus(progressKey, getString(R.string.onnx_models_phase_completed))

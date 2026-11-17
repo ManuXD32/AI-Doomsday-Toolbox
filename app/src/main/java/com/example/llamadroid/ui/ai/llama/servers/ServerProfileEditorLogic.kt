@@ -117,7 +117,8 @@ internal suspend fun createChatForNewServer(context: android.content.Context, ro
         val chatId = repository.createChat(
             title = title,
             contextSize = 0,
-            apiParams = com.example.llamadroid.ui.ai.llama.chatlist.newChatApiParamsForServer(entity),
+            apiParams = com.example.llamadroid.chat.cards.ChatCardsDefaults.applyToNewChatParams(
+                context, com.example.llamadroid.ui.ai.llama.chatlist.newChatApiParamsForServer(entity)),
             serverId = rowId,
             persistKvCache = com.example.llamadroid.ui.ai.llama.chatlist.defaultPersistKvCacheForServer(entity)
         )

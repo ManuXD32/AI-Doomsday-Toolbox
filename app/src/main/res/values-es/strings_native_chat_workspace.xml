@@ -11,4 +11,26 @@
     <string name="native_chat_workspace_io_error">La acción del espacio de trabajo falló. Revisa el nombre del archivo e inténtalo de nuevo.</string>
     <string name="native_chat_workspace_new_file">Archivo nuevo</string>
     <string name="native_chat_workspace_new_folder">Carpeta nueva</string>
+    <string name="native_chat_workspace_select_all">Seleccionar todo</string>
+    <string name="native_chat_workspace_open_with">Abrir con otra app</string>
+    <string name="native_chat_workspace_no_app">Ninguna app puede abrir este archivo.</string>
+    <string name="native_chat_workspace_chosen_folder">la carpeta elegida</string>
+    <string name="native_chat_files_row_title">Archivos del chat</string>
+    <string name="native_chat_files_row_desc">Explora, descarga o elimina los archivos del espacio de este chat.</string>
+    <string name="native_chat_files_row_open">Abrir</string>
+    <plurals name="native_chat_workspace_selected">
+        <item quantity="one">%1$d seleccionado</item>
+        <item quantity="many">%1$d seleccionados</item>
+        <item quantity="other">%1$d seleccionados</item>
+    </plurals>
+    <plurals name="native_chat_workspace_saved">
+        <item quantity="one">%1$d archivo guardado en %2$s</item>
+        <item quantity="many">%1$d archivos guardados en %2$s</item>
+        <item quantity="other">%1$d archivos guardados en %2$s</item>
+    </plurals>
+    <plurals name="native_chat_workspace_delete_confirm">
+        <item quantity="one">¿Eliminar %1$d elemento seleccionado del espacio de este chat? No se puede deshacer.</item>
+        <item quantity="many">¿Eliminar %1$d elementos seleccionados del espacio de este chat? No se puede deshacer.</item>
+        <item quantity="other">¿Eliminar %1$d elementos seleccionados del espacio de este chat? No se puede deshacer.</item>
+    </plurals>
 </resources>

@@ -13,5 +13,7 @@
     <string name="vision_helper_thinking">Let the vision model think (slower)</string>
     <string name="vision_helper_ram_note">A temporary low-impact server starts only when there is enough free RAM, describes all pending images in one run and is stopped again.</string>
     <string name="vision_helper_status_waiting_ram">Vision helper waiting for free RAM</string>
-    <string name="vision_helper_status_describing">Describing image…</string>
+    <string name="vision_helper_status_starting">Starting the vision helper (this can take a minute)…</string>
+    <string name="vision_helper_status_describing">Describing image %1$s/%2$s with the vision helper…</string>
+    <string name="vision_helper_status_describing_partial">Describing image %1$s/%2$s with the vision helper… “%3$s”</string>
 </resources>

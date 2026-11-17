@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -26,7 +27,6 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -34,10 +34,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -56,6 +54,7 @@ import com.example.llamadroid.data.db.SdDistributedTemplateEntity
 import com.example.llamadroid.data.db.SdDistributedWorkerEntity
 import com.example.llamadroid.sd.SdComponentRole
 import com.example.llamadroid.sd.SdModelFamily
+import com.example.llamadroid.sd.SdModelFamilySpec
 import com.example.llamadroid.sd.matchesSdFamily
 import com.example.llamadroid.service.SDMode
 import com.example.llamadroid.service.SdDistributedAutoRamScope
@@ -129,7 +128,7 @@ internal fun TemplateManagerCard(
 
 @Composable
 internal fun RamPlanPreview(plan: SdDistributedPlacementPlan) {
-    Text(stringResource(R.string.sd_dist_auto_ram_plan), style = MaterialTheme.typography.labelLarge, color = RenderFarmPalette.violet)
+    Text(stringResource(R.string.sd_dist_auto_ram_plan), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
     Text(stringResource(R.string.sd_dist_auto_ram_budget_preview), style = MaterialTheme.typography.labelMedium)
     CodeBlock(text = plan.maxVramSpec.ifBlank { "-" })
     Text(stringResource(R.string.sd_dist_current_plan), style = MaterialTheme.typography.labelMedium)
@@ -175,8 +174,7 @@ internal fun NumberSliderField(
     valueDraft: String,
     onValueDraftChange: (String) -> Unit,
     range: ClosedFloatingPointRange<Float>,
-    suffix: String = "",
-    onDark: Boolean = false
+    suffix: String = ""
 ) {
     val numeric = valueDraft.toFloatOrNull()?.coerceIn(range.start, range.endInclusive) ?: range.start
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -185,7 +183,7 @@ internal fun NumberSliderField(
                 label,
                 modifier = Modifier.fillMaxWidth(),
                 style = MaterialTheme.typography.labelLarge,
-                color = if (onDark) Color.White else MaterialTheme.colorScheme.onSurface
+                color = MaterialTheme.colorScheme.onSurface
             )
             OutlinedTextField(
                 value = valueDraft,
@@ -193,25 +191,13 @@ internal fun NumberSliderField(
                 suffix = { if (suffix.isNotBlank()) Text(suffix) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                colors = distributedOutlinedTextFieldColors(onDark)
+                singleLine = true
             )
         }
         Slider(
             value = numeric,
             onValueChange = { onValueDraftChange(it.toInt().toString()) },
-            valueRange = range,
-            colors = if (onDark) {
-                SliderDefaults.colors(
-                    thumbColor = RenderFarmPalette.lime,
-                    activeTrackColor = RenderFarmPalette.lime,
-                    inactiveTrackColor = Color.White.copy(alpha = 0.42f),
-                    activeTickColor = RenderFarmPalette.graphite,
-                    inactiveTickColor = Color.White.copy(alpha = 0.72f)
-                )
-            } else {
-                SliderDefaults.colors()
-            }
+            valueRange = range
         )
     }
 }
@@ -222,7 +208,9 @@ internal fun WorkerRow(
     rpcName: String,
     onToggle: () -> Unit,
     onEdit: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    /** Reachability of an enabled Helper; null while unknown or when the Helper is off. */
+    online: Boolean? = null
 ) {
     ElevatedCard(
         modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
@@ -236,20 +224,34 @@ internal fun WorkerRow(
                     Text(worker.deviceName, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text("${worker.host}:${worker.port}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                AssistChip(onClick = {}, label = { Text(rpcName, maxLines = 1) })
+                if (rpcName.isNotBlank() && rpcName != "-") {
+                    AssistChip(onClick = {}, label = { Text(rpcName, maxLines = 1) })
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    stringResource(R.string.sd_dist_worker_budget_line, worker.ramMB, worker.threads),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f)
-                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.sd_dist_worker_budget_line, worker.ramMB, worker.threads),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (online != null) {
+                        Text(
+                            stringResource(if (online) R.string.sd_r8_w07_helper_online else R.string.sd_r8_w07_helper_offline),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (online) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
                 IconButton(onClick = onEdit) {
-                    Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.sd_dist_edit_worker))
+                    Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.sd_r8_w07_edit_helper))
                 }
                 IconButton(onClick = onDelete) {
-                    Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.sd_dist_delete_worker))
+                    Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.sd_r8_w07_remove_helper))
                 }
             }
         }
@@ -344,39 +346,27 @@ internal fun ToggleRow(
     title: String,
     subtitle: String,
     checked: Boolean,
-    titleColor: Color? = null,
-    subtitleColor: Color? = null,
-    checkboxCheckedColor: Color? = null,
-    checkboxUncheckedColor: Color? = null,
-    checkboxCheckmarkColor: Color? = null,
     enabled: Boolean = true,
     onCheckedChange: (Boolean) -> Unit
 ) {
-    val resolvedTitleColor = titleColor ?: MaterialTheme.colorScheme.onSurface
-    val resolvedSubtitleColor = subtitleColor ?: MaterialTheme.colorScheme.onSurfaceVariant
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
         Checkbox(
             checked = checked,
             onCheckedChange = onCheckedChange,
-            enabled = enabled,
-            colors = CheckboxDefaults.colors(
-                checkedColor = checkboxCheckedColor ?: MaterialTheme.colorScheme.primary,
-                uncheckedColor = checkboxUncheckedColor ?: MaterialTheme.colorScheme.onSurfaceVariant,
-                checkmarkColor = checkboxCheckmarkColor ?: MaterialTheme.colorScheme.onPrimary
-            )
+            enabled = enabled
         )
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 title,
                 fontWeight = FontWeight.SemiBold,
-                color = resolvedTitleColor,
+                color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
             Text(
                 subtitle,
                 style = MaterialTheme.typography.bodySmall,
-                color = resolvedSubtitleColor,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis
             )
@@ -390,8 +380,7 @@ internal fun LabeledTextField(
     value: String,
     onValueChange: (String) -> Unit,
     placeholderRes: Int,
-    keyboardType: KeyboardType = KeyboardType.Text,
-    onDark: Boolean = false
+    keyboardType: KeyboardType = KeyboardType.Text
 ) {
     OutlinedTextField(
         value = value,
@@ -400,38 +389,9 @@ internal fun LabeledTextField(
         placeholder = { Text(stringResource(placeholderRes)) },
         keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
         modifier = Modifier.fillMaxWidth(),
-        minLines = 1,
-        colors = distributedOutlinedTextFieldColors(onDark)
+        minLines = 1
     )
 }
-
-@Composable
-internal fun distributedOutlinedTextFieldColors(onDark: Boolean) =
-    if (onDark) {
-        OutlinedTextFieldDefaults.colors(
-            focusedTextColor = Color.White,
-            unfocusedTextColor = Color.White,
-            disabledTextColor = Color.White.copy(alpha = 0.72f),
-            cursorColor = RenderFarmPalette.lime,
-            focusedBorderColor = RenderFarmPalette.lime,
-            unfocusedBorderColor = Color.White.copy(alpha = 0.72f),
-            disabledBorderColor = Color.White.copy(alpha = 0.50f),
-            focusedLabelColor = RenderFarmPalette.lime,
-            unfocusedLabelColor = Color.White.copy(alpha = 0.84f),
-            disabledLabelColor = Color.White.copy(alpha = 0.72f),
-            focusedTrailingIconColor = RenderFarmPalette.lime,
-            unfocusedTrailingIconColor = Color.White.copy(alpha = 0.84f),
-            disabledTrailingIconColor = Color.White.copy(alpha = 0.60f),
-            focusedPlaceholderColor = Color.White.copy(alpha = 0.72f),
-            unfocusedPlaceholderColor = Color.White.copy(alpha = 0.72f),
-            disabledPlaceholderColor = Color.White.copy(alpha = 0.60f),
-            focusedSuffixColor = Color.White.copy(alpha = 0.84f),
-            unfocusedSuffixColor = Color.White.copy(alpha = 0.84f),
-            disabledSuffixColor = Color.White.copy(alpha = 0.60f)
-        )
-    } else {
-        OutlinedTextFieldDefaults.colors()
-    }
 
 @Composable
 internal fun TwoColumnFields(first: @Composable () -> Unit, second: @Composable () -> Unit) {
@@ -603,4 +563,32 @@ internal fun placementModeDescription(mode: SdDistributedPlacementMode): String 
     SdDistributedPlacementMode.AUTO_FIT -> stringResource(R.string.sd_dist_placement_auto_fit_desc)
     SdDistributedPlacementMode.COMPONENTS -> stringResource(R.string.sd_dist_placement_components_desc)
     SdDistributedPlacementMode.MANUAL -> stringResource(R.string.sd_dist_placement_manual_desc)
+}
+
+internal enum class SdDistributedTemplateWorkflow { IMAGE, VIDEO }
+
+/** Compatible installed files and current picks for the image component pickers of the Model step. */
+internal data class SdDistributedImageComponentChoices(
+    val familyLabel: String,
+    val spec: SdModelFamilySpec?,
+    val roles: List<SdComponentRole>,
+    val compatibleModels: Map<SdComponentRole, List<ModelEntity>>,
+    val selectedPaths: Map<SdComponentRole, String>,
+    val controlNetEnabled: Boolean,
+    val loraEnabled: Boolean,
+    val loraApplyMode: String
+)
+
+/** Compact label + value chip in the render-farm dark look (the generated-media gallery counters). */
+@Composable
+internal fun FarmStatusChip(label: String, value: String, color: Color) {
+    ElevatedCard(
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.elevatedCardColors(containerColor = RenderFarmPalette.graphiteSoft)
+    ) {
+        Column(modifier = Modifier.widthIn(min = 150.dp, max = 260.dp).padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(label, style = MaterialTheme.typography.labelSmall, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(value, style = MaterialTheme.typography.bodySmall, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+    }
 }

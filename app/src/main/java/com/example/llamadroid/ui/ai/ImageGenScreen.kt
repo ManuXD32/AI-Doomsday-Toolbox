@@ -117,6 +117,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.example.llamadroid.media.buildGeneratedMediaDetailLines
+import com.example.llamadroid.ui.distributed.sd.SdGeneratedMediaParameterLine
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -4500,16 +4502,12 @@ fun ImageGenScreen(
                     }
                     imageMetadata?.let { metadata ->
                         Spacer(modifier = Modifier.height(12.dp))
-                        Text(metadata.prompt, style = MaterialTheme.typography.bodyMedium)
-                        if (metadata.negativePrompt.isNotBlank()) Text(metadata.negativePrompt, style = MaterialTheme.typography.bodySmall)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(stringResource(R.string.sd_gallery_image_details, metadata.modelName, metadata.width, metadata.height, metadata.steps, metadata.samplingMethod.cliName), style = MaterialTheme.typography.bodySmall)
-                        Text("${Date(metadata.createdAt)} • ${metadata.generationDurationMs?.let { formatGenerationDuration(it) } ?: stringResource(R.string.sd_gallery_unavailable)}", style = MaterialTheme.typography.bodySmall)
-                        Text(stringResource(R.string.sd_gallery_image_runtime, metadata.sdRuntimeBackendMode, metadata.quantizationType.ifBlank { stringResource(R.string.sd_gallery_default) }), style = MaterialTheme.typography.bodySmall)
-                        metadata.conditioningDurationMs?.let { Text(stringResource(R.string.sd_stage_conditioning, formatGenerationDuration(it)), style = MaterialTheme.typography.bodySmall) }
-                        metadata.samplingDurationMs?.let { Text(stringResource(R.string.sd_stage_sampling, formatGenerationDuration(it)), style = MaterialTheme.typography.bodySmall) }
-                        metadata.decodingDurationMs?.let { Text(stringResource(R.string.sd_stage_decoding, formatGenerationDuration(it)), style = MaterialTheme.typography.bodySmall) }
-                        Text(stringResource(R.string.sd_gallery_image_components, metadata.vaeName ?: metadata.taeName ?: stringResource(R.string.sd_gallery_unavailable), metadata.cacheMode?.cliName ?: stringResource(R.string.gen_cache_mode_off), metadata.diffusionConvDirect, metadata.vaeConvDirect), style = MaterialTheme.typography.bodySmall)
+                        val lines = remember(metadata.metadataPath) {
+                            buildGeneratedMediaDetailLines(context, File(metadata.outputPath), metadata.mode, metadata.createdAt, null, metadata, null)
+                        }
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            lines.forEach { (label, value) -> SdGeneratedMediaParameterLine(label, value) }
+                        }
                     }
                 }
             }
@@ -4524,12 +4522,6 @@ private data class PreparedImageInput(
 )
 
 private const val IMAGE_GEN_UI_DIAGNOSTIC_SOURCE = "image_generation_ui"
-
-private fun formatGenerationDuration(durationMs: Long): String = when {
-    durationMs < 1_000L -> "${durationMs} ms"
-    durationMs < 60_000L -> String.format(Locale.getDefault(), "%.1f s", durationMs / 1_000.0)
-    else -> String.format(Locale.getDefault(), "%dm %02ds", durationMs / 60_000L, (durationMs / 1_000L) % 60L)
-}
 
 private suspend fun prepareImageInputForMode(
     context: Context,

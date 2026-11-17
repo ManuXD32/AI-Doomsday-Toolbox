@@ -80,8 +80,8 @@ import com.example.llamadroid.ui.distributed.sd.PipelineWorkerLane
 import com.example.llamadroid.ui.distributed.sd.RenderFarmPalette
 import com.example.llamadroid.ui.distributed.sd.RuntimeSummary
 import com.example.llamadroid.ui.distributed.sd.SdAdvancedHint
-import com.example.llamadroid.ui.distributed.sd.SdDistributedMasterContent
 import com.example.llamadroid.ui.distributed.sd.SdMasterMode
+import com.example.llamadroid.ui.distributed.sd.SdMasterScreen
 import com.example.llamadroid.ui.distributed.sd.SdRunProgressSection
 import com.example.llamadroid.ui.distributed.sd.SdDistributedPage
 import com.example.llamadroid.ui.distributed.sd.SdGeneratedMediaCard
@@ -568,16 +568,16 @@ fun SdDistributedNetworkScreen(navController: NavController) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SdDistributedRunConfigScreen(navController: NavController) {
-    SdDistributedMasterContent(navController, SdMasterMode.IMAGES)
+    SdMasterScreen(navController, SdMasterMode.IMAGES)
 }
 
 /** Image main-device screen; also the target of the legacy `sd_distributed_master` route. */
 @Composable
 fun SdDistributedMasterScreen(navController: NavController) {
-    SdDistributedMasterContent(navController, SdMasterMode.IMAGES)
+    SdMasterScreen(navController, SdMasterMode.IMAGES)
 }
 
 @Composable
 fun SdDistributedVideoScreen(navController: NavController) {
-    SdDistributedMasterContent(navController, SdMasterMode.VIDEO)
+    SdMasterScreen(navController, SdMasterMode.VIDEO)
 }

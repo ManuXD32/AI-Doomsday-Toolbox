@@ -2,4 +2,6 @@
 <resources>
     <string name="native_chat_attachments_read_status">Leyendo archivo adjunto…</string>
     <string name="native_chat_attachments_adding_file">Añadiendo archivo…</string>
+    <string name="native_chat_document_indexing">Indexando documento… (%1$d/%2$d)</string>
+    <string name="native_chat_document_index_failed">No se pudo indexar %1$s: %2$s</string>
 </resources>

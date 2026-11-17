@@ -131,7 +131,6 @@ fun LlamaChatListContent(
 
     var showNewChatSheet by remember { mutableStateOf(false) }
     var showQuickSetupSheet by remember { mutableStateOf(false) }
-    var showTitleGenerationSheet by remember { mutableStateOf(false) }
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var showManageFoldersDialog by remember { mutableStateOf(false) }
     var showPromptProfilesDialog by remember { mutableStateOf(false) }
@@ -297,10 +296,14 @@ fun LlamaChatListContent(
                     )
                 }
                 DropdownMenuItem(
-                    text = { Text(stringResource(R.string.title_generation_menu_item)) },
+                    text = { Text(stringResource(R.string.chat_global_settings_title)) },
                     onClick = {
                         showMoreMenu = false
-                        showTitleGenerationSheet = true
+                        navController.navigate(
+                            com.example.llamadroid.ui.settings.chat.ChatSettingsSection.route(
+                                com.example.llamadroid.ui.settings.chat.ChatSettingsSection.HELPERS
+                            )
+                        )
                     }
                 )
                 DropdownMenuItem(
@@ -557,10 +560,6 @@ fun LlamaChatListContent(
     }
 
     ChatListServerSheets(state = serverSheets, viewModel = serversViewModel, navController = navController)
-
-    if (showTitleGenerationSheet) {
-        com.example.llamadroid.ui.settings.TitleGenerationSheet(onDismiss = { showTitleGenerationSheet = false })
-    }
 
     if (showQuickSetupSheet) {
         com.example.llamadroid.ui.quicksetup.QuickSetupSheet(onDismiss = { showQuickSetupSheet = false })
@@ -1251,7 +1250,7 @@ private fun LlamaPromptProfileActionsRow(
 }
 
 @Composable
-private fun LlamaPromptProfilesManagerDialog(
+internal fun LlamaPromptProfilesManagerDialog(
     customProfiles: List<LlamaChatPromptProfileEntity>,
     onDismiss: () -> Unit,
     onCreateProfile: (String, String) -> Unit,

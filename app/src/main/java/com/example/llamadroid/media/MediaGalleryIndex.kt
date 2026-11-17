@@ -705,6 +705,8 @@ object MediaGalleryIndex {
         val explicitEnabled = runCatching {
             val json = JSONObject(metadataFile.readText())
             when {
+                // Newer sidecars record whether helpers were really used (enabled AND servers present).
+                json.opt("distributedUsed") is Boolean -> json.optBoolean("distributedUsed")
                 json.opt("distributedEnabled") is Boolean -> json.optBoolean("distributedEnabled")
                 json.optJSONObject("distributedRuntime")?.opt("enabled") is Boolean ->
                     json.optJSONObject("distributedRuntime")?.optBoolean("enabled")

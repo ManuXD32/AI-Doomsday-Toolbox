@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="video_controls_profile_title">Video profile</string>
     <string name="video_controls_binary_checking">Checking the selected native binary; saved controls remain editable until the result is known.</string>
     <string name="video_controls_binary_unavailable">Unavailable selected controls: %1$d. Saved values are retained for recovery.</string>
     <string name="video_controls_binary_unavailable_selection">The selected Stable Diffusion video binary is unavailable or could not be checked. Choose a media binary in Settings, then retry the check.</string>
@@ -50,17 +49,14 @@
     <string name="video_controls_lora_low_noise_unavailable">Low-noise-only adapters are unavailable in this native contract.</string>
     <string name="video_controls_lora_missing_or_incompatible">This adapter is missing or incompatible with the selected video family: %1$s. Disable it or choose a compatible model.</string>
     <string name="video_controls_lora_default">Native default</string>
-    <string name="video_controls_lingbot_apply">Apply installed LingBot Phone profile</string>
-    <string name="video_controls_lingbot_ready">LingBot Phone components are installed.</string>
-    <string name="video_controls_lingbot_missing">Install all LingBot Phone components in SD Models before applying this profile.</string>
-    <string name="video_controls_lingbot_no_run">This only applies the saved profile; it does not download or start a run.</string>
     <string name="video_controls_profile_missing_components">Selected profile is missing: %1$s</string>
     <string name="video_controls_profile_missing_inputs">Selected workflow is missing: %1$s</string>
     <string name="video_controls_custom_path_hint">Enter a local path or select an installed model</string>
     <string name="video_controls_clear">Clear</string>
     <string name="video_controls_additional_options">Additional native controls</string>
     <string name="video_controls_additional_options_hint">Optional flags are passed only when supported by the selected native binary and workflow. Leave a field empty to use the native default.</string>
-    <string name="video_controls_additional_unavailable">Unavailable controls for this family or native binary: %1$d. Saved values are retained for recovery.</string>
+    <string name="video_controls_additional_family_ignored">These saved values belong to a control the selected model family does not use (high-noise pass). They are kept but ignored for this run.</string>
+    <string name="video_controls_additional_binary_ignored">Some saved controls are not supported by the selected native binary. They are kept but ignored for this run; pick a newer binary to use them.</string>
     <string name="video_controls_additional_sampler">Sampler controls</string>
     <string name="video_controls_img_cfg_scale">Image CFG scale</string>
     <string name="video_controls_guidance">Guidance</string>

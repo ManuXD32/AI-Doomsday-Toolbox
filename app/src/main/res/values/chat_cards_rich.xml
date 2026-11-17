@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_card_weather_unavailable">Weather unavailable for %1$s</string>
+    <string name="chat_card_weather_feels">%1$s · feels %2$s</string>
+    <string name="chat_card_weather_humidity_wind">Humidity %1$s%% · wind %2$s km/h</string>
+    <string name="chat_card_weather_humidity">Humidity %1$s%%</string>
+    <string name="chat_card_weather_wind">Wind %1$s km/h</string>
+    <string name="chat_card_weather_source">Open-Meteo · °C</string>
+    <string name="chat_card_weather_loading">Loading weather…</string>
+    <string name="chat_card_budget_per_person">%1$s per person</string>
+    <string name="chat_card_budget_left">%1$s left of %2$s</string>
+    <string name="chat_card_budget_over">%1$s over %2$s</string>
+    <string name="chat_card_budget_estimated">Estimated total</string>
+    <string name="chat_card_budget_percent">%1$s %2$s%%</string>
+    <string name="chat_card_budget_slider">Adjust %1$s</string>
+    <string name="chat_card_photo_of">Photo: %1$s</string>
+</resources>

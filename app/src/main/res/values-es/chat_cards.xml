@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_card_preparing">Preparando tarjeta…</string>
+    <string name="chat_card_send">Enviar</string>
+    <string name="chat_card_answered">Respondida</string>
+    <string name="chat_card_other_hint">Otra…</string>
+    <string name="chat_card_required_missing">Rellena los campos obligatorios.</string>
+    <string name="chat_card_yes">Sí</string>
+    <string name="chat_card_no">No</string>
+    <string name="chat_card_select_hint">Elige…</string>
+    <string name="chat_card_date_hint">AAAA-MM-DD</string>
+    <string name="chat_card_map_default_title">Lugares</string>
+    <string name="chat_card_map_route_note">Ruta en este orden</string>
+    <string name="chat_card_chart_description">Gráfico</string>
+    <string name="chat_card_link_open">Abrir enlace</string>
+    <string name="chat_card_send_answers">Enviar respuestas</string>
+    <string name="chat_card_form_default_title">Detalles</string>
+    <string name="chat_card_pick_date">Elegir fecha</string>
+    <string name="chat_card_choose_one">Elige una</string>
+    <string name="chat_card_choose_any">Elige las que quieras</string>
+    <string name="chat_card_answers_progress">Respondidas: %1$d/%2$d</string>
+    <string name="chat_card_omni_sent">Enviado: %1$s</string>
+    <string name="chat_card_omni_error">Error</string>
+    <string name="chat_card_omni_backspace">Borrar el último carácter</string>
+    <string name="chat_card_omni_decrease">Disminuir</string>
+    <string name="chat_card_omni_increase">Aumentar</string>
+    <string name="chat_card_omni_timer">Temporizador</string>
+    <string name="chat_card_omni_stopwatch">Cronómetro</string>
+    <string name="chat_card_omni_start">Iniciar</string>
+    <string name="chat_card_omni_pause">Pausar</string>
+    <string name="chat_card_omni_reset">Reiniciar</string>
+    <string name="chat_card_omni_done">Listo</string>
+    <string name="chat_card_omni_dice">Dados</string>
+    <string name="chat_card_omni_roll">Lanzar</string>
+    <string name="chat_card_omni_coin">Moneda</string>
+    <string name="chat_card_omni_flip">Lanzar</string>
+    <string name="chat_card_omni_heads">Cara</string>
+    <string name="chat_card_omni_tails">Cruz</string>
+    <string name="chat_card_omni_pick_label">Elige uno</string>
+    <string name="chat_card_omni_pick">Elegir</string>
+</resources>

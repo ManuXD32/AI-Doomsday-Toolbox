@@ -27,6 +27,7 @@ import com.example.llamadroid.service.LlamaClientService
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.lazy.LazyListState
 import com.example.llamadroid.ui.ai.llama.MarkdownText
+import com.example.llamadroid.ui.ai.llama.chat.cards.ChatCardsUi
 
 /**
  * Message list with streaming bubble, completion stats, Continue, scroll-to-bottom button and the
@@ -64,7 +65,8 @@ internal fun ChatMessageList(
     modifier: Modifier = Modifier,
     streamingMessage: LlamaMessageEntity? = null,
     compactions: List<NativeChatCompactionEntity> = emptyList(),
-    attachmentsByMessage: Map<Long, List<LlamaMessageAttachmentEntity>> = emptyMap()
+    attachmentsByMessage: Map<Long, List<LlamaMessageAttachmentEntity>> = emptyMap(),
+    cards: ChatCardsUi? = null
 ) {
     val scope = rememberCoroutineScope()
     Box(modifier = modifier) {
@@ -100,7 +102,7 @@ internal fun ChatMessageList(
                             onRegenerate = { onRegenerate(msg) },
                             onEdit = { newContent -> onEditMessage(msg, newContent) },
                             onRetry = { onRetryMessage(msg) },
-                            retryEnabled = !isChatBusy && !msg.isError && hasActiveServer,
+                            retryEnabled = !isChatBusy && hasActiveServer && (msg.role == "assistant" || !msg.isError),
                             onRetryTranscription = { onRetryTranscription(msg) },
                             onDiscardFailedMessage = { onDiscardFailedMessage(msg) },
                             onDelete = { onDeleteMessage(msg) },
@@ -115,7 +117,8 @@ internal fun ChatMessageList(
                                 }
                             },
                             onKnowledgeLinkClick = onKnowledgeLinkClick,
-                            attachments = attachmentsByMessage[msg.id].orEmpty()
+                            attachments = attachmentsByMessage[msg.id].orEmpty(),
+                            cards = cards
                         )
                     }
                     compactions.filter { it.boundaryMessageId == msg.id }.forEach { compaction ->
@@ -142,14 +145,16 @@ internal fun ChatMessageList(
                                 genState.thinking,
                                 genState.content,
                                 forceExpand = true,
-                                onKnowledgeLinkClick = onKnowledgeLinkClick
+                                onKnowledgeLinkClick = onKnowledgeLinkClick,
+                                cardContent = if (cards != null) ({ _, _ -> }) else null
                             )
                         } else if (genState.content.isNotBlank()) {
                             MarkdownText(
                                 text = genState.content,
                                 textColor = MaterialTheme.colorScheme.onSurfaceVariant,
                                 onLinkClick = onKnowledgeLinkClick,
-                                streaming = true
+                                streaming = true,
+                                cardContent = if (cards != null) ({ _, _ -> }) else null
                             )
                         }
 

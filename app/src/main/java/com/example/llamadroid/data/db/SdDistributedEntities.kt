@@ -140,7 +140,9 @@ data class SdDistributedMasterSettingsEntity(
     val videoExpanded: Boolean = false,
     val runtimeExpanded: Boolean = false,
     val adaptersExpanded: Boolean = false,
-    val expertExpanded: Boolean = true
+    val expertExpanded: Boolean = true,
+    /** Sends split-boundary activations between devices as BF16 (half the bytes); off by default. */
+    @androidx.room.ColumnInfo(defaultValue = "0") val compressLayerTransfers: Boolean = false
 )
 
 @Entity(

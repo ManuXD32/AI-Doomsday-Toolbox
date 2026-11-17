@@ -130,6 +130,14 @@ internal fun nativeChatDocumentMimeTypes(): Array<String> = arrayOf(
     "application/xml",
     "text/markdown",
     "text/csv",
+    "text/tab-separated-values",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.oasis.opendocument.text",
+    "application/epub+zip",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.oasis.opendocument.spreadsheet",
+    "application/msword",
+    "application/vnd.ms-excel",
     "*/*"
 )
 

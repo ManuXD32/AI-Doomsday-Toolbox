@@ -5,6 +5,9 @@ import com.example.llamadroid.service.APP_WEB_SEARCH_USER_AGENT
 import com.example.llamadroid.service.MAX_APP_WEB_SEARCH_QUERY_CHARS
 import com.example.llamadroid.service.MAX_APP_WEB_SEARCH_RESULTS
 import com.example.llamadroid.service.parseDuckDuckGoSearchResults
+import com.example.llamadroid.service.search.WebSearchBackend
+import com.example.llamadroid.service.search.WebSearchBackends
+import android.content.Context
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
@@ -61,10 +64,19 @@ internal class HarnessAppWebSearch(
         .followRedirects(false)
         .followSslRedirects(false)
         .build(),
+    /** When set, the globally configured SearXNG backend is tried first with DuckDuckGo as fallback. */
+    private val context: Context? = null,
 ) {
     fun cancelOwnedRequests() = client.dispatcher.cancelAll()
 
     suspend fun search(query: String, maxResults: Int): List<DuckDuckGoSearchResult> {
+        val duckDuckGo = object : WebSearchBackend {
+            override suspend fun search(query: String, limit: Int) = searchDuckDuckGo(query, limit)
+        }
+        return WebSearchBackends.current(context, duckDuckGo).search(query, maxResults)
+    }
+
+    private suspend fun searchDuckDuckGo(query: String, maxResults: Int): List<DuckDuckGoSearchResult> {
         val url = endpoint.newBuilder().addQueryParameter("q", query).build()
         val request = Request.Builder()
             .url(url)

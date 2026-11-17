@@ -128,7 +128,8 @@ fun NewChatSheet(
                     title = title.trim().ifBlank { defaultTitle },
                     contextSize = 0,
                     systemPrompt = systemPrompt.ifBlank { null },
-                    apiParams = mergeProfileToolParams(newChatApiParamsForServer(entity), profileNeedsFileTools),
+                    apiParams = com.example.llamadroid.chat.cards.ChatCardsDefaults.applyToNewChatParams(
+                        context, mergeProfileToolParams(newChatApiParamsForServer(entity), profileNeedsFileTools)),
                     folderId = folderId,
                     serverId = rowId,
                     persistKvCache = defaultPersistKvCacheForServer(entity)

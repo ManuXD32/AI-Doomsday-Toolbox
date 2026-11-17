@@ -18,17 +18,13 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.llamadroid.R
@@ -36,7 +32,6 @@ import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppSectionCard
 import com.example.llamadroid.ui.components.AppTaskActionFooter
-import com.example.llamadroid.ui.navigation.Screen
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -79,21 +74,9 @@ internal fun SdDistributedPage(
         onBack = { navController.popBackStack() },
         bottomBar = { if (footer != null) AppTaskActionFooter(content = footer) }
     ) {
-        CompositionLocalProvider(LocalSdGetModels provides { navController.navigate(Screen.SDModels.route) }) {
-            AppContentColumn(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                content()
-            }
+        AppContentColumn(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            content()
         }
-    }
-}
-
-internal val LocalSdGetModels = compositionLocalOf<(() -> Unit)?> { null }
-
-@Composable
-internal fun SdGetModelsButton() {
-    val onGetModels = LocalSdGetModels.current ?: return
-    TextButton(onClick = onGetModels) {
-        Text(stringResource(R.string.common_get_models_link), maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

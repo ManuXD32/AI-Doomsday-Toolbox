@@ -903,6 +903,7 @@ class StableDiffusionService : Service() {
         val libDir = File(applicationContext.filesDir, "lib").apply { mkdirs() }
         setupSdLibrarySymlinks(sdBinary.parentFile, libDir, sdBinary.absolutePath)
         pb.environment()["LD_LIBRARY_PATH"] = sdProcessLibraryPath(binaryRepo, sdBinary, libDir)
+        pb.environment().putAll(sdRpcClientEnvironment(config.distributedRuntime))
 
         val process = pb.start()
         storeModeProcess(config.mode, useDistributedStateHolder, process)
@@ -933,12 +934,14 @@ class StableDiffusionService : Service() {
             }
         }
 
-        val watchdog = SdHelperWatchdog.startFor(this@StableDiffusionService, config.distributedRuntime, useDistributedStateHolder, process)
+        val lastOutputAtMs = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+        val watchdog = SdHelperWatchdog.startFor(this@StableDiffusionService, config.distributedRuntime, useDistributedStateHolder, process) { lastOutputAtMs.get() }
         try {
             process.inputStream.bufferedReader().use { reader ->
                 var line = reader.readLine()
                 while (line != null) {
                     nativeOutput.add(line)
+                    lastOutputAtMs.set(System.currentTimeMillis())
                     markNativeOutput(config.mode)
                     DebugLog.log("SD: $line")
                     latestStageTimings = latestStageTimings.withLine(line)
@@ -1132,6 +1135,7 @@ class StableDiffusionService : Service() {
         val libDir = File(applicationContext.filesDir, "lib").apply { mkdirs() }
         setupSdLibrarySymlinks(sdBinary.parentFile, libDir, sdBinary.absolutePath)
         pb.environment()["LD_LIBRARY_PATH"] = sdProcessLibraryPath(binaryRepo, sdBinary, libDir)
+        pb.environment().putAll(sdRpcClientEnvironment(config.distributedRuntime))
 
         val process = pb.start()
         storeModeProcess(SDMode.UPSCALE, useDistributedStateHolder, process)
@@ -1159,12 +1163,14 @@ class StableDiffusionService : Service() {
             }
         }
 
-        val watchdog = SdHelperWatchdog.startFor(this@StableDiffusionService, config.distributedRuntime, useDistributedStateHolder, process)
+        val lastOutputAtMs = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+        val watchdog = SdHelperWatchdog.startFor(this@StableDiffusionService, config.distributedRuntime, useDistributedStateHolder, process) { lastOutputAtMs.get() }
         try {
             process.inputStream.bufferedReader().use { reader ->
                 var line = reader.readLine()
                 while (line != null) {
                     nativeOutput.add(line)
+                    lastOutputAtMs.set(System.currentTimeMillis())
                     markNativeOutput(SDMode.UPSCALE)
                     DebugLog.log("SD: $line")
                     progressTracker.update(line, SystemClock.elapsedRealtime())?.let { parsedSnapshot ->

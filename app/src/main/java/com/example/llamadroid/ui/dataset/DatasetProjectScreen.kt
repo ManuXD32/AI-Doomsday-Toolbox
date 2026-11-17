@@ -124,7 +124,7 @@ fun DatasetProjectScreen(
     val selectedTab by viewModel.selectedTab.collectAsState()
     
     // State from database - using Flow for project so settings changes auto-refresh
-    val project by dao.getProjectFlow(projectId).collectAsState(initial = null)
+    val project: DatasetProjectEntity? by dao.getProjectFlow(projectId).collectAsState(initial = null)
     val sources by dao.getSourcesForProject(projectId).collectAsState(initial = emptyList())
     val chunks by dao.getChunksForProject(projectId).collectAsState(initial = emptyList())
     val qaList by dao.getQAForProject(projectId).collectAsState(initial = emptyList())

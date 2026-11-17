@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="searxng_local_title">SearXNG integrado (experimental)</string>
+    <string name="searxng_local_desc">Ejecuta un buscador SearXNG privado dentro del entorno Debian, accesible solo desde este teléfono. Deja vacía la dirección de SearXNG para usarlo.</string>
+    <string name="searxng_local_state_not_installed">No instalado</string>
+    <string name="searxng_local_state_installing">Instalando… puede tardar varios minutos</string>
+    <string name="searxng_local_state_stopped">Instalado y detenido (arranca en la siguiente búsqueda)</string>
+    <string name="searxng_local_state_starting">Iniciando…</string>
+    <string name="searxng_local_state_running">En ejecución en este teléfono</string>
+    <string name="searxng_local_state_failed">Error</string>
+    <string name="searxng_local_install">Instalar SearXNG</string>
+    <string name="searxng_local_start">Iniciar ahora</string>
+    <string name="searxng_local_stop">Detener</string>
+    <string name="searxng_local_uninstall">Desinstalar</string>
+    <string name="searxng_local_show_log">Ver registro</string>
+    <string name="searxng_local_hide_log">Ocultar registro</string>
+    <string name="searxng_local_log_empty">Aún no hay registro.</string>
+    <string name="searxng_local_copy_log">Copiar registro</string>
+    <string name="searxng_local_log_copied">Registro copiado.</string>
+    <string name="searxng_local_log_clip_label">Registro de SearXNG</string>
+    <string name="searxng_local_install_title">¿Instalar SearXNG?</string>
+    <string name="searxng_local_install_message">Se descargará una copia del entorno Debian (unos 200 MB en disco) más SearXNG y sus paquetes de Python (unos 150 MB adicionales) por la red, así que usa Wi-Fi.\n\nMientras funciona consume RAM junto a tu modelo y se detiene solo tras 10 minutos sin uso. Los buscadores pueden bloquear o pedir CAPTCHA a la IP de tu teléfono, así que algunas búsquedas pueden no devolver nada y recurrir a DuckDuckGo.\n\nEsta función es experimental.</string>
+    <string name="searxng_local_install_confirm">Instalar</string>
+    <string name="searxng_local_uninstall_title">¿Desinstalar SearXNG?</string>
+    <string name="searxng_local_uninstall_message">Se eliminarán los archivos de SearXNG y su configuración. Podrás instalarlo de nuevo más tarde.</string>
+    <string name="searxng_local_cancel">Cancelar</string>
+</resources>

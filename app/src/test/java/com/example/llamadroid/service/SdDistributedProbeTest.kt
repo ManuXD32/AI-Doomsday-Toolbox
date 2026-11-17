@@ -22,4 +22,12 @@ class SdDistributedProbeTest {
         assertTrue(NsdHelper.shouldRetryResolve(3, 1))
         assertFalse(NsdHelper.shouldRetryResolve(3, NsdHelper.MAX_RESOLVE_ATTEMPTS))
     }
+
+    @Test
+    fun counterRegexesMatchRealBinaryLines() {
+        assertTrue(SdDistributedService.CONNECTED_REGEX.containsMatchIn("Accepted client connection"))
+        assertTrue(SdDistributedService.DISCONNECTED_REGEX.containsMatchIn("Client connection closed"))
+        assertFalse(SdDistributedService.DISCONNECTED_REGEX.containsMatchIn("Accepted client connection"))
+        assertFalse(SdDistributedService.CONNECTED_REGEX.containsMatchIn("Client connection closed"))
+    }
 }

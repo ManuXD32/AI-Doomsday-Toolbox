@@ -263,7 +263,7 @@ internal fun sanitizeChatFileName(name: String): String {
 }
 
 internal sealed class ChatFileImportResult {
-    data class Added(val displayName: String) : ChatFileImportResult()
+    data class Added(val displayName: String, val path: String? = null) : ChatFileImportResult()
     data class TooLarge(val displayName: String) : ChatFileImportResult()
     data class Failed(val displayName: String) : ChatFileImportResult()
 }
@@ -319,7 +319,7 @@ internal suspend fun importChatFiles(context: Context, chatId: Long, uris: List<
                         source = LlamaMessageAttachmentSource.USER
                     )
                 )
-                ChatFileImportResult.Added(displayName)
+                ChatFileImportResult.Added(displayName, target.absolutePath)
             } catch (error: Exception) {
                 target.delete()
                 ChatFileImportResult.Failed(displayName)

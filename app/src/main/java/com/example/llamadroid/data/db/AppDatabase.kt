@@ -186,9 +186,10 @@ class Converters {
         com.example.llamadroid.data.model.NativeChatDelegateEventEntity::class,
         com.example.llamadroid.data.model.LlamaMessageAttachmentEntity::class,
         com.example.llamadroid.data.model.NativeChatCompactionEntity::class,
-        com.example.llamadroid.data.model.LlamaMessageImageDescriptionEntity::class
+        com.example.llamadroid.data.model.LlamaMessageImageDescriptionEntity::class,
+        com.example.llamadroid.data.model.LlamaMessageCardStateEntity::class
     ],
-    version = 132,
+    version = 134,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -233,6 +234,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun llamaMessageAttachmentDao(): com.example.llamadroid.data.dao.LlamaMessageAttachmentDao
     abstract fun nativeChatCompactionDao(): com.example.llamadroid.data.dao.NativeChatCompactionDao
     abstract fun llamaMessageImageDescriptionDao(): com.example.llamadroid.data.dao.LlamaMessageImageDescriptionDao
+    abstract fun llamaMessageCardStateDao(): com.example.llamadroid.data.dao.LlamaMessageCardStateDao
     abstract fun llamaScheduledTaskDao(): com.example.llamadroid.data.dao.LlamaScheduledTaskDao
     abstract fun llamaSpeculativeRunDao(): com.example.llamadroid.data.dao.LlamaSpeculativeRunDao
     abstract fun organizerDao(): OrganizerDao

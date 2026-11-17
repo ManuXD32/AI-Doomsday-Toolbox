@@ -1,9 +1,9 @@
 {
   "schema": 2,
-  "selection": "core-ai+sd-rpc",
-  "run_dir": "runs/adt-native-20261111-100007",
-  "output_dir": "runs/adt-native-20261111-100007/binaries",
-  "project_head": "fca6db742f7d1b0db5c0e3baf5f08b945d0f50b5",
+  "selection": "core-ai+sd-rpc+sd+sd-all",
+  "run_dir": "runs/adt-native-20261114-100009",
+  "output_dir": "runs/adt-native-20261114-100009/binaries",
+  "project_head": "0ca77a38211692f4918b758a2c174da8be005769",
   "files": [
     {
       "source": "armv9/libllama-bench_armv9.so",
@@ -63,18 +63,6 @@
       "mode": 493,
       "destinations": [
         "feature_llm_armv9/src/main/jniLibs/arm64-v8a/librpc-server_armv9.so"
-      ]
-    },
-    {
-      "source": "armv9/libsd_armv9.so",
-      "targets": [
-        "sd"
-      ],
-      "sha256": "4352b49440e8c6e5b94e69a76368bb987de4a404c2772348057431a9567737d2",
-      "bytes": 40237304,
-      "mode": 493,
-      "destinations": [
-        "feature_media_armv9/src/main/jniLibs/arm64-v8a/libsd_armv9.so"
       ]
     },
     {
@@ -151,18 +139,6 @@
       ]
     },
     {
-      "source": "baseline/libsd_baseline.so",
-      "targets": [
-        "sd"
-      ],
-      "sha256": "7c4ea0d4010f8c850f01c8cffd3cc23989eb91c33e9ba16d4e0c6556140f4beb",
-      "bytes": 40168880,
-      "mode": 493,
-      "destinations": [
-        "feature_media_baseline/src/main/jniLibs/arm64-v8a/libsd_baseline.so"
-      ]
-    },
-    {
       "source": "baseline/libwhisper-cli_baseline.so",
       "targets": [
         "whisper"
@@ -233,18 +209,6 @@
       "mode": 493,
       "destinations": [
         "feature_llm_dotprod/src/main/jniLibs/arm64-v8a/librpc-server_dotprod.so"
-      ]
-    },
-    {
-      "source": "dotprod/libsd_dotprod.so",
-      "targets": [
-        "sd"
-      ],
-      "sha256": "9c73c7ac590b5f0e9c72c1296b607dcc99acade303a795085cadd0bdcf2be3ae",
-      "bytes": 40156032,
-      "mode": 493,
-      "destinations": [
-        "feature_media_dotprod/src/main/jniLibs/arm64-v8a/libsd_dotprod.so"
       ]
     },
     {
@@ -321,18 +285,6 @@
       ]
     },
     {
-      "source": "i8mm/libsd_i8mm.so",
-      "targets": [
-        "sd-i8mm"
-      ],
-      "sha256": "c40178a1b84999254405f1ddfd03a4219c178d29e0e9f09c8b5fd0915ed53100",
-      "bytes": 40383232,
-      "mode": 493,
-      "destinations": [
-        "feature_media_i8mm/src/main/jniLibs/arm64-v8a/libsd_i8mm.so"
-      ]
-    },
-    {
       "source": "i8mm/libwhisper-cli_i8mm.so",
       "targets": [
         "whisper"
@@ -342,20 +294,6 @@
       "mode": 493,
       "destinations": [
         "feature_llm_i8mm/src/main/jniLibs/arm64-v8a/libwhisper-cli_i8mm.so"
-      ]
-    },
-    {
-      "source": "snapdragon_opencl/libAIDOCL.so",
-      "targets": [
-        "llama-snapdragon-opencl",
-        "sd-snapdragon-opencl"
-      ],
-      "sha256": "b5ab40b062fcbc63cfbfb99863abd2a2b858aaecc1e9e3fdac9b1aabab807ba1",
-      "bytes": 17680,
-      "mode": 493,
-      "destinations": [
-        "feature_llm_snapdragon_opencl/src/main/jniLibs/arm64-v8a/libAIDOCL.so",
-        "feature_media_snapdragon_opencl/src/main/jniLibs/arm64-v8a/libAIDOCL.so"
       ]
     },
     {
@@ -380,30 +318,6 @@
       "mode": 493,
       "destinations": [
         "feature_llm_snapdragon_opencl/src/main/jniLibs/arm64-v8a/libllama_server_snapdragon_opencl.so"
-      ]
-    },
-    {
-      "source": "snapdragon_opencl/libsd_snapdragon_opencl.so",
-      "targets": [
-        "sd-snapdragon-opencl"
-      ],
-      "sha256": "2c1372b0a6e4c89c275b2ed7ae0cced5aaeba2de3d40f86f50826663f61cfc81",
-      "bytes": 43176904,
-      "mode": 493,
-      "destinations": [
-        "feature_media_snapdragon_opencl/src/main/jniLibs/arm64-v8a/libsd_snapdragon_opencl.so"
-      ]
-    },
-    {
-      "source": "snapdragon_vulkan/libsd_snapdragon_vulkan.so",
-      "targets": [
-        "sd-snapdragon-vulkan"
-      ],
-      "sha256": "ad0d0a23cc1c2cc4b6b32496d0615d3504f239f8601383bf1577711f9a5051b2",
-      "bytes": 82287672,
-      "mode": 493,
-      "destinations": [
-        "feature_media_snapdragon_vulkan/src/main/jniLibs/arm64-v8a/libsd_snapdragon_vulkan.so"
       ]
     },
     {
@@ -443,18 +357,104 @@
       ]
     },
     {
+      "source": "armv9/libsd_armv9.so",
+      "targets": [
+        "sd"
+      ],
+      "sha256": "d8dc325c458eec2e0815173761d748e998435dbc03a463d2b0da99f7d507e055",
+      "bytes": 40247160,
+      "mode": 493,
+      "destinations": [
+        "feature_media_armv9/src/main/jniLibs/arm64-v8a/libsd_armv9.so"
+      ]
+    },
+    {
+      "source": "baseline/libsd_baseline.so",
+      "targets": [
+        "sd"
+      ],
+      "sha256": "b903b8e2e35c62e278839b7a4273196c20f1a8bf3df6abb5efae998776ecdfba",
+      "bytes": 40178704,
+      "mode": 493,
+      "destinations": [
+        "feature_media_baseline/src/main/jniLibs/arm64-v8a/libsd_baseline.so"
+      ]
+    },
+    {
+      "source": "dotprod/libsd_dotprod.so",
+      "targets": [
+        "sd"
+      ],
+      "sha256": "0bd5bf48e7c7f7cd001f884a5ee89f4ecefb2d51b8c5517e8f73ea57564b8972",
+      "bytes": 40165872,
+      "mode": 493,
+      "destinations": [
+        "feature_media_dotprod/src/main/jniLibs/arm64-v8a/libsd_dotprod.so"
+      ]
+    },
+    {
+      "source": "i8mm/libsd_i8mm.so",
+      "targets": [
+        "sd-i8mm"
+      ],
+      "sha256": "ba5d85410493a4841344d2f4c1ab5b8a0652a2e5b9f3be9590bc344e895a9694",
+      "bytes": 40393072,
+      "mode": 493,
+      "destinations": [
+        "feature_media_i8mm/src/main/jniLibs/arm64-v8a/libsd_i8mm.so"
+      ]
+    },
+    {
       "source": "native_build_commits.txt",
       "targets": [
         "metadata"
       ],
-      "sha256": "8141ba00ad5bb5f90b50073d034f8944d65c5dddeb19125d140f803dcc98db44",
-      "bytes": 345,
+      "sha256": "3fdca9da3cc04371f70a4d0087452bd6035a6e5877a1489863bd807692a9e78b",
+      "bytes": 229,
       "mode": 420
+    },
+    {
+      "source": "snapdragon_opencl/libAIDOCL.so",
+      "targets": [
+        "llama-snapdragon-opencl",
+        "sd-snapdragon-opencl"
+      ],
+      "sha256": "b5ab40b062fcbc63cfbfb99863abd2a2b858aaecc1e9e3fdac9b1aabab807ba1",
+      "bytes": 17680,
+      "mode": 493,
+      "destinations": [
+        "feature_llm_snapdragon_opencl/src/main/jniLibs/arm64-v8a/libAIDOCL.so",
+        "feature_media_snapdragon_opencl/src/main/jniLibs/arm64-v8a/libAIDOCL.so"
+      ]
+    },
+    {
+      "source": "snapdragon_opencl/libsd_snapdragon_opencl.so",
+      "targets": [
+        "sd-snapdragon-opencl"
+      ],
+      "sha256": "0108d5dcc09cb04a6bf27c61a30791f3260652f897ba7d838c63c36daaedaa39",
+      "bytes": 43186776,
+      "mode": 493,
+      "destinations": [
+        "feature_media_snapdragon_opencl/src/main/jniLibs/arm64-v8a/libsd_snapdragon_opencl.so"
+      ]
+    },
+    {
+      "source": "snapdragon_vulkan/libsd_snapdragon_vulkan.so",
+      "targets": [
+        "sd-snapdragon-vulkan"
+      ],
+      "sha256": "46352749f90974438d7ba23cbe16158f144f4495e960925b14304f2132cf8e3c",
+      "bytes": 82297496,
+      "mode": 493,
+      "destinations": [
+        "feature_media_snapdragon_vulkan/src/main/jniLibs/arm64-v8a/libsd_snapdragon_vulkan.so"
+      ]
     }
   ],
   "source_lock": {
     "schema": 2,
-    "selection": "sd-rpc",
+    "selection": "sd-all",
     "android": {
       "api_level": 28,
       "ndk_path": "android-ndk-r26d"
@@ -501,13 +501,13 @@
       "Vulkan-Headers": {
         "url": "https://github.com/KhronosGroup/Vulkan-Headers.git",
         "requested_ref": "default",
-        "commit": "88487f687f3100ebe1d3559a8a34d971ee85b977",
+        "commit": "b26454f3ccd67e704117a39295fa13935fd3804c",
         "submodules": false
       },
       "SPIRV-Headers": {
         "url": "https://github.com/KhronosGroup/SPIRV-Headers.git",
         "requested_ref": "default",
-        "commit": "6efe5ae6b7c6ad29da3f2cc3f164b9c3d72b78b1",
+        "commit": "5c6004e758e0c80185ef2cee93ae5c10fa342a5b",
         "submodules": false
       }
     },
@@ -531,6 +531,6 @@
       }
     }
   },
-  "published_from": "runs/adt-native-20261111-100007/native_build_manifest.json",
-  "merged_into_from": "runs/adt-native-20261109b-100002/native_build_manifest.json"
+  "published_from": "runs/adt-native-20261114-100009/native_build_manifest.json",
+  "merged_into_from": "runs/adt-native-20261112b-100008/native_build_manifest.json"
 }

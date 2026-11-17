@@ -85,6 +85,75 @@ object NativeChatWorkspaceSupport {
             .ifBlank { "[empty directory]" }
     }
 
+    const val LISTING_MAX_DEPTH = 3
+    const val LISTING_MAX_ENTRIES = 200
+    const val LISTING_FOOTER = "Read attachments with chat_file_read <id>; other files with read_workspace_file <path>."
+    const val LIST_FILES_HINT =
+        "Call list_workspace_files to see them before saying a file is missing or asking the user to send it again."
+
+    /** Context-bound recursive listing of the whole workspace (attachment ids resolved from the database). */
+    suspend fun listAll(context: Context, chatId: Long): String {
+        val root = root(context, chatId).canonicalFile
+        val db = com.example.llamadroid.data.db.AppDatabase.getDatabase(context)
+        val idsByPath = HashMap<String, String>()
+        runCatching { db.llamaMessageAttachmentDao().getForChat(chatId) }.getOrDefault(emptyList()).forEach { row ->
+            runCatching { File(row.path).canonicalPath }.getOrNull()?.let { idsByPath[it] = "f${row.id}" }
+        }
+        val outside = ArrayList<Pair<String, String>>()
+        runCatching { db.llamaMessageDao().getMessagesOnce(chatId) }.getOrDefault(emptyList()).forEach { msg ->
+            val file = msg.imagePath?.takeIf { it.isNotBlank() }?.let { File(it) } ?: return@forEach
+            if (!file.isFile) return@forEach
+            val canonical = runCatching { file.canonicalPath }.getOrNull() ?: return@forEach
+            if (canonical.startsWith(root.path + File.separator)) idsByPath[canonical] = "img${msg.id}"
+            else outside += "img${msg.id}" to file.name
+        }
+        return formatListing(root, idsByPath, outside)
+    }
+
+    /**
+     * Pure recursive listing: relative paths (depth <= [LISTING_MAX_DEPTH], <= [LISTING_MAX_ENTRIES] entries),
+     * files known by [idsByPath] (canonical path -> `f12`/`img55`) show their chat_file_read id, and
+     * [outsideImages] (id to name) are message images stored outside the workspace.
+     */
+    internal fun formatListing(root: File, idsByPath: Map<String, String>, outsideImages: List<Pair<String, String>> = emptyList()): String {
+        val lines = ArrayList<String>()
+        var truncated = false
+        fun walk(dir: File, depth: Int) {
+            val children = dir.listFiles().orEmpty()
+                .filter { !it.name.startsWith(".") }
+                .sortedWith(compareBy<File>({ !it.isDirectory }, { it.name.lowercase() }))
+            for (child in children) {
+                if (lines.size >= LISTING_MAX_ENTRIES) { truncated = true; return }
+                val rel = child.relativeTo(root).path.replace(File.separatorChar, '/')
+                if (child.isDirectory) {
+                    lines += "[dir] $rel/"
+                    if (depth <= LISTING_MAX_DEPTH) walk(child, depth + 1)
+                } else {
+                    val id = runCatching { idsByPath[child.canonicalPath] }.getOrNull()
+                    lines += "[file] $rel" + lineCountSuffix(child) + (id?.let { " id=$it" } ?: "")
+                }
+            }
+        }
+        walk(root, 1)
+        for ((id, name) in outsideImages) {
+            if (lines.size >= LISTING_MAX_ENTRIES) { truncated = true; break }
+            lines += "[image] $name id=$id"
+        }
+        if (lines.isEmpty()) return "[empty workspace]\n$LISTING_FOOTER"
+        return lines.joinToString("\n") + (if (truncated) "\n(listing truncated at $LISTING_MAX_ENTRIES entries)" else "") + "\n$LISTING_FOOTER"
+    }
+
+    /** Number of visible files (depth <= 3) under [root]; 0 when it does not exist. */
+    fun countFiles(root: File): Int =
+        if (!root.isDirectory) 0
+        else root.walkTopDown().maxDepth(LISTING_MAX_DEPTH + 1)
+            .onEnter { !it.name.startsWith(".") || it == root }
+            .count { it.isFile && !it.name.startsWith(".") }
+
+    /** Per-turn hint when file tools are OFF; null when the chat has no files. */
+    fun filesCountHint(count: Int): String? =
+        if (count <= 0) null else "This chat has $count file${if (count == 1) "" else "s"}. $LIST_FILES_HINT"
+
     private fun lineCountSuffix(file: File): String =
         if (file.length() <= LIST_LINE_COUNT_MAX_BYTES) {
             runCatching { " (${NativeChatWorkspaceEdits.lineCount(file)} lines)" }.getOrDefault("")
@@ -98,6 +167,37 @@ object NativeChatWorkspaceSupport {
         require(file.exists() && file.isFile) { "Workspace file not found: $path" }
         return NativeChatWorkspaceEdits.readRange(readEditable(file, "read"), path, startLine, endLine)
     }
+
+    private val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "heif")
+
+    /** MIME type when [header] (the first bytes of a file) is a known image format, else null. Never decodes anything. */
+    fun imageMimeFromMagic(header: ByteArray): String? {
+        fun at(i: Int) = if (i < header.size) header[i].toInt() and 0xFF else -1
+        fun ascii(from: Int, text: String) = text.indices.all { at(from + it) == text[it].code }
+        return when {
+            at(0) == 0x89 && ascii(1, "PNG") -> "image/png"
+            at(0) == 0xFF && at(1) == 0xD8 && at(2) == 0xFF -> "image/jpeg"
+            ascii(0, "GIF8") -> "image/gif"
+            ascii(0, "RIFF") && ascii(8, "WEBP") -> "image/webp"
+            header.size >= 14 && ascii(0, "BM") && (6..9).all { at(it) == 0 } -> "image/bmp"
+            ascii(4, "ftyp") && (ascii(8, "heic") || ascii(8, "heix") || ascii(8, "mif1") || ascii(8, "heif")) -> "image/heic"
+            else -> null
+        }
+    }
+
+    /** True when [file] is an image by extension or by magic bytes (so text tools never decode it as text). */
+    fun isImageFile(file: File): Boolean {
+        if (!file.isFile) return false
+        if (file.name.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT) in IMAGE_EXTENSIONS) return true
+        return imageMimeOf(file) != null
+    }
+
+    /** MIME type from the file's magic bytes, or null. */
+    fun imageMimeOf(file: File): String? = runCatching {
+        val header = ByteArray(16)
+        val n = file.inputStream().use { it.read(header) }
+        if (n <= 0) null else imageMimeFromMagic(header.copyOf(n))
+    }.getOrNull()
 
     fun search(context: Context, chatId: Long, path: String, query: String, maxResults: Int?, regex: Boolean): String {
         val file = resolve(context, chatId, path)

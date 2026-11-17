@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sd_r8_w01_unverifiable_log">Helper %1$s (%2$s) did not answer the first liveness check, so it cannot be monitored during this run.</string>
+</resources>

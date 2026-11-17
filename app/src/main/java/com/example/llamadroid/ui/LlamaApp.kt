@@ -599,7 +599,10 @@ fun LlamaApp(
             LocalServerProfileEditorOpener provides { cardId, modelPath ->
                 navController.navigate(serverProfileEditorRoute(cardId, modelPath))
             },
-            LocalTamaNotice provides tamaNotice
+            LocalTamaNotice provides tamaNotice,
+            com.example.llamadroid.ui.settings.chat.LocalChatGlobalSettingsOpener provides { section ->
+                navController.navigate(com.example.llamadroid.ui.settings.chat.ChatSettingsSection.route(section))
+            }
         ) {
         Box(Modifier.fillMaxSize()) {
         NavHost(
@@ -780,6 +783,15 @@ fun LlamaApp(
             // Settings sub-screens
             composable("settings_general") { GeneralSettingsScreen(navController) }
             composable("settings_llm") { LLMSettingsScreen(navController) }
+            composable(
+                com.example.llamadroid.ui.settings.chat.ChatSettingsSection.ROUTE_PATTERN,
+                arguments = listOf(navArgument("section") { type = NavType.StringType; nullable = true; defaultValue = null })
+            ) { entry ->
+                com.example.llamadroid.ui.settings.chat.ChatGlobalSettingsScreen(
+                    navController,
+                    com.example.llamadroid.ui.settings.chat.ChatSettingsSection.fromArg(entry.arguments?.getString("section"))
+                )
+            }
             composable(
                 Screen.ServerProfileEditor.route,
                 arguments = listOf(

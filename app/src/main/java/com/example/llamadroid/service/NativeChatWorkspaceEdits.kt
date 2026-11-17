@@ -177,12 +177,22 @@ object NativeChatWorkspaceEdits {
         return if (line.length <= 300) line else line.take(299) + "…"
     }
 
+    /** [workspaceHint] plus the list-files sentence, ≤ 300 chars in total; null when the chat has no files. */
+    fun workspaceHintWithList(root: File): String? {
+        val base = workspaceHint(root) ?: return null
+        val sentence = NativeChatWorkspaceSupport.filesCountHint(NativeChatWorkspaceSupport.countFiles(root)) ?: return base
+        val tail = " $sentence"
+        val room = 300 - tail.length
+        val head = if (base.length <= room) base else base.take(room - 1) + "…"
+        return head + tail
+    }
+
     fun lineCount(file: File): Int = lines(file.readText(Charsets.UTF_8)).size
 
     // ---- tool definitions and dispatch (a pure function of config) ----
 
     fun tools(fileToolsEnabled: Boolean): List<AgentTool> = buildList {
-        add(AgentTool(NativeChatToolRuntime.TOOL_LIST_WORKSPACE_FILES, "List files and folders in this chat's private workspace, with line counts.", mapOf("path" to "Optional workspace-relative directory")))
+        add(AgentTool(NativeChatToolRuntime.TOOL_LIST_WORKSPACE_FILES, "List this chat's files: attachments (with their chat_file_read ids), generated files and workspace files. Call it before saying a file is missing.", mapOf("path" to "Optional workspace-relative directory")))
         add(AgentTool(
             NativeChatToolRuntime.TOOL_READ_WORKSPACE_FILE,
             "Read part of a UTF-8 file from this chat's workspace as numbered lines. Without a range you get the first $DEFAULT_READ_LINES lines; read big files in ranges.",

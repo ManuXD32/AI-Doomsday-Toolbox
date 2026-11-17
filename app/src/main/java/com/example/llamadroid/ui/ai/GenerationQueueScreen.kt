@@ -90,7 +90,7 @@ fun GenerationQueueScreen(navController: NavController) {
     val repository = remember(context) { GenerationQueueRepository(context) }
     val scope = rememberCoroutineScope()
     val queue by repository.queue.collectAsState(initial = emptyList())
-    val control by repository.control.collectAsState(initial = null)
+    val control: com.example.llamadroid.data.db.GenerationQueueControlEntity? by repository.control.collectAsState(initial = null)
     val pendingCount by repository.pendingCountFlow.collectAsState(initial = 0)
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     val runId = control?.runId

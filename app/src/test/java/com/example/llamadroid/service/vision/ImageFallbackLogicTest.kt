@@ -23,7 +23,7 @@ class ImageFallbackLogicTest {
         val list = listOf(msg(1, content = "what is this?", image = "/a.png"), msg(2, role = "assistant", content = "ok"))
         val out = ImageFallbackLogic.apply(list, supportsVision = false, descriptions = mapOf(1L to " a cat "))
         assertNull(out[0].imagePath)
-        assertEquals("what is this?\n\n${ImageFallbackLogic.DESCRIPTION_HEADER}\na cat", out[0].content)
+        assertEquals("what is this?\n\n${ImageFallbackLogic.DESCRIPTION_HEADER}\na cat\n\n${ImageFallbackLogic.MISTAKES_NOTE}", out[0].content)
         assertEquals(list[1], out[1])
     }
 
@@ -34,7 +34,7 @@ class ImageFallbackLogicTest {
             supportsVision = false,
             descriptions = mapOf(1L to "desc")
         )
-        assertEquals("${ImageFallbackLogic.DESCRIPTION_HEADER}\ndesc", out[0].content)
+        assertEquals("${ImageFallbackLogic.DESCRIPTION_HEADER}\ndesc\n\n${ImageFallbackLogic.MISTAKES_NOTE}", out[0].content)
         assertEquals("q", out[1].content)
         assertTrue(out.all { it.imagePath == null })
     }

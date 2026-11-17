@@ -314,12 +314,12 @@
         "libwhisper-cli_baseline.so",
         "libz.so"
       ],
-      "uncompressedNativeBytes": 85493424,
+      "uncompressedNativeBytes": 85503248,
       "libraries": [
         {
           "name": "libsd_baseline.so",
-          "sha256": "7c4ea0d4010f8c850f01c8cffd3cc23989eb91c33e9ba16d4e0c6556140f4beb",
-          "bytes": 40168880
+          "sha256": "b903b8e2e35c62e278839b7a4273196c20f1a8bf3df6abb5efae998776ecdfba",
+          "bytes": 40178704
         },
         {
           "name": "libsd-rpc-server_baseline.so",
@@ -364,12 +364,12 @@
         "libwhisper-cli_dotprod.so",
         "libz.so"
       ],
-      "uncompressedNativeBytes": 85498064,
+      "uncompressedNativeBytes": 85507904,
       "libraries": [
         {
           "name": "libsd_dotprod.so",
-          "sha256": "9c73c7ac590b5f0e9c72c1296b607dcc99acade303a795085cadd0bdcf2be3ae",
-          "bytes": 40156032
+          "sha256": "0bd5bf48e7c7f7cd001f884a5ee89f4ecefb2d51b8c5517e8f73ea57564b8972",
+          "bytes": 40165872
         },
         {
           "name": "libsd-rpc-server_dotprod.so",
@@ -414,12 +414,12 @@
         "libwhisper-cli_armv9.so",
         "libz.so"
       ],
-      "uncompressedNativeBytes": 85581864,
+      "uncompressedNativeBytes": 85591720,
       "libraries": [
         {
           "name": "libsd_armv9.so",
-          "sha256": "4352b49440e8c6e5b94e69a76368bb987de4a404c2772348057431a9567737d2",
-          "bytes": 40237304
+          "sha256": "d8dc325c458eec2e0815173761d748e998435dbc03a463d2b0da99f7d507e055",
+          "bytes": 40247160
         },
         {
           "name": "libsd-rpc-server_armv9.so",
@@ -460,12 +460,12 @@
         "libsd_i8mm.so",
         "libz.so"
       ],
-      "uncompressedNativeBytes": 40383232,
+      "uncompressedNativeBytes": 40393072,
       "libraries": [
         {
           "name": "libsd_i8mm.so",
-          "sha256": "c40178a1b84999254405f1ddfd03a4219c178d29e0e9f09c8b5fd0915ed53100",
-          "bytes": 40383232
+          "sha256": "ba5d85410493a4841344d2f4c1ab5b8a0652a2e5b9f3be9590bc344e895a9694",
+          "bytes": 40393072
         }
       ]
     },
@@ -487,12 +487,12 @@
         "libsd_snapdragon_opencl.so",
         "libz.so"
       ],
-      "uncompressedNativeBytes": 43194584,
+      "uncompressedNativeBytes": 43204456,
       "libraries": [
         {
           "name": "libsd_snapdragon_opencl.so",
-          "sha256": "2c1372b0a6e4c89c275b2ed7ae0cced5aaeba2de3d40f86f50826663f61cfc81",
-          "bytes": 43176904
+          "sha256": "0108d5dcc09cb04a6bf27c61a30791f3260652f897ba7d838c63c36daaedaa39",
+          "bytes": 43186776
         },
         {
           "name": "libAIDOCL.so",
@@ -519,12 +519,12 @@
         "libvulkan.so",
         "libz.so"
       ],
-      "uncompressedNativeBytes": 82287672,
+      "uncompressedNativeBytes": 82297496,
       "libraries": [
         {
           "name": "libsd_snapdragon_vulkan.so",
-          "sha256": "ad0d0a23cc1c2cc4b6b32496d0615d3504f239f8601383bf1577711f9a5051b2",
-          "bytes": 82287672
+          "sha256": "46352749f90974438d7ba23cbe16158f144f4495e960925b14304f2132cf8e3c",
+          "bytes": 82297496
         }
       ]
     }

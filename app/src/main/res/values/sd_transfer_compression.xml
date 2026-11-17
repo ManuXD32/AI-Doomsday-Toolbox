@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sd_transfer_title">Compress transfers between devices</string>
+    <string name="sd_transfer_desc">Sends about half as much data between phones on every step of a split run.</string>
+    <string name="sd_transfer_details_title">What this changes</string>
+    <string name="sd_transfer_detail_bandwidth">Halves the data sent between phones on every step of a split run, which helps on slow Wi-Fi.</string>
+    <string name="sd_transfer_detail_precision">It uses BF16, which keeps the full number range (no overflow) but only about 3 significant digits. Results can differ slightly from an unsplit run with the same seed.</string>
+    <string name="sd_transfer_detail_scope">Only matters when the model is split across devices. It has no effect on chat.</string>
+    <string name="sd_transfer_detail_version">This phone needs version 1.00009 or newer. Older Helpers work fine.</string>
+</resources>

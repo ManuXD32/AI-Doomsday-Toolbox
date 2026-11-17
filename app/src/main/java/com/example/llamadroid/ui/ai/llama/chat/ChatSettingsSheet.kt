@@ -73,6 +73,10 @@ internal fun ChatSettingsSheet(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            val openGlobalSettings = com.example.llamadroid.ui.settings.chat.LocalChatGlobalSettingsOpener.current
+            androidx.compose.material3.TextButton(onClick = { onDismiss(); openGlobalSettings(null) }) {
+                Text(stringResource(R.string.chat_settings_for_all_chats), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
             ChatSettingsGroupList(
                 state = state,
                 env = env,

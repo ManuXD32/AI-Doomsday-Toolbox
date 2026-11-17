@@ -202,24 +202,14 @@ fun GeneralSettingsScreen(navController: NavController) {
                 }
             }
 
-            // Prompt disk caches (all KV caches: chats, subagents, harness agents)
+            // Chat-related preferences (prompt caches, web search, helper models) live in Chat settings.
             item {
-                ChatKvCacheStorageCard(
-                    titleRes = R.string.general_prompt_caches_title,
-                    deleteAllLabelRes = R.string.general_prompt_caches_erase_all,
-                    deleteAllTitleRes = R.string.general_prompt_caches_erase_title,
-                    deleteAllMessageRes = R.string.general_prompt_caches_erase_message
-                )
-            }
-
-            // Title generation and the vision helper live in the chats home "Helper models" sheet.
-            item {
-                Text(
-                    stringResource(R.string.general_helper_models_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
-                )
+                OutlinedButton(
+                    onClick = { navController.navigate(com.example.llamadroid.ui.settings.chat.ChatSettingsSection.route()) },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.general_chat_settings_link), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
             }
 
             item {

@@ -21,7 +21,10 @@ data class ShotProfile(
         val TABLET7 = ShotProfile("tablet7", "w600dp-h960dp-port-notnight-xhdpi", 1200, 1920, 1280)
         val TABLET10 = ShotProfile("tablet10", "w800dp-h1280dp-port-notnight-xhdpi", 1600, 2560, 1280)
 
-        val ALL = listOf(PHONE, TABLET7, TABLET10)
+        /** Phone width, double height: for long single items (chat cards); trim the empty bottom after capture. */
+        val PHONE_LONG = ShotProfile("phone_long", "w412dp-h1464dp-port-notnight-420dpi", 1080, 3840, 1280)
+
+        val ALL = listOf(PHONE, TABLET7, TABLET10, PHONE_LONG)
 
         fun byKey(key: String): ShotProfile =
             ALL.firstOrNull { it.key == key } ?: error("Unknown shot profile '$key'; use ${ALL.map { it.key }}")

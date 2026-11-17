@@ -1,9 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="sd_r4_images_title">Distributed images</string>
-    <string name="sd_r4_images_subtitle">Choose helpers, an image model and a prompt. Everything else is optional.</string>
     <string name="sd_r4_video_title">Distributed video</string>
-    <string name="sd_r4_video_subtitle">Choose helpers, a video model and a prompt. Everything else is optional.</string>
     <string name="sd_r4_hub_images_desc">Make images with your helpers: text to image, image to image, upscale and ADetailer.</string>
     <string name="sd_r4_hub_video_desc">Make video clips with your helpers: text to video and image to video.</string>
     <string name="sd_r4_open_images">Open images</string>

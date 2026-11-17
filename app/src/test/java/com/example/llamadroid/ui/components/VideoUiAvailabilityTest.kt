@@ -85,4 +85,49 @@ class VideoUiAvailabilityTest {
         assertEquals(true, cleared.useTae)
         assertEquals(SdVideoPromptFormat.PLAIN, cleared.promptFormat)
     }
+
+    @Test
+    fun `family without high-noise pass hides the group and reports no engine blocks`() {
+        val availability = videoUiAvailability(
+            profile = SdVideoFamilyProfiles.LINGBOT_VIDEO,
+            binaryCapabilities = SdBinaryCapabilities.ALLOW_ALL
+        )
+        val defaults = VideoRuntimeOptions()
+
+        assertFalse(availability.highNoiseFamilySupported)
+        assertTrue(availability.binaryBlockedControls.isEmpty())
+        assertTrue(availability.familyBlockedControls.all { it.requiresHighNoiseProfile })
+        assertEquals(8, availability.familyBlockedControls.size)
+        assertTrue(availability.familyBlockedControls.none { defaults.hasSavedValue(it) })
+    }
+
+    @Test
+    fun `saved high-noise value is reported as family blocked`() {
+        val availability = videoUiAvailability(
+            profile = SdVideoFamilyProfiles.LINGBOT_VIDEO,
+            binaryCapabilities = SdBinaryCapabilities.ALLOW_ALL
+        )
+        val options = VideoRuntimeOptions(highNoiseGuidance = 3f)
+
+        assertTrue(availability.familyBlockedControls.any { options.hasSavedValue(it) })
+        assertTrue(availability.binaryBlockedControls.none { options.hasSavedValue(it) })
+    }
+
+    @Test
+    fun `binary missing a flag is reported as binary blocked not family blocked`() {
+        val availability = videoUiAvailability(
+            profile = SdVideoFamilyProfiles.WAN,
+            binaryCapabilities = SdBinaryCapabilities(
+                supportedFlags = setOf("--guidance"),
+                supportedModes = setOf("vid_gen")
+            )
+        )
+        val options = VideoRuntimeOptions(eta = 0.5f)
+
+        assertTrue(availability.highNoiseFamilySupported)
+        assertTrue(availability.familyBlockedControls.isEmpty())
+        assertTrue(VideoAdditionalControl.ETA in availability.binaryBlockedControls)
+        assertTrue(availability.binaryBlockedControls.any { options.hasSavedValue(it) })
+        assertTrue(VideoAdditionalControl.GUIDANCE !in availability.binaryBlockedControls)
+    }
 }

@@ -58,12 +58,18 @@ fun VideoAdditionalOptionsEditor(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        if (availability.unavailableControls.isNotEmpty()) {
+        val savedFamilyBlocked = availability.familyBlockedControls.any { options.hasSavedValue(it) }
+        val savedBinaryBlocked = availability.binaryBlockedControls.any { options.hasSavedValue(it) }
+        if (savedFamilyBlocked) {
             Text(
-                text = stringResource(
-                    R.string.video_controls_additional_unavailable,
-                    availability.unavailableControls.size
-                ),
+                text = stringResource(R.string.video_controls_additional_family_ignored),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+        if (savedBinaryBlocked) {
+            Text(
+                text = stringResource(R.string.video_controls_additional_binary_ignored),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error
             )
@@ -123,78 +129,80 @@ fun VideoAdditionalOptionsEditor(
             onValueChange = { onOptionsChange(options.copy(strength = it)) }
         )
 
-        Text(
-            text = stringResource(R.string.video_controls_high_noise_additional),
-            style = MaterialTheme.typography.labelLarge
-        )
-        Text(
-            text = stringResource(R.string.video_controls_high_noise_sampling_method),
-            style = MaterialTheme.typography.bodyMedium
-        )
-        LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            item {
-                FilterChip(
-                    selected = options.highNoiseSamplingMethod == null,
-                    enabled = availability.isEnabled(VideoAdditionalControl.HIGH_NOISE_SAMPLING_METHOD),
-                    onClick = { onOptionsChange(options.copy(highNoiseSamplingMethod = null)) },
-                    label = { Text(stringResource(R.string.video_controls_high_noise_sampling_default)) }
-                )
+        if (availability.highNoiseFamilySupported) {
+            Text(
+                text = stringResource(R.string.video_controls_high_noise_additional),
+                style = MaterialTheme.typography.labelLarge
+            )
+            Text(
+                text = stringResource(R.string.video_controls_high_noise_sampling_method),
+                style = MaterialTheme.typography.bodyMedium
+            )
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                item {
+                    FilterChip(
+                        selected = options.highNoiseSamplingMethod == null,
+                        enabled = availability.isEnabled(VideoAdditionalControl.HIGH_NOISE_SAMPLING_METHOD),
+                        onClick = { onOptionsChange(options.copy(highNoiseSamplingMethod = null)) },
+                        label = { Text(stringResource(R.string.video_controls_high_noise_sampling_default)) }
+                    )
+                }
+                items(SamplingMethod.entries, key = { it.name }) { method ->
+                    FilterChip(
+                        selected = options.highNoiseSamplingMethod == method,
+                        enabled = availability.isEnabled(VideoAdditionalControl.HIGH_NOISE_SAMPLING_METHOD),
+                        onClick = { onOptionsChange(options.copy(highNoiseSamplingMethod = method)) },
+                        label = { Text(method.cliName, maxLines = 1) }
+                    )
+                }
             }
-            items(SamplingMethod.entries, key = { it.name }) { method ->
-                FilterChip(
-                    selected = options.highNoiseSamplingMethod == method,
-                    enabled = availability.isEnabled(VideoAdditionalControl.HIGH_NOISE_SAMPLING_METHOD),
-                    onClick = { onOptionsChange(options.copy(highNoiseSamplingMethod = method)) },
-                    label = { Text(method.cliName, maxLines = 1) }
-                )
-            }
+            OptionalFloatField(
+                label = stringResource(R.string.video_controls_high_noise_img_cfg_scale),
+                value = options.highNoiseImgCfgScale,
+                enabled = availability.isEnabled(VideoAdditionalControl.HIGH_NOISE_IMG_CFG_SCALE),
+                onValueChange = { onOptionsChange(options.copy(highNoiseImgCfgScale = it)) }
+            )
+            OptionalFloatField(
+                label = stringResource(R.string.video_controls_high_noise_guidance),
+                value = options.highNoiseGuidance,
+                enabled = availability.isEnabled(VideoAdditionalControl.HIGH_NOISE_GUIDANCE),
+                onValueChange = { onOptionsChange(options.copy(highNoiseGuidance = it)) }
+            )
+            OptionalFloatField(
+                label = stringResource(R.string.video_controls_high_noise_slg_scale),
+                value = options.highNoiseSlgScale,
+                enabled = availability.isEnabled(VideoAdditionalControl.HIGH_NOISE_SLG_SCALE),
+                onValueChange = { onOptionsChange(options.copy(highNoiseSlgScale = it)) }
+            )
+            OptionalFloatField(
+                label = stringResource(R.string.video_controls_high_noise_slg_start),
+                value = options.highNoiseSkipLayerStart,
+                enabled = availability.isEnabled(VideoAdditionalControl.HIGH_NOISE_SLG_START),
+                onValueChange = { onOptionsChange(options.copy(highNoiseSkipLayerStart = it)) }
+            )
+            OptionalFloatField(
+                label = stringResource(R.string.video_controls_high_noise_slg_end),
+                value = options.highNoiseSkipLayerEnd,
+                enabled = availability.isEnabled(VideoAdditionalControl.HIGH_NOISE_SLG_END),
+                onValueChange = { onOptionsChange(options.copy(highNoiseSkipLayerEnd = it)) }
+            )
+            OptionalStringField(
+                label = stringResource(R.string.video_controls_high_noise_skip_layers),
+                value = options.highNoiseSkipLayers,
+                keyboardType = KeyboardType.Text,
+                enabled = availability.isEnabled(VideoAdditionalControl.HIGH_NOISE_SKIP_LAYERS),
+                onValueChange = { onOptionsChange(options.copy(highNoiseSkipLayers = it)) }
+            )
+            OptionalFloatField(
+                label = stringResource(R.string.video_controls_high_noise_eta),
+                value = options.highNoiseEta,
+                enabled = availability.isEnabled(VideoAdditionalControl.HIGH_NOISE_ETA),
+                onValueChange = { onOptionsChange(options.copy(highNoiseEta = it)) }
+            )
         }
-        OptionalFloatField(
-            label = stringResource(R.string.video_controls_high_noise_img_cfg_scale),
-            value = options.highNoiseImgCfgScale,
-            enabled = availability.isEnabled(VideoAdditionalControl.HIGH_NOISE_IMG_CFG_SCALE),
-            onValueChange = { onOptionsChange(options.copy(highNoiseImgCfgScale = it)) }
-        )
-        OptionalFloatField(
-            label = stringResource(R.string.video_controls_high_noise_guidance),
-            value = options.highNoiseGuidance,
-            enabled = availability.isEnabled(VideoAdditionalControl.HIGH_NOISE_GUIDANCE),
-            onValueChange = { onOptionsChange(options.copy(highNoiseGuidance = it)) }
-        )
-        OptionalFloatField(
-            label = stringResource(R.string.video_controls_high_noise_slg_scale),
-            value = options.highNoiseSlgScale,
-            enabled = availability.isEnabled(VideoAdditionalControl.HIGH_NOISE_SLG_SCALE),
-            onValueChange = { onOptionsChange(options.copy(highNoiseSlgScale = it)) }
-        )
-        OptionalFloatField(
-            label = stringResource(R.string.video_controls_high_noise_slg_start),
-            value = options.highNoiseSkipLayerStart,
-            enabled = availability.isEnabled(VideoAdditionalControl.HIGH_NOISE_SLG_START),
-            onValueChange = { onOptionsChange(options.copy(highNoiseSkipLayerStart = it)) }
-        )
-        OptionalFloatField(
-            label = stringResource(R.string.video_controls_high_noise_slg_end),
-            value = options.highNoiseSkipLayerEnd,
-            enabled = availability.isEnabled(VideoAdditionalControl.HIGH_NOISE_SLG_END),
-            onValueChange = { onOptionsChange(options.copy(highNoiseSkipLayerEnd = it)) }
-        )
-        OptionalStringField(
-            label = stringResource(R.string.video_controls_high_noise_skip_layers),
-            value = options.highNoiseSkipLayers,
-            keyboardType = KeyboardType.Text,
-            enabled = availability.isEnabled(VideoAdditionalControl.HIGH_NOISE_SKIP_LAYERS),
-            onValueChange = { onOptionsChange(options.copy(highNoiseSkipLayers = it)) }
-        )
-        OptionalFloatField(
-            label = stringResource(R.string.video_controls_high_noise_eta),
-            value = options.highNoiseEta,
-            enabled = availability.isEnabled(VideoAdditionalControl.HIGH_NOISE_ETA),
-            onValueChange = { onOptionsChange(options.copy(highNoiseEta = it)) }
-        )
 
         Text(
             text = stringResource(R.string.video_controls_additional_model_controls),

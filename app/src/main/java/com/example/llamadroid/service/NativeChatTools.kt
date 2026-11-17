@@ -29,6 +29,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import com.example.llamadroid.service.search.WebSearchBackend
+import com.example.llamadroid.service.search.WebSearchBackends
 import org.json.JSONArray
 import org.json.JSONObject
 import com.tom_roush.pdfbox.pdmodel.PDDocument
@@ -287,7 +289,9 @@ data class NativeChatToolConfig(
     val whisperLanguage: String? = null,
     /** Per-chat video routing: [VIDEO_INPUT_SERVER] (server/global policy), [VIDEO_INPUT_NATIVE] (try natively, fall back) or [VIDEO_INPUT_TRANSCRIPT]. */
     val videoInputMode: String = VIDEO_INPUT_SERVER,
-    val maxToolRounds: Int = DEFAULT_TOOL_ROUNDS
+    val maxToolRounds: Int = DEFAULT_TOOL_ROUNDS,
+    /** Opt-in interactive chat cards (` ```card ` fences); adds the awareness text to the stable prefix. */
+    val cardsEnabled: Boolean = false
 ) {
     fun hasEnabledTools(): Boolean = toolsEnabled && (
         webSearchEnabled ||
@@ -430,6 +434,7 @@ data class NativeChatToolConfig(
             if (value != null) put(key, value)
         }
         put(KEY_MAX_TOOL_ROUNDS, maxToolRounds.coerceIn(MIN_TOOL_ROUNDS, MAX_TOOL_ROUNDS))
+        put(KEY_CARDS_ENABLED, cardsEnabled)
     }
 
     fun normalizedKiwixUrl(): String = kiwixServerUrl.trim().ifBlank { DEFAULT_KIWIX_URL }.trimEnd('/')
@@ -558,6 +563,7 @@ data class NativeChatToolConfig(
         const val KEY_BGR_RESIZE_BEFORE_PROCESSING = "tool_background_removal_resize_before_processing"
         const val KEY_BGR_RESIZE_MAX_EDGE = "tool_background_removal_resize_max_edge"
         const val KEY_MAX_TOOL_ROUNDS = "tool_max_rounds"
+        const val KEY_CARDS_ENABLED = "chat_cards_enabled"
 
         const val DEFAULT_SEARCH_PAGES = 3
         const val DEFAULT_PAGE_CHARS = 2_000
@@ -684,7 +690,8 @@ data class NativeChatToolConfig(
             whisperLanguage = stringParam(params, KEY_WHISPER_LANGUAGE, "").trim().takeIf { it.isNotBlank() },
             videoInputMode = normalizeVideoInputMode(stringParam(params, KEY_VIDEO_INPUT_MODE, VIDEO_INPUT_SERVER)),
             maxToolRounds = intParam(params, KEY_MAX_TOOL_ROUNDS, DEFAULT_TOOL_ROUNDS)
-                .coerceIn(MIN_TOOL_ROUNDS, MAX_TOOL_ROUNDS)
+                .coerceIn(MIN_TOOL_ROUNDS, MAX_TOOL_ROUNDS),
+            cardsEnabled = booleanParam(params, KEY_CARDS_ENABLED, false)
         )
 
         private fun imageParamsFromParams(params: Map<String, Any?>): NativeChatImageToolParams =
@@ -860,7 +867,9 @@ data class NativeChatToolConfig(
 
 data class NativeChatToolResult(
     val content: String,
-    val generatedImagePath: String? = null
+    val generatedImagePath: String? = null,
+    /** Image the tool loop shows to the chat model as a user-role picture note (vision models only). */
+    val viewImagePath: String? = null
 )
 
 private fun Throwable.asException(): Exception =
@@ -1419,7 +1428,8 @@ class NativeChatToolRuntime(
                 add(
                     AgentTool(
                         name = TOOL_GENERATE_IMAGE,
-                        description = "Generate a PNG image with the native-chat configured image engine. Before calling this tool, rewrite the user's idea into a stronger optimized image prompt with clear subject, composition, style, lighting, colors, and constraints so the result is better. Return the saved app-local path plus a note_markdown line that can be inserted into a note.",
+                        description = "Generate an image (PNG) with the app's image engine. ONLY call this tool when the user explicitly asks you to create, draw, paint, render or generate an image, picture, photo, illustration, logo, icon or wallpaper. Never call it to explain, describe, answer a question, make a chart or graph, build an app, calculator, tool, game or card, illustrate or decorate an answer, or because a topic is visual. Before calling, rewrite the user's idea into an optimized image prompt with clear subject, composition, style, lighting, colors and constraints. Returns the saved app-local path plus a note_markdown line that can be inserted into a note." +
+                            if (config.cardsEnabled) " " + com.example.llamadroid.chat.cards.ChatCardsAwareness.IMAGE_TOOL_NOTE else "",
                         parameters = mapOf(
                             "prompt" to "Optimized positive prompt describing the image to generate. Improve sparse user wording instead of passing it through unchanged.",
                             "negative_prompt" to "Optional negative prompt for defects, unwanted styles, or objects to avoid"
@@ -1955,14 +1965,32 @@ class NativeChatToolRuntime(
                 }
                 TOOL_LIST_WORKSPACE_FILES -> {
                     require(config.toolsEnabled) { "Workspace file tools are disabled for this chat." }
-                    NativeChatWorkspaceSupport.list(requireNotNull(context), requireNotNull(chatId), toolCall.arguments["path"].orEmpty())
+                    val listPath = toolCall.arguments["path"].orEmpty()
+                    if (listPath.isBlank() || listPath.trim() == "." || listPath.trim() == "/") {
+                        NativeChatWorkspaceSupport.listAll(requireNotNull(context), requireNotNull(chatId))
+                    } else {
+                        NativeChatWorkspaceSupport.list(requireNotNull(context), requireNotNull(chatId), listPath)
+                    }
                 }
                 TOOL_READ_WORKSPACE_FILE -> {
                     require(config.toolsEnabled) { "Workspace file tools are disabled for this chat." }
-                    NativeChatWorkspaceSupport.read(
-                        requireNotNull(context), requireNotNull(chatId), toolCall.arguments["path"].orEmpty(),
-                        toolCall.arguments["start_line"]?.trim()?.toIntOrNull(), toolCall.arguments["end_line"]?.trim()?.toIntOrNull()
-                    )
+                    val readPath = toolCall.arguments["path"].orEmpty()
+                    val workspaceFile = NativeChatWorkspaceSupport.resolve(requireNotNull(context), requireNotNull(chatId), readPath)
+                    if (NativeChatWorkspaceSupport.isImageFile(workspaceFile)) {
+                        // Never decode image bytes as text: show the picture or describe it.
+                        val imageTools = extensionFor(TOOL_READ_ATTACHMENT) as? NativeChatAttachmentTools
+                            ?: NativeChatAttachmentTools.forChatService(context)
+                        imageTools.readImage(
+                            chatId, workspaceFile, workspaceFile.name,
+                            NativeChatWorkspaceSupport.imageMimeOf(workspaceFile) ?: "image/jpeg",
+                            TOOL_READ_WORKSPACE_FILE, onProgress
+                        )
+                    } else {
+                        NativeChatWorkspaceSupport.read(
+                            context, chatId, readPath,
+                            toolCall.arguments["start_line"]?.trim()?.toIntOrNull(), toolCall.arguments["end_line"]?.trim()?.toIntOrNull()
+                        )
+                    }
                 }
                 NativeChatWorkspaceEdits.TOOL_SEARCH, NativeChatWorkspaceEdits.TOOL_REPLACE ->
                     NativeChatWorkspaceEdits.execute(requireNotNull(context), requireNotNull(chatId), config, toolCall.name, toolCall.arguments)
@@ -2020,6 +2048,25 @@ class NativeChatToolRuntime(
         }
     }
 
+    private fun searchDuckDuckGoHtml(query: String, maxPages: Int): List<DuckDuckGoSearchResult> {
+        val encodedQuery = URLEncoder.encode(query, "UTF-8")
+        val searchUrl = "https://html.duckduckgo.com/html/?q=$encodedQuery"
+        val html = client.newCall(
+            Request.Builder()
+                .url(searchUrl)
+                .header(USER_AGENT_HEADER, DEFAULT_USER_AGENT)
+                .build()
+        ).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw IllegalStateException("Web search failed: HTTP ${response.code}.")
+            }
+            response.body?.charStream()?.use { reader ->
+                readLimited(reader, MAX_SEARCH_HTML_CHARS)
+            }.orEmpty()
+        }
+        return parseDuckDuckGoSearchResults(html, maxPages)
+    }
+
     private suspend fun webSearch(
         query: String,
         maxPages: Int,
@@ -2037,23 +2084,10 @@ class NativeChatToolRuntime(
             )
         )
 
-        val encodedQuery = URLEncoder.encode(trimmedQuery, "UTF-8")
-        val searchUrl = "https://html.duckduckgo.com/html/?q=$encodedQuery"
-        val html = client.newCall(
-            Request.Builder()
-                .url(searchUrl)
-                .header(USER_AGENT_HEADER, DEFAULT_USER_AGENT)
-                .build()
-        ).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw IllegalStateException("Web search failed: HTTP ${response.code}.")
-            }
-            response.body?.charStream()?.use { reader ->
-                readLimited(reader, MAX_SEARCH_HTML_CHARS)
-            }.orEmpty()
+        val duckDuckGo = object : WebSearchBackend {
+            override suspend fun search(query: String, limit: Int) = searchDuckDuckGoHtml(query, limit)
         }
-
-        val links = parseDuckDuckGoSearchResults(html, maxPages)
+        val links = WebSearchBackends.current(context, duckDuckGo).search(trimmedQuery, maxPages)
             .map { SearchLink(url = it.url, title = it.title) }
             .take(maxPages.coerceIn(NativeChatToolConfig.MIN_SEARCH_PAGES, NativeChatToolConfig.MAX_SEARCH_PAGES))
 
@@ -3486,6 +3520,7 @@ class NativeChatToolRuntime(
         const val TOOL_REMOVE_IMAGE_BACKGROUND = "remove_image_background"
         const val TOOL_LIST_WORKSPACE_FILES = "list_workspace_files"
         const val TOOL_READ_WORKSPACE_FILE = "read_workspace_file"
+        private const val TOOL_READ_ATTACHMENT = NativeChatAttachmentTools.TOOL_READ
         const val TOOL_WRITE_WORKSPACE_FILE = "write_workspace_file"
         const val TOOL_APPEND_WORKSPACE_FILE = "append_workspace_file"
         const val TOOL_EDIT_WORKSPACE_LINES = "edit_workspace_lines"

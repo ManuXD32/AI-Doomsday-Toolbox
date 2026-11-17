@@ -19,10 +19,12 @@ object NativeChatBasePrefix {
     /**
      * Stable awareness text for [config]: the tool-awareness system messages plus the extension
      * awareness blocks ([extensionAwareness], e.g. DeepSeek delegation; they depend only on the
-     * config), without the per-chat knowledge-base routing guide. Empty when no tools are enabled.
+     * config), without the per-chat knowledge-base routing guide, plus the interactive-cards text when
+     * [NativeChatToolConfig.cardsEnabled]. Empty when no tools and no cards are enabled.
      */
     fun stableText(config: NativeChatToolConfig, extensionAwareness: List<String> = emptyList()): String =
-        (nativeChatToolAwarenessMessages(config).map { it.content } + extensionAwareness)
+        (nativeChatToolAwarenessMessages(config).map { it.content } + extensionAwareness +
+            listOfNotNull(if (config.cardsEnabled) com.example.llamadroid.chat.cards.ChatCardsAwareness.current() else null))
             .map { it.trim() }.filter { it.isNotEmpty() }
             .joinToString(BLOCK_SEPARATOR).trim()
 

@@ -73,6 +73,8 @@ class LlamaApplication : Application() {
         }
         container = DefaultAppContainer(this)
         UnifiedNotificationManager.init(this)
+        // Lets web search find the optional in-app SearXNG instance before the settings screen is opened.
+        runCatching { com.example.llamadroid.service.search.SearxngLocalInstance.register(this) }
         DebugLog.init(this)
         GenerationDiagnosticsStore.init(this)
         if (!isMainProcess()) {

@@ -30,6 +30,26 @@ enum class SdDistributedAutoRamScope {
     }
 }
 
+/** Tensors larger than this are cached by hash on RPC helpers instead of being re-sent every job. */
+const val SD_RPC_HASH_THRESHOLD_BYTES = 4L * 1024 * 1024
+
+/** Read by sd-cli: wire type for activations that cross split-backend boundaries (`bf16` | `f16`). */
+const val SD_LAYER_SPLIT_TRANSFER_TYPE_ENV = "SD_LAYER_SPLIT_TRANSFER_TYPE"
+const val SD_LAYER_SPLIT_TRANSFER_TYPE_BF16 = "bf16"
+
+/** Extra environment for the master sd-cli process; empty unless the run uses RPC helpers. */
+fun sdRpcClientEnvironment(runtime: SdDistributedRuntimeConfig): Map<String, String> =
+    if (runtime.enabled && runtime.hasRpcServers) {
+        buildMap {
+            put("GGML_RPC_HASH_THRESHOLD", SD_RPC_HASH_THRESHOLD_BYTES.toString())
+            if (runtime.compressLayerTransfers) {
+                put(SD_LAYER_SPLIT_TRANSFER_TYPE_ENV, SD_LAYER_SPLIT_TRANSFER_TYPE_BF16)
+            }
+        }
+    } else {
+        emptyMap()
+    }
+
 @Parcelize
 data class SdDistributedRuntimeConfig(
     val enabled: Boolean = false,
@@ -40,7 +60,8 @@ data class SdDistributedRuntimeConfig(
     val autoFit: Boolean = false,
     val maxVramSpec: String = "",
     val splitMode: SdDistributedSplitMode = SdDistributedSplitMode.LAYER,
-    val customFlags: String = ""
+    val customFlags: String = "",
+    val compressLayerTransfers: Boolean = false
 ) : Parcelable {
     val hasRpcServers: Boolean
         get() = rpcServers.trim().isNotEmpty()
@@ -221,7 +242,9 @@ data class SdRamPlannerOptions(
     val autoRamScope: SdDistributedAutoRamScope = SdDistributedAutoRamScope.DIFFUSION_ONLY,
     val useDiskParamsForSplitDiffusion: Boolean = false,
     val diffusionReserveMB: Int = 512,
-    val firstRpcOverheadMB: Int = 512
+    val firstRpcOverheadMB: Int = 512,
+    /** Size of the selected diffusion model file; null = unknown (display falls back to proportional-to-capacity). */
+    val diffusionModelBytes: Long? = null
 ) {
     val assignTextEncoder: Boolean
         get() = autoRamScope == SdDistributedAutoRamScope.FULL_PIPELINE
@@ -309,16 +332,18 @@ fun buildRamWeightedSdPlacementPlan(
         )
     }
 
-    val diffusionWeightTotal = diffusionWorkers.sumOf { (remainingRam[it.rpcName] ?: it.ramMB).coerceAtLeast(1) }
     val manualMasterShare = diffusionWorkers
         .firstOrNull { it.isLocalMaster }
         ?.manualDiffusionSharePercent
         ?.coerceIn(1, 95)
 
-    val estimatedShares = if (manualMasterShare != null) {
+    // The manual master share only affects this display (no flag is derived from it); kept as before.
+    val estimatedShares: Map<String, Float>
+    val estimatedLayers: Map<String, Int>
+    if (manualMasterShare != null) {
         val master = diffusionWorkers.first { it.isLocalMaster }
         val remotes = diffusionWorkers.filterNot { it.isLocalMaster }
-        if (remotes.isEmpty()) {
+        estimatedShares = if (remotes.isEmpty()) {
             mapOf(master.rpcName to 1f)
         } else {
             val remoteTotal = remotes.sumOf { (remainingRam[it.rpcName] ?: it.ramMB).coerceAtLeast(1) }.coerceAtLeast(1)
@@ -330,13 +355,17 @@ fun buildRamWeightedSdPlacementPlan(
                 }
             }
         }
+        estimatedLayers = normalizePercentages(estimatedShares)
     } else {
-        diffusionWorkers.associate { worker ->
-        val share = (remainingRam[worker.rpcName] ?: worker.ramMB).coerceAtLeast(1).toFloat() / diffusionWeightTotal.toFloat()
-        worker.rpcName to share
-        }
+        val bytesByDevice = simulateSdGreedyDiffusionFill(
+            devices = diffusionWorkers.map { it.rpcName },
+            capacityMB = diffusionWorkers.map { (remainingRam[it.rpcName] ?: it.ramMB).coerceAtLeast(1) },
+            modelBytes = options.diffusionModelBytes
+        )
+        val total = bytesByDevice.values.sum().coerceAtLeast(1L).toFloat()
+        estimatedShares = bytesByDevice.mapValues { (_, bytes) -> bytes / total }
+        estimatedLayers = largestRemainderPercentages(bytesByDevice)
     }
-    val estimatedLayers = normalizePercentages(estimatedShares)
     assignments.add(
         0,
         SdDistributedModuleAssignment(
@@ -369,6 +398,46 @@ fun buildRamWeightedSdPlacementPlan(
         maxVramSpec = maxVramSpec,
         assignments = assignments
     )
+}
+
+/**
+ * Mirrors sd.cpp's multi-device layer split: devices are filled in `diffusion=` order, each up to its
+ * `--max-vram` capacity, never going back. Returns bytes per device in the same order (zero entries kept).
+ * Unknown [modelBytes] fills with the sum of capacities (proportional to capacity); an overflow lands on the last device.
+ */
+internal fun simulateSdGreedyDiffusionFill(
+    devices: List<String>,
+    capacityMB: List<Int>,
+    modelBytes: Long?
+): Map<String, Long> {
+    val caps = capacityMB.map { it.coerceAtLeast(1).toLong() * 1024L * 1024L }
+    var remaining = modelBytes?.takeIf { it > 0L } ?: caps.sum()
+    val result = LinkedHashMap<String, Long>()
+    devices.forEachIndexed { index, name ->
+        val take = if (index == devices.lastIndex) remaining else minOf(remaining, caps[index])
+        result[name] = take
+        remaining -= take
+    }
+    return result
+}
+
+/** Integer percentages summing to 100 by largest remainder; zero-byte devices stay at 0. */
+internal fun largestRemainderPercentages(bytes: Map<String, Long>): Map<String, Int> {
+    val total = bytes.values.sum()
+    if (bytes.isEmpty() || total <= 0L) return bytes.mapValues { 0 }
+    val floors = bytes.mapValues { (_, v) -> (v * 100L / total).toInt() }.toMutableMap()
+    var left = 100 - floors.values.sum()
+    val order = bytes.entries.sortedByDescending { (it.value * 100L) % total }.map { it.key }
+    var i = 0
+    while (left > 0 && order.isNotEmpty()) {
+        val key = order[i % order.size]
+        if ((bytes[key] ?: 0L) > 0L) {
+            floors[key] = (floors[key] ?: 0) + 1
+            left--
+        }
+        i++
+    }
+    return floors
 }
 
 private fun buildSdDistributedMaxVramSpec(

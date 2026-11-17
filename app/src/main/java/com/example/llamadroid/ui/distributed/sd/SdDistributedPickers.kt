@@ -33,7 +33,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -84,7 +83,6 @@ internal fun ModelPicker(
             }
         }
     }
-    SdGetModelsButton()
     }
 }
 
@@ -106,12 +104,12 @@ internal fun ImageComponentPickerSection(
                 text = stringResource(R.string.imagegen_components_title),
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
-                color = RenderFarmPalette.lime
+                color = MaterialTheme.colorScheme.primary
             )
             Text(
                 text = stringResource(R.string.imagegen_components_desc, components.familyLabel.ifBlank { "-" }),
                 style = MaterialTheme.typography.bodySmall,
-                color = Color.White.copy(alpha = 0.72f)
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             components.roles.forEach { role ->
                 ComponentModelPicker(
@@ -134,12 +132,12 @@ internal fun ImageComponentPickerSection(
                 text = stringResource(R.string.imagegen_adapters_title),
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
-                color = RenderFarmPalette.coral
+                color = MaterialTheme.colorScheme.primary
             )
             Text(
                 text = stringResource(R.string.imagegen_adapters_desc),
                 style = MaterialTheme.typography.bodySmall,
-                color = Color.White.copy(alpha = 0.72f)
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             if (mode == "IMG2IMG" && controlNetModels.isNotEmpty()) {
                 OptionalComponentPicker(
@@ -310,7 +308,7 @@ internal fun OptionalComponentPicker(
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelLarge,
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
@@ -343,9 +341,8 @@ internal fun ComponentModelPicker(
         Text(
             text = emptyMessage,
             style = MaterialTheme.typography.bodySmall,
-            color = RenderFarmPalette.orange
+            color = MaterialTheme.colorScheme.error
         )
-        SdGetModelsButton()
         return
     }
     var expanded by remember { mutableStateOf(false) }
@@ -401,8 +398,7 @@ internal fun BackendDevicePicker(
     label: String,
     selected: String,
     onSelected: (String) -> Unit,
-    includeRemoteChoices: Boolean,
-    onDark: Boolean = false
+    includeRemoteChoices: Boolean
 ) {
     val options = buildList {
         add("")
@@ -418,8 +414,7 @@ internal fun BackendDevicePicker(
         selected = selected,
         options = options,
         offLabel = stringResource(R.string.sd_dist_picker_auto),
-        onSelected = onSelected,
-        onDark = onDark
+        onSelected = onSelected
     )
 }
 
@@ -467,8 +462,7 @@ internal fun SimpleStringPicker(
     selected: String,
     options: List<String>,
     offLabel: String,
-    onSelected: (String) -> Unit,
-    onDark: Boolean = false
+    onSelected: (String) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
     val displayValue = selected.ifBlank { offLabel }
@@ -480,8 +474,7 @@ internal fun SimpleStringPicker(
             modifier = Modifier.fillMaxWidth().menuAnchor(),
             label = { Text(label) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            singleLine = true,
-            colors = distributedOutlinedTextFieldColors(onDark)
+            singleLine = true
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             options.distinct().forEach { option ->

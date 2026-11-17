@@ -79,7 +79,12 @@ object VisionImageDescriptions {
     private val locks = ConcurrentHashMap<String, Mutex>()
     private val failures = VisionFailureMemo()
 
-    suspend fun describe(context: Context, bytes: ByteArray, mime: String): VisionImageDescription {
+    suspend fun describe(
+        context: Context,
+        bytes: ByteArray,
+        mime: String,
+        onProgress: ((String) -> Unit)? = null
+    ): VisionImageDescription {
         if (bytes.isEmpty() || bytes.size > MAX_IMAGE_BYTES) {
             return VisionImageDescription.Unavailable("the image is empty or larger than 16 MiB")
         }
@@ -95,7 +100,7 @@ object VisionImageDescriptions {
             val dataUrl = withContext(Dispatchers.Default) {
                 "data:$safeMime;base64," + java.util.Base64.getEncoder().encodeToString(bytes)
             }
-            when (val outcome = VisionDescriptionService.describeDataUrls(context, listOf(dataUrl))) {
+            when (val outcome = VisionDescriptionService.describeDataUrls(context, listOf(dataUrl), onProgress)) {
                 is VisionDescriptionService.DataUrlOutcome.Unavailable -> {
                     failures.put(sha, outcome.reason)
                     VisionImageDescription.Unavailable(outcome.reason)

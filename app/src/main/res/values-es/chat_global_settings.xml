@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_global_settings_title">Ajustes de chat</string>
+    <string name="chat_global_settings_subtitle">Opciones de toda la app para todos los chats</string>
+    <string name="chat_global_settings_hub_desc">Documentos, modelos auxiliares, tarjetas, búsqueda web, cachés</string>
+    <string name="chat_global_documents_title">Documentos y conocimiento</string>
+    <string name="chat_global_documents_hint">El modelo de embeddings convierte los documentos adjuntos y las bases de conocimiento en texto buscable.</string>
+    <string name="chat_global_documents_advanced">Avanzado (Base de conocimiento)</string>
+    <string name="chat_global_helpers_title">Modelos auxiliares</string>
+    <string name="chat_global_cards_title">Tarjetas interactivas</string>
+    <string name="chat_global_web_title">Búsqueda web</string>
+    <string name="chat_global_caches_title">Cachés</string>
+    <string name="chat_global_caches_prepare_hint">\"Preparar cachés\" de un servidor concreto está en los detalles de ese servidor.</string>
+    <string name="chat_global_new_chats_title">Chats nuevos</string>
+    <string name="chat_global_new_chats_servers_hint">Herramientas y opciones con las que empiezan los chats nuevos de cada servidor guardado.</string>
+    <string name="chat_global_new_chats_no_servers">Aún no hay servidores guardados.</string>
+    <string name="chat_global_new_chats_edit_defaults">Editar valores para chats nuevos</string>
+    <string name="chat_global_delegation_title">Delegación</string>
+    <string name="chat_global_delegation_clear_hint">Para borrar la caché de un entorno, usa sus ajustes de entorno del Agente.</string>
+    <string name="chat_global_wear_title">Chat rápido de Wear</string>
+    <string name="chat_settings_for_all_chats">Ajustes para todos los chats</string>
+    <string name="chat_cards_global_moved_hint">El valor \"usar en chats nuevos\" y los tipos de tarjeta están en Ajustes de chat.</string>
+    <string name="general_chat_settings_link">Las cachés de prompts, la búsqueda web y los modelos auxiliares ahora están en Ajustes de chat</string>
+</resources>

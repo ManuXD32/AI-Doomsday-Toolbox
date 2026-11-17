@@ -40,7 +40,10 @@ import com.example.llamadroid.data.model.LlamaMessageEntity
 import com.example.llamadroid.data.model.stripEmbeddedAudioTranscript
 import com.example.llamadroid.data.model.stripEmbeddedDocumentText
 import java.io.File
+import com.example.llamadroid.chat.cards.ChatCard
 import com.example.llamadroid.ui.ai.llama.MarkdownText
+import com.example.llamadroid.ui.ai.llama.chat.cards.ChatCardsUi
+import com.example.llamadroid.ui.ai.llama.chat.cards.rememberChatCardSlot
 
 @Composable
 fun LlamaDeleteMessageDialog(
@@ -108,6 +111,12 @@ fun LlamaRetryMessageDialog(
     )
 }
 
+private val THINK_START_REGEX = Regex("<[^>]*?(?:think|thought|Thought|Think)[^>]*?>")
+private val THINK_COMBINED_REGEX = Regex(
+    "(<[^>]*?(?:think|thought|Thought|Think)[^>]*?>)(.*?)(<[^>]*?/(?:think|thought|Thought|Think)[^>]*?>|$)",
+    setOf(RegexOption.DOT_MATCHES_ALL)
+)
+
 @Composable
 fun LlamaMessageItem(
     message: LlamaMessageEntity,
@@ -121,9 +130,11 @@ fun LlamaMessageItem(
     autoPlayAssistantAudio: Boolean = false,
     onAssistantAudioAutoPlayed: (String) -> Unit = {},
     onKnowledgeLinkClick: (String) -> Boolean = { false },
-    attachments: List<LlamaMessageAttachmentEntity> = emptyList()
+    attachments: List<LlamaMessageAttachmentEntity> = emptyList(),
+    cards: ChatCardsUi? = null
 ) {
     val isUser = message.role == "user"
+    val cardSlot = if (!isUser && cards != null) rememberChatCardSlot(message.id, message.content, cards) else null
     val context = LocalContext.current
     val clipboardLabelMessageText = stringResource(R.string.clipboard_label_message)
     val termuxCopyToastText = stringResource(R.string.termux_copy_toast)
@@ -170,12 +181,12 @@ fun LlamaMessageItem(
             colors = CardDefaults.cardColors(
                 containerColor = if (isUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
             ),
-            shape = RoundedCornerShape(
+            shape = com.example.llamadroid.ui.theme.TallSafeShape(RoundedCornerShape(
                 topStart = 16.dp,
                 topEnd = 16.dp,
                 bottomStart = if (isUser) 16.dp else 4.dp,
                 bottomEnd = if (isUser) 4.dp else 16.dp
-            ),
+            )),
             modifier = Modifier.widthIn(max = 320.dp)
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
@@ -257,9 +268,8 @@ fun LlamaMessageItem(
                                 )
                             }
 
-                            val thinkStartRegex = Regex("<[^>]*?(?:think|thought|Thought|Think)[^>]*?>")
                             val renderedContent = if (isUser) displayContent else message.content
-                            val hasThinkingTags = thinkStartRegex.containsMatchIn(renderedContent)
+                            val hasThinkingTags = THINK_START_REGEX.containsMatchIn(renderedContent)
 
                             if (renderedContent.isNotBlank()) {
                                 if (!isUser && (!message.thinking.isNullOrBlank() || hasThinkingTags)) {
@@ -267,24 +277,26 @@ fun LlamaMessageItem(
                                         ThinkingMessageContent(
                                             message.thinking,
                                             renderedContent,
-                                            onKnowledgeLinkClick = onKnowledgeLinkClick
+                                            onKnowledgeLinkClick = onKnowledgeLinkClick,
+                                            cardContent = cardSlot
                                         )
                                     } else {
-                                        val combinedRegex = Regex("(<[^>]*?(?:think|thought|Thought|Think)[^>]*?>)(.*?)(<[^>]*?/(?:think|thought|Thought|Think)[^>]*?>|$)", setOf(RegexOption.DOT_MATCHES_ALL))
-                                        val match = combinedRegex.find(renderedContent)
+                                        val match = THINK_COMBINED_REGEX.find(renderedContent)
                                         val thinking = match?.groupValues?.get(2)?.trim() ?: ""
-                                        val content = renderedContent.replace(combinedRegex, "").trim()
+                                        val content = renderedContent.replace(THINK_COMBINED_REGEX, "").trim()
                                         ThinkingMessageContent(
                                             thinking,
                                             content,
-                                            onKnowledgeLinkClick = onKnowledgeLinkClick
+                                            onKnowledgeLinkClick = onKnowledgeLinkClick,
+                                            cardContent = cardSlot
                                         )
                                     }
                                 } else {
                                     MarkdownText(
                                         text = renderedContent,
                                         textColor = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                                        onLinkClick = onKnowledgeLinkClick
+                                        onLinkClick = onKnowledgeLinkClick,
+                                        cardContent = cardSlot
                                     )
                                 }
                             }
@@ -384,7 +396,7 @@ fun LlamaMessageItem(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
-                    IconButton(onClick = onRegenerate, modifier = Modifier.size(LLAMA_MESSAGE_ACTION_TOUCH_TARGET_DP.dp)) {
+                    IconButton(onClick = onRegenerate, enabled = retryEnabled, modifier = Modifier.size(LLAMA_MESSAGE_ACTION_TOUCH_TARGET_DP.dp)) {
                         Icon(
                             Icons.Default.Refresh,
                             contentDescription = stringResource(R.string.llama_regenerate),
@@ -578,7 +590,8 @@ fun ThinkingMessageContent(
     thinkingContent: String,
     finalResponse: String,
     forceExpand: Boolean = false,
-    onKnowledgeLinkClick: (String) -> Boolean = { false }
+    onKnowledgeLinkClick: (String) -> Boolean = { false },
+    cardContent: (@Composable (Int, ChatCard) -> Unit)? = null
 ) {
     var isExpanded by remember { mutableStateOf(forceExpand) }
     var showFullThinking by remember { mutableStateOf(false) }
@@ -687,7 +700,8 @@ fun ThinkingMessageContent(
                 text = finalResponse,
                 textColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 onLinkClick = onKnowledgeLinkClick,
-                streaming = forceExpand
+                streaming = forceExpand,
+                cardContent = cardContent
             )
         }
     }

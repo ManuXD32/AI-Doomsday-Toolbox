@@ -10,8 +10,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.net.InetSocketAddress
-import java.net.Socket
 
 /** One remote SD RPC helper the running sd-cli depends on. */
 data class SdHelper(val name: String, val host: String, val port: Int) {
@@ -27,13 +25,23 @@ data class SdHelper(val name: String, val host: String, val port: Int) {
  */
 class SdHelperWatchdog(
     private val helpers: List<SdHelper>,
-    private val threshold: Int = DEFAULT_THRESHOLD,
-    private val probe: (SdHelper) -> Boolean = ::probeTcp,
+    private val probe: (SdHelper) -> SdHelperLiveness = { SdHelperProbe.probe(it.host, it.port) },
+    private val lastOutputAtMs: () -> Long,
+    private val now: () -> Long = System::currentTimeMillis,
+    private val onUnverifiable: (SdHelper) -> Unit = {},
     private val onLost: (SdHelper) -> Unit
 ) {
+    private class State {
+        var probed = false
+        var unverifiable = false
+        var seenHeartbeat = false
+        var unreachable = 0
+        var hostAliveAfterHeartbeat = 0
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var job: Job? = null
-    private var failures: Map<String, Int> = emptyMap()
+    private val states = helpers.associate { it.endpoint to State() }
 
     @Volatile private var stopped = false
     @Volatile var lostHelper: SdHelper? = null
@@ -43,6 +51,7 @@ class SdHelperWatchdog(
 
     fun start(intervalMs: Long = INTERVAL_MS) {
         if (helpers.isEmpty() || job != null) return
+        activeRuns.incrementAndGet()
         job = scope.launch {
             while (isActive) {
                 delay(intervalMs)
@@ -51,15 +60,40 @@ class SdHelperWatchdog(
         }
     }
 
-    /** One probe round. Reports the first helper reaching [threshold] consecutive failures, once. */
+    /** One probe round. Reports the first helper meeting a kill rule, once. */
     fun tick() {
         if (stopped || lost) return
         for (helper in helpers) {
             if (stopped) return
-            val ok = probe(helper)
-            val next = nextFailures(failures[helper.endpoint] ?: 0, ok)
-            failures = failures + (helper.endpoint to next)
-            if (helperLost(next, threshold)) {
+            val state = states.getValue(helper.endpoint)
+            val liveness = probe(helper)
+            if (!state.probed) {
+                state.probed = true
+                if (liveness == SdHelperLiveness.UNREACHABLE) {
+                    state.unverifiable = true
+                    onUnverifiable(helper)
+                }
+            }
+            when (liveness) {
+                SdHelperLiveness.HEARTBEAT -> {
+                    state.seenHeartbeat = true
+                    state.unreachable = 0
+                    state.hostAliveAfterHeartbeat = 0
+                }
+                SdHelperLiveness.HOST_ALIVE -> {
+                    state.unreachable = 0
+                    state.hostAliveAfterHeartbeat = if (state.seenHeartbeat) state.hostAliveAfterHeartbeat + 1 else 0
+                }
+                SdHelperLiveness.UNREACHABLE -> {
+                    state.unreachable++
+                    state.hostAliveAfterHeartbeat = 0
+                }
+            }
+            val processGone = state.hostAliveAfterHeartbeat >= PROCESS_GONE_THRESHOLD
+            val silentAndUnreachable = !state.unverifiable &&
+                state.unreachable >= UNREACHABLE_THRESHOLD &&
+                now() - lastOutputAtMs() >= SILENCE_MS
+            if (processGone || silentAndUnreachable) {
                 lostHelper = helper
                 onLost(helper)
                 return
@@ -68,6 +102,7 @@ class SdHelperWatchdog(
     }
 
     fun stop() {
+        if (!stopped && job != null) activeRuns.decrementAndGet()
         stopped = true
         scope.cancel()
     }
@@ -79,18 +114,14 @@ class SdHelperWatchdog(
 
     companion object {
         const val INTERVAL_MS = 10_000L
-        const val DEFAULT_THRESHOLD = 2
-        const val PROBE_TIMEOUT_MS = 1500
+        const val UNREACHABLE_THRESHOLD = 6
+        const val PROCESS_GONE_THRESHOLD = 2
+        const val SILENCE_MS = 60_000L
 
-        fun helperLost(consecutiveFailures: Int, threshold: Int = DEFAULT_THRESHOLD): Boolean =
-            consecutiveFailures >= threshold
+        private val activeRuns = java.util.concurrent.atomic.AtomicInteger(0)
 
-        fun nextFailures(previous: Int, reachable: Boolean): Int = if (reachable) 0 else previous + 1
-
-        fun probeTcp(helper: SdHelper): Boolean = runCatching {
-            Socket().use { it.connect(InetSocketAddress(helper.host, helper.port), PROBE_TIMEOUT_MS) }
-            true
-        }.getOrDefault(false)
+        /** True while a distributed run is being watched; the helpers' RPC ports must not be probed then. */
+        val runActive: Boolean get() = activeRuns.get() > 0
 
         /** Parses `host:port,host:port` into helpers, naming them from known workers. */
         fun parseHelpers(rpcServers: String, known: List<SdDistributedWorkerRuntime>): List<SdHelper> =
@@ -113,17 +144,27 @@ class SdHelperWatchdog(
             context: Context,
             runtime: SdDistributedRuntimeConfig,
             distributedHolder: Boolean,
-            process: Process
+            process: Process,
+            lastOutputAtMs: () -> Long
         ): SdHelperWatchdog? {
             if (!distributedHolder || !runtime.enabled || !runtime.hasRpcServers) return null
             val helpers = parseHelpers(runtime.rpcServers, SdDistributedService.activeWorkers.value)
             if (helpers.isEmpty()) return null
-            return SdHelperWatchdog(helpers) { helper ->
-                SdDistributedService.appendLog(context.getString(R.string.sd_helper_lost_error, helper.name, helper.endpoint))
-                process.destroyForcibly()
-                runCatching { process.inputStream.close() }
-                runCatching { process.errorStream.close() }
-            }.also { it.start() }
+            return SdHelperWatchdog(
+                helpers = helpers,
+                lastOutputAtMs = lastOutputAtMs,
+                onUnverifiable = { helper ->
+                    SdDistributedService.appendLog(
+                        context.getString(R.string.sd_r8_w01_unverifiable_log, helper.name, helper.endpoint)
+                    )
+                },
+                onLost = { helper ->
+                    SdDistributedService.appendLog(context.getString(R.string.sd_helper_lost_error, helper.name, helper.endpoint))
+                    process.destroyForcibly()
+                    runCatching { process.inputStream.close() }
+                    runCatching { process.errorStream.close() }
+                }
+            ).also { it.start() }
         }
 
         /** Runs a stream consumer; the "stream closed" error caused by a watchdog kill is not a failure of its own. */

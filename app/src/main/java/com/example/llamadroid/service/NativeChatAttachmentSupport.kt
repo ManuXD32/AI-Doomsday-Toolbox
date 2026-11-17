@@ -18,6 +18,8 @@ internal object NativeChatAttachmentSupport {
     /** Largest file read into memory for decoding (text, PDF, image). */
     const val MAX_READ_BYTES = 8L * 1024 * 1024
     const val MAX_PDF_BYTES = 48L * 1024 * 1024
+    /** Largest DOCX/ODT/EPUB/XLSX/ODS/CSV file handed to DocumentTextExtractor. */
+    const val MAX_DOCUMENT_BYTES = 64L * 1024 * 1024
     /** Largest zip entry decoded into text. */
     const val MAX_ZIP_ENTRY_BYTES = 4L * 1024 * 1024
     private const val MAX_ENTRY_PATH_CHARS = 512

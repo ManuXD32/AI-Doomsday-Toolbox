@@ -5,6 +5,7 @@ import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.SdDistributedMasterSettingsEntity
 import com.example.llamadroid.data.db.SdDistributedWorkerEntity
 import com.example.llamadroid.sd.SdLoraSpec
+import com.example.llamadroid.sd.SdVideoWorkflow
 import com.example.llamadroid.sd.toJsonArray
 import com.example.llamadroid.sd.toSdLoraSpecs
 import kotlinx.coroutines.Dispatchers
@@ -110,10 +111,38 @@ fun SdDistributedMasterSettingsEntity.toMasterPlanningWorker(): SdDistributedPla
 fun SdDistributedMasterSettingsEntity.toPlanningWorkers(workers: List<SdDistributedWorkerEntity>): List<SdDistributedPlanningWorker> =
     listOfNotNull(toMasterPlanningWorker()) + workers.toSdPlanningWorkers()
 
-fun SdDistributedMasterSettingsEntity.toRamPlannerOptions(): SdRamPlannerOptions =
+fun SdDistributedMasterSettingsEntity.toRamPlannerOptions(diffusionModelBytes: Long? = null): SdRamPlannerOptions =
     SdRamPlannerOptions(
-        autoRamScope = SdDistributedAutoRamScope.fromStoredValue(autoRamScope)
+        autoRamScope = SdDistributedAutoRamScope.fromStoredValue(autoRamScope),
+        diffusionModelBytes = diffusionModelBytes
     )
+
+private fun fileBytesOrNull(path: String?): Long? =
+    path?.trim()?.takeIf { it.isNotEmpty() }
+        ?.let { java.io.File(it) }
+        ?.takeIf { it.isFile }
+        ?.length()
+        ?.takeIf { it > 0L }
+
+/**
+ * Size of the diffusion model the planner display should fill. [video] true/false selects the video or image
+ * model; null (unknown) takes the larger of the two. Video uses the larger of the model and the high-noise expert.
+ * Missing file -> null.
+ */
+fun SdDistributedMasterSettingsEntity.selectedDiffusionModelBytes(video: Boolean? = null): Long? {
+    val image = fileBytesOrNull(imageModelPath)
+    val options = videoRuntimeOptionsOrNull()
+    val components = options?.videoComponents
+    val videoBytes = listOfNotNull(
+        fileBytesOrNull(components?.diffusionModelPath ?: components?.fullModelPath ?: videoModelPath),
+        fileBytesOrNull(components?.highNoiseDiffusionModelPath)
+    ).maxOrNull()
+    return when (video) {
+        true -> videoBytes
+        false -> image
+        null -> listOfNotNull(image, videoBytes).maxOrNull()
+    }
+}
 
 fun SdDistributedMasterSettingsEntity.toRuntimeConfig(plan: SdDistributedPlacementPlan): SdDistributedRuntimeConfig {
     val mode = runCatching {
@@ -151,7 +180,8 @@ fun SdDistributedMasterSettingsEntity.toRuntimeConfig(plan: SdDistributedPlaceme
         autoFit = effectiveAutoFit,
         maxVramSpec = effectiveMaxVramSpec,
         splitMode = SdDistributedSplitMode.LAYER,
-        customFlags = effectiveCustomFlags
+        customFlags = effectiveCustomFlags,
+        compressLayerTransfers = compressLayerTransfers
     )
 }
 
@@ -161,7 +191,10 @@ suspend fun restorePersistedSdDistributedRuntime(context: Context) {
         val settings = dao.getMasterSettings() ?: SdDistributedMasterSettingsEntity()
         val workers = dao.getEnabledWorkersOnce()
         val planningWorkers = settings.toPlanningWorkers(workers)
-        val plan = buildRamWeightedSdPlacementPlan(planningWorkers, settings.toRamPlannerOptions())
+        val plan = buildRamWeightedSdPlacementPlan(
+            planningWorkers,
+            settings.toRamPlannerOptions(settings.selectedDiffusionModelBytes())
+        )
         val runtimeConfig = settings.toRuntimeConfig(plan)
         val assignmentByWorker = assignmentsByRpc(plan)
         SdDistributedService.setRuntimeConfig(runtimeConfig)
@@ -442,3 +475,64 @@ private fun moduleDisplayLabel(module: String): String = when (module) {
     "upscaler" -> "Upscaler"
     else -> module
 }
+
+/**
+ * Writes [options] into the row: the versioned `videoAdvancedJson` plus the legacy scalar
+ * columns that older readers (templates, reuse, planner) still consult.
+ */
+fun SdDistributedMasterSettingsEntity.withVideoOptions(options: VideoRuntimeOptions): SdDistributedMasterSettingsEntity {
+    val modelPath = (options.videoComponents.diffusionModelPath ?: options.videoComponents.fullModelPath).orEmpty()
+    val vaePath = options.videoComponents.vaePath.orEmpty()
+    val t5xxlPath = options.videoComponents.t5xxlPath.orEmpty()
+    return copy(
+        videoAdvancedJson = options.toJsonString(),
+        videoModelPath = modelPath,
+        videoVaePath = vaePath,
+        videoUseVae = vaePath.isNotBlank() && !options.useTae,
+        videoT5xxlPath = t5xxlPath,
+        videoUseT5xxl = t5xxlPath.isNotBlank(),
+        videoInputPath = options.videoInputs.initImagePath.orEmpty(),
+        videoSeed = options.seed.takeIf { it != -1L }?.toString().orEmpty(),
+        videoWorkflowMode = if (options.workflow == SdVideoWorkflow.IMAGE_TO_VIDEO) "IMG2VID" else "TXT2VID"
+    )
+}
+
+/** Master-device enablement is derived: the farm is on exactly when some Helper is enabled. */
+fun SdDistributedMasterSettingsEntity.withDerivedEnabled(workers: List<SdDistributedWorkerEntity>): SdDistributedMasterSettingsEntity {
+    val derived = workers.any { it.isEnabled }
+    return if (derived == enabled) this else copy(enabled = derived)
+}
+
+/**
+ * Applies the legacy-column mirrors and field normalisation the former screen performed on
+ * every save (`dimensions`, `prompt`, `masterBackendDevice`, module CSV, LoRA JSON, ...).
+ */
+fun SdDistributedMasterSettingsEntity.normalizedForSave(defaultMasterName: String): SdDistributedMasterSettingsEntity {
+    val loraStack = imageLoras()
+    return copy(
+        splitMode = "layer",
+        prompt = imagePrompt,
+        negativePrompt = imageNegativePrompt,
+        dimensions = "${imageWidth.ifBlank { "512" }} x ${imageHeight.ifBlank { "512" }}",
+        steps = imageSteps,
+        cfg = imageCfg,
+        seed = imageSeed,
+        sampler = imageSampler,
+        scheduler = imageScheduler,
+        flowShift = imageFlowShift,
+        masterDisplayName = masterDisplayName.ifBlank { defaultMasterName },
+        masterBackendDevice = masterBackendDevice.ifBlank { "cpu" },
+        masterAllowedModules = SdDistributedModules.toCsv(SdDistributedModules.normalizeCsv(masterAllowedModules)),
+        masterDiffusionSharePercent = masterDiffusionSharePercent.filter(Char::isDigit).take(2),
+        imageLoraPath = loraStack.firstOrNull()?.path.orEmpty(),
+        imageLorasJson = if (imageLoraEnabled) loraStack.toJsonArray().toString() else "[]"
+    )
+}
+
+/** Replaces the image LoRA stack, keeping the enable flag and legacy single-path column in sync. */
+fun SdDistributedMasterSettingsEntity.withImageLoras(stack: List<SdLoraSpec>): SdDistributedMasterSettingsEntity =
+    copy(
+        imageLoraEnabled = stack.isNotEmpty(),
+        imageLoraPath = stack.firstOrNull()?.path.orEmpty(),
+        imageLorasJson = stack.toJsonArray().toString()
+    )

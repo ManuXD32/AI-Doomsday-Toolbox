@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_cards_setting_title">Tarjetas interactivas</string>
+    <string name="chat_cards_setting_desc">Permite que el modelo responda con opciones, formularios, botones de seguimiento, mapas, gráficos y otras tarjetas en lugar de solo texto.</string>
+    <plurals name="chat_cards_setting_tokens">
+        <item quantity="one">Añade unos %d token a las instrucciones de este chat.</item>
+        <item quantity="many">Añade unos %d tokens a las instrucciones de este chat.</item>
+        <item quantity="other">Añade unos %d tokens a las instrucciones de este chat.</item>
+    </plurals>
+    <plurals name="chat_cards_setting_tokens_global">
+        <item quantity="one">Añade unos %d token a las instrucciones de cada chat con tarjetas activadas.</item>
+        <item quantity="many">Añade unos %d tokens a las instrucciones de cada chat con tarjetas activadas.</item>
+        <item quantity="other">Añade unos %d tokens a las instrucciones de cada chat con tarjetas activadas.</item>
+    </plurals>
+    <string name="chat_cards_setting_output_cost">Cada tarjeta genera más texto de salida que una respuesta normal, así que las respuestas tardan más.</string>
+    <string name="chat_cards_setting_map_network">Algunas tarjetas usan internet al mostrarse: mapas (OpenStreetMap, Photon), fotos (Wikipedia, Openverse) y el tiempo (Open-Meteo).</string>
+    <string name="chat_cards_setting_cache_note">Cambiarlo reconstruye la caché de este chat una vez.</string>
+    <string name="chat_cards_default_title">Usar en chats nuevos</string>
+    <string name="chat_cards_default_desc">Los chats nuevos empiezan con las tarjetas interactivas activadas. Se aplica a cada chat que crees; los chats existentes mantienen su propio ajuste.</string>
+</resources>

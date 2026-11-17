@@ -21,12 +21,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -57,6 +59,16 @@ import kotlinx.coroutines.isActive
 
 private const val TRANSFER_SAMPLE_MS = 500L
 private const val PREVIEW_LOG_LINES = 12
+private const val SILENCE_TICK_MS = 15_000L
+
+/** Minutes of generator silence after which the run panel shows its "no output" hint. */
+internal const val SD_RUN_SILENCE_HINT_MS = 5 * 60_000L
+
+/** Whole minutes without output when at least [SD_RUN_SILENCE_HINT_MS] has passed, else null. */
+internal fun sdRunSilenceMinutes(nowMs: Long, lastOutputAtMs: Long): Int? {
+    val silent = nowMs - lastOutputAtMs
+    return if (silent >= SD_RUN_SILENCE_HINT_MS) (silent / 60_000L).toInt() else null
+}
 
 /** Phases shown for [kind], in execution order. */
 internal fun sdRunPhasesFor(kind: SdRunKind): List<SdRunPhase> =
@@ -112,13 +124,12 @@ internal fun SdRunProgressSection(navController: NavController) {
     val saving = runView.saving
     val running = runView.running
 
-    val runLines = remember(debugLogs, current) {
+    val runEntries = remember(debugLogs, current) {
         if (current == null) emptyList() else debugLogs
             .filter { it.timestamp >= current.startedAtMs - 1_000L }
-            .map { it.message }
-            .filter { it.startsWith("SD: ") || it.startsWith("[VIDEO-GEN] ") }
-            .map { it.removePrefix("SD: ") }
+            .filter { it.message.startsWith("SD: ") || it.message.startsWith("[VIDEO-GEN] ") }
     }
+    val runLines = remember(runEntries) { runEntries.map { it.message.removePrefix("SD: ") } }
     val parsed = remember(runLines) { SdRunLineParser.parse(runLines) }
     // The video service only exposes step counters; use them when the log tail no longer holds the sampling bar.
     val progress = if (parsed.totalSteps == 0) {
@@ -134,6 +145,18 @@ internal fun SdRunProgressSection(navController: NavController) {
     val effective = if (saving && (progress.phase?.ordinal ?: -1) < SdRunPhase.SAVING.ordinal) {
         progress.copy(phase = SdRunPhase.SAVING)
     } else progress
+
+    // Hint only (never a kill): how long the generator has printed nothing during a running run.
+    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(running) {
+        while (running && isActive) {
+            nowMs = System.currentTimeMillis()
+            delay(SILENCE_TICK_MS)
+        }
+    }
+    val silentMinutes = if (running && current != null) {
+        sdRunSilenceMinutes(nowMs, runEntries.maxOfOrNull { it.timestamp } ?: current.startedAtMs)
+    } else null
 
     val latest = rememberUpdatedState(effective)
     val latestComplete = rememberUpdatedState(complete)
@@ -205,6 +228,14 @@ internal fun SdRunProgressSection(navController: NavController) {
                     text = stringResource(R.string.sd_r4_run_eta, DistributedTransferMath.formatEta(eta)),
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold
+                )
+            }
+
+            if (silentMinutes != null) {
+                Text(
+                    text = pluralStringResource(R.plurals.sd_r8_w08_silence_hint, silentMinutes, silentMinutes),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary
                 )
             }
 

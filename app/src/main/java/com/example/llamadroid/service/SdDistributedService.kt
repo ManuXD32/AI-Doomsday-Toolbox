@@ -24,8 +24,8 @@ import kotlinx.coroutines.launch
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
-import java.net.InetSocketAddress
-import java.net.Socket
+import java.net.InetAddress
+import java.net.ServerSocket
 
 data class SdDistributedWorkerRuntime(
     val host: String,
@@ -51,6 +51,8 @@ data class SdDistributedWorkerAssignment(
 
 class SdDistributedService : Service() {
 
+    @Volatile private var heartbeatServer: SdHelperHeartbeatServer? = null
+
     companion object {
         private const val TAG = "SdDistributedService"
         const val CONFIRMED_PROBE_INTERVAL_MS = 30_000L
@@ -70,6 +72,12 @@ class SdDistributedService : Service() {
         const val EXTRA_CACHE_ENABLED = "cache_enabled"
 
         private const val MAX_LOG_LINES = 300
+
+        // The binary prints "Accepted client connection" / "Client connection closed".
+        internal val CONNECTED_REGEX =
+            "accepted (client )?connection|new connection|client connected".toRegex(RegexOption.IGNORE_CASE)
+        internal val DISCONNECTED_REGEX =
+            "(client )?connection closed|closing connection|client disconnected".toRegex(RegexOption.IGNORE_CASE)
         private const val WORKER_PREFS = "sd_distributed_worker"
         private const val PREF_CACHE_ENABLED = "cache_enabled"
 
@@ -130,6 +138,7 @@ class SdDistributedService : Service() {
 
         private val monitorScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         private var masterMonitorJob: Job? = null
+        @Volatile private var masterMonitorEndpoints: Set<String> = emptySet()
 
         fun createStartWorkerIntent(
             context: Context,
@@ -209,12 +218,36 @@ class SdDistributedService : Service() {
         }
 
         fun setActiveWorkers(workers: List<SdDistributedWorkerRuntime>) {
-            _activeWorkers.value = workers
-            startMasterConnectionMonitor(workers)
+            val previous = _activeWorkers.value
+            _activeWorkers.value = mergeActiveWorkers(previous, workers)
+            val endpoints = workers.map { "${it.host}:${it.port}" }.toSet()
+            val running = masterMonitorJob?.isActive == true
+            if (running && endpoints == masterMonitorEndpoints) return
+            startMasterConnectionMonitor(workers, endpoints)
         }
 
-        private fun startMasterConnectionMonitor(workers: List<SdDistributedWorkerRuntime>) {
+        /** Pure: keeps connection state for workers whose host:port is unchanged. */
+        internal fun mergeActiveWorkers(
+            previous: List<SdDistributedWorkerRuntime>,
+            next: List<SdDistributedWorkerRuntime>
+        ): List<SdDistributedWorkerRuntime> {
+            val known = previous.associateBy { "${it.host}:${it.port}" }
+            return next.map { worker ->
+                val old = known["${worker.host}:${worker.port}"] ?: return@map worker
+                worker.copy(isConnected = old.isConnected, lastSeenAt = old.lastSeenAt)
+            }
+        }
+
+        fun stopMasterConnectionMonitor() {
             masterMonitorJob?.cancel()
+            masterMonitorJob = null
+            masterMonitorEndpoints = emptySet()
+        }
+
+        private fun startMasterConnectionMonitor(workers: List<SdDistributedWorkerRuntime>, endpoints: Set<String>) {
+            masterMonitorJob?.cancel()
+            masterMonitorJob = null
+            masterMonitorEndpoints = endpoints
             if (workers.isEmpty()) return
             masterMonitorJob = monitorScope.launch {
                 while (true) {
@@ -226,12 +259,19 @@ class SdDistributedService : Service() {
                                 lastSeenAt = System.currentTimeMillis()
                             )
                         }
-                        // Each probe is a TCP connect that the worker's rpc-server logs as a connection pair;
-                        // once a worker is confirmed online, re-check it only every CONFIRMED_PROBE_INTERVAL_MS.
                         if (!shouldProbeWorker(worker.isConnected, worker.lastSeenAt, System.currentTimeMillis())) {
                             return@map worker
                         }
-                        val connected = canReach(worker.host, worker.port)
+                        // Probe the helper's heartbeat port (rpc port + 1), never the RPC port: the RPC server
+                        // serves one client at a time and a probe there would queue behind a running job.
+                        // A helper without the heartbeat (older app, or worker not started) only says "host is up";
+                        // confirm on the RPC port then, but never while a run holds that port.
+                        val connected = when (SdHelperProbe.probe(worker.host, worker.port)) {
+                            SdHelperLiveness.HEARTBEAT -> true
+                            SdHelperLiveness.UNREACHABLE -> false
+                            SdHelperLiveness.HOST_ALIVE ->
+                                if (SdHelperWatchdog.runActive) worker.isConnected else canReachRpc(worker.host, worker.port)
+                        }
                         worker.copy(
                             isConnected = connected,
                             lastSeenAt = if (connected) System.currentTimeMillis() else worker.lastSeenAt
@@ -243,11 +283,9 @@ class SdDistributedService : Service() {
             }
         }
 
-        private fun canReach(host: String, port: Int): Boolean =
+        private fun canReachRpc(host: String, port: Int): Boolean =
             runCatching {
-                Socket().use { socket ->
-                    socket.connect(InetSocketAddress(host, port), 750)
-                }
+                java.net.Socket().use { it.connect(java.net.InetSocketAddress(host, port), 750) }
                 true
             }.getOrDefault(false)
 
@@ -422,6 +460,7 @@ class SdDistributedService : Service() {
 
                 rpcProcess = processBuilder.start()
                 _isWorkerRunning.value = true
+                startHeartbeat(port)
                 ensureNsdHelper(applicationContext).registerService(
                     port,
                     deviceName,
@@ -444,6 +483,7 @@ class SdDistributedService : Service() {
             } catch (error: Exception) {
                 addLog(getString(R.string.sd_dist_error_worker_failed, error.message ?: error.javaClass.simpleName))
             } finally {
+                stopHeartbeat()
                 _isWorkerRunning.value = false
                 rpcProcess = null
                 nsdHelper?.unregisterService()
@@ -458,15 +498,13 @@ class SdDistributedService : Service() {
     }
 
     private fun readWorkerOutput(process: Process) {
-        val connectedRegex = "accepted connection|new connection|client connected".toRegex(RegexOption.IGNORE_CASE)
-        val disconnectedRegex = "connection closed|closing connection|client disconnected".toRegex(RegexOption.IGNORE_CASE)
         BufferedReader(InputStreamReader(process.inputStream)).useLines { lines ->
             lines.forEach { line ->
                 addLog(line)
-                if (connectedRegex.containsMatchIn(line)) {
+                if (CONNECTED_REGEX.containsMatchIn(line)) {
                     _connectionCount.value += 1
                 }
-                if (disconnectedRegex.containsMatchIn(line) && _connectionCount.value > 0) {
+                if (DISCONNECTED_REGEX.containsMatchIn(line) && _connectionCount.value > 0) {
                     _connectionCount.value -= 1
                 }
             }
@@ -475,7 +513,23 @@ class SdDistributedService : Service() {
         addLog(getString(R.string.sd_dist_log_worker_exited, exitCode))
     }
 
+    private fun startHeartbeat(rpcPort: Int) {
+        stopHeartbeat()
+        val server = SdHelperHeartbeatServer(SdHelperProbe.heartbeatPort(rpcPort))
+        if (server.start()) {
+            heartbeatServer = server
+        } else {
+            addLog(getString(R.string.sd_dist_log_heartbeat_unavailable))
+        }
+    }
+
+    private fun stopHeartbeat() {
+        heartbeatServer?.close()
+        heartbeatServer = null
+    }
+
     private fun stopWorkerMode() {
+        stopHeartbeat()
         rpcProcess?.destroy()
         rpcProcess = null
         nsdHelper?.unregisterService()
@@ -505,5 +559,47 @@ class SdDistributedService : Service() {
         notificationTaskId = taskId
         UnifiedNotificationManager.updateProgress(taskId, -1f, title)
         return true
+    }
+}
+
+/**
+ * Tiny sidecar on rpc port + 1: writes [SdHelperProbe.BANNER] and closes every accepted socket, so
+ * the master can tell the Helper is alive without touching the single-client RPC port.
+ */
+internal class SdHelperHeartbeatServer(private val port: Int, private val bindHost: String = "0.0.0.0") {
+    @Volatile private var server: ServerSocket? = null
+    @Volatile private var thread: Thread? = null
+
+    /** Binds and starts serving; returns false (after logging) when the port cannot be bound. */
+    fun start(): Boolean {
+        val socket = try {
+            ServerSocket(port, 50, InetAddress.getByName(bindHost))
+        } catch (e: Exception) {
+            DebugLog.log("[SdHelperHeartbeat] bind failed on $port: ${e.message}")
+            return false
+        }
+        server = socket
+        thread = Thread({
+            while (!socket.isClosed) {
+                try {
+                    socket.accept().use { client ->
+                        client.soTimeout = 1000
+                        client.getOutputStream().apply {
+                            write((SdHelperProbe.BANNER + "\n").toByteArray(Charsets.US_ASCII))
+                            flush()
+                        }
+                    }
+                } catch (_: Exception) {
+                    // closed server or a client that vanished; loop condition decides whether to stop
+                }
+            }
+        }, "sd-helper-heartbeat").apply { isDaemon = true; start() }
+        return true
+    }
+
+    fun close() {
+        runCatching { server?.close() }
+        server = null
+        thread = null
     }
 }

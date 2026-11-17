@@ -421,6 +421,7 @@ class VideoGenerationService : Service() {
         updateNotification(getString(R.string.gen_status_calculating_eta), 0f)
         markActivity(config.mode, "starting")
 
+        var helperWatchdogLost = false
         suspend fun runSamplingWithBinary(
             candidateBinary: File,
             candidateCapabilities: SdBinaryCapabilities?
@@ -448,6 +449,7 @@ class VideoGenerationService : Service() {
             val processBuilder = ProcessBuilder(args)
                 .directory(candidateBinary.parentFile)
             processBuilder.environment()["LD_LIBRARY_PATH"] = sdProcessLibraryPath(binaryRepo, candidateBinary, libDir)
+            processBuilder.environment().putAll(sdRpcClientEnvironment(config.distributedRuntime))
 
             val lane = laneFor(config.mode, useDistributedStateHolder)
             modeProcesses[lane] = processBuilder.start()
@@ -510,7 +512,9 @@ class VideoGenerationService : Service() {
                 }
             }
 
+            val lastOutputAtMs = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
             suspend fun handleSamplingOutput(text: String, appendToLog: Boolean) {
+                lastOutputAtMs.set(System.currentTimeMillis())
                 markActivity(config.mode, "generating")
                 stageTimings = stageTimings.withLine(text)
                 nativePhaseTracker.update(text)
@@ -534,7 +538,7 @@ class VideoGenerationService : Service() {
                 }
             }
 
-            val watchdog = SdHelperWatchdog.startFor(this@VideoGenerationService, config.distributedRuntime, useDistributedStateHolder, sdProcess)
+            val watchdog = SdHelperWatchdog.startFor(this@VideoGenerationService, config.distributedRuntime, useDistributedStateHolder, sdProcess) { lastOutputAtMs.get() }
             try {
                 BufferedOutputStream(FileOutputStream(processLogFile, false)).use { processLog ->
                     val stdoutJob = launch(Dispatchers.IO) {
@@ -562,7 +566,10 @@ class VideoGenerationService : Service() {
                     stderrJob.join()
                     publishPendingSamplingSnapshot(force = true)
                     modeProcesses.remove(lane)
-                    watchdog?.lostMessage(this@VideoGenerationService)?.let { throw IllegalStateException(it) }
+                    watchdog?.lostMessage(this@VideoGenerationService)?.let {
+                        helperWatchdogLost = true
+                        throw IllegalStateException(it)
+                    }
                     if (sdExitCode != 0) {
                         val acceleratorBinary = DeviceAcceleration.isAcceleratorBinary(candidateBinary)
                         throw videoNativeFailureException(
@@ -590,7 +597,8 @@ class VideoGenerationService : Service() {
             runSamplingWithBinary(sdBinary, binaryCapabilities)
         }.getOrElse { error ->
             val cpuBinary = binaryRepo.getCpuSdBinary()
-            if (DeviceAcceleration.isAcceleratorBinary(sdBinary) &&
+            if (!helperWatchdogLost &&
+                DeviceAcceleration.isAcceleratorBinary(sdBinary) &&
                 shouldRetrySdGenerationOnCpu(sdBinary, cpuBinary, config.distributedRuntime, error)
             ) {
                 val detail = "Stable Diffusion video accelerator ${sdBinary.name} failed: ${error.message.orEmpty().take(180)}"

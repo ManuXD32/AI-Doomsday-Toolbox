@@ -59,7 +59,14 @@ enum class VideoAdditionalControl(
  * Saved values are never cleared when a control becomes unavailable.
  */
 data class VideoUiAvailability(
+    /** Union of [familyBlockedControls] and [binaryBlockedControls]. */
     val unavailableControls: Set<VideoAdditionalControl> = emptySet(),
+    /** Controls the selected model family has no use for (e.g. high-noise pass outside Wan). */
+    val familyBlockedControls: Set<VideoAdditionalControl> = emptySet(),
+    /** Controls the probed native binary does not advertise. */
+    val binaryBlockedControls: Set<VideoAdditionalControl> = emptySet(),
+    /** False when the family has no high-noise pass; the editor hides that whole group. */
+    val highNoiseFamilySupported: Boolean = true,
     val unavailableFlags: Set<String> = emptySet(),
     val workflowEnabled: Boolean = true,
     val highNoiseEnabled: Boolean = true,
@@ -196,6 +203,40 @@ internal fun VideoRuntimeOptions.clearUnavailableAdvancedSelections(
     return next
 }
 
+/** True when [control] holds a non-default saved value in these options. */
+internal fun VideoRuntimeOptions.hasSavedValue(control: VideoAdditionalControl): Boolean = when (control) {
+    VideoAdditionalControl.IMG_CFG_SCALE -> imgCfgScale != null
+    VideoAdditionalControl.GUIDANCE -> guidance != null
+    VideoAdditionalControl.SLG_SCALE -> slgScale != null
+    VideoAdditionalControl.SLG_START -> skipLayerStart != null
+    VideoAdditionalControl.SLG_END -> skipLayerEnd != null
+    VideoAdditionalControl.SKIP_LAYERS -> skipLayers.isNotEmpty()
+    VideoAdditionalControl.ETA -> eta != null
+    VideoAdditionalControl.STRENGTH -> strength != null
+    VideoAdditionalControl.HIGH_NOISE_IMG_CFG_SCALE -> highNoiseImgCfgScale != null
+    VideoAdditionalControl.HIGH_NOISE_GUIDANCE -> highNoiseGuidance != null
+    VideoAdditionalControl.HIGH_NOISE_SAMPLING_METHOD -> highNoiseSamplingMethod != null
+    VideoAdditionalControl.HIGH_NOISE_SLG_SCALE -> highNoiseSlgScale != null
+    VideoAdditionalControl.HIGH_NOISE_SLG_START -> highNoiseSkipLayerStart != null
+    VideoAdditionalControl.HIGH_NOISE_SLG_END -> highNoiseSkipLayerEnd != null
+    VideoAdditionalControl.HIGH_NOISE_SKIP_LAYERS -> highNoiseSkipLayers.isNotEmpty()
+    VideoAdditionalControl.HIGH_NOISE_ETA -> highNoiseEta != null
+    VideoAdditionalControl.MOE_BOUNDARY -> moeBoundary != null
+    VideoAdditionalControl.VACE_STRENGTH -> vaceStrength != null
+    VideoAdditionalControl.IP_ADAPTER_STRENGTH -> ipAdapterStrength != null
+    VideoAdditionalControl.VAE_FORMAT -> vaeFormat != null
+    VideoAdditionalControl.SIGMAS -> sigmas.isNotEmpty()
+    VideoAdditionalControl.REF_IMAGE_ARGS -> refImageArgs.isNotEmpty()
+    VideoAdditionalControl.EXTRA_SAMPLE_ARGS -> extraSampleArgs.isNotEmpty()
+    VideoAdditionalControl.EXTRA_TILING_ARGS -> extraTilingArgs.isNotEmpty()
+    VideoAdditionalControl.INCREASE_REF_INDEX -> increaseRefIndex
+    VideoAdditionalControl.DISABLE_AUTO_RESIZE_REF_IMAGE -> disableAutoResizeRefImage
+    VideoAdditionalControl.CIRCULAR -> circular
+    VideoAdditionalControl.CIRCULAR_X -> circularX
+    VideoAdditionalControl.CIRCULAR_Y -> circularY
+    VideoAdditionalControl.TEMPORAL_TILING -> temporalTiling
+}
+
 internal fun VideoRuntimeOptions.hasUnavailableAdvancedSelections(
     availability: VideoUiAvailability
 ): Boolean = this != clearUnavailableAdvancedSelections(availability)
@@ -260,17 +301,19 @@ fun videoUiAvailability(
             )
         )
     }
-    val unavailable = buildSet {
-        VideoAdditionalControl.entries.forEach { control ->
-            val profileUnavailable = control.requiresHighNoiseProfile &&
-                profile?.supportsHighNoisePass == false
-            val binaryUnavailable = !supportsFlag(control.cliFlag)
-            if (profileUnavailable || binaryUnavailable) add(control)
-        }
-    }
+    val familyBlocked = VideoAdditionalControl.entries.filter {
+        it.requiresHighNoiseProfile && profile?.supportsHighNoisePass == false
+    }.toSet()
+    val binaryBlocked = VideoAdditionalControl.entries.filter {
+        !supportsFlag(it.cliFlag)
+    }.toSet()
+    val unavailable = familyBlocked + binaryBlocked
     val unavailableFlags = trackedFlags.filterNot(::supportsFlag).toSet()
     return VideoUiAvailability(
         unavailableControls = unavailable,
+        familyBlockedControls = familyBlocked,
+        binaryBlockedControls = binaryBlocked,
+        highNoiseFamilySupported = profile?.supportsHighNoisePass != false,
         unavailableFlags = unavailableFlags,
         workflowEnabled = binaryProbePending ||
             (!binaryProbeUnavailable && (

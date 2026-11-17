@@ -830,12 +830,12 @@ private fun TamaChatBubble(
         Box {
             Surface(
                 color = if (isUser) TamaDark else (if (warningBubble) Color(0xFFB71C1C) else TamaLight),
-                shape = RoundedCornerShape(
+                shape = com.example.llamadroid.ui.theme.TallSafeShape(RoundedCornerShape(
                     topStart = 16.dp,
                     topEnd = 16.dp,
                     bottomStart = if (isUser) 16.dp else 4.dp,
                     bottomEnd = if (isUser) 4.dp else 16.dp
-                ),
+                )),
                 border = if (!isUser && !warningBubble) androidx.compose.foundation.BorderStroke(2.dp, TamaDark) else null,
                 shadowElevation = 2.dp,
                 modifier = Modifier.combinedClickable(

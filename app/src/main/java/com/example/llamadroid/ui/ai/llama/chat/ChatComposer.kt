@@ -173,7 +173,8 @@ internal fun ChatComposer(
     onPickFile: () -> Unit = {},
     pendingFiles: List<LlamaMessageAttachmentEntity> = emptyList(),
     onRemovePendingFile: (LlamaMessageAttachmentEntity) -> Unit = {},
-    isImportingFile: Boolean = false
+    isImportingFile: Boolean = false,
+    documentIndexing: DocumentIndexSummary? = null
 ) {
     val context = LocalContext.current
     var showAttachmentMenu by remember { mutableStateOf(false) }
@@ -230,6 +231,26 @@ internal fun ChatComposer(
                     CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
                     Text(
                         text = stringResource(R.string.native_chat_attachments_adding_file),
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            if (documentIndexing != null && !documentIndexing.canSend) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                    Text(
+                        text = stringResource(
+                            R.string.native_chat_document_indexing,
+                            documentIndexing.finished,
+                            documentIndexing.total
+                        ),
                         style = MaterialTheme.typography.labelMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -387,17 +408,22 @@ internal fun ChatComposer(
                         attachedAudioPath != null ||
                         attachedVideoPath != null ||
                         pendingFiles.isNotEmpty()
+                    val sendEnabled = canSend && queuedState == null && !isCallActiveForChat && !isImportingFile && !isExtractingDocument &&
+                        documentIndexing?.canSend != false
                     IconButton(
                         onClick = { if (canSend) onSend() },
-                        enabled = canSend && queuedState == null && !isCallActiveForChat && !isImportingFile,
+                        enabled = sendEnabled,
                         modifier = Modifier
-                            .background(MaterialTheme.colorScheme.primary, CircleShape)
+                            .background(
+                                if (sendEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                                CircleShape
+                            )
                             .size(48.dp)
                     ) {
                         Icon(
                             Icons.AutoMirrored.Filled.Send,
                             contentDescription = stringResource(R.string.chat_send),
-                            tint = MaterialTheme.colorScheme.onPrimary
+                            tint = if (sendEnabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                         )
                     }
                 }

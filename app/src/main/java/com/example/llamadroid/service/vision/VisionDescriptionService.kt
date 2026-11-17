@@ -49,7 +49,7 @@ object VisionDescriptionService {
         context: Context,
         chatId: Long,
         server: LlamaServerEntity,
-        onStatus: (String) -> Unit = {}
+        onStatus: ((String) -> Unit)? = null
     ): Map<Long, String> {
         val app = context.applicationContext
         val db = AppDatabase.getDatabase(app)
@@ -77,15 +77,16 @@ object VisionDescriptionService {
             }
             val ram = EphemeralLlamaServer.ramDecision(app, File(modelPath).length(), File(mmprojPath).length())
             if (!ram.ok) {
-                onStatus(app.getString(R.string.vision_helper_status_waiting_ram))
+                onStatus?.invoke(app.getString(R.string.vision_helper_status_waiting_ram))
                 return current()
             }
-            onStatus(app.getString(R.string.vision_helper_status_describing))
+            onStatus?.invoke(app.getString(R.string.vision_helper_status_starting))
             val launch = EphemeralLlamaServer.lowImpactProfile(profile, modelPath, mmprojPath, CONTEXT_TOKENS)
             val created = EphemeralLlamaServer.run(app, LlamaServerSessionIds.VISION_HELPER, launch) { baseUrl ->
                 buildList {
-                    for (message in pending) {
-                        val row = describeOne(baseUrl, message, info.card.name, settings.thinking) ?: continue
+                    for ((index, message) in pending.withIndex()) {
+                        val progress = progressFor(app, onStatus, index + 1, pending.size)
+                        val row = describeOne(baseUrl, message, info.card.name, settings.thinking, progress) ?: continue
                         dao.insert(row)
                         add(row)
                     }
@@ -103,11 +104,12 @@ object VisionDescriptionService {
         baseUrl: String,
         message: LlamaMessageEntity,
         modelName: String,
-        thinking: Boolean
+        thinking: Boolean,
+        progress: ((String) -> Unit)?
     ): LlamaMessageImageDescriptionEntity? {
         val path = message.imagePath ?: return null
         val dataUrl = withContext(Dispatchers.IO) { fileToDataUrl(path, inferImageMimeType(path)) }
-        val description = describeDataUrl(baseUrl, dataUrl, thinking) ?: return null
+        val description = describeDataUrl(baseUrl, dataUrl, thinking, progress) ?: return null
         return LlamaMessageImageDescriptionEntity(
             messageId = message.id,
             imagePath = path,
@@ -116,8 +118,27 @@ object VisionDescriptionService {
         )
     }
 
-    /** Shared by chats and the harness: one image request to a running helper server. Null on failure. */
-    private suspend fun describeDataUrl(baseUrl: String, dataUrl: String, thinking: Boolean): String? {
+    /**
+     * Shared by chats and the harness: one image request to a running helper server. Null on failure.
+     * With [progress] the request streams and reports the partial text; a server that rejects or
+     * ignores streaming falls back to one plain request.
+     */
+    private suspend fun describeDataUrl(
+        baseUrl: String,
+        dataUrl: String,
+        thinking: Boolean,
+        progress: ((String) -> Unit)? = null
+    ): String? {
+        if (progress != null) {
+            val streamed = try {
+                val body = withContext(Dispatchers.IO) { ImageFallbackLogic.buildRequestBody(dataUrl, thinking, stream = true) }
+                postStreaming(baseUrl, body, progress)
+            } catch (error: java.io.IOException) {
+                DebugLog.log("$TAG: streaming image request failed (${error.javaClass.simpleName})")
+                null
+            }
+            if (streamed != null) return streamed
+        }
         val body = withContext(Dispatchers.IO) { ImageFallbackLogic.buildRequestBody(dataUrl, thinking) }
         val response = try {
             post(baseUrl, body)
@@ -126,6 +147,30 @@ object VisionDescriptionService {
             return null
         }
         return ImageFallbackLogic.parseDescription(response)
+    }
+
+    /** Builds the throttled "Describing image i/n..." reporter, or null when nobody listens. */
+    private fun progressFor(
+        context: Context,
+        sink: ((String) -> Unit)?,
+        index: Int,
+        total: Int
+    ): ((String) -> Unit)? {
+        if (sink == null) return null
+        val throttle = VisionStatusThrottle { android.os.SystemClock.elapsedRealtime() }
+        sink(context.getString(R.string.vision_helper_status_describing, index.toString(), total.toString()))
+        return { partial ->
+            if (throttle.shouldEmit()) {
+                val tail = ImageFallbackLogic.statusTail(partial)
+                sink(
+                    if (tail.isEmpty()) {
+                        context.getString(R.string.vision_helper_status_describing, index.toString(), total.toString())
+                    } else {
+                        context.getString(R.string.vision_helper_status_describing_partial, index.toString(), total.toString(), tail)
+                    }
+                )
+            }
+        }
     }
 
     /** Whether the helper is switched on and a card is chosen (cheap; no file or RAM checks). */
@@ -150,7 +195,11 @@ object VisionDescriptionService {
      * Runs the helper once (a single temporary server start) over [dataUrls]. Never throws for helper
      * problems; cancellation propagates.
      */
-    internal suspend fun describeDataUrls(context: Context, dataUrls: List<String>): DataUrlOutcome {
+    internal suspend fun describeDataUrls(
+        context: Context,
+        dataUrls: List<String>,
+        onProgress: ((String) -> Unit)? = null
+    ): DataUrlOutcome {
         if (dataUrls.isEmpty()) return DataUrlOutcome.Done(emptyList())
         val app = context.applicationContext
         val settings = VisionHelperSettings(app)
@@ -167,9 +216,12 @@ object VisionDescriptionService {
             }
             val ram = EphemeralLlamaServer.ramDecision(app, File(modelPath).length(), File(mmprojPath).length())
             if (!ram.ok) return DataUrlOutcome.Unavailable(REASON_NO_RAM)
+            onProgress?.invoke(app.getString(R.string.vision_helper_status_starting))
             val launch = EphemeralLlamaServer.lowImpactProfile(profile, modelPath, mmprojPath, CONTEXT_TOKENS)
             val texts = EphemeralLlamaServer.run(app, LlamaServerSessionIds.VISION_HELPER, launch) { baseUrl ->
-                dataUrls.map { describeDataUrl(baseUrl, it, settings.thinking) }
+                dataUrls.mapIndexed { index, url ->
+                    describeDataUrl(baseUrl, url, settings.thinking, progressFor(app, onProgress, index + 1, dataUrls.size))
+                }
             }
             DataUrlOutcome.Done(texts)
         } catch (error: Exception) {
@@ -178,6 +230,30 @@ object VisionDescriptionService {
             DataUrlOutcome.Unavailable(REASON_FAILED)
         }
     }
+
+    /**
+     * Streams a chat completion and returns the final text, or null when the server answered with an
+     * error status or produced no content (the caller then retries without streaming).
+     */
+    private suspend fun postStreaming(baseUrl: String, body: String, progress: (String) -> Unit): String? =
+        withContext(Dispatchers.IO) {
+            val request = Request.Builder()
+                .url(baseUrl.trimEnd('/') + "/v1/chat/completions")
+                .post(body.toRequestBody("application/json".toMediaType()))
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext null
+                val source = response.body?.source() ?: return@withContext null
+                val text = StringBuilder()
+                while (true) {
+                    val line = source.readUtf8Line() ?: break
+                    val delta = ImageFallbackLogic.parseStreamDelta(line) ?: continue
+                    text.append(delta)
+                    progress(text.toString())
+                }
+                ImageFallbackLogic.finishStreamed(text.toString())
+            }
+        }
 
     private suspend fun post(baseUrl: String, body: String): String = withContext(Dispatchers.IO) {
         val request = Request.Builder()

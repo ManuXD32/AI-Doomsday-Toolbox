@@ -97,6 +97,8 @@ internal class ChatSettingsState {
     var whisperModelPath by mutableStateOf("")
     var whisperLanguage by mutableStateOf("")
     var videoInputMode by mutableStateOf(NativeChatToolConfig.VIDEO_INPUT_SERVER)
+    /** Opt-in interactive cards (see [NativeChatToolConfig.cardsEnabled]); off by default. */
+    var cardsEnabled by mutableStateOf(false)
     var callNoSpeechTimeoutSeconds by mutableIntStateOf(NativeChatToolConfig.fromApiParams(null).callNoSpeechTimeoutSeconds)
     var maxToolRounds by mutableIntStateOf(parseParam(null, NativeChatToolConfig.KEY_MAX_TOOL_ROUNDS, NativeChatToolConfig.DEFAULT_TOOL_ROUNDS))
     var imageToolModel by mutableStateOf(NativeChatToolConfig.fromApiParams(null).imageParams.model.orEmpty())
@@ -321,6 +323,7 @@ internal class ChatSettingsState {
         whisperModelPath = NativeChatToolConfig.fromApiParams(params).whisperModelPath.orEmpty()
         whisperLanguage = NativeChatToolConfig.fromApiParams(params).whisperLanguage.orEmpty()
         videoInputMode = NativeChatToolConfig.fromApiParams(params).videoInputMode
+        cardsEnabled = NativeChatToolConfig.fromApiParams(params).cardsEnabled
         callNoSpeechTimeoutSeconds = NativeChatToolConfig.fromApiParams(params).callNoSpeechTimeoutSeconds
         maxToolRounds = parseParam(params, NativeChatToolConfig.KEY_MAX_TOOL_ROUNDS, NativeChatToolConfig.DEFAULT_TOOL_ROUNDS)
         val imageParams = NativeChatToolConfig.fromApiParams(params).imageParams
@@ -580,6 +583,7 @@ internal class ChatSettingsState {
                 resizeMaxEdge = bgrToolResizeMaxEdge
             ),
             maxToolRounds = maxToolRounds,
+            cardsEnabled = cardsEnabled,
             deepSeekDelegationEnabled = delegation.enabled,
             deepSeekDelegationMode = delegation.mode
     )

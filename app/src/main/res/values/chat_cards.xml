@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_card_preparing">Preparing card…</string>
+    <string name="chat_card_send">Send</string>
+    <string name="chat_card_answered">Answered</string>
+    <string name="chat_card_other_hint">Other…</string>
+    <string name="chat_card_required_missing">Fill in the required fields.</string>
+    <string name="chat_card_yes">Yes</string>
+    <string name="chat_card_no">No</string>
+    <string name="chat_card_select_hint">Choose…</string>
+    <string name="chat_card_date_hint">YYYY-MM-DD</string>
+    <string name="chat_card_map_default_title">Places</string>
+    <string name="chat_card_map_route_note">Route in this order</string>
+    <string name="chat_card_chart_description">Chart</string>
+    <string name="chat_card_link_open">Open link</string>
+    <string name="chat_card_send_answers">Send answers</string>
+    <string name="chat_card_form_default_title">Details</string>
+    <string name="chat_card_pick_date">Pick a date</string>
+    <string name="chat_card_choose_one">Choose one</string>
+    <string name="chat_card_choose_any">Choose any that apply</string>
+    <string name="chat_card_answers_progress">Answered: %1$d/%2$d</string>
+    <string name="chat_card_omni_sent">Sent: %1$s</string>
+    <string name="chat_card_omni_error">Error</string>
+    <string name="chat_card_omni_backspace">Delete last character</string>
+    <string name="chat_card_omni_decrease">Decrease</string>
+    <string name="chat_card_omni_increase">Increase</string>
+    <string name="chat_card_omni_timer">Timer</string>
+    <string name="chat_card_omni_stopwatch">Stopwatch</string>
+    <string name="chat_card_omni_start">Start</string>
+    <string name="chat_card_omni_pause">Pause</string>
+    <string name="chat_card_omni_reset">Reset</string>
+    <string name="chat_card_omni_done">Done</string>
+    <string name="chat_card_omni_dice">Dice</string>
+    <string name="chat_card_omni_roll">Roll</string>
+    <string name="chat_card_omni_coin">Coin</string>
+    <string name="chat_card_omni_flip">Flip</string>
+    <string name="chat_card_omni_heads">Heads</string>
+    <string name="chat_card_omni_tails">Tails</string>
+    <string name="chat_card_omni_pick_label">Pick one</string>
+    <string name="chat_card_omni_pick">Pick</string>
+</resources>

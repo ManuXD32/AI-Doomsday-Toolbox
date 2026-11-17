@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sd_transfer_title">Comprimir transferencias entre dispositivos</string>
+    <string name="sd_transfer_desc">Envía aproximadamente la mitad de datos entre teléfonos en cada paso de una ejecución dividida.</string>
+    <string name="sd_transfer_details_title">Qué cambia esto</string>
+    <string name="sd_transfer_detail_bandwidth">Reduce a la mitad los datos que viajan entre teléfonos en cada paso de una ejecución dividida, lo que ayuda con un Wi-Fi lento.</string>
+    <string name="sd_transfer_detail_precision">Usa BF16, que conserva todo el rango de números (sin desbordamientos) pero solo unas 3 cifras significativas. Los resultados pueden diferir un poco de una ejecución sin dividir con la misma semilla.</string>
+    <string name="sd_transfer_detail_scope">Solo importa cuando el modelo se reparte entre varios dispositivos. No afecta al chat.</string>
+    <string name="sd_transfer_detail_version">Este teléfono necesita la versión 1.00009 o posterior. Los Ayudantes con versiones anteriores funcionan sin problema.</string>
+</resources>

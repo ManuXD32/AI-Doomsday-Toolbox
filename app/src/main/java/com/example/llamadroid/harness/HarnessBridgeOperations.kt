@@ -99,7 +99,7 @@ class HarnessBridgeOperations(
     private val zims = ZimRepository(context, database.zimDao())
     private val sshProcesses = HarnessSshProcesses(files, diagnostics)
     private val client = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
-    private val appWebSearch = HarnessAppWebSearch()
+    private val appWebSearch = HarnessAppWebSearch(context = context)
 
     suspend fun invoke(method: String, sessionId: String?, args: JSONObject): Any? = withContext(Dispatchers.IO) {
         if (method == "appTools.status") return@withContext appToolsStatus(SettingsRepository(context))

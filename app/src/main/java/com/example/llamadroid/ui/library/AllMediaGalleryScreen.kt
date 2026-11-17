@@ -85,6 +85,7 @@ import com.example.llamadroid.media.MediaGalleryLocationFilter
 import com.example.llamadroid.media.MediaGallerySource
 import com.example.llamadroid.media.MediaGallerySourceFilter
 import com.example.llamadroid.media.MediaGalleryType
+import com.example.llamadroid.media.buildGeneratedMediaDetailLines
 import com.example.llamadroid.media.parseMediaGalleryRouteFilters
 import com.example.llamadroid.media.MediaGalleryTypeFilter
 import com.example.llamadroid.ui.ai.VideoGalleryDetail
@@ -510,6 +511,20 @@ private fun MediaGalleryDetailDialog(
     onOpenExternal: () -> Unit,
     onShare: () -> Unit
 ) {
+    val context = LocalContext.current
+    val detailLines by produceState(initialValue = emptyList<Pair<String, String>>(), item.identity.value) {
+        value = withContext(Dispatchers.Default) {
+            buildGeneratedMediaDetailLines(
+                context = context,
+                file = item.file,
+                modeLabel = item.mode.ifBlank { "-" },
+                createdAt = item.createdAt,
+                resolution = null,
+                imageMetadata = item.imageMetadata,
+                videoMetadata = item.videoMetadata
+            )
+        }
+    }
     com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -537,24 +552,29 @@ private fun MediaGalleryDetailDialog(
                     stringResource(R.string.media_gallery_source_label),
                     sourceLabel(item.source)
                 )
-                MediaGalleryDetailLine(
-                    stringResource(R.string.media_gallery_location_label),
-                    locationLabel(item.location)
-                )
-                MediaGalleryDetailLine(
-                    stringResource(R.string.media_gallery_created_label),
-                    formatMediaGalleryDate(item.createdAt)
-                )
-                if (item.prompt.isNotBlank()) {
-                    MediaGalleryDetailLine(stringResource(R.string.media_gallery_prompt_label), item.prompt)
-                }
-                if (item.type == MediaGalleryType.VIDEO && item.videoMetadata == null) {
+                if (item.imageMetadata != null || item.videoMetadata != null) {
+                    // Shared formatter: summary (time + distributed), created date, prompt, models, LoRAs and settings.
+                    detailLines.forEach { (label, value) -> MediaGalleryDetailLine(label, value) }
+                } else {
                     MediaGalleryDetailLine(
-                        stringResource(R.string.media_gallery_generation_settings_label),
-                        stringResource(R.string.media_gallery_generation_settings_unavailable)
+                        stringResource(R.string.media_gallery_location_label),
+                        locationLabel(item.location)
                     )
+                    MediaGalleryDetailLine(
+                        stringResource(R.string.media_gallery_created_label),
+                        formatMediaGalleryDate(item.createdAt)
+                    )
+                    if (item.prompt.isNotBlank()) {
+                        MediaGalleryDetailLine(stringResource(R.string.media_gallery_prompt_label), item.prompt)
+                    }
+                    if (item.type == MediaGalleryType.VIDEO) {
+                        MediaGalleryDetailLine(
+                            stringResource(R.string.media_gallery_generation_settings_label),
+                            stringResource(R.string.media_gallery_generation_settings_unavailable)
+                        )
+                    }
+                    MediaGalleryDetailLine(stringResource(R.string.media_gallery_file_label), item.file.name)
                 }
-                MediaGalleryDetailLine(stringResource(R.string.media_gallery_file_label), item.file.name)
             }
         },
         confirmButton = {
