@@ -10,7 +10,9 @@ data class SdDiscoveredWorker(
     val port: Int,
     val ramMb: Int?,
     val cores: Int?,
-    val appVersion: String?
+    val appVersion: String?,
+    /** The other address (Wi-Fi vs VPN), tried when [host] does not answer. */
+    val altHost: String? = null
 ) {
     val address: String get() = "$host:$port"
 
@@ -51,13 +53,15 @@ object SdWorkerAdvert {
     ): SdDiscoveredWorker {
         val advert = WorkerAdvert.parse(attributes)
         val vpn = attributes?.get(TXT_VPN_IP)?.toString(Charsets.UTF_8)
+        val candidates = DeviceAddresses.endpointCandidates(resolvedIp, vpn, localHasVpn)
         return SdDiscoveredWorker(
             name = serviceName.removePrefix("$SERVICE_NAME_PREFIX-"),
-            host = DeviceAddresses.chooseWorkerEndpoint(resolvedIp, vpn, localHasVpn),
+            host = candidates.first(),
             port = port,
             ramMb = advert.ramFreeMb,
             cores = advert.cores,
-            appVersion = advert.appVersion
+            appVersion = advert.appVersion,
+            altHost = candidates.getOrNull(1)
         )
     }
 

@@ -9,6 +9,7 @@ import com.example.llamadroid.R
 import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.DeviceAddresses
+import com.example.llamadroid.util.HelperHeartbeatServer
 import com.example.llamadroid.util.NsdHelper
 import com.example.llamadroid.util.WakeLockManager
 import kotlinx.coroutines.CoroutineScope
@@ -24,8 +25,6 @@ import kotlinx.coroutines.launch
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
-import java.net.InetAddress
-import java.net.ServerSocket
 
 data class SdDistributedWorkerRuntime(
     val host: String,
@@ -566,40 +565,13 @@ class SdDistributedService : Service() {
  * Tiny sidecar on rpc port + 1: writes [SdHelperProbe.BANNER] and closes every accepted socket, so
  * the master can tell the Helper is alive without touching the single-client RPC port.
  */
-internal class SdHelperHeartbeatServer(private val port: Int, private val bindHost: String = "0.0.0.0") {
-    @Volatile private var server: ServerSocket? = null
-    @Volatile private var thread: Thread? = null
+internal class SdHelperHeartbeatServer(port: Int, bindHost: String = "0.0.0.0") {
+    private val delegate = HelperHeartbeatServer(
+        port, SdHelperProbe.BANNER, bindHost, "sd-helper-heartbeat", "SdHelperHeartbeat"
+    )
 
     /** Binds and starts serving; returns false (after logging) when the port cannot be bound. */
-    fun start(): Boolean {
-        val socket = try {
-            ServerSocket(port, 50, InetAddress.getByName(bindHost))
-        } catch (e: Exception) {
-            DebugLog.log("[SdHelperHeartbeat] bind failed on $port: ${e.message}")
-            return false
-        }
-        server = socket
-        thread = Thread({
-            while (!socket.isClosed) {
-                try {
-                    socket.accept().use { client ->
-                        client.soTimeout = 1000
-                        client.getOutputStream().apply {
-                            write((SdHelperProbe.BANNER + "\n").toByteArray(Charsets.US_ASCII))
-                            flush()
-                        }
-                    }
-                } catch (_: Exception) {
-                    // closed server or a client that vanished; loop condition decides whether to stop
-                }
-            }
-        }, "sd-helper-heartbeat").apply { isDaemon = true; start() }
-        return true
-    }
+    fun start(): Boolean = delegate.start()
 
-    fun close() {
-        runCatching { server?.close() }
-        server = null
-        thread = null
-    }
+    fun close() = delegate.close()
 }

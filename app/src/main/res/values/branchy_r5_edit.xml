@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r5_edit_title">Edit devices</string>
+    <string name="branchy_r5_edit_intro_title">Change the devices of this paused run</string>
+    <string name="branchy_r5_edit_intro_hint">Add or remove helpers and change thread counts, recalculate the plan for the same model, then save. The model and checkpoint stay as they are; the run resumes on the new devices.</string>
+    <string name="branchy_r5_edit_save_hint">Change something, then recalculate. Save needs a plan that fits and is up to date.</string>
+    <string name="branchy_r5_edit_active">The run is active. Pause it before editing its devices.</string>
+    <string name="branchy_r5_edit_not_paused">Only paused runs can be edited.</string>
+    <string name="branchy_r5_edit_no_plan">This run has no saved plan to edit.</string>
+    <string name="branchy_r5_edit_missing">The run could not be found.</string>
+    <string name="branchy_r5_edit_layout_changed">The new plan would change the model layout, which the saved checkpoint cannot use. Add memory or keep the previous devices.</string>
+    <string name="branchy_r5_edit_saving">Saving…</string>
+    <string name="branchy_r5_edit_saved">Devices updated. Resume the run to continue on them.</string>
+    <string name="branchy_r5_edit_failed">Could not apply the change: %1$s</string>
+    <string name="branchy_r5_edit_failed_kept">The previous devices are still configured.</string>
+    <string name="branchy_r5_edit_consolidating_title">Collecting the checkpoint</string>
+    <string name="branchy_r5_edit_consolidating_hint">The placement changed, so this phone is pulling the checkpoint parts that the helpers hold. Keep the helpers online until it finishes.</string>
+    <string name="branchy_r5_edit_consolidating_unit">%1$s from %2$s: %3$s of %4$s</string>
+</resources>

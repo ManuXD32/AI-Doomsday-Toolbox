@@ -76,4 +76,43 @@ class DeviceAddressesTest {
         assertEquals("192.168.1.9", DeviceAddresses.chooseWorkerEndpoint("192.168.1.9", null, true))
         assertEquals("192.168.1.9", DeviceAddresses.chooseWorkerEndpoint("192.168.1.9", "  ", true))
     }
+
+    @Test
+    fun `endpoint candidates keep vpn first then the other address`() {
+        assertEquals(listOf("10.2.0.3", "192.168.1.9"), DeviceAddresses.endpointCandidates("192.168.1.9", "10.2.0.3", true))
+        assertEquals(listOf("192.168.1.9", "10.2.0.3"), DeviceAddresses.endpointCandidates("192.168.1.9", "10.2.0.3", false))
+        assertEquals(listOf("192.168.1.9"), DeviceAddresses.endpointCandidates("192.168.1.9", "  ", true))
+        assertEquals(listOf("192.168.1.9"), DeviceAddresses.endpointCandidates("192.168.1.9", "192.168.1.9", true))
+        assertEquals("10.2.0.3", DeviceAddresses.endpointCandidates("192.168.1.9", "10.2.0.3", true).first())
+    }
+
+    @Test
+    fun `firstReachable skips a closed port and returns the one that connects`() {
+        java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1")).use { open ->
+            val closed = java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1")).use { it.localPort }
+            assertEquals("127.0.0.1", DeviceAddresses.firstReachable(listOf("127.0.0.1"), open.localPort, 500))
+            assertNull(DeviceAddresses.firstReachable(listOf("127.0.0.1"), closed, 500))
+            assertNull(DeviceAddresses.firstReachable(emptyList(), open.localPort, 500))
+        }
+    }
+
+    @Test
+    fun `auto keeps the stored order and drops blanks and duplicates`() {
+        assertEquals(listOf("192.168.1.5", "100.64.0.2"), DeviceAddresses.orderedCandidates("auto", "192.168.1.5", "100.64.0.2"))
+        assertEquals(listOf("192.168.1.5"), DeviceAddresses.orderedCandidates("auto", "192.168.1.5", "192.168.1.5"))
+        assertEquals(listOf("192.168.1.5"), DeviceAddresses.orderedCandidates("bogus", "192.168.1.5", " "))
+    }
+
+    @Test
+    fun `vpn and lan preferences put that kind first`() {
+        assertEquals(listOf("100.64.0.2", "192.168.1.5"), DeviceAddresses.orderedCandidates("vpn", "192.168.1.5", "100.64.0.2"))
+        assertEquals(listOf("192.168.1.5", "100.64.0.2"), DeviceAddresses.orderedCandidates("lan", "100.64.0.2", "192.168.1.5"))
+        assertEquals(listOf("10.8.0.4", "192.168.1.5"), DeviceAddresses.orderedCandidates("VPN", "192.168.1.5", "10.8.0.4", setOf("10.8.0.4")))
+    }
+
+    @Test
+    fun `preference keeps stored order when both addresses are the same kind`() {
+        assertEquals(listOf("192.168.1.5", "192.168.1.6"), DeviceAddresses.orderedCandidates("vpn", "192.168.1.5", "192.168.1.6"))
+        assertEquals(listOf("100.64.0.3", "100.64.0.2"), DeviceAddresses.orderedCandidates("lan", "100.64.0.3", "100.64.0.2"))
+    }
 }

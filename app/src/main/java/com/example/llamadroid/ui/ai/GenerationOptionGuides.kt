@@ -101,140 +101,140 @@ fun GenerationCachingCard(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                return@Column
-            }
+            } else {
 
-            var modeExpanded by remember { mutableStateOf(false) }
-            ExposedDropdownMenuBox(
-                expanded = modeExpanded,
-                onExpandedChange = { modeExpanded = !modeExpanded }
-            ) {
-                OutlinedTextField(
-                    value = cacheMode?.cliName ?: stringResource(R.string.gen_cache_mode_off),
-                    onValueChange = {},
-                    readOnly = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .menuAnchor(),
-                    label = { Text(stringResource(R.string.gen_cache_mode_label)) },
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = modeExpanded) },
-                    shape = RoundedCornerShape(12.dp)
-                )
-                ExposedDropdownMenu(
+                var modeExpanded by remember { mutableStateOf(false) }
+                ExposedDropdownMenuBox(
                     expanded = modeExpanded,
-                    onDismissRequest = { modeExpanded = false }
+                    onExpandedChange = { modeExpanded = !modeExpanded }
                 ) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.gen_cache_mode_off)) },
-                        onClick = {
-                            onCacheModeChange(null)
-                            onScmPolicyChange(null)
-                            onScmMaskChange("")
-                            modeExpanded = false
-                        }
+                    OutlinedTextField(
+                        value = cacheMode?.cliName ?: stringResource(R.string.gen_cache_mode_off),
+                        onValueChange = {},
+                        readOnly = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor(),
+                        label = { Text(stringResource(R.string.gen_cache_mode_label)) },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = modeExpanded) },
+                        shape = RoundedCornerShape(12.dp)
                     )
-                    SdCacheMode.entries.forEach { mode ->
+                    ExposedDropdownMenu(
+                        expanded = modeExpanded,
+                        onDismissRequest = { modeExpanded = false }
+                    ) {
                         DropdownMenuItem(
-                            text = { Text(mode.cliName) },
+                            text = { Text(stringResource(R.string.gen_cache_mode_off)) },
                             onClick = {
-                                onCacheModeChange(mode)
-                                if (mode != SdCacheMode.CACHE_DIT) {
-                                    onScmPolicyChange(null)
-                                    onScmMaskChange("")
-                                }
+                                onCacheModeChange(null)
+                                onScmPolicyChange(null)
+                                onScmMaskChange("")
                                 modeExpanded = false
                             }
                         )
-                    }
-                }
-            }
-
-            if (cacheMode != null) {
-                Spacer(modifier = Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = cacheOption,
-                    onValueChange = onCacheOptionChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.gen_cache_option_label)) },
-                    placeholder = { Text(cacheOptionPlaceholder(cacheMode)) },
-                    supportingText = {
-                        Text(stringResource(R.string.gen_cache_option_support))
-                    },
-                    singleLine = true,
-                    shape = RoundedCornerShape(12.dp)
-                )
-
-                if (cacheMode == SdCacheMode.CACHE_DIT) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    var scmExpanded by remember { mutableStateOf(false) }
-                    ExposedDropdownMenuBox(
-                        expanded = scmExpanded,
-                        onExpandedChange = { scmExpanded = !scmExpanded }
-                    ) {
-                        OutlinedTextField(
-                            value = scmPolicy?.cliName ?: stringResource(R.string.gen_cache_mode_off),
-                            onValueChange = {},
-                            readOnly = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .menuAnchor(),
-                            label = { Text(stringResource(R.string.gen_cache_scm_policy_label)) },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = scmExpanded) },
-                            shape = RoundedCornerShape(12.dp)
-                        )
-                        ExposedDropdownMenu(
-                            expanded = scmExpanded,
-                            onDismissRequest = { scmExpanded = false }
-                        ) {
+                        SdCacheMode.entries.forEach { mode ->
                             DropdownMenuItem(
-                                text = { Text(stringResource(R.string.gen_cache_mode_off)) },
+                                text = { Text(mode.cliName) },
                                 onClick = {
-                                    onScmPolicyChange(null)
-                                    scmExpanded = false
+                                    onCacheModeChange(mode)
+                                    if (mode != SdCacheMode.CACHE_DIT) {
+                                        onScmPolicyChange(null)
+                                        onScmMaskChange("")
+                                    }
+                                    modeExpanded = false
                                 }
                             )
-                            SdCacheScmPolicy.entries.forEach { policy ->
+                        }
+                    }
+                }
+
+                if (cacheMode != null) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = cacheOption,
+                        onValueChange = onCacheOptionChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.gen_cache_option_label)) },
+                        placeholder = { Text(cacheOptionPlaceholder(cacheMode)) },
+                        supportingText = {
+                            Text(stringResource(R.string.gen_cache_option_support))
+                        },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp)
+                    )
+
+                    if (cacheMode == SdCacheMode.CACHE_DIT) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        var scmExpanded by remember { mutableStateOf(false) }
+                        ExposedDropdownMenuBox(
+                            expanded = scmExpanded,
+                            onExpandedChange = { scmExpanded = !scmExpanded }
+                        ) {
+                            OutlinedTextField(
+                                value = scmPolicy?.cliName ?: stringResource(R.string.gen_cache_mode_off),
+                                onValueChange = {},
+                                readOnly = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .menuAnchor(),
+                                label = { Text(stringResource(R.string.gen_cache_scm_policy_label)) },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = scmExpanded) },
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            ExposedDropdownMenu(
+                                expanded = scmExpanded,
+                                onDismissRequest = { scmExpanded = false }
+                            ) {
                                 DropdownMenuItem(
-                                    text = { Text(policy.cliName) },
+                                    text = { Text(stringResource(R.string.gen_cache_mode_off)) },
                                     onClick = {
-                                        onScmPolicyChange(policy)
+                                        onScmPolicyChange(null)
                                         scmExpanded = false
                                     }
                                 )
+                                SdCacheScmPolicy.entries.forEach { policy ->
+                                    DropdownMenuItem(
+                                        text = { Text(policy.cliName) },
+                                        onClick = {
+                                            onScmPolicyChange(policy)
+                                            scmExpanded = false
+                                        }
+                                    )
+                                }
                             }
                         }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = scmMask,
+                            onValueChange = onScmMaskChange,
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text(stringResource(R.string.gen_cache_scm_mask_label)) },
+                            placeholder = { Text("1,1,1,0,0,1,0,0,1,0") },
+                            supportingText = { Text(stringResource(R.string.gen_cache_scm_mask_support)) },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                            shape = RoundedCornerShape(12.dp)
+                        )
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = scmMask,
-                        onValueChange = onScmMaskChange,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text(stringResource(R.string.gen_cache_scm_mask_label)) },
-                        placeholder = { Text("1,1,1,0,0,1,0,0,1,0") },
-                        supportingText = { Text(stringResource(R.string.gen_cache_scm_mask_support)) },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
-                        shape = RoundedCornerShape(12.dp)
-                    )
-                }
-
-                guidanceFamily?.let { family ->
-                    Spacer(modifier = Modifier.height(12.dp))
-                    val recommendation = cacheRecommendationText(family)
-                    val mismatch = cacheMismatchText(cacheMode, family)
-                    Text(
-                        recommendation,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    mismatch?.let {
-                        Spacer(modifier = Modifier.height(6.dp))
+                    guidanceFamily?.let { family ->
+                        Spacer(modifier = Modifier.height(12.dp))
+                        val recommendation = cacheRecommendationText(family)
+                        val mismatch = cacheMismatchText(cacheMode, family)
                         Text(
-                            it,
+                            recommendation,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.tertiary
+                            color = MaterialTheme.colorScheme.primary
                         )
+                        mismatch?.let {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.tertiary
+                            )
+                        }
                     }
                 }
             }

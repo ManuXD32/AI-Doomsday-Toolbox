@@ -49,7 +49,11 @@ data class ModelEntity(
     /** AUTO/CATALOG/USER_OVERRIDE/LEGACY; existing runtime fields stay effective. */
     @ColumnInfo(defaultValue = "'LEGACY'") val classificationSource: String = "LEGACY",
     /** Immutable bounded inspector evidence, separate from effective selections. */
-    @ColumnInfo(defaultValue = "NULL") val detectedClassificationJson: String? = null
+    @ColumnInfo(defaultValue = "NULL") val detectedClassificationJson: String? = null,
+    /** Lineage: `branchy_export` or `quantized`; null for ordinary models. */
+    val origin: String? = null,
+    /** Source filename this model was derived from (quantizer only). */
+    val derivedFrom: String? = null
 )
 
 const val SD_CAPABILITY_TXT2IMG = "txt2img"

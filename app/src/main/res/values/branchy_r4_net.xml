@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r4_phase_waiting">Waiting for network</string>
+    <string name="branchy_r4_notification_waiting">Waiting for the cluster network… training resumes automatically</string>
+    <string name="branchy_r4_dp_setup">Sending data to %1$s… %2$d%%</string>
+</resources>

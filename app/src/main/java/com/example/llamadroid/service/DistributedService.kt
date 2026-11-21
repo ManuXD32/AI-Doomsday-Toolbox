@@ -70,7 +70,11 @@ data class WorkerInfo(
     /** RAM the worker advertised over NSD (`ram_free_mb`); null for manual or legacy workers. */
     val advertisedRamMb: Int? = null,
     val advertisedCores: Int? = null,
-    val advertisedAppVersion: String? = null
+    val advertisedAppVersion: String? = null,
+    /** The helper's other address (VPN vs LAN); [ip] swaps with it when only it answers. */
+    val altIp: String? = null,
+    /** `auto`, `vpn` or `lan`. */
+    val preferredInterface: String = "auto"
 )
 
 /**
@@ -947,7 +951,15 @@ class DistributedService : Service() {
         }
         
         // Add or update worker manually
-        fun addWorkerManually(ip: String, port: Int = RPC_DEFAULT_PORT, deviceName: String = "Manual", ramMB: Int = 4096, proportion: Float? = null) {
+        fun addWorkerManually(
+            ip: String,
+            port: Int = RPC_DEFAULT_PORT,
+            deviceName: String = "Manual",
+            ramMB: Int = 4096,
+            proportion: Float? = null,
+            altIp: String? = null,
+            preferredInterface: String? = null
+        ) {
             val current = _workers.value.toMutableList()
             val existingIndex = current.indexOfFirst { it.ip == ip && it.port == port }
             
@@ -958,7 +970,9 @@ class DistributedService : Service() {
                     deviceName = deviceName,
                     availableRamMB = ramMB,
                     assignedProportion = proportion,
-                    isEnabled = true
+                    isEnabled = true,
+                    altIp = altIp ?: current[existingIndex].altIp,
+                    preferredInterface = preferredInterface ?: current[existingIndex].preferredInterface
                 )
             } else {
                 // Add new - default isConnected to FALSE to prevent false positives until verified
@@ -969,7 +983,9 @@ class DistributedService : Service() {
                         ip, port, deviceName, ramMB, null, false, true, null, proportion,
                         advertisedRamMb = advert?.ramFreeMb,
                         advertisedCores = advert?.cores,
-                        advertisedAppVersion = advert?.appVersion
+                        advertisedAppVersion = advert?.appVersion,
+                        altIp = altIp,
+                        preferredInterface = preferredInterface ?: "auto"
                     )
                 )
             }
@@ -1218,6 +1234,78 @@ class DistributedService : Service() {
             )
         }
 
+        /** Persists a worker address swap (old ip, port, new ip, new alt); set by the last caller of [applyInterfacePreferences]. */
+        @Volatile
+        private var addressSwitchPersister: (suspend (String, Int, String, String?) -> Unit)? = null
+        @Volatile
+        private var lastFailoverCheckMs = 0L
+
+        /**
+         * Orders each enabled worker's addresses by its VPN/LAN preference ([overrides] maps `ip:port` to a
+         * preference that is not saved yet) and switches [WorkerInfo.ip] to the first one whose heartbeat or RPC
+         * port answers; the other address becomes `altIp`. [persist] stores the swap in Room first (the UI
+         * re-syncs workers from Room). Blocking probes: call from an IO dispatcher. No answer keeps the worker as is.
+         */
+        suspend fun applyInterfacePreferences(
+            overrides: Map<String, String> = emptyMap(),
+            persist: suspend (oldIp: String, port: Int, newIp: String, newAlt: String?) -> Unit
+        ) {
+            addressSwitchPersister = persist
+            val addresses = com.example.llamadroid.util.DeviceAddresses
+            for (worker in _workers.value.filter { it.isEnabled && !it.altIp.isNullOrBlank() }) {
+                val pref = overrides["${worker.ip}:${worker.port}"] ?: worker.preferredInterface
+                val ordered = addresses.orderedCandidates(pref, worker.ip, worker.altIp)
+                val chosen = ordered.firstOrNull {
+                    addresses.canConnect(it, worker.port + 1) || addresses.canConnect(it, worker.port)
+                } ?: continue
+                if (chosen == worker.ip) continue
+                DebugLog.log("[$TAG] Worker ${worker.deviceName}: switching address ${worker.ip} -> $chosen (pref=$pref)")
+                persist(worker.ip, worker.port, chosen, worker.ip)
+                _workers.value = _workers.value.map {
+                    if (it.ip == worker.ip && it.port == worker.port) it.copy(ip = chosen, altIp = worker.ip) else it
+                }
+            }
+        }
+
+        /** Rate-limited failover for the connection monitor: re-runs [applyInterfacePreferences] when a worker with an alternate address is not answering. */
+        private suspend fun failoverOfflineWorkers() {
+            val persist = addressSwitchPersister ?: return
+            val now = System.currentTimeMillis()
+            if (now - lastFailoverCheckMs < 15_000L) return
+            if (_workers.value.none { it.isEnabled && !it.altIp.isNullOrBlank() && it.rpcStatus != RpcWorkerStatus.ONLINE }) return
+            lastFailoverCheckMs = now
+            applyInterfacePreferences(persist = persist)
+        }
+
+        /** Address NSD resolved for [service] (first of `hostAddresses` on API 34+). */
+        private fun resolvedIpOf(service: android.net.nsd.NsdServiceInfo): String =
+            if (android.os.Build.VERSION.SDK_INT >= 34) {
+                service.hostAddresses.firstOrNull()?.hostAddress.orEmpty()
+            } else {
+                @Suppress("DEPRECATION")
+                service.host?.hostAddress.orEmpty()
+            }
+
+        /** Preferred endpoint first, then the other address; see [DeviceAddresses.endpointCandidates]. */
+        fun endpointCandidatesFor(service: android.net.nsd.NsdServiceInfo): List<String> =
+            com.example.llamadroid.util.DeviceAddresses.endpointCandidates(
+                resolvedIp = resolvedIpOf(service),
+                advertisedVpnIp = service.attributes?.get(TXT_VPN_IP)?.toString(Charsets.UTF_8),
+                localHasVpn = _vpnIp.value != null
+            )
+
+        /**
+         * Endpoint to save for a discovered worker: the first candidate whose RPC or heartbeat (port + 1) port
+         * accepts a TCP connection, else [endpointIpFor]. Blocking; call from an IO dispatcher.
+         */
+        fun reachableEndpointIpFor(service: android.net.nsd.NsdServiceInfo): String {
+            val candidates = endpointCandidatesFor(service)
+            val addresses = com.example.llamadroid.util.DeviceAddresses
+            val reachable = addresses.firstReachable(candidates, service.port)
+                ?: addresses.firstReachable(candidates, service.port + 1)
+            return reachable ?: endpointIpFor(service)
+        }
+
         private fun applyAdverts(services: List<android.net.nsd.NsdServiceInfo>) {
             val adverts = services.associate { service ->
                 "${service.host?.hostAddress}:${service.port}" to WorkerAdvert.parse(service.attributes)
@@ -1333,6 +1421,7 @@ class DistributedService : Service() {
                         }
                     }
                     
+                    failoverOfflineWorkers()
                     delay(3000)
                 }
                 DebugLog.log("[$TAG] Master connection monitor stopped (mode changed)")
@@ -1601,9 +1690,14 @@ class DistributedService : Service() {
                 
                 
             } catch (e: Exception) {
-                DebugLog.log("[$TAG] Error starting worker: ${e.message}")
-                _isRunning.value = false
-                _mode.value = DistributedMode.NONE
+                if (e is java.io.IOException && _mode.value != DistributedMode.WORKER) {
+                    // stopWorkerMode() destroyed the process under the reader: expected, not an error.
+                    DebugLog.log("[$TAG] Worker output closed after stop")
+                } else {
+                    DebugLog.log("[$TAG] Error starting worker: ${e.message}")
+                    _isRunning.value = false
+                    _mode.value = DistributedMode.NONE
+                }
             }
         }
     }

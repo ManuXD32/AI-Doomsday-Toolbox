@@ -261,6 +261,7 @@ fun InstalledTab(
     // Edit state
     var showRenameDialog by remember { mutableStateOf(false) }
     var modelToRename by remember { mutableStateOf<ModelEntity?>(null) }
+    var modelToQuantize by remember { mutableStateOf<ModelEntity?>(null) }
     var pendingDeleteModel by remember { mutableStateOf<ModelEntity?>(null) }
     var newModelName by remember { mutableStateOf("") }
     var editedModelType by remember { mutableStateOf(ModelType.LLM) }
@@ -681,8 +682,19 @@ fun InstalledTab(
                     }
                 }
             } else {
+                val lineageFamilies = trainedModelFamilies(models)
+                if (lineageFamilies.isNotEmpty()) {
+                    item {
+                        TrainedModelsSection(
+                            families = lineageFamilies,
+                            onQuantize = { modelToQuantize = it },
+                            onShare = { exportModel(it) },
+                            onDelete = { pendingDeleteModel = it; viewModel.prepareDelete(it) }
+                        )
+                    }
+                }
                 MODEL_MANAGER_CATEGORIES.forEach { category ->
-                    val categoryModels = models.filter { it.type in category.modelTypes }
+                    val categoryModels = models.filter { it.type in category.modelTypes && !it.isLineageModel() }
                     if (categoryModels.isNotEmpty()) {
                         item {
                             Text(
@@ -713,6 +725,9 @@ fun InstalledTab(
                                 },
                                 onExport = { exportModel(model) },
                                 onSource = { sourceAsset = installedAssetForModel(model) },
+                                onQuantize = if (model.type == ModelType.LLM && model.path.endsWith(".gguf", ignoreCase = true)) {
+                                    { modelToQuantize = model }
+                                } else null,
                                 onRename = {
                                     modelToRename = model
                                     newModelName = model.filename.substringBeforeLast(".")
@@ -733,6 +748,8 @@ fun InstalledTab(
             }
         }
         
+        modelToQuantize?.let { QuantizeModelDialog(it) { modelToQuantize = null } }
+
         // Edit Dialog
         if (showRenameDialog && modelToRename != null) {
             val db = remember { com.example.llamadroid.data.db.AppDatabase.getDatabase(context) }
@@ -1801,7 +1818,8 @@ fun ModelCard(
     onAction: () -> Unit,
     onExport: (() -> Unit)? = null,
     onRename: (() -> Unit)? = null,
-    onSource: (() -> Unit)? = null
+    onSource: (() -> Unit)? = null,
+    onQuantize: (() -> Unit)? = null
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1877,6 +1895,11 @@ fun ModelCard(
                             contentDescription = stringResource(R.string.model_source_attach_title),
                             tint = MaterialTheme.colorScheme.primary
                         )
+                    }
+                }
+                onQuantize?.let {
+                    IconButton(onClick = it) {
+                        Icon(Icons.Default.Compress, stringResource(R.string.model_quantize_action), tint = MaterialTheme.colorScheme.secondary)
                     }
                 }
                 onRename?.let {

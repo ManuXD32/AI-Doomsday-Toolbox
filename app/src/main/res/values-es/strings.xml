@@ -6758,7 +6758,6 @@
     <string name="adventure_gate_effect_turn_regen">Cada turno: +%1$d%% PV / +%2$d%% maná</string>
     <string name="models_type_quadtrix">Checkpoint Quadtrix</string>
     <string name="quadtrix_title">Entrenador Quadtrix</string>
-    <string name="quadtrix_hub_desc">Entrena y usa LLMs nativos en el móvil</string>
     <string name="quadtrix_eyebrow">Entrenamiento nativo</string>
     <string name="quadtrix_subtitle">Crea, reanuda, monitoriza, exporta y chatea con modelos Quadtrix directamente en este teléfono.</string>
     <string name="quadtrix_info">Información</string>
@@ -9119,4 +9118,39 @@
     <string name="embchooser_open_models">Abrir gestor de modelos</string>
     <string name="embchooser_close">Cerrar</string>
     <string name="embchooser_reindex_note">Una descarga terminada se convierte automáticamente en tu modelo de embeddings si no hay ninguno. Cambiar de modelo después obliga a reindexar los documentos existentes.</string>
+
+    <!-- Servicio de entrenamiento Branchy -->
+    <string name="branchy_notification_channel_name">Entrenamiento Branchy</string>
+    <string name="branchy_notification_title_generic">Entrenamiento Branchy</string>
+    <string name="branchy_notification_title">Branchy: %1$s</string>
+    <string name="branchy_notification_tokenizer">Entrenando el tokenizador…</string>
+    <string name="branchy_notification_prepare">Preparando datos %1$s: %2$d%%</string>
+    <string name="branchy_notification_training_start">Iniciando el entrenamiento…</string>
+    <string name="branchy_notification_training">Etapa %1$s · paso %2$s / %3$s · pérdida %4$s · ETA %5$s</string>
+    <string name="branchy_notification_pausing">Pausando y guardando un punto de control…</string>
+    <string name="branchy_notification_paused">En pausa (%1$s)</string>
+    <string name="branchy_notification_done">Entrenamiento terminado</string>
+    <string name="branchy_notification_failed">El entrenamiento falló: %1$s</string>
+    <string name="branchy_action_pause">Pausar</string>
+    <string name="branchy_action_resume">Reanudar</string>
+    <string name="branchy_action_stop">Detener</string>
+    <string name="branchy_pause_reason_user">pausado por ti</string>
+    <string name="branchy_pause_reason_battery_low">batería baja</string>
+    <string name="branchy_pause_reason_unplugged">desconectado del cargador</string>
+    <string name="branchy_pause_reason_hot">batería demasiado caliente</string>
+    <string name="branchy_pause_reason_restored">la app se reinició</string>
+    <string name="branchy_error_run_missing">La ejecución de entrenamiento ya no existe.</string>
+    <string name="branchy_error_config_invalid">No se puede leer la configuración de la ejecución.</string>
+    <string name="branchy_error_binary_missing">No se encontró el binario de entrenamiento de Branchy.</string>
+    <string name="branchy_error_plan_does_not_fit">El plan no cabe en este dispositivo.</string>
+    <string name="branchy_error_dataset_missing">No se encontró el conjunto de datos %1$s.</string>
+    <string name="branchy_error_dataset_not_ready">El conjunto de datos %1$s aún no está descargado.</string>
+    <string name="branchy_error_no_data">Esta etapa no tiene datos de entrenamiento.</string>
+    <string name="branchy_error_native">El entrenador terminó con el código %1$d.</string>
+    <string name="branchy_stage_pretrain">Preentrenamiento</string>
+    <string name="branchy_stage_sft">Ajuste fino de chat y herramientas</string>
+    <string name="branchy_recipe_30m_title">Mini asistente 30M</string>
+    <string name="branchy_recipe_30m_desc">Un modelo branchy diminuto (unos 30M de parámetros) para chat y llamadas a herramientas. Preentrena con unos 255M de tokens de texto general, código y cuentos, y luego se ajusta con unos 45M de tokens de chat, herramientas, código y español.</string>
+    <string name="branchy_recipe_120m_title">Mini asistente 120M</string>
+    <string name="branchy_recipe_120m_desc">Un modelo branchy pequeño (unos 120M de parámetros) para chat y llamadas a herramientas. Preentrena con cerca de 1B de tokens de texto general, código y cuentos, y luego se ajusta con unos 180M de tokens de chat, herramientas, código y español. Necesita varios días en un teléfono.</string>
 </resources>

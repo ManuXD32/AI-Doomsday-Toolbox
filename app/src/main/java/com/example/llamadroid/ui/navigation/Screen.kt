@@ -107,6 +107,11 @@ sealed class Screen(val route: String) {
     object Benchmark : Screen("benchmark")               // Thread benchmark tool
     object BenchmarkHistory : Screen("benchmark_history") // Benchmark run history and model comparison
     object Dataset : Screen("dataset")                   // Dataset creation tool (project list)
+    object Training : Screen("training_hub")             // Training hub (Quadtrix, Branchy, dataset library)
+    object DatasetLibrary : Screen("dataset_library")    // Shared training dataset library
+    object BranchyTrainer : Screen("branchy_trainer")    // Branchy branched-model trainer
+    object BranchyInference : Screen("branchy_inference") // Branchy distributed inference: main device (chat)
+    object BranchyHelper : Screen("branchy_helper")      // Branchy training-cluster helper (lends this phone)
     object QuadtrixTrainer : Screen("quadtrix_trainer")  // Native Quadtrix LLM training
     object QuadtrixWebUi : Screen("quadtrix_webui/{url}") {
         fun createRoute(url: String): String {

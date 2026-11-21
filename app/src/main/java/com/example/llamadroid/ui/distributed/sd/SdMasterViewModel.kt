@@ -338,7 +338,45 @@ internal class SdMasterStore(
     // ---- Helpers (workers) ----
 
     suspend fun addDiscoveredWorker(found: SdDiscoveredWorker) {
-        data.upsertWorker(found.toEntity(data.maxWorkerSortOrder() + 1))
+        // VPN address first, Wi-Fi fallback when the preferred one does not answer on the worker port.
+        val candidates = listOfNotNull(found.host, found.altHost)
+        val endpoint = withContext(Dispatchers.IO) {
+            com.example.llamadroid.util.DeviceAddresses.firstReachable(candidates, found.port)
+        } ?: found.host
+        // Keep both addresses so the preferred interface (Auto/VPN/LAN) can switch between them later.
+        data.upsertWorker(
+            found.copy(host = endpoint).toEntity(data.maxWorkerSortOrder() + 1)
+                .copy(altHost = candidates.firstOrNull { it != endpoint })
+        )
+    }
+
+    /** Saves [pref] (`auto`, `vpn`, `lan`) for [worker] and re-orders its addresses right away. */
+    suspend fun setWorkerInterface(worker: SdDistributedWorkerEntity, pref: String) {
+        data.upsertWorker(worker.copy(preferredInterface = com.example.llamadroid.util.DeviceAddresses.normalizePref(pref)))
+        resolveWorkerAddresses()
+    }
+
+    /**
+     * At run start (and after a preference change): for each enabled Helper with a second address, probe the
+     * candidates in preferred order and make the first one that answers the primary [SdDistributedWorkerEntity.host]
+     * (the old one becomes `altHost`), then refresh the runtime. Blocking probes; call on an IO dispatcher.
+     */
+    suspend fun resolveWorkerAddresses() {
+        val addresses = com.example.llamadroid.util.DeviceAddresses
+        var changed = false
+        for (worker in data.getEnabledWorkers()) {
+            if (worker.altHost.isNullOrBlank()) continue
+            val ordered = addresses.orderedCandidates(worker.preferredInterface, worker.host, worker.altHost)
+            val chosen = ordered.firstOrNull { addresses.canConnect(it, worker.port) } ?: continue
+            if (chosen == worker.host) continue
+            data.upsertWorker(worker.copy(host = chosen, altHost = worker.host))
+            changed = true
+        }
+        if (changed) {
+            val fresh = data.getEnabledWorkers().associateBy { it.id }
+            _state.update { st -> st.copy(workers = st.workers.map { fresh[it.id] ?: it }) }
+            sink.apply(currentRuntime())
+        }
     }
 
     suspend fun setWorkerEnabled(worker: SdDistributedWorkerEntity) {
@@ -375,7 +413,9 @@ internal class SdMasterStore(
                 threads = threads.toIntOrNull() ?: 4,
                 backendDevice = backend,
                 isEnabled = existing?.isEnabled ?: true,
-                sortOrder = sortOrder
+                sortOrder = sortOrder,
+                altHost = existing?.altHost?.takeIf { it != cleanHost },
+                preferredInterface = existing?.preferredInterface ?: "auto"
             )
         )
         return true
@@ -492,6 +532,9 @@ internal class SdMasterViewModel(
 
     // Helpers
     fun addDiscoveredWorker(found: SdDiscoveredWorker) { viewModelScope.launch(Dispatchers.IO) { store.addDiscoveredWorker(found) } }
+    fun setWorkerInterface(worker: SdDistributedWorkerEntity, pref: String) { viewModelScope.launch(Dispatchers.IO) { store.setWorkerInterface(worker, pref) } }
+    /** Re-orders every Helper's addresses by its preference; call before a run starts. */
+    suspend fun resolveWorkerAddresses() = withContext(Dispatchers.IO) { store.resolveWorkerAddresses() }
     fun toggleWorker(worker: SdDistributedWorkerEntity) { viewModelScope.launch(Dispatchers.IO) { store.setWorkerEnabled(worker) } }
     fun deleteWorker(id: Long) { viewModelScope.launch(Dispatchers.IO) { store.deleteWorker(id) } }
 

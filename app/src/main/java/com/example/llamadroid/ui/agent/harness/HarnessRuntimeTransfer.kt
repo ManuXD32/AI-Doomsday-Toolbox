@@ -642,129 +642,129 @@ private fun ImportTransferBody(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            return@Column
-        }
-        Text(
-            stringResource(R.string.harness_installations_import_preview_title),
-            style = MaterialTheme.typography.titleSmall,
-        )
-        Text(
-            stringResource(
-                R.string.harness_installations_import_preview_summary,
-                preview.archiveName,
-                preview.runtimeName ?: stringResource(R.string.harness_installations_runtime_fallback_name),
-                preview.projectCount,
-                preview.sessionCount,
-            ),
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Text(
-            stringResource(
-                if (preview.format == HarnessRuntimeTransferFormat.FULL_SNAPSHOT) {
-                    R.string.harness_installations_import_preview_full
-                } else if (preview.scope == HarnessRuntimeTransferScope.CONFIG_ONLY) {
-                    R.string.harness_installations_import_preview_config_only
-                } else {
-                    R.string.harness_installations_import_preview_portable
-                }
-            ),
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        if (preview.includesConfiguration) {
-            Text(stringResource(R.string.harness_installations_import_preview_configuration))
-        }
-        if (preview.includesCredentials) {
-            Text(stringResource(R.string.harness_installations_import_preview_credentials))
-        }
-        if (preview.missingMappings.isNotEmpty()) {
+        } else {
             Text(
-                stringResource(
-                    if (destination == HarnessRuntimeImportDestination.NEW_RUNTIME) {
-                        R.string.harness_installations_import_missing_mappings_new_runtime
-                    } else {
-                        R.string.harness_installations_import_missing_mappings
-                    }
-                ),
-                color = MaterialTheme.colorScheme.error,
+                stringResource(R.string.harness_installations_import_preview_title),
                 style = MaterialTheme.typography.titleSmall,
             )
-            preview.missingMappings.forEach { mapping ->
+            Text(
+                stringResource(
+                    R.string.harness_installations_import_preview_summary,
+                    preview.archiveName,
+                    preview.runtimeName ?: stringResource(R.string.harness_installations_runtime_fallback_name),
+                    preview.projectCount,
+                    preview.sessionCount,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                stringResource(
+                    if (preview.format == HarnessRuntimeTransferFormat.FULL_SNAPSHOT) {
+                        R.string.harness_installations_import_preview_full
+                    } else if (preview.scope == HarnessRuntimeTransferScope.CONFIG_ONLY) {
+                        R.string.harness_installations_import_preview_config_only
+                    } else {
+                        R.string.harness_installations_import_preview_portable
+                    }
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            if (preview.includesConfiguration) {
+                Text(stringResource(R.string.harness_installations_import_preview_configuration))
+            }
+            if (preview.includesCredentials) {
+                Text(stringResource(R.string.harness_installations_import_preview_credentials))
+            }
+            if (preview.missingMappings.isNotEmpty()) {
                 Text(
-                    "• $mapping",
-                    style = MaterialTheme.typography.bodySmall,
+                    stringResource(
+                        if (destination == HarnessRuntimeImportDestination.NEW_RUNTIME) {
+                            R.string.harness_installations_import_missing_mappings_new_runtime
+                        } else {
+                            R.string.harness_installations_import_missing_mappings
+                        }
+                    ),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                preview.missingMappings.forEach { mapping ->
+                    Text(
+                        "• $mapping",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+            if (mappingChoices.isNotEmpty()) {
+                Text(
+                    stringResource(R.string.harness_installations_import_mapping_title),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                mappingChoices.forEach { choice ->
+                    Text(choice.label, style = MaterialTheme.typography.bodyMedium)
+                    choice.options.forEach { option ->
+                        TransferFormatOption(
+                            selected = mappingOverrides[choice.reference] == option.id,
+                            title = option.label,
+                            description = option.detail.orEmpty(),
+                            onClick = { onMappingSelected(choice.reference, option.id) },
+                        )
+                    }
+                }
+            }
+            if (preview.format == HarnessRuntimeTransferFormat.PORTABLE) {
+                Text(
+                    stringResource(R.string.harness_installations_import_destination_label),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                TransferFormatOption(
+                    selected = destination == HarnessRuntimeImportDestination.NEW_RUNTIME,
+                    title = stringResource(R.string.harness_installations_import_new_runtime),
+                    description = stringResource(R.string.harness_installations_import_new_runtime_description),
+                    onClick = { onDestinationChange(HarnessRuntimeImportDestination.NEW_RUNTIME) },
+                )
+                TransferFormatOption(
+                    selected = destination == HarnessRuntimeImportDestination.COPY_STOPPED_RUNTIME,
+                    enabled = stoppedRuntimeTargets.isNotEmpty(),
+                    title = stringResource(R.string.harness_installations_import_copy_runtime),
+                    description = stringResource(
+                        if (stoppedRuntimeTargets.isEmpty()) {
+                            R.string.harness_installations_import_copy_runtime_unavailable
+                        } else {
+                            R.string.harness_installations_import_copy_runtime_description
+                        }
+                    ),
+                    onClick = { onDestinationChange(HarnessRuntimeImportDestination.COPY_STOPPED_RUNTIME) },
+                )
+                if (destination == HarnessRuntimeImportDestination.COPY_STOPPED_RUNTIME) {
+                    stoppedRuntimeTargets.forEach { target ->
+                        TransferTargetOption(
+                            target = target,
+                            selected = target.id == destinationRuntimeId,
+                            onClick = { onDestinationRuntimeIdChange(target.id) },
+                        )
+                    }
+                }
+            }
+            if (destination == HarnessRuntimeImportDestination.NEW_RUNTIME) {
+                OutlinedTextField(
+                    value = runtimeName,
+                    onValueChange = onRuntimeNameChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(stringResource(R.string.harness_installations_import_runtime_name_label)) },
+                    supportingText = {
+                        Text(stringResource(R.string.harness_installations_import_runtime_name_description))
+                    },
+                    singleLine = true,
+                    isError = runtimeName.trim().isEmpty(),
+                )
+            }
+            if (!preview.canImport) {
+                Text(
+                    stringResource(R.string.harness_installations_import_preview_unavailable),
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-        }
-        if (mappingChoices.isNotEmpty()) {
-            Text(
-                stringResource(R.string.harness_installations_import_mapping_title),
-                style = MaterialTheme.typography.titleSmall,
-            )
-            mappingChoices.forEach { choice ->
-                Text(choice.label, style = MaterialTheme.typography.bodyMedium)
-                choice.options.forEach { option ->
-                    TransferFormatOption(
-                        selected = mappingOverrides[choice.reference] == option.id,
-                        title = option.label,
-                        description = option.detail.orEmpty(),
-                        onClick = { onMappingSelected(choice.reference, option.id) },
-                    )
-                }
-            }
-        }
-        if (preview.format == HarnessRuntimeTransferFormat.PORTABLE) {
-            Text(
-                stringResource(R.string.harness_installations_import_destination_label),
-                style = MaterialTheme.typography.titleSmall,
-            )
-            TransferFormatOption(
-                selected = destination == HarnessRuntimeImportDestination.NEW_RUNTIME,
-                title = stringResource(R.string.harness_installations_import_new_runtime),
-                description = stringResource(R.string.harness_installations_import_new_runtime_description),
-                onClick = { onDestinationChange(HarnessRuntimeImportDestination.NEW_RUNTIME) },
-            )
-            TransferFormatOption(
-                selected = destination == HarnessRuntimeImportDestination.COPY_STOPPED_RUNTIME,
-                enabled = stoppedRuntimeTargets.isNotEmpty(),
-                title = stringResource(R.string.harness_installations_import_copy_runtime),
-                description = stringResource(
-                    if (stoppedRuntimeTargets.isEmpty()) {
-                        R.string.harness_installations_import_copy_runtime_unavailable
-                    } else {
-                        R.string.harness_installations_import_copy_runtime_description
-                    }
-                ),
-                onClick = { onDestinationChange(HarnessRuntimeImportDestination.COPY_STOPPED_RUNTIME) },
-            )
-            if (destination == HarnessRuntimeImportDestination.COPY_STOPPED_RUNTIME) {
-                stoppedRuntimeTargets.forEach { target ->
-                    TransferTargetOption(
-                        target = target,
-                        selected = target.id == destinationRuntimeId,
-                        onClick = { onDestinationRuntimeIdChange(target.id) },
-                    )
-                }
-            }
-        }
-        if (destination == HarnessRuntimeImportDestination.NEW_RUNTIME) {
-            OutlinedTextField(
-                value = runtimeName,
-                onValueChange = onRuntimeNameChange,
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text(stringResource(R.string.harness_installations_import_runtime_name_label)) },
-                supportingText = {
-                    Text(stringResource(R.string.harness_installations_import_runtime_name_description))
-                },
-                singleLine = true,
-                isError = runtimeName.trim().isEmpty(),
-            )
-        }
-        if (!preview.canImport) {
-            Text(
-                stringResource(R.string.harness_installations_import_preview_unavailable),
-                color = MaterialTheme.colorScheme.error,
-            )
         }
     }
 }

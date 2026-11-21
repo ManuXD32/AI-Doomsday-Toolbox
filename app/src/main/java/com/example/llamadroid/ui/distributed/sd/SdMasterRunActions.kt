@@ -171,6 +171,7 @@ private suspend fun startImageRun(
     val issue = sdMasterImageLaunchIssue(settings, sdMasterImageMissingRoles(settings, installed))
     if (issue != null) return blocked(context, vm, issue, state.mode)
 
+    vm.resolveWorkerAddresses()
     vm.saveNow()
     vm.reportLaunchIssue(null)
     val runtimeConfig = vm.runtimeConfig()
@@ -230,6 +231,7 @@ private suspend fun startVideoRun(
     val issue = sdMasterVideoLaunchIssue(settings, options, sdMasterCompatibleVideoLoraPaths(installed, options))
     if (issue != null) return blocked(context, vm, issue, state.mode)
 
+    vm.resolveWorkerAddresses()
     vm.saveNow()
     vm.reportLaunchIssue(null)
     val runtimeConfig = vm.runtimeConfig()

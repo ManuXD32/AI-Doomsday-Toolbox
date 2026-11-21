@@ -868,7 +868,12 @@ class DownloadService : Service() {
                     url = finalUrl,
                     destFile = destFile,
                     context = this@DownloadService,
-                    bearerToken = pending?.huggingFaceToken,
+                    // Branchy training datasets ("dataset:<id>:<n>" task ids) use the app's Hugging Face token so gated
+                    // datasets download; retries and resumes read the token again from the preferences.
+                    bearerToken = pending?.huggingFaceToken
+                        ?: if (resolvedTaskId.startsWith("dataset:")) {
+                            com.example.llamadroid.training.HfToken.read(this@DownloadService).takeIf { it.isNotBlank() }
+                        } else null,
                     downloadId = resolvedTaskId,
                     preservePartialOnCancel = pending?.stageOnly == true
                 )

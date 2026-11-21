@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r4_tab_train">Train</string>
+    <string name="branchy_r4_tab_worker">Be a worker</string>
+    <string name="branchy_r4_worker_status_waiting">Waiting for master…</string>
+    <string name="branchy_r4_worker_status_connected">Connected to a master</string>
+    <string name="branchy_r4_worker_threads">Compute threads: %1$d</string>
+</resources>

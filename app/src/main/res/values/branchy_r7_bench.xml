@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r7_helper_bench">Benchmark</string>
+    <string name="branchy_r7_helper_benching">Benchmarking…</string>
+    <plurals name="branchy_r7_helper_best">
+        <item quantity="one">Best: %1$d thread · %2$s GFLOP/s</item>
+        <item quantity="other">Best: %1$d threads · %2$s GFLOP/s</item>
+    </plurals>
+</resources>

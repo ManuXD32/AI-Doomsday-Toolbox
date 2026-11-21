@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r7_rejoin_trying">Intentando reconectar…</string>
+    <string name="branchy_r7_rejoin_failed">Sigue sin respuesta: %1$s — próximo intento en %2$s</string>
+    <string name="branchy_r7_rejoin_failed_no_retry">Sigue sin respuesta: %1$s</string>
+    <string name="branchy_r7_rejoin_failed_noreason">Sigue sin respuesta — próximo intento en %1$s</string>
+    <string name="branchy_r7_rejoin_failed_bare">Sigue sin respuesta</string>
+    <string name="branchy_r7_rejoin_joined">Reconectado</string>
+</resources>

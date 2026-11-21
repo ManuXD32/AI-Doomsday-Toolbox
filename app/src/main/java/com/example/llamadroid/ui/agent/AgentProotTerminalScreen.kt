@@ -278,25 +278,25 @@ fun AgentProotTerminalScreen(navController: NavController) {
                     style = MaterialTheme.typography.bodyLarge
                 )
             }
-            return@Scaffold
-        }
+        } else {
 
-        AgentProotTerminalViewport(
-            innerPadding = innerPadding,
-            keyboardVisible = keyboardVisible,
-            sessions = sessions,
-            selectedSession = selectedSession,
-            isOpening = isOpening,
-            terminalHost = terminalHost,
-            screenError = screenError,
-            controlEnabled = controlEnabled,
-            altEnabled = altEnabled,
-            onSelectSession = { selectedSessionId = it },
-            onNewSession = ::openNewSession,
-            onControl = { controlEnabled = terminalHost?.toggleControl() == true },
-            onAlt = { altEnabled = terminalHost?.toggleAlt() == true },
-            onSequence = ::sendSequence
-        )
+            AgentProotTerminalViewport(
+                innerPadding = innerPadding,
+                keyboardVisible = keyboardVisible,
+                sessions = sessions,
+                selectedSession = selectedSession,
+                isOpening = isOpening,
+                terminalHost = terminalHost,
+                screenError = screenError,
+                controlEnabled = controlEnabled,
+                altEnabled = altEnabled,
+                onSelectSession = { selectedSessionId = it },
+                onNewSession = ::openNewSession,
+                onControl = { controlEnabled = terminalHost?.toggleControl() == true },
+                onAlt = { altEnabled = terminalHost?.toggleAlt() == true },
+                onSequence = ::sendSequence
+            )
+        }
     }
 }
 

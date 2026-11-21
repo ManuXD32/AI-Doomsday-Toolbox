@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Training hub -->
+    <string name="training_title">Training</string>
+    <string name="training_hub_desc">Train language models: Quadtrix, Branchy and training datasets</string>
+    <string name="training_hub_subtitle">Train small language models on your own devices</string>
+    <string name="training_hub_quadtrix_title">Quadtrix</string>
+    <string name="training_hub_quadtrix_desc">Train and serve native phone LLMs with the Quadtrix WebUI and workers.</string>
+    <string name="training_hub_branchy_title">Branchy</string>
+    <string name="training_hub_branchy_desc">Branched models trained from scratch across several devices, exported as Q8 or Q4 GGUF.</string>
+    <string name="training_hub_datasets_title">Dataset library</string>
+    <string name="training_hub_datasets_desc">Download, import and manage the datasets used for training.</string>
+
+    <!-- Dataset library -->
+    <string name="dataset_library_title">Dataset library</string>
+    <string name="dataset_library_subtitle">Training datasets shared by all trainers</string>
+    <string name="dataset_tab_mine">My datasets</string>
+    <string name="dataset_tab_catalog">Catalog</string>
+    <string name="dataset_tab_hf">Hugging Face</string>
+    <string name="dataset_empty_title">No datasets yet</string>
+    <string name="dataset_empty_body">Add one from the catalog, search Hugging Face, or import a file.</string>
+    <string name="dataset_lib_status_pending">Pending</string>
+    <string name="dataset_status_downloading">Downloading</string>
+    <string name="dataset_status_ready">Ready</string>
+    <string name="dataset_status_failed">Failed</string>
+    <string name="dataset_source_curated">Catalog</string>
+    <string name="dataset_source_hf">Hugging Face</string>
+    <string name="dataset_source_file">Imported</string>
+    <string name="dataset_chip_nc">Non-commercial</string>
+    <string name="dataset_chip_gated">Gated</string>
+    <string name="dataset_licence_unknown">Unknown licence</string>
+    <string name="dataset_nc_hint">Non-commercial or restricted terms. Check the licence before using a model trained on it commercially.</string>
+    <string name="dataset_gated_hint">Requires accepting the terms on Hugging Face and an access token.</string>
+    <string name="dataset_meta_format">%1$s · about %2$s rows</string>
+    <string name="dataset_lib_delete_title">Delete dataset?</string>
+    <string name="dataset_delete_body">Delete %1$s and its files from this device?</string>
+    <string name="dataset_added_notice">Added: %1$s</string>
+    <string name="dataset_add_failed">Could not add the dataset: %1$s</string>
+
+    <!-- Catalog -->
+    <string name="dataset_group_chat">Chat</string>
+    <string name="dataset_group_general">General knowledge</string>
+    <string name="dataset_group_coding">Coding</string>
+    <string name="dataset_group_tool_use">Tool use</string>
+    <string name="dataset_group_stories">Stories</string>
+    <string name="dataset_group_spanish">Spanish</string>
+    <string name="dataset_catalog_add">Add</string>
+    <string name="dataset_catalog_added">Added</string>
+    <string name="dataset_cap_label">Data read when preparing</string>
+    <string name="dataset_cap_all">Everything</string>
+
+    <!-- Hugging Face search -->
+    <string name="dataset_hf_search_label">Search Hugging Face datasets</string>
+    <string name="dataset_hf_search_hint">Type at least 2 characters</string>
+    <string name="dataset_hf_no_results">No datasets found.</string>
+    <string name="dataset_hf_error">Request failed: %1$s</string>
+    <string name="dataset_hf_stats">%1$s downloads · %2$s likes</string>
+    <string name="dataset_hf_loading">Loading dataset details…</string>
+    <string name="dataset_hf_no_files">No supported data files (jsonl, json, parquet, csv, txt) were found.</string>
+    <string name="dataset_hf_source_repo">Repository files</string>
+    <string name="dataset_hf_source_parquet">Converted parquet</string>
+    <string name="dataset_hf_files_title">Data files</string>
+    <string name="dataset_hf_config">Config</string>
+    <string name="dataset_hf_split">Split</string>
+    <string name="dataset_hf_selected_summary">Selected %1$s of %2$s files · %3$s</string>
+    <string name="dataset_hf_add">Add dataset</string>
+    <string name="dataset_lib_name_label">Name</string>
+
+    <!-- Format and column mapping -->
+    <string name="dataset_format_label">Format</string>
+    <string name="dataset_format_auto">Auto-detect</string>
+    <string name="dataset_format_chat">Chat</string>
+    <string name="dataset_format_instruction">Instruction</string>
+    <string name="dataset_format_text">Plain text</string>
+    <string name="dataset_columns_label">Column mapping</string>
+    <string name="dataset_columns_auto_hint">Auto-detect reads the columns by itself; no mapping is needed.</string>
+    <string name="dataset_col_messages">Messages column</string>
+    <string name="dataset_col_role">Role key</string>
+    <string name="dataset_col_content">Content key</string>
+    <string name="dataset_col_instruction">Instruction column</string>
+    <string name="dataset_col_input">Input column</string>
+    <string name="dataset_col_output">Output column</string>
+    <string name="dataset_col_text">Text column</string>
+
+    <!-- File import -->
+    <string name="dataset_import_button">Import from file</string>
+    <string name="dataset_import_title">Import dataset</string>
+    <string name="dataset_import_file">File: %1$s</string>
+    <string name="dataset_import_unsupported">Unsupported file type. Use jsonl, json, parquet, csv or txt.</string>
+    <string name="dataset_import_confirm">Import</string>
+    <string name="dataset_import_progress">Importing %1$s…</string>
+    <string name="dataset_import_done">Imported: %1$s</string>
+    <string name="dataset_import_failed">Import failed: %1$s</string>
+
+    <!-- Picker used by trainers -->
+    <string name="dataset_pick_from_library">Pick from dataset library</string>
+    <string name="dataset_pick_title">Choose a dataset file</string>
+    <string name="dataset_pick_empty">No ready datasets yet. Add one in the dataset library.</string>
+    <string name="dataset_pick_open_library">Open dataset library</string>
+    <string name="dataset_pick_current">Dataset file</string>
+    <string name="dataset_pick_none">No dataset file selected</string>
+    <string name="dataset_quadtrix_card_title">Training data</string>
+    <string name="dataset_quadtrix_card_desc">The dataset file Quadtrix trains on. Pick one you downloaded or imported in the dataset library.</string>
+</resources>

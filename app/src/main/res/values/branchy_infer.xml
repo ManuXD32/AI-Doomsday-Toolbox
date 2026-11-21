@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Distributed hub -->
+    <string name="branchy_infer_hub_title">Branchy main device (chat)</string>
+    <string name="branchy_infer_hub_desc">Split a trained Branchy model across helper phones and chat with it.</string>
+
+    <!-- Screen -->
+    <string name="branchy_infer_title">Branchy distributed chat</string>
+    <string name="branchy_infer_subtitle">Main device</string>
+    <string name="branchy_infer_honest_title">When this helps</string>
+    <string name="branchy_infer_honest_body">Splitting a model across phones pays off mainly when the model does not fit on one device. On a fast local network it can be somewhat faster, but when the round trip to a helper is about %1$s ms or more it is slower than running on one device. Helpers must be on the same Wi-Fi or VPN.</string>
+
+    <string name="branchy_infer_run_title">Model and precision</string>
+    <string name="branchy_infer_run_none">No trained Branchy run with a checkpoint yet. Train one in the Branchy trainer first.</string>
+    <string name="branchy_infer_run_no_layout">This run has no readable branch layout.</string>
+
+    <string name="branchy_infer_helpers_title">Helpers</string>
+    <string name="branchy_infer_helpers_hint">Phones running the Branchy helper with inference enabled.</string>
+    <string name="branchy_infer_helpers_none">No inference helpers found. Start the Branchy helper on another phone with \"Help inference\" turned on.</string>
+    <string name="branchy_infer_helper_online">Online - %1$s</string>
+    <string name="branchy_infer_helper_offline">Not seen recently - %1$s</string>
+    <string name="branchy_infer_rtt">Round trip about %1$s ms</string>
+    <string name="branchy_infer_rtt_slow">Round trip about %1$s ms: slower than one device</string>
+
+    <string name="branchy_infer_placement_title">Placement</string>
+    <string name="branchy_infer_placement_hint">Branch 0 stays on this phone; the others are shared by speed. Tap Move to change a branch.</string>
+    <string name="branchy_infer_this_phone">This phone</string>
+    <string name="branchy_infer_branch_row">Branch %1$d: %2$s</string>
+    <string name="branchy_infer_branch_move">Move</string>
+    <string name="branchy_infer_auto_place">Place automatically</string>
+    <string name="branchy_infer_problem_no_remote">Place at least one branch on a helper.</string>
+    <string name="branchy_infer_problem_no_local">Keep at least one branch on this phone.</string>
+
+    <!-- Progress -->
+    <string name="branchy_infer_progress_title">Progress</string>
+    <string name="branchy_infer_step_export_main">Export the main model</string>
+    <string name="branchy_infer_step_export_slice">Export the slice for %1$s</string>
+    <string name="branchy_infer_step_push">Send the slice to %1$s</string>
+    <string name="branchy_infer_step_server">Start the chat server</string>
+    <string name="branchy_infer_state_pending">Waiting</string>
+    <string name="branchy_infer_state_done">Done</string>
+    <string name="branchy_infer_state_reused">Done (kept from an earlier run)</string>
+    <string name="branchy_infer_state_failed">Failed: %1$s</string>
+
+    <!-- Live -->
+    <string name="branchy_infer_live_title">Running</string>
+    <string name="branchy_infer_link_connected">%1$s: connected</string>
+    <string name="branchy_infer_link_degraded">%1$s: not answering, its branches are skipped until it returns</string>
+    <string name="branchy_infer_link_resync">%1$s: reconnected, catching up</string>
+    <string name="branchy_infer_tps">Speed: %1$s tokens per second</string>
+    <string name="branchy_infer_tps_none">Speed: send a message to measure.</string>
+    <string name="branchy_infer_live_hint">The server is listed in your native chat servers. Keep the helpers awake while chatting.</string>
+
+    <!-- Actions and errors -->
+    <string name="branchy_infer_start">Export, send and start</string>
+    <string name="branchy_infer_cancel">Cancel</string>
+    <string name="branchy_infer_stop_server">Stop server</string>
+    <string name="branchy_infer_open_chat">Open chat</string>
+    <string name="branchy_infer_cancelled">Cancelled. Sending resumes where it stopped next time.</string>
+    <string name="branchy_infer_err_training_helper">%1$s is part of a training run on this phone. Sending a slice would drop its training session; stop or finish the run first.</string>
+    <string name="branchy_infer_err_no_binary">The Branchy tool is not installed.</string>
+    <string name="branchy_infer_err_no_checkpoint">This run has no checkpoint to export.</string>
+    <string name="branchy_infer_err_failed">Could not finish: %1$s</string>
+</resources>

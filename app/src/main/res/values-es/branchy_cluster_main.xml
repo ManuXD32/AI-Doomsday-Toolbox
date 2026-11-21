@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Distributed hub -->
+    <string name="branchy_main_hub_section">Clúster de entrenamiento Branchy</string>
+    <string name="branchy_main_hub_main_title">Dispositivo principal de Branchy (entrenamiento)</string>
+    <string name="branchy_main_hub_main_desc">Entrena un modelo Branchy con la ayuda de otros móviles de tu red.</string>
+    <string name="branchy_main_hub_helper_title">Ayudante de Branchy</string>
+    <string name="branchy_main_hub_helper_desc">Presta este móvil al dispositivo principal de un clúster de entrenamiento Branchy.</string>
+
+    <!-- Wizard: Devices step -->
+    <string name="branchy_main_step_devices">Equipos</string>
+    <string name="branchy_main_devices_title">Dispositivos de entrenamiento</string>
+    <string name="branchy_main_devices_hint">Marca los móviles ayudantes con los que entrenar. Sin ninguno marcado, este móvil entrena solo. Los ayudantes necesitan el mismo token del clúster y tener el ayudante de Branchy en marcha.</string>
+    <string name="branchy_main_devices_empty">Aún no se ha encontrado ningún ayudante. Inicia el ayudante de Branchy en otro móvil de la misma red o añade uno por dirección.</string>
+    <string name="branchy_main_device_forget">Quitar de la lista</string>
+    <string name="branchy_main_device_ram">RAM (MB)</string>
+    <string name="branchy_main_device_gflops">GFLOP/s</string>
+    <string name="branchy_main_device_link">Mbit/s</string>
+    <string name="branchy_main_manual_title">Añadir por dirección</string>
+    <string name="branchy_main_manual_hint">Escribe la IP y el puerto del ayudante, por ejemplo 192.168.1.20:50210.</string>
+    <string name="branchy_main_manual_label">Dirección IP y puerto</string>
+    <string name="branchy_main_manual_add">Añadir ayudante</string>
+    <string name="branchy_main_manual_invalid">Esa dirección no es válida. Usa IP:puerto.</string>
+    <string name="branchy_main_mode_title">Cómo repartir el trabajo</string>
+    <string name="branchy_main_mode_hint">Memoria reparte las ramas del modelo entre los móviles para que quepan modelos más grandes. Velocidad da una copia completa a cada móvil y entrena más rápido. Auto elige por ti.</string>
+    <string name="branchy_main_mode_auto">Auto</string>
+    <string name="branchy_main_mode_branch">Memoria (por ramas)</string>
+    <string name="branchy_main_mode_data">Velocidad (por datos)</string>
+    <string name="branchy_main_error_need_ram">Introduce la RAM libre (MB) de estos ayudantes: %1$s</string>
+    <string name="branchy_main_error_missing_endpoints">Estos dispositivos del plan no tienen una dirección conocida: %1$s. Vuelve a añadirlos en el paso Equipos.</string>
+
+    <!-- Plan result -->
+    <string name="branchy_main_plan_mode_branch">Modo: por ramas. Cada ayudante ejecuta algunas ramas, lo que ahorra memoria.</string>
+    <string name="branchy_main_plan_mode_data">Modo: por datos. Cada dispositivo entrena una copia completa y se sincronizan de vez en cuando, lo que es más rápido.</string>
+    <string name="branchy_main_plan_speedup">Aceleración estimada: %1$sx</string>
+    <string name="branchy_main_plan_limit">Limitado por: %1$s</string>
+    <string name="branchy_main_limit_coordinator">este móvil</string>
+    <string name="branchy_main_limit_worker">el ayudante más lento</string>
+    <string name="branchy_main_limit_link">la red</string>
+    <string name="branchy_main_plan_this_phone">Este móvil</string>
+    <string name="branchy_main_plan_device_ram">%1$s: %2$s de %3$s</string>
+    <string name="branchy_main_plan_link_slow">El enlace con %1$s es lento: necesita unos %2$s Mbit/s pero tiene %3$s Mbit/s, así que la red limitará el entrenamiento.</string>
+
+    <!-- Token card -->
+    <string name="branchy_main_token_title">Token del clúster</string>
+    <string name="branchy_main_token_hint">Introduce este token en cada ayudante (escanea el código QR o pega el texto). Mantenlo privado: quien lo tenga puede unirse a tu clúster.</string>
+    <string name="branchy_main_token_qr_description">Código QR del token del clúster</string>
+    <string name="branchy_main_token_copied">Token copiado.</string>
+    <string name="branchy_main_token_regenerate">Regenerar</string>
+    <string name="branchy_main_token_regenerate_title">¿Regenerar el token?</string>
+    <string name="branchy_main_token_regenerate_body">Todos los ayudantes dejarán de aceptar este dispositivo hasta que introduzcas el nuevo token en ellos.</string>
+
+    <!-- Live view -->
+    <string name="branchy_main_live_title">Dispositivos</string>
+    <string name="branchy_main_live_branches">Ramas: %1$s</string>
+    <string name="branchy_main_live_lost">Conexión perdida: %1$s</string>
+    <string name="branchy_main_live_up">Conectado</string>
+    <string name="branchy_main_live_down">Perdido</string>
+    <string name="branchy_main_live_sync">Ronda de sincronización %1$s: %2$s intercambiados, ayudantes: %3$s</string>
+</resources>

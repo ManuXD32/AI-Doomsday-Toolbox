@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r6w_training_title">Training</string>
+    <string name="branchy_r6w_role_dp">Data-parallel replica</string>
+    <string name="branchy_r6w_role_bp">Branch owner</string>
+    <string name="branchy_r6w_run">Run: %1$s</string>
+    <string name="branchy_r6w_round">Round %1$d</string>
+    <string name="branchy_r6w_phase">Phase: %1$s</string>
+    <string name="branchy_r6w_phase_compute">Computing</string>
+    <string name="branchy_r6w_phase_upload">Uploading</string>
+    <string name="branchy_r6w_phase_wait">Waiting for others</string>
+    <string name="branchy_r6w_phase_resting">Resting</string>
+    <string name="branchy_r6w_micro_dp">Microbatches: %1$d / %2$d</string>
+    <string name="branchy_r6w_left">Left this round: %1$d</string>
+    <string name="branchy_r6w_ms_per_micro">Per microbatch: %1$d ms</string>
+    <string name="branchy_r6w_eta">ETA: %1$s</string>
+    <string name="branchy_r6w_micro_bp">Step %1$d, microbatch: %2$d / %3$d</string>
+    <string name="branchy_r6w_fwd_bwd">Forward: %1$d ms, backward: %2$d ms</string>
+    <string name="branchy_r6w_storage_title">Worker storage</string>
+    <string name="branchy_r6w_storage_total">Total: %1$s</string>
+    <string name="branchy_r6w_storage_dp_data">Data-parallel data</string>
+    <string name="branchy_r6w_storage_kind_shards">Shards</string>
+    <string name="branchy_r6w_storage_kind_dp">Data-parallel data</string>
+    <string name="branchy_r6w_storage_kind_slice">Inference slice</string>
+    <string name="branchy_r6w_storage_row">%1$s - %2$s - last used %3$s</string>
+    <string name="branchy_r6w_storage_delete">Delete</string>
+    <string name="branchy_r6w_storage_delete_all">Delete all</string>
+    <string name="branchy_r6w_storage_running_reason">Stop the worker to delete its data.</string>
+    <string name="branchy_r6w_storage_delete_failed">Some data could not be deleted.</string>
+    <string name="branchy_r6w_storage_confirm_title">Delete this data?</string>
+    <string name="branchy_r6w_storage_confirm_one">%1$s will be removed from this worker. The master can send it again when needed.</string>
+    <string name="branchy_r6w_storage_confirm_all">All worker data (%1$s) will be removed. The master can send it again when needed.</string>
+</resources>

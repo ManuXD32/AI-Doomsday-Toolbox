@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Distributed hub -->
+    <string name="branchy_infer_hub_title">Dispositivo principal Branchy (chat)</string>
+    <string name="branchy_infer_hub_desc">Reparte un modelo Branchy entrenado entre teléfonos ayudantes y chatea con él.</string>
+
+    <!-- Screen -->
+    <string name="branchy_infer_title">Chat distribuido Branchy</string>
+    <string name="branchy_infer_subtitle">Dispositivo principal</string>
+    <string name="branchy_infer_honest_title">Cuándo ayuda</string>
+    <string name="branchy_infer_honest_body">Repartir un modelo entre teléfonos compensa sobre todo cuando el modelo no cabe en un solo dispositivo. En una red local rápida puede ir algo más rápido, pero si el viaje de ida y vuelta a un ayudante es de unos %1$s ms o más, es más lento que usar un solo dispositivo. Los ayudantes deben estar en la misma Wi-Fi o VPN.</string>
+
+    <string name="branchy_infer_run_title">Modelo y precisión</string>
+    <string name="branchy_infer_run_none">Aún no hay ningún entrenamiento Branchy con punto de control. Entrena uno primero en el entrenador Branchy.</string>
+    <string name="branchy_infer_run_no_layout">Este entrenamiento no tiene una estructura de ramas legible.</string>
+
+    <string name="branchy_infer_helpers_title">Ayudantes</string>
+    <string name="branchy_infer_helpers_hint">Teléfonos con el ayudante Branchy e inferencia activada.</string>
+    <string name="branchy_infer_helpers_none">No se han encontrado ayudantes de inferencia. Inicia el ayudante Branchy en otro teléfono con \"Ayudar a la inferencia\" activado.</string>
+    <string name="branchy_infer_helper_online">En línea - %1$s</string>
+    <string name="branchy_infer_helper_offline">No visto recientemente - %1$s</string>
+    <string name="branchy_infer_rtt">Ida y vuelta de unos %1$s ms</string>
+    <string name="branchy_infer_rtt_slow">Ida y vuelta de unos %1$s ms: más lento que un solo dispositivo</string>
+
+    <string name="branchy_infer_placement_title">Reparto</string>
+    <string name="branchy_infer_placement_hint">La rama 0 se queda en este teléfono; las demás se reparten según la velocidad. Toca Mover para cambiar una rama.</string>
+    <string name="branchy_infer_this_phone">Este teléfono</string>
+    <string name="branchy_infer_branch_row">Rama %1$d: %2$s</string>
+    <string name="branchy_infer_branch_move">Mover</string>
+    <string name="branchy_infer_auto_place">Repartir automáticamente</string>
+    <string name="branchy_infer_problem_no_remote">Coloca al menos una rama en un ayudante.</string>
+    <string name="branchy_infer_problem_no_local">Deja al menos una rama en este teléfono.</string>
+
+    <!-- Progress -->
+    <string name="branchy_infer_progress_title">Progreso</string>
+    <string name="branchy_infer_step_export_main">Exportar el modelo principal</string>
+    <string name="branchy_infer_step_export_slice">Exportar la parte para %1$s</string>
+    <string name="branchy_infer_step_push">Enviar la parte a %1$s</string>
+    <string name="branchy_infer_step_server">Iniciar el servidor de chat</string>
+    <string name="branchy_infer_state_pending">En espera</string>
+    <string name="branchy_infer_state_done">Hecho</string>
+    <string name="branchy_infer_state_reused">Hecho (conservado de una ejecución anterior)</string>
+    <string name="branchy_infer_state_failed">Error: %1$s</string>
+
+    <!-- Live -->
+    <string name="branchy_infer_live_title">En marcha</string>
+    <string name="branchy_infer_link_connected">%1$s: conectado</string>
+    <string name="branchy_infer_link_degraded">%1$s: no responde, sus ramas se omiten hasta que vuelva</string>
+    <string name="branchy_infer_link_resync">%1$s: reconectado, poniéndose al día</string>
+    <string name="branchy_infer_tps">Velocidad: %1$s tokens por segundo</string>
+    <string name="branchy_infer_tps_none">Velocidad: envía un mensaje para medirla.</string>
+    <string name="branchy_infer_live_hint">El servidor aparece en tus servidores del chat nativo. Mantén los ayudantes activos mientras chateas.</string>
+
+    <!-- Actions and errors -->
+    <string name="branchy_infer_start">Exportar, enviar e iniciar</string>
+    <string name="branchy_infer_cancel">Cancelar</string>
+    <string name="branchy_infer_stop_server">Detener servidor</string>
+    <string name="branchy_infer_open_chat">Abrir chat</string>
+    <string name="branchy_infer_cancelled">Cancelado. El envío se reanuda donde se quedó la próxima vez.</string>
+    <string name="branchy_infer_err_training_helper">%1$s forma parte de un entrenamiento en este teléfono. Enviar una parte cerraría su sesión de entrenamiento; detén o termina el entrenamiento primero.</string>
+    <string name="branchy_infer_err_no_binary">La herramienta Branchy no está instalada.</string>
+    <string name="branchy_infer_err_no_checkpoint">Este entrenamiento no tiene un punto de control para exportar.</string>
+    <string name="branchy_infer_err_failed">No se pudo terminar: %1$s</string>
+</resources>

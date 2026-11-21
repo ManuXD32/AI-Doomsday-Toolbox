@@ -37,6 +37,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -964,7 +965,11 @@ class StableDiffusionService : Service() {
                 }
             }
         } catch (e: java.io.IOException) {
-            if (watchdog?.lost != true) throw e
+            // cancelMode() closes the pipes while this coroutine reads them: that is a cancel, not a failure.
+            if (watchdog?.lost != true) {
+                ensureActive()
+                throw e
+            }
         } finally {
             etaTickerJob.cancel()
             watchdog?.stop()
@@ -1192,7 +1197,11 @@ class StableDiffusionService : Service() {
                 }
             }
         } catch (e: java.io.IOException) {
-            if (watchdog?.lost != true) throw e
+            // cancelMode() closes the pipes while this coroutine reads them: that is a cancel, not a failure.
+            if (watchdog?.lost != true) {
+                ensureActive()
+                throw e
+            }
         } finally {
             etaTickerJob.cancel()
             watchdog?.stop()

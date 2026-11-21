@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r5d_status_unreachable">Unreachable</string>
+    <string name="branchy_r5d_status_offline">Offline</string>
+    <string name="branchy_r5d_micro_title">Microbatch %1$s/%2$s</string>
+    <string name="branchy_r5d_micro_stats">%1$s tok/s · RAM %2$s</string>
+    <string name="branchy_r5d_devices_title">Devices</string>
+    <string name="branchy_r5d_dev_rtt">RTT %1$s ms</string>
+    <string name="branchy_r5d_dev_speed">%1$s tok/s</string>
+    <string name="branchy_r5d_dev_ram">RAM %1$s</string>
+    <string name="branchy_r5d_dev_steps">Steps %1$s</string>
+    <string name="branchy_r5d_dev_sync_ago">Last sync %1$s ago</string>
+    <string name="branchy_r5d_dev_sync_never">No sync yet</string>
+    <string name="branchy_r5d_waiting_title">Waiting for %1$s</string>
+    <string name="branchy_r5d_waiting_join">The helpers have not answered yet.</string>
+    <string name="branchy_r5d_waiting_run">A helper stopped answering; retrying.</string>
+    <string name="branchy_r5d_skip_button">Continue without %1$s</string>
+    <string name="branchy_r5d_skip_confirm_title">Continue without %1$s?</string>
+    <string name="branchy_r5d_skip_confirm_body">The run will go on without this device and will not try to reconnect it.</string>
+    <string name="branchy_r5d_not_skippable">Pause the run, then use Edit devices to remove or replace the missing device.</string>
+    <string name="branchy_r5d_edit_devices">Edit devices</string>
+    <string name="branchy_r5d_runlog_title">Run log</string>
+    <string name="branchy_r5d_runlog_show">Show</string>
+    <string name="branchy_r5d_runlog_hide">Hide</string>
+    <string name="branchy_r5d_runlog_empty">No log yet.</string>
+    <string name="branchy_r5d_runlog_loading">Loading…</string>
+    <string name="branchy_r5d_runlog_refresh">Refresh</string>
+    <string name="branchy_r5d_copied">Copied</string>
+</resources>

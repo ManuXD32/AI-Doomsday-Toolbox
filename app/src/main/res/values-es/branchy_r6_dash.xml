@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r6d_load_title">Carga por dispositivo</string>
+    <string name="branchy_r6d_load_round">Ronda %1$s</string>
+    <string name="branchy_r6d_main">Principal</string>
+    <string name="branchy_r6d_bar_mb">Microlotes %1$s / %2$s</string>
+    <string name="branchy_r6d_bar_seconds">Tiempo %1$s s</string>
+    <string name="branchy_r6d_bar_ms_per_mb">%1$s ms por microlote</string>
+    <string name="branchy_r6d_bar_idle">Inactivo %1$s s</string>
+    <string name="branchy_r6d_history_title">Microlotes por ronda</string>
+    <string name="branchy_r6d_history_hint">Pellizca para ampliar, arrastra para mover, toca dos veces para restablecer.</string>
+    <string name="branchy_r6d_not_needed">No necesario</string>
+    <string name="branchy_r6d_not_needed_detail">Aporta un %1$s%% de velocidad, cuesta un %2$s%% de tiempo de sincronización</string>
+    <string name="branchy_r6d_rest_button">Descansar</string>
+    <string name="branchy_r6d_rest_confirm_title">¿Poner a descansar %1$s?</string>
+    <string name="branchy_r6d_rest_confirm_body">El dispositivo sigue conectado pero no recibe trabajo hasta que lo uses de nuevo.</string>
+    <string name="branchy_r6d_resting">Descansando</string>
+    <string name="branchy_r6d_use_again">Usar de nuevo</string>
+    <string name="branchy_r6d_bp_title">Tiempo de cálculo por paso</string>
+    <string name="branchy_r6d_bp_ms">%1$s ms</string>
+    <string name="branchy_r6d_rebalance_title">Reequilibrar: un %1$s%% más rápido aprox.</string>
+    <string name="branchy_r6d_rebalance_times">Ahora %1$s ms por paso, propuesto %2$s ms</string>
+    <string name="branchy_r6d_rebalance_button">Reequilibrar</string>
+    <string name="branchy_r6d_rebalance_confirm_title">¿Reequilibrar el clúster?</string>
+    <string name="branchy_r6d_rebalance_confirm_body">El entrenamiento se pausa un momento, guarda un punto de control y se reinicia con la colocación de ramas propuesta.</string>
+    <string name="branchy_r6d_rebalance_blocked">No se puede reequilibrar: %1$s</string>
+    <string name="branchy_r6d_rebalance_blocked_generic">Esta colocación no se puede aplicar automáticamente.</string>
+    <string name="branchy_r6d_status_idle">Inactivo: esperando a los demás</string>
+    <string name="branchy_r6d_status_resting">Descansando</string>
+    <string name="branchy_r6d_address">Dirección: %1$s</string>
+    <string name="branchy_r6d_retry_now">Reintentar ahora</string>
+    <string name="branchy_r6d_stop_trying">Dejar de intentar</string>
+    <string name="branchy_r6d_forget_confirm_title">¿Dejar de intentar con %1$s?</string>
+    <string name="branchy_r6d_forget_confirm_body">La ejecución deja de reconectar con este dispositivo y continúa sin él.</string>
+    <string name="branchy_r6d_checkpoint_now">Guardar punto de control ahora</string>
+    <string name="branchy_r6d_last_checkpoint">Último punto de control: paso %1$s (%2$s) hace %3$s</string>
+    <string name="branchy_r6d_last_checkpoint_plain">Último punto de control: paso %1$s hace %2$s</string>
+    <string name="branchy_r6d_ckpt_every">periódico</string>
+    <string name="branchy_r6d_ckpt_manual">manual</string>
+    <string name="branchy_r6d_ckpt_wait">en espera</string>
+    <string name="branchy_r6d_ckpt_pause">pausa</string>
+    <string name="branchy_r6d_ckpt_end">final</string>
+</resources>

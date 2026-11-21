@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r6_recipe_data_hint">Esta receta entrena por etapas con los conjuntos de datos de abajo. Después eliges los dispositivos y empiezas como en cualquier ejecución.</string>
+    <string name="branchy_r6_recipe_stage">Etapa %1$d</string>
+    <string name="branchy_r6_recipe_locked">Estos valores vienen de la receta. Personaliza para editarlos como en una ejecución propia.</string>
+    <string name="branchy_r6_recipe_customize">Personalizar</string>
+    <string name="branchy_r6_recipe_model_title">Modelo de la receta</string>
+    <string name="branchy_r6_recipe_model_summary">Tamaño %1$s · contexto %2$d · vocabulario %3$s · %4$s tokens de entrenamiento</string>
+    <string name="branchy_r6_recipe_stage_tokens">Unos %1$s tokens de entrenamiento</string>
+</resources>

@@ -141,6 +141,11 @@ import com.example.llamadroid.ui.settings.BenchmarkScreen
 import com.example.llamadroid.ui.ai.DatasetScreen
 import com.example.llamadroid.ui.ai.QuadtrixTrainerScreen
 import com.example.llamadroid.ui.ai.QuadtrixWebUiScreen
+import com.example.llamadroid.ui.distributed.branchy.BranchyHelperScreen
+import com.example.llamadroid.ui.distributed.branchy.BranchyInferenceMainScreen
+import com.example.llamadroid.ui.training.BranchyTrainerScreen
+import com.example.llamadroid.ui.training.DatasetLibraryScreen
+import com.example.llamadroid.ui.training.TrainingHubScreen
 import com.example.llamadroid.ui.ai.TermuxScreen
 import com.example.llamadroid.ui.ai.TermuxWebViewScreen
 import com.example.llamadroid.ui.ai.TermuxFileManagerScreen
@@ -856,6 +861,11 @@ fun LlamaApp(
             composable(Screen.BenchmarkHistory.route) { BenchmarkHistoryScreen(navController) }
             // Dataset Creator
             composable(Screen.Dataset.route) { DatasetScreen(navController) }
+            composable(Screen.Training.route) { TrainingHubScreen(navController) }
+            composable(Screen.DatasetLibrary.route) { DatasetLibraryScreen(navController) }
+            composable(Screen.BranchyTrainer.route) { BranchyTrainerScreen(navController) }
+            composable(Screen.BranchyHelper.route) { BranchyHelperScreen(navController) }
+            composable(Screen.BranchyInference.route) { BranchyInferenceMainScreen(navController) }
             composable(Screen.QuadtrixTrainer.route) { QuadtrixTrainerScreen(navController) }
             composable(
                 Screen.QuadtrixWebUi.route,

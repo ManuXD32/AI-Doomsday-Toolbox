@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_cluster_notification_channel">Ayudante de Branchy</string>
+    <string name="branchy_cluster_notification_title">Ayudante de Branchy</string>
+    <string name="branchy_cluster_notification_starting">Iniciando el ayudante…</string>
+    <string name="branchy_cluster_notification_running">Ayudando a entrenar en el puerto %1$d</string>
+    <string name="branchy_cluster_action_stop">Detener</string>
+
+    <string name="branchy_cluster_log_no_token">No hay token del clúster. Introduce primero el token que muestra el dispositivo principal.</string>
+    <string name="branchy_cluster_log_no_binary">No se encontró el binario del entrenador de Branchy.</string>
+    <string name="branchy_cluster_log_benchmarking">Midiendo la velocidad de este dispositivo…</string>
+    <string name="branchy_cluster_log_benchmark_done">Velocidad: %1$.1f GFLOP/s</string>
+    <string name="branchy_cluster_log_starting">Iniciando el worker en el puerto %1$d (hilos: %2$d)</string>
+    <string name="branchy_cluster_log_stopped">El ayudante se detuvo (código de salida %1$d)</string>
+    <string name="branchy_cluster_log_failed">El ayudante falló: %1$s</string>
+    <string name="branchy_cluster_log_heartbeat_busy">El puerto %1$d está ocupado, así que el dispositivo principal no puede comprobar que este ayudante está activo.</string>
+
+    <string name="branchy_cluster_title">Ayudante de Branchy</string>
+    <string name="branchy_cluster_subtitle">Presta este teléfono a un clúster de entrenamiento de Branchy</string>
+    <string name="branchy_cluster_status_title">Estado</string>
+    <string name="branchy_cluster_status_running">El ayudante está en marcha. El dispositivo principal lo encuentra solo en la misma red, o puedes añadirlo por dirección.</string>
+    <string name="branchy_cluster_status_stopped">El ayudante está detenido.</string>
+    <string name="branchy_cluster_address">Dirección: %1$s</string>
+    <string name="branchy_cluster_address_unknown">No se encontró ninguna dirección de red. Conéctate a la misma Wi-Fi o VPN que el dispositivo principal.</string>
+    <string name="branchy_cluster_keep_awake_hint">Mantén este teléfono enchufado. El ayudante sigue trabajando con la pantalla apagada.</string>
+
+    <string name="branchy_cluster_token_title">Token del clúster</string>
+    <string name="branchy_cluster_token_hint">Abre Branchy en el dispositivo principal, copia su token del clúster y pégalo aquí. Todos los dispositivos de un clúster comparten el mismo token.</string>
+    <string name="branchy_cluster_token_set">Token guardado: %1$s</string>
+    <string name="branchy_cluster_token_missing">Aún no hay ningún token guardado.</string>
+    <string name="branchy_cluster_token_label">Token</string>
+    <string name="branchy_cluster_token_paste">Pegar</string>
+    <string name="branchy_cluster_token_save">Guardar</string>
+    <string name="branchy_cluster_token_clear">Quitar</string>
+    <string name="branchy_cluster_token_saved_notice">Token guardado.</string>
+    <string name="branchy_cluster_token_invalid">Ese token no es válido. Tiene 64 caracteres (0–9, a–f).</string>
+    <string name="branchy_cluster_token_cleared_notice">Token eliminado.</string>
+
+    <string name="branchy_cluster_settings_title">Opciones</string>
+    <string name="branchy_cluster_setting_name">Nombre del dispositivo</string>
+    <string name="branchy_cluster_setting_port">Puerto</string>
+    <string name="branchy_cluster_setting_threads">Hilos</string>
+    <string name="branchy_cluster_settings_locked">Detén el ayudante para cambiar estas opciones.</string>
+    <string name="branchy_cluster_port_invalid">El puerto debe estar entre 1024 y 65534.</string>
+
+    <string name="branchy_cluster_log_title">Registro</string>
+    <string name="branchy_cluster_log_empty">Todavía nada.</string>
+    <string name="branchy_cluster_log_clear">Borrar registro</string>
+
+    <string name="branchy_cluster_start">Empezar a ayudar</string>
+    <string name="branchy_cluster_stop">Dejar de ayudar</string>
+    <string name="branchy_cluster_start_needs_token">Guarda primero el token del clúster.</string>
+
+    <string name="branchy_cluster_roles_title">En qué ayudar</string>
+    <string name="branchy_cluster_roles_hint">Elige qué ofrece este teléfono al dispositivo principal. Al menos una opción debe quedar activa.</string>
+    <string name="branchy_cluster_roles_locked">Detén el ayudante para cambiar los roles.</string>
+    <string name="branchy_cluster_role_train">Ayudar al entrenamiento</string>
+    <string name="branchy_cluster_role_infer">Ayudar a la inferencia</string>
+    <string name="branchy_cluster_role_need_one">Al menos un rol debe quedar activo.</string>
+    <string name="branchy_cluster_battery_paused_status">En pausa: la batería está baja y el teléfono no se está cargando.</string>
+
+    <string name="branchy_cluster_infer_title">Porción de inferencia</string>
+    <string name="branchy_cluster_infer_hint">El dispositivo principal envía a este teléfono una porción del modelo. El ayudante la carga en cuanto llega. También puedes elegir un archivo de porción de este teléfono.</string>
+    <string name="branchy_cluster_slice_none">Aún no se ha recibido ninguna porción.</string>
+    <string name="branchy_cluster_slice_name">Porción: %1$s</string>
+    <string name="branchy_cluster_slice_size">Tamaño: %1$s</string>
+    <string name="branchy_cluster_slice_branches">Ramas alojadas: %1$s</string>
+    <string name="branchy_cluster_slice_branches_unknown">Ramas alojadas: no figuran en el nombre del archivo</string>
+    <string name="branchy_cluster_slice_pick">Elegir un archivo de porción</string>
+    <string name="branchy_cluster_slice_copying">Copiando la porción…</string>
+    <string name="branchy_cluster_slice_needs_role">Activa primero \"Ayudar a la inferencia\".</string>
+    <string name="branchy_cluster_slice_bad_name">Elige un archivo cuyo nombre termine en .slice.gguf.</string>
+    <string name="branchy_cluster_slice_copy_failed">No se pudo copiar el archivo de la porción.</string>
+    <string name="branchy_cluster_infer_off">Ayudante de inferencia: detenido</string>
+    <string name="branchy_cluster_infer_running">Ayudante de inferencia: en marcha en el puerto %1$d</string>
+    <string name="branchy_cluster_infer_exited">Ayudante de inferencia: terminó (código %1$d)</string>
+    <string name="branchy_cluster_infer_output_title">Última salida del ayudante</string>
+    <string name="branchy_cluster_setting_ctx">Contexto de inferencia (tokens)</string>
+    <string name="branchy_cluster_setting_battery_guard">Pausar con batería baja</string>
+    <string name="branchy_cluster_setting_battery_min">Pausar por debajo de este nivel de batería (%)</string>
+
+    <string name="branchy_cluster_log_slice_received">Porción recibida: %1$s</string>
+    <string name="branchy_cluster_log_infer_disabled">La porción se guardó, pero \"Ayudar a la inferencia\" está desactivado, así que no se cargó.</string>
+    <string name="branchy_cluster_log_no_helper_binary">No se encontró el binario del ayudante de inferencia.</string>
+    <string name="branchy_cluster_log_infer_starting">Cargando la porción %1$s (puerto de inferencia %2$d)</string>
+    <string name="branchy_cluster_log_infer_stopped">El ayudante de inferencia se detuvo (código de salida %1$d)</string>
+    <string name="branchy_cluster_log_battery_paused">Batería al %1$d%%: ayudante en pausa.</string>
+    <string name="branchy_cluster_log_battery_resumed">Batería al %1$d%%: ayudante reanudado.</string>
+</resources>

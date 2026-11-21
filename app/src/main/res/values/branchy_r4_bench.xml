@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_bench_title">Benchmark</string>
+    <string name="branchy_bench_hint">Measures this phone at several thread counts and picks the best one for training.</string>
+    <string name="branchy_bench_hint_cluster">Measures this phone and every selected helper at several thread counts, then applies the best count to each device.</string>
+    <string name="branchy_bench_cool_hint">Short benchmarks run on a cool phone. After minutes of training the phone throttles, so the pick takes the smallest thread count within 5% of the maximum.</string>
+    <string name="branchy_bench_worker_stop_hint">Stop the worker to benchmark: a sweep would steal CPU from training.</string>
+    <string name="branchy_bench_button">Benchmark</string>
+    <string name="branchy_bench_running">Benchmarking…</string>
+    <string name="branchy_bench_cancel">Cancel</string>
+    <string name="branchy_bench_this_phone">This phone</string>
+    <string name="branchy_bench_applied">Applied</string>
+    <string name="branchy_bench_error">Benchmark failed: %1$s</string>
+    <string name="branchy_bench_device_error">Could not benchmark: %1$s</string>
+    <plurals name="branchy_bench_best">
+        <item quantity="one">Best: %1$d thread (%2$s GFLOP/s)</item>
+        <item quantity="other">Best: %1$d threads (%2$s GFLOP/s)</item>
+    </plurals>
+</resources>

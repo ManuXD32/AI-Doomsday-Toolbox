@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r6_recipe_data_hint">This recipe trains in stages on the datasets below. Next you choose the devices and start as for any run.</string>
+    <string name="branchy_r6_recipe_stage">Stage %1$d</string>
+    <string name="branchy_r6_recipe_locked">These values come from the recipe. Customize to edit them like a custom run.</string>
+    <string name="branchy_r6_recipe_customize">Customize</string>
+    <string name="branchy_r6_recipe_model_title">Recipe model</string>
+    <string name="branchy_r6_recipe_model_summary">Size %1$s · context %2$d · vocabulary %3$s · %4$s training tokens</string>
+    <string name="branchy_r6_recipe_stage_tokens">About %1$s training tokens</string>
+</resources>

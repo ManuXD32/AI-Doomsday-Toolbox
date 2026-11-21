@@ -2828,286 +2828,287 @@ fun AgentGlobalOverrideCard(
 
             // Inactive override values are deliberately not editable. The
             // read-only Direct card below remains the authoritative summary.
-            if (!directDefaultsMode && !state.enabled) return@Column
+            if (directDefaultsMode || state.enabled) {
 
-            AgentStringDropdown(
-                label = stringResource(
-                    if (directDefaultsMode) R.string.agent_runtime_engine_label
-                    else R.string.agent_global_override_backend_label
-                ),
-                selected = state.backend,
-                values = backendOptions,
-                labelFor = { backend ->
-                    when (AgentRuntimeBackend.from(backend)) {
-                        AgentRuntimeBackend.OLLAMA -> stringResource(R.string.agent_runtime_engine_ollama)
-                        AgentRuntimeBackend.LLAMA_SERVER -> stringResource(R.string.agent_runtime_engine_llama_server)
-                        AgentRuntimeBackend.LLAMA_SWAP -> stringResource(R.string.agent_runtime_engine_llama_swap)
-                        AgentRuntimeBackend.LITERT -> stringResource(R.string.agent_runtime_engine_litert)
-                    }
-                },
-                onSelected = {
-                    onChange(
-                        state.copy(
-                            backend = it,
-                            endpointConfigId = null,
-                            managedLlamaServerId = null,
-                            model = state.model
-                        )
-                    )
-                }
-            )
-
-            if (backend != AgentRuntimeBackend.LITERT) {
                 AgentStringDropdown(
                     label = stringResource(
-                        if (directDefaultsMode) R.string.agent_runtime_connection_label
-                        else R.string.agent_global_override_connection_label
+                        if (directDefaultsMode) R.string.agent_runtime_engine_label
+                        else R.string.agent_global_override_backend_label
                     ),
-                    selected = connectionSelection,
-                    values = connectionOptions,
-                    labelFor = { selection ->
-                        when (selection) {
-                            GLOBAL_OVERRIDE_CONNECTION_KEY -> stringResource(
-                                R.string.agent_runtime_connection_global
-                            )
-                            MANAGED_OVERRIDE_CONNECTION_KEY -> stringResource(
-                                R.string.agent_runtime_connection_managed
-                            )
-                            else -> endpointConfigs.firstOrNull {
-                                it.id.toString() == selection
-                            }?.name ?: selection
+                    selected = state.backend,
+                    values = backendOptions,
+                    labelFor = { backend ->
+                        when (AgentRuntimeBackend.from(backend)) {
+                            AgentRuntimeBackend.OLLAMA -> stringResource(R.string.agent_runtime_engine_ollama)
+                            AgentRuntimeBackend.LLAMA_SERVER -> stringResource(R.string.agent_runtime_engine_llama_server)
+                            AgentRuntimeBackend.LLAMA_SWAP -> stringResource(R.string.agent_runtime_engine_llama_swap)
+                            AgentRuntimeBackend.LITERT -> stringResource(R.string.agent_runtime_engine_litert)
                         }
-                    },
-                    descriptionFor = { selection ->
-                        when (selection) {
-                            GLOBAL_OVERRIDE_CONNECTION_KEY -> globalConnectionDescription
-                                ?.takeIf { it.isNotBlank() }
-                                ?: stringResource(R.string.agent_runtime_connection_not_configured)
-                            MANAGED_OVERRIDE_CONNECTION_KEY -> serverOptions.firstOrNull()?.let {
-                                "${it.host}:${it.port}"
-                            } ?: stringResource(R.string.agent_runtime_connection_choose_managed)
-                            else -> endpointConfigs.firstOrNull {
-                                it.id.toString() == selection
-                            }?.baseUrl.orEmpty()
-                        }
-                    },
-                    supportingText = stringResource(R.string.agent_global_override_connection_hint),
-                    onSelected = ::selectConnection
-                )
-            } else {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(10.dp),
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
-                ) {
-                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
-                        Text(
-                            stringResource(
-                                if (directDefaultsMode) R.string.agent_runtime_connection_label
-                                else R.string.agent_global_override_connection_label
-                            ),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(stringResource(R.string.agent_global_override_connection_litert))
-                    }
-                }
-            }
-
-            if (
-                backend == AgentRuntimeBackend.LLAMA_SERVER ||
-                    backend == AgentRuntimeBackend.LLAMA_SWAP
-            ) {
-                if (state.managedLlamaServerId != null) {
-                    AgentStringDropdown(
-                        label = stringResource(R.string.agent_runtime_managed_server_label),
-                        selected = state.managedLlamaServerId.toString(),
-                        values = serverOptions.map { it.id.toString() },
-                        labelFor = { id ->
-                            serverOptions.firstOrNull { it.id.toString() == id }?.displayName
-                                ?: id
-                        },
-                        descriptionFor = { id ->
-                            serverOptions.firstOrNull { it.id.toString() == id }?.let {
-                                "${it.host}:${it.port}"
-                            }
-                        },
-                        onSelected = { id ->
-                            onChange(state.copy(managedLlamaServerId = id.toLongOrNull()))
-                        }
-                    )
-                }
-            }
-
-            if (backend == AgentRuntimeBackend.LITERT) {
-                AgentStringDropdown(
-                    label = stringResource(R.string.agent_runtime_litert_model_label),
-                    selected = state.liteRtModelId?.toString().orEmpty(),
-                    values = liteRtModelOptions,
-                    labelFor = { id ->
-                        liteRtModels.firstOrNull { it.id.toString() == id }?.displayName ?: id
                     },
                     onSelected = {
-                        onChange(state.copy(liteRtModelId = it.toLongOrNull(), model = null))
+                        onChange(
+                            state.copy(
+                                backend = it,
+                                endpointConfigId = null,
+                                managedLlamaServerId = null,
+                                model = state.model
+                            )
+                        )
                     }
                 )
-            } else {
-                if (modelOptions.isNotEmpty()) {
+
+                if (backend != AgentRuntimeBackend.LITERT) {
                     AgentStringDropdown(
                         label = stringResource(
-                            if (directDefaultsMode) R.string.agent_runtime_model_label
-                            else R.string.agent_global_override_model_label
+                            if (directDefaultsMode) R.string.agent_runtime_connection_label
+                            else R.string.agent_global_override_connection_label
                         ),
-                        selected = state.model.orEmpty(),
-                        values = modelOptions,
-                        onSelected = { onChange(state.copy(model = it)) }
+                        selected = connectionSelection,
+                        values = connectionOptions,
+                        labelFor = { selection ->
+                            when (selection) {
+                                GLOBAL_OVERRIDE_CONNECTION_KEY -> stringResource(
+                                    R.string.agent_runtime_connection_global
+                                )
+                                MANAGED_OVERRIDE_CONNECTION_KEY -> stringResource(
+                                    R.string.agent_runtime_connection_managed
+                                )
+                                else -> endpointConfigs.firstOrNull {
+                                    it.id.toString() == selection
+                                }?.name ?: selection
+                            }
+                        },
+                        descriptionFor = { selection ->
+                            when (selection) {
+                                GLOBAL_OVERRIDE_CONNECTION_KEY -> globalConnectionDescription
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?: stringResource(R.string.agent_runtime_connection_not_configured)
+                                MANAGED_OVERRIDE_CONNECTION_KEY -> serverOptions.firstOrNull()?.let {
+                                    "${it.host}:${it.port}"
+                                } ?: stringResource(R.string.agent_runtime_connection_choose_managed)
+                                else -> endpointConfigs.firstOrNull {
+                                    it.id.toString() == selection
+                                }?.baseUrl.orEmpty()
+                            }
+                        },
+                        supportingText = stringResource(R.string.agent_global_override_connection_hint),
+                        onSelected = ::selectConnection
                     )
                 } else {
-                    OutlinedTextField(
-                        value = state.model.orEmpty(),
-                        onValueChange = { onChange(state.copy(model = it)) },
-                        label = {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
                             Text(
                                 stringResource(
-                                    if (directDefaultsMode) R.string.agent_runtime_model_label
-                                    else R.string.agent_global_override_model_label
-                                )
+                                    if (directDefaultsMode) R.string.agent_runtime_connection_label
+                                    else R.string.agent_global_override_connection_label
+                                ),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
+                            Text(stringResource(R.string.agent_global_override_connection_litert))
+                        }
+                    }
                 }
-            }
 
-            if (backend == AgentRuntimeBackend.LITERT) {
-                Text(
-                    text = stringResource(R.string.litert_gallery_accelerator),
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 13.sp
-                )
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()
+                if (
+                    backend == AgentRuntimeBackend.LLAMA_SERVER ||
+                        backend == AgentRuntimeBackend.LLAMA_SWAP
                 ) {
-                    listOf(
-                        LITERT_BACKEND_AUTO to R.string.general_acceleration_mode_auto,
-                        LITERT_BACKEND_CPU to R.string.general_acceleration_mode_cpu,
-                        LITERT_BACKEND_GPU to R.string.litert_backend_gpu
-                    ).forEach { (mode, labelRes) ->
-                        FilterChip(
-                            selected = normalizeLiteRtBackend(state.liteRtBackend) == mode,
-                            onClick = { onChange(state.copy(liteRtBackend = mode)) },
-                            modifier = Modifier.defaultMinSize(minWidth = 104.dp),
-                            label = { Text(stringResource(labelRes), maxLines = 1) }
+                    if (state.managedLlamaServerId != null) {
+                        AgentStringDropdown(
+                            label = stringResource(R.string.agent_runtime_managed_server_label),
+                            selected = state.managedLlamaServerId.toString(),
+                            values = serverOptions.map { it.id.toString() },
+                            labelFor = { id ->
+                                serverOptions.firstOrNull { it.id.toString() == id }?.displayName
+                                    ?: id
+                            },
+                            descriptionFor = { id ->
+                                serverOptions.firstOrNull { it.id.toString() == id }?.let {
+                                    "${it.host}:${it.port}"
+                                }
+                            },
+                            onSelected = { id ->
+                                onChange(state.copy(managedLlamaServerId = id.toLongOrNull()))
+                            }
                         )
                     }
                 }
-                AgentGlobalOverrideSwitchRow(
-                    title = stringResource(R.string.litert_gallery_mtp_title),
-                    description = stringResource(R.string.litert_gallery_mtp_desc),
-                    checked = state.liteRtMtpEnabled,
-                    onCheckedChange = { onChange(state.copy(liteRtMtpEnabled = it)) }
-                )
-            }
 
-            DraftIntTextField(
-                value = contextSizeForDisplay ?: state.contextSize,
-                onValueChange = {
-                    onChange(state.copy(contextSize = if (optimizedLimits) {
-                        it.coerceIn(AgentHarnessPolicy.MIN_CONTEXT_TOKENS, AgentHarnessPolicy.MAX_CONTEXT_TOKENS)
-                    } else it))
-                },
-                valueRange = if (optimizedLimits) {
-                    AgentHarnessPolicy.MIN_CONTEXT_TOKENS..AgentHarnessPolicy.MAX_CONTEXT_TOKENS
-                } else 1..1_048_576,
-                label = {
-                    Text(
-                        stringResource(
-                            if (directDefaultsMode) R.string.agent_direct_context_label
-                            else R.string.agent_global_override_context_label
-                        )
-                    )
-                },
-                modifier = Modifier.fillMaxWidth(),
-                blankValue = if (optimizedLimits) AgentDirectUiDefaults.CONTEXT_TOKENS else 0
-            )
-            DraftIntTextField(
-                value = maxOutputTokensForDisplay ?: state.maxOutputTokens,
-                onValueChange = {
-                    onChange(state.copy(maxOutputTokens = if (optimizedLimits) {
-                        it.coerceIn(AgentHarnessPolicy.MIN_OUTPUT_TOKENS, AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS)
-                    } else it))
-                },
-                valueRange = if (optimizedLimits) {
-                    AgentHarnessPolicy.MIN_OUTPUT_TOKENS..AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS
-                } else 1..1_048_576,
-                label = {
-                    Text(
-                        stringResource(
-                            if (directDefaultsMode) R.string.agent_direct_build_output_label
-                            else R.string.agent_global_override_max_output_label
-                        )
-                    )
-                },
-                modifier = Modifier.fillMaxWidth(),
-                blankValue = if (optimizedLimits) AgentHarnessPolicy.CONTROL_MAX_OUTPUT_TOKENS else 8096
-            )
-            outputRecommendation?.let { recommendation ->
-                Text(
-                    text = recommendation,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.tertiary
-                )
-            }
-
-            AgentGlobalOverrideSwitchRow(
-                title = stringResource(R.string.agent_thinking_enabled),
-                description = stringResource(R.string.agent_thinking_enabled_desc),
-                checked = state.thinkingEnabled,
-                onCheckedChange = { onChange(state.copy(thinkingEnabled = it)) }
-            )
-            if (state.thinkingEnabled) {
-                if (
-                    backend == AgentRuntimeBackend.LLAMA_SERVER ||
-                    backend == AgentRuntimeBackend.LLAMA_SWAP
-                ) {
-                    DraftIntTextField(
-                        value = state.thinkingBudgetTokens ?: 0,
-                        onValueChange = { value ->
-                            onChange(
-                                state.copy(
-                                    thinkingBudgetTokens = value.takeIf { it > 0 }
-                                )
-                            )
+                if (backend == AgentRuntimeBackend.LITERT) {
+                    AgentStringDropdown(
+                        label = stringResource(R.string.agent_runtime_litert_model_label),
+                        selected = state.liteRtModelId?.toString().orEmpty(),
+                        values = liteRtModelOptions,
+                        labelFor = { id ->
+                            liteRtModels.firstOrNull { it.id.toString() == id }?.displayName ?: id
                         },
-                        valueRange = 0..state.maxOutputTokens.coerceAtLeast(1),
-                        label = {
-                            Text(stringResource(R.string.agent_thinking_budget_label))
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        blankValue = 0
-                    )
-                    Text(
-                        text = stringResource(R.string.agent_thinking_budget_desc),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        onSelected = {
+                            onChange(state.copy(liteRtModelId = it.toLongOrNull(), model = null))
+                        }
                     )
                 } else {
+                    if (modelOptions.isNotEmpty()) {
+                        AgentStringDropdown(
+                            label = stringResource(
+                                if (directDefaultsMode) R.string.agent_runtime_model_label
+                                else R.string.agent_global_override_model_label
+                            ),
+                            selected = state.model.orEmpty(),
+                            values = modelOptions,
+                            onSelected = { onChange(state.copy(model = it)) }
+                        )
+                    } else {
+                        OutlinedTextField(
+                            value = state.model.orEmpty(),
+                            onValueChange = { onChange(state.copy(model = it)) },
+                            label = {
+                                Text(
+                                    stringResource(
+                                        if (directDefaultsMode) R.string.agent_runtime_model_label
+                                        else R.string.agent_global_override_model_label
+                                    )
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                    }
+                }
+
+                if (backend == AgentRuntimeBackend.LITERT) {
                     Text(
-                        text = stringResource(R.string.agent_thinking_budget_unsupported),
+                        text = stringResource(R.string.litert_gallery_accelerator),
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 13.sp
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        listOf(
+                            LITERT_BACKEND_AUTO to R.string.general_acceleration_mode_auto,
+                            LITERT_BACKEND_CPU to R.string.general_acceleration_mode_cpu,
+                            LITERT_BACKEND_GPU to R.string.litert_backend_gpu
+                        ).forEach { (mode, labelRes) ->
+                            FilterChip(
+                                selected = normalizeLiteRtBackend(state.liteRtBackend) == mode,
+                                onClick = { onChange(state.copy(liteRtBackend = mode)) },
+                                modifier = Modifier.defaultMinSize(minWidth = 104.dp),
+                                label = { Text(stringResource(labelRes), maxLines = 1) }
+                            )
+                        }
+                    }
+                    AgentGlobalOverrideSwitchRow(
+                        title = stringResource(R.string.litert_gallery_mtp_title),
+                        description = stringResource(R.string.litert_gallery_mtp_desc),
+                        checked = state.liteRtMtpEnabled,
+                        onCheckedChange = { onChange(state.copy(liteRtMtpEnabled = it)) }
+                    )
+                }
+
+                DraftIntTextField(
+                    value = contextSizeForDisplay ?: state.contextSize,
+                    onValueChange = {
+                        onChange(state.copy(contextSize = if (optimizedLimits) {
+                            it.coerceIn(AgentHarnessPolicy.MIN_CONTEXT_TOKENS, AgentHarnessPolicy.MAX_CONTEXT_TOKENS)
+                        } else it))
+                    },
+                    valueRange = if (optimizedLimits) {
+                        AgentHarnessPolicy.MIN_CONTEXT_TOKENS..AgentHarnessPolicy.MAX_CONTEXT_TOKENS
+                    } else 1..1_048_576,
+                    label = {
+                        Text(
+                            stringResource(
+                                if (directDefaultsMode) R.string.agent_direct_context_label
+                                else R.string.agent_global_override_context_label
+                            )
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    blankValue = if (optimizedLimits) AgentDirectUiDefaults.CONTEXT_TOKENS else 0
+                )
+                DraftIntTextField(
+                    value = maxOutputTokensForDisplay ?: state.maxOutputTokens,
+                    onValueChange = {
+                        onChange(state.copy(maxOutputTokens = if (optimizedLimits) {
+                            it.coerceIn(AgentHarnessPolicy.MIN_OUTPUT_TOKENS, AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS)
+                        } else it))
+                    },
+                    valueRange = if (optimizedLimits) {
+                        AgentHarnessPolicy.MIN_OUTPUT_TOKENS..AgentHarnessPolicy.BUILD_MAX_OUTPUT_TOKENS
+                    } else 1..1_048_576,
+                    label = {
+                        Text(
+                            stringResource(
+                                if (directDefaultsMode) R.string.agent_direct_build_output_label
+                                else R.string.agent_global_override_max_output_label
+                            )
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    blankValue = if (optimizedLimits) AgentHarnessPolicy.CONTROL_MAX_OUTPUT_TOKENS else 8096
+                )
+                outputRecommendation?.let { recommendation ->
+                    Text(
+                        text = recommendation,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.tertiary
                     )
                 }
+
+                AgentGlobalOverrideSwitchRow(
+                    title = stringResource(R.string.agent_thinking_enabled),
+                    description = stringResource(R.string.agent_thinking_enabled_desc),
+                    checked = state.thinkingEnabled,
+                    onCheckedChange = { onChange(state.copy(thinkingEnabled = it)) }
+                )
+                if (state.thinkingEnabled) {
+                    if (
+                        backend == AgentRuntimeBackend.LLAMA_SERVER ||
+                        backend == AgentRuntimeBackend.LLAMA_SWAP
+                    ) {
+                        DraftIntTextField(
+                            value = state.thinkingBudgetTokens ?: 0,
+                            onValueChange = { value ->
+                                onChange(
+                                    state.copy(
+                                        thinkingBudgetTokens = value.takeIf { it > 0 }
+                                    )
+                                )
+                            },
+                            valueRange = 0..state.maxOutputTokens.coerceAtLeast(1),
+                            label = {
+                                Text(stringResource(R.string.agent_thinking_budget_label))
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            blankValue = 0
+                        )
+                        Text(
+                            text = stringResource(R.string.agent_thinking_budget_desc),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        Text(
+                            text = stringResource(R.string.agent_thinking_budget_unsupported),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.tertiary
+                        )
+                    }
+                }
+                AgentGlobalOverrideSwitchRow(
+                    title = stringResource(R.string.agent_vision_enabled),
+                    description = stringResource(R.string.agent_vision_enabled_desc),
+                    checked = state.visionEnabled,
+                    onCheckedChange = { onChange(state.copy(visionEnabled = it)) }
+                )
             }
-            AgentGlobalOverrideSwitchRow(
-                title = stringResource(R.string.agent_vision_enabled),
-                description = stringResource(R.string.agent_vision_enabled_desc),
-                checked = state.visionEnabled,
-                onCheckedChange = { onChange(state.copy(visionEnabled = it)) }
-            )
         }
     }
 }

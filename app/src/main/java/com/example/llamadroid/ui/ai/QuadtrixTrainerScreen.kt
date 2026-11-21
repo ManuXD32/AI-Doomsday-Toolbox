@@ -72,6 +72,7 @@ import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppSectionCard
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.training.DatasetFilePickerDialog
 import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import kotlinx.coroutines.Dispatchers
@@ -110,6 +111,8 @@ fun QuadtrixTrainerScreen(navController: NavController) {
     var workerThreads by rememberSaveable { mutableStateOf(savedWorkerThreads.toString()) }
     var startWebUiAfterFolderPick by rememberSaveable { mutableStateOf(false) }
     var showInfo by rememberSaveable { mutableStateOf(false) }
+    var datasetPath by rememberSaveable { mutableStateOf("") }
+    var showDatasetPicker by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(savedWebHost, savedWebPort, savedWorkerHost, savedWorkerPort, savedWorkerToken, savedWorkerThreads) {
         webHost = savedWebHost
@@ -118,6 +121,12 @@ fun QuadtrixTrainerScreen(navController: NavController) {
         workerPort = savedWorkerPort.toString()
         workerToken = savedWorkerToken
         workerThreads = savedWorkerThreads.toString()
+    }
+
+    LaunchedEffect(Unit) {
+        datasetPath = withContext(Dispatchers.IO) {
+            database.quadtrixProfileDao().getProfileByName(QUADTRIX_RUNTIME_PROFILE)?.datasetPath.orEmpty()
+        }
     }
 
     suspend fun saveRuntimeProfile(overrideWorkspacePath: String? = null): Long {
@@ -160,6 +169,7 @@ fun QuadtrixTrainerScreen(navController: NavController) {
                 tokenizer = "qwen3",
                 qwenTokenizerJsonPath = tokenizerPath,
                 noGenerateAfterTrain = true,
+                datasetPath = datasetPath,
                 enabledOptions = enabledOptions,
                 updatedAt = System.currentTimeMillis()
             )
@@ -220,6 +230,20 @@ fun QuadtrixTrainerScreen(navController: NavController) {
         QuadtrixInfoDialog(onDismiss = { showInfo = false })
     }
 
+    if (showDatasetPicker) {
+        DatasetFilePickerDialog(
+            onDismiss = { showDatasetPicker = false },
+            onPicked = { path ->
+                datasetPath = path
+                showDatasetPicker = false
+            },
+            onOpenLibrary = {
+                showDatasetPicker = false
+                navController.navigate(Screen.DatasetLibrary.route)
+            }
+        )
+    }
+
     AppScreenScaffold(
         title = stringResource(R.string.quadtrix_title),
         subtitle = stringResource(R.string.quadtrix_simple_subtitle),
@@ -266,6 +290,10 @@ fun QuadtrixTrainerScreen(navController: NavController) {
                         )
                     )
                 }
+            )
+            DatasetCard(
+                datasetPath = datasetPath,
+                onPick = { showDatasetPicker = true }
             )
             WorkerCard(
                 runtime = runtime,
@@ -412,6 +440,23 @@ private fun WebUiCard(
                 Text(stringResource(R.string.quadtrix_open_webui), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             LabeledValue(stringResource(R.string.quadtrix_webui_url), previewUrl)
+        }
+    }
+}
+
+@Composable
+private fun DatasetCard(datasetPath: String, onPick: () -> Unit) {
+    AppSectionCard {
+        SectionHeading(
+            title = stringResource(R.string.dataset_quadtrix_card_title),
+            body = stringResource(R.string.dataset_quadtrix_card_desc)
+        )
+        LabeledValue(
+            label = stringResource(R.string.dataset_pick_current),
+            value = datasetPath.ifBlank { stringResource(R.string.dataset_pick_none) }
+        )
+        OutlinedButton(onClick = onPick, modifier = Modifier.fillMaxWidth()) {
+            Text(stringResource(R.string.dataset_pick_from_library), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

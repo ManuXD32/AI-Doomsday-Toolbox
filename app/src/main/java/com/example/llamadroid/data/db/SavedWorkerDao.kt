@@ -33,6 +33,12 @@ interface SavedWorkerDao {
     @Query("UPDATE saved_workers SET isEnabled = :enabled WHERE id = :id")
     suspend fun setWorkerEnabled(id: Long, enabled: Boolean)
     
+    @Query("UPDATE saved_workers SET preferredInterface = :pref WHERE id = :id")
+    suspend fun setPreferredInterface(id: Long, pref: String)
+
+    @Query("UPDATE saved_workers SET ip = :newIp, altIp = :newAlt WHERE ip = :oldIp AND port = :port")
+    suspend fun switchAddress(oldIp: String, port: Int, newIp: String, newAlt: String?)
+
     @Query("DELETE FROM saved_workers")
     suspend fun deleteAll()
 }

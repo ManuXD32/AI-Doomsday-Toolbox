@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r5_helper_online">Online</string>
+    <string name="branchy_r5_helper_online_rtt">Online · %1$d ms</string>
+    <string name="branchy_r5_helper_unreachable">Unreachable</string>
+    <string name="branchy_r5_helper_checking">Checking…</string>
+    <string name="branchy_r5_vpn_hint">On a VPN, add helpers by address.</string>
+</resources>

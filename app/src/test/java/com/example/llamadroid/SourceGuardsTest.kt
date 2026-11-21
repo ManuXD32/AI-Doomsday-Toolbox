@@ -31,4 +31,27 @@ class SourceGuardsTest {
             offenders.isEmpty()
         )
     }
+
+    private val earlyComposableReturn = Regex(
+        """return@(Column|Row|Box|BoxWithConstraints|FlowRow|LazyColumn|LazyRow|Scaffold|Card|ElevatedCard|OutlinedCard|Surface|AppSectionCard)\b"""
+    )
+
+    /** Early returns from composable content lambdas unbalance Compose groups on recomposition (Branchy chart crash). */
+    @Test
+    fun composableContentLambdasDoNotReturnEarly() {
+        val srcDir = listOf("src/main/java", "app/src/main/java").map(::File).first { it.isDirectory }
+        val uiDir = File(srcDir, "com/example/llamadroid/ui")
+        val offenders = uiDir.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .flatMap { file ->
+                file.readLines().mapIndexedNotNull { index, line ->
+                    if (earlyComposableReturn.containsMatchIn(line)) "${file.path}:${index + 1}: ${line.trim()}" else null
+                }
+            }
+            .toList()
+        assertTrue(
+            "Use if/else instead of return@<composable> in composable lambdas:\n" + offenders.joinToString("\n"),
+            offenders.isEmpty()
+        )
+    }
 }

@@ -52,6 +52,7 @@ import com.example.llamadroid.R
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.SdDistributedTemplateEntity
 import com.example.llamadroid.data.db.SdDistributedWorkerEntity
+import com.example.llamadroid.ui.components.NetInterfacePrefChips
 import com.example.llamadroid.sd.SdComponentRole
 import com.example.llamadroid.sd.SdModelFamily
 import com.example.llamadroid.sd.SdModelFamilySpec
@@ -210,7 +211,9 @@ internal fun WorkerRow(
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     /** Reachability of an enabled Helper; null while unknown or when the Helper is off. */
-    online: Boolean? = null
+    online: Boolean? = null,
+    /** Saves the Auto/VPN/LAN preference; null hides the chips (also hidden while the Helper has one address). */
+    onPreferredInterface: ((String) -> Unit)? = null
 ) {
     ElevatedCard(
         modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
@@ -227,6 +230,13 @@ internal fun WorkerRow(
                 if (rpcName.isNotBlank() && rpcName != "-") {
                     AssistChip(onClick = {}, label = { Text(rpcName, maxLines = 1) })
                 }
+            }
+            if (onPreferredInterface != null && !worker.altHost.isNullOrBlank()) {
+                NetInterfacePrefChips(
+                    pref = worker.preferredInterface,
+                    activeHost = worker.host,
+                    onChange = onPreferredInterface
+                )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {

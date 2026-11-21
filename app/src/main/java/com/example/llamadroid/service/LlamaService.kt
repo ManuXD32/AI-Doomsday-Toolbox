@@ -971,6 +971,15 @@ class LlamaService : Service() {
         
         // Get distributed inference workers from DistributedService (if master mode is active)
         val rpcWorkers = distributedConfig?.rpcWorkers ?: rpcWorkersOverride ?: if (DistributedService.mode.value == DistributedMode.MASTER) {
+            // Preferred VPN/LAN address first, other one as fallback; runs on the service's IO launch.
+            runCatching {
+                val savedWorkers = AppDatabase.getDatabase(applicationContext).savedWorkerDao()
+                kotlinx.coroutines.runBlocking {
+                    DistributedService.applyInterfacePreferences { oldIp, port, newIp, newAlt ->
+                        savedWorkers.switchAddress(oldIp, port, newIp, newAlt)
+                    }
+                }
+            }
             DistributedService.getConfiguredWorkerAddresses().also {
                 if (it.isNotEmpty()) {
                     DebugLog.log("LlamaService: Distributed mode - workers: ${it.joinToString(",")}")

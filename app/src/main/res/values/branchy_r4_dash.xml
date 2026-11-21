@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_dash_waiting_banner">Waiting for network — resumes automatically</string>
+    <string name="branchy_dash_loss_down">Loss went down</string>
+    <string name="branchy_dash_loss_up">Loss went up</string>
+    <string name="branchy_dash_stage_pretrain">Pretrain</string>
+    <string name="branchy_dash_stage_sft">SFT</string>
+    <string name="branchy_dash_stage_n">Stage %1$d</string>
+    <string name="branchy_dash_chart_best">Best: %1$s</string>
+    <string name="branchy_dash_chart_point">Step %1$d: %2$s</string>
+    <string name="branchy_dash_chart_hint">Tap the chart to inspect a point.</string>
+    <string name="branchy_dash_master">Main</string>
+    <string name="branchy_dash_link_waiting">Waiting</string>
+    <string name="branchy_dash_step_ms_title">Step time per device</string>
+    <string name="branchy_dash_ring_desc">Progress %1$d%%</string>
+</resources>

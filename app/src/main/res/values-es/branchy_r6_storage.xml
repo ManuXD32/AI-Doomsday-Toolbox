@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r6_storage_delete_body">\"%1$s\" se eliminará de este teléfono. Esto es lo que ocupa:</string>
+    <string name="branchy_r6_storage_exports_kept">Los modelos exportados se conservan: se mueven a la biblioteca de modelos antes de eliminar la ejecución.</string>
+    <string name="branchy_r6_storage_delete_failed">No se pudieron mover los modelos exportados, así que la ejecución no se eliminó: %1$s</string>
+    <string name="branchy_r6_storage_part_tokenized">Datos tokenizados</string>
+    <string name="branchy_r6_storage_part_tokenizer">Tokenizador</string>
+    <string name="branchy_r6_storage_part_checkpoints">Puntos de control</string>
+    <string name="branchy_r6_storage_part_mirror">Copias espejo</string>
+    <string name="branchy_r6_storage_part_dp">Fragmentos de datos en paralelo</string>
+    <string name="branchy_r6_storage_part_exports">Exportaciones</string>
+    <string name="branchy_r6_storage_part_other">Otros</string>
+    <string name="branchy_r6_storage_free_action">Liberar espacio</string>
+    <string name="branchy_r6_storage_free_title">¿Liberar espacio?</string>
+    <string name="branchy_r6_storage_free_body">Se eliminarán los datos tokenizados, las copias espejo y los fragmentos de datos en paralelo, liberando %1$s. Los puntos de control y las exportaciones se conservan.</string>
+    <string name="branchy_r6_storage_free_paused_warning">Esta ejecución está en pausa. Al reanudarla se volverán a tokenizar los conjuntos de datos, lo que lleva tiempo.</string>
+    <string name="branchy_r6_storage_free_confirm">Liberar espacio</string>
+    <string name="branchy_r6_storage_freed">Se liberaron %1$s.</string>
+    <string name="branchy_r6_storage_free_failed">No se pudo liberar espacio: %1$s</string>
+    <string name="branchy_r6_storage_card_title">Almacenamiento de Branchy</string>
+    <string name="branchy_r6_storage_card_total">Todas las ejecuciones</string>
+    <string name="branchy_r6_storage_card_manage">Gestionar ejecuciones</string>
+</resources>

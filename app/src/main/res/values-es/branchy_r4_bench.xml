@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_bench_title">Prueba de rendimiento</string>
+    <string name="branchy_bench_hint">Mide este teléfono con varios números de hilos y elige el mejor para entrenar.</string>
+    <string name="branchy_bench_hint_cluster">Mide este teléfono y cada ayudante seleccionado con varios números de hilos y aplica el mejor a cada dispositivo.</string>
+    <string name="branchy_bench_cool_hint">Las pruebas cortas se ejecutan con el teléfono frío. Tras minutos de entrenamiento el teléfono se ralentiza, así que se elige el menor número de hilos que esté dentro del 5% del máximo.</string>
+    <string name="branchy_bench_worker_stop_hint">Detén el worker para hacer el benchmark: la medición le quitaría CPU al entrenamiento.</string>
+    <string name="branchy_bench_button">Probar rendimiento</string>
+    <string name="branchy_bench_running">Midiendo…</string>
+    <string name="branchy_bench_cancel">Cancelar</string>
+    <string name="branchy_bench_this_phone">Este teléfono</string>
+    <string name="branchy_bench_applied">Aplicado</string>
+    <string name="branchy_bench_error">La prueba falló: %1$s</string>
+    <string name="branchy_bench_device_error">No se pudo medir: %1$s</string>
+    <plurals name="branchy_bench_best">
+        <item quantity="one">Mejor: %1$d hilo (%2$s GFLOP/s)</item>
+        <item quantity="many">Mejor: %1$d de hilos (%2$s GFLOP/s)</item>
+        <item quantity="other">Mejor: %1$d hilos (%2$s GFLOP/s)</item>
+    </plurals>
+</resources>

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r6_storage_delete_body">\"%1$s\" will be deleted from this phone. This is what it uses:</string>
+    <string name="branchy_r6_storage_exports_kept">Exported models are kept: they are moved to the models library before the run is deleted.</string>
+    <string name="branchy_r6_storage_delete_failed">Could not move the exported models, so the run was not deleted: %1$s</string>
+    <string name="branchy_r6_storage_part_tokenized">Tokenized data</string>
+    <string name="branchy_r6_storage_part_tokenizer">Tokenizer</string>
+    <string name="branchy_r6_storage_part_checkpoints">Checkpoints</string>
+    <string name="branchy_r6_storage_part_mirror">Mirror copies</string>
+    <string name="branchy_r6_storage_part_dp">Data-parallel shards</string>
+    <string name="branchy_r6_storage_part_exports">Exports</string>
+    <string name="branchy_r6_storage_part_other">Other</string>
+    <string name="branchy_r6_storage_free_action">Free space</string>
+    <string name="branchy_r6_storage_free_title">Free space?</string>
+    <string name="branchy_r6_storage_free_body">Tokenized data, mirror copies and data-parallel shards will be deleted, freeing %1$s. Checkpoints and exports are kept.</string>
+    <string name="branchy_r6_storage_free_paused_warning">This run is paused. Resuming it will tokenize the datasets again, which takes time.</string>
+    <string name="branchy_r6_storage_free_confirm">Free space</string>
+    <string name="branchy_r6_storage_freed">Freed %1$s.</string>
+    <string name="branchy_r6_storage_free_failed">Could not free space: %1$s</string>
+    <string name="branchy_r6_storage_card_title">Branchy storage</string>
+    <string name="branchy_r6_storage_card_total">All runs</string>
+    <string name="branchy_r6_storage_card_manage">Manage runs</string>
+</resources>

@@ -544,6 +544,23 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="User-started on-device model training for the Quadtrix game; stops when training finishes or the user cancels" />
         </service>
+
+        <service
+            android:name=".service.BranchyTrainingService"
+            android:foregroundServiceType="dataSync|specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started on-device training of Branchy language models; pauses and stops when training finishes or the user cancels" />
+        </service>
+        <service
+            android:name=".service.BranchyHelperService"
+            android:foregroundServiceType="dataSync|specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started helper that lends this device's CPU and RAM to a Branchy training cluster on the local network until the user stops it" />
+        </service>
             
         <!-- Receiver for completed ZIM downloads - must be exported for DOWNLOAD_COMPLETE -->
         <receiver

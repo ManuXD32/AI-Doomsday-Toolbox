@@ -71,6 +71,7 @@ internal fun LazyListScope.sdMasterDevicesStepItems(
                 else active.firstOrNull { it.host == worker.host && it.port == worker.port }?.isConnected
             },
             onToggle = vm::toggleWorker,
+            onPreferredInterface = vm::setWorkerInterface,
             onDelete = { vm.deleteWorker(it.id) },
             onSave = { id, host, port, name, ram, threads, backend, done ->
                 vm.saveWorker(id, host, port, name, ram, threads, backend, done)
@@ -159,6 +160,7 @@ internal fun SdMasterHelpersCard(
     onToggle: (SdDistributedWorkerEntity) -> Unit,
     onDelete: (SdDistributedWorkerEntity) -> Unit,
     onSave: SdSaveHelper,
+    onPreferredInterface: ((SdDistributedWorkerEntity, String) -> Unit)? = null,
     onOpenHelperGuide: () -> Unit
 ) {
     var showForm by rememberSaveable { mutableStateOf(false) }
@@ -207,6 +209,7 @@ internal fun SdMasterHelpersCard(
                     rpcName = "",
                     online = online(worker),
                     onToggle = { onToggle(worker) },
+                    onPreferredInterface = onPreferredInterface?.let { cb -> { pref: String -> cb(worker, pref) } },
                     onEdit = {
                         editingId = worker.id
                         host = worker.host

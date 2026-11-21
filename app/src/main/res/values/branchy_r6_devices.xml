@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r6_unused_prefix">Gets no work: %1$s</string>
+    <string name="branchy_r6_unused_no_branch">No branch left (branches in the model: %1$d)</string>
+    <string name="branchy_r6_unused_ram">Not enough free RAM</string>
+    <string name="branchy_r6_unused_slower">Slower than the others</string>
+    <string name="branchy_r6_unused_dp_not_fit">Can\'t hold the whole model (data-parallel)</string>
+    <string name="branchy_r6_unused_other">Not needed for this plan</string>
+    <string name="branchy_r6_helper_threads_own">Its own setting</string>
+    <string name="branchy_r6_helper_threads_reset">Use its own</string>
+    <string name="branchy_r6_checkpoint_title">Checkpoints</string>
+    <string name="branchy_r6_checkpoint_hint">How often training saves a checkpoint. Leave empty to use the planner default.</string>
+    <string name="branchy_r6_checkpoint_label">Save a checkpoint every N steps</string>
+    <string name="branchy_r6_checkpoint_default">Default: %1$d</string>
+    <string name="branchy_r6_checkpoint_default_unknown">Planner default</string>
+</resources>

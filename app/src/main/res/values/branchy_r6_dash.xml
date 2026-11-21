@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="branchy_r6d_load_title">Load per device</string>
+    <string name="branchy_r6d_load_round">Round %1$s</string>
+    <string name="branchy_r6d_main">Main</string>
+    <string name="branchy_r6d_bar_mb">Microbatches %1$s / %2$s</string>
+    <string name="branchy_r6d_bar_seconds">Time %1$s s</string>
+    <string name="branchy_r6d_bar_ms_per_mb">%1$s ms per microbatch</string>
+    <string name="branchy_r6d_bar_idle">Idle %1$s s</string>
+    <string name="branchy_r6d_history_title">Microbatches per round</string>
+    <string name="branchy_r6d_history_hint">Pinch to zoom, drag to pan, double-tap to reset.</string>
+    <string name="branchy_r6d_not_needed">Not needed</string>
+    <string name="branchy_r6d_not_needed_detail">Adds %1$s%% speed, costs %2$s%% sync time</string>
+    <string name="branchy_r6d_rest_button">Rest it</string>
+    <string name="branchy_r6d_rest_confirm_title">Rest %1$s?</string>
+    <string name="branchy_r6d_rest_confirm_body">The device stays connected but gets no work until you use it again.</string>
+    <string name="branchy_r6d_resting">Resting</string>
+    <string name="branchy_r6d_use_again">Use again</string>
+    <string name="branchy_r6d_bp_title">Compute time per step</string>
+    <string name="branchy_r6d_bp_ms">%1$s ms</string>
+    <string name="branchy_r6d_rebalance_title">Rebalance: about %1$s%% faster</string>
+    <string name="branchy_r6d_rebalance_times">Now %1$s ms per step, proposed %2$s ms</string>
+    <string name="branchy_r6d_rebalance_button">Rebalance</string>
+    <string name="branchy_r6d_rebalance_confirm_title">Rebalance the cluster?</string>
+    <string name="branchy_r6d_rebalance_confirm_body">Training pauses briefly, saves a checkpoint and restarts with the proposed branch placement.</string>
+    <string name="branchy_r6d_rebalance_blocked">Cannot rebalance: %1$s</string>
+    <string name="branchy_r6d_rebalance_blocked_generic">Cannot apply this placement automatically.</string>
+    <string name="branchy_r6d_status_idle">Idle – waiting for others</string>
+    <string name="branchy_r6d_status_resting">Resting</string>
+    <string name="branchy_r6d_address">Address: %1$s</string>
+    <string name="branchy_r6d_retry_now">Retry now</string>
+    <string name="branchy_r6d_stop_trying">Stop trying</string>
+    <string name="branchy_r6d_forget_confirm_title">Stop trying %1$s?</string>
+    <string name="branchy_r6d_forget_confirm_body">The run stops reconnecting to this device and continues without it.</string>
+    <string name="branchy_r6d_checkpoint_now">Save checkpoint now</string>
+    <string name="branchy_r6d_last_checkpoint">Last checkpoint: step %1$s (%2$s) %3$s ago</string>
+    <string name="branchy_r6d_last_checkpoint_plain">Last checkpoint: step %1$s %2$s ago</string>
+    <string name="branchy_r6d_ckpt_every">periodic</string>
+    <string name="branchy_r6d_ckpt_manual">manual</string>
+    <string name="branchy_r6d_ckpt_wait">waiting</string>
+    <string name="branchy_r6d_ckpt_pause">pause</string>
+    <string name="branchy_r6d_ckpt_end">end</string>
+</resources>

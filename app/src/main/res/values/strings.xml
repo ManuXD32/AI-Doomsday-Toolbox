@@ -6870,7 +6870,6 @@
     <string name="quadtrix_head_dim">Head dim</string>
     <string name="quadtrix_heads">Heads</string>
     <string name="quadtrix_highest_temp">Highest temp</string>
-    <string name="quadtrix_hub_desc">Train and use native phone LLMs</string>
     <string name="quadtrix_import_checkpoint">Import checkpoint</string>
     <string name="quadtrix_info">Information</string>
     <string name="quadtrix_info_body">Quadtrix now defaults to Qwen3 architecture with the embedded Qwen tokenizer, while the legacy character trainer remains available for older checkpoints. It trains from local text, JSON, JSONL, or Parquet datasets. Linked datasets stay in phone storage, so the native binary needs a readable direct path and may need All files access. Quantized weight and optimizer settings reduce RAM for long phone runs. Distributed mode lets a coordinator split gradient work across workers using the same token. Checkpoints can be resumed when the tokenizer and model shape still match. Qwen3 checkpoints can export or convert to GGUF, and exported GGUF files can be registered in the general Models tab for normal llama.cpp chat, export, and removal. Stream progress exposes this coordinator on the selected port for other ADT apps to view state, logs, graph data, telemetry, and worker controls. The optional WebUI starts locally by default at 127.0.0.1; use LAN binding only on trusted networks. ETA, logs, loss graph, CPU temperature, and battery status are best-effort telemetry and may be unavailable on some devices.</string>
@@ -9114,4 +9113,39 @@
     <string name="embchooser_open_models">Open model manager</string>
     <string name="embchooser_close">Close</string>
     <string name="embchooser_reindex_note">A finished download becomes your embedding model automatically if none is set. Changing the model later requires re-indexing existing documents.</string>
+
+    <!-- Branchy training service -->
+    <string name="branchy_notification_channel_name">Branchy training</string>
+    <string name="branchy_notification_title_generic">Branchy training</string>
+    <string name="branchy_notification_title">Branchy: %1$s</string>
+    <string name="branchy_notification_tokenizer">Training the tokenizer…</string>
+    <string name="branchy_notification_prepare">Preparing data %1$s: %2$d%%</string>
+    <string name="branchy_notification_training_start">Starting training…</string>
+    <string name="branchy_notification_training">Stage %1$s · step %2$s / %3$s · loss %4$s · ETA %5$s</string>
+    <string name="branchy_notification_pausing">Pausing and saving a checkpoint…</string>
+    <string name="branchy_notification_paused">Paused (%1$s)</string>
+    <string name="branchy_notification_done">Training finished</string>
+    <string name="branchy_notification_failed">Training failed: %1$s</string>
+    <string name="branchy_action_pause">Pause</string>
+    <string name="branchy_action_resume">Resume</string>
+    <string name="branchy_action_stop">Stop</string>
+    <string name="branchy_pause_reason_user">paused by you</string>
+    <string name="branchy_pause_reason_battery_low">battery low</string>
+    <string name="branchy_pause_reason_unplugged">unplugged</string>
+    <string name="branchy_pause_reason_hot">battery too hot</string>
+    <string name="branchy_pause_reason_restored">app restarted</string>
+    <string name="branchy_error_run_missing">The training run no longer exists.</string>
+    <string name="branchy_error_config_invalid">The run configuration is unreadable.</string>
+    <string name="branchy_error_binary_missing">The Branchy trainer binary was not found.</string>
+    <string name="branchy_error_plan_does_not_fit">The plan does not fit this device.</string>
+    <string name="branchy_error_dataset_missing">Dataset %1$s was not found.</string>
+    <string name="branchy_error_dataset_not_ready">Dataset %1$s is not downloaded yet.</string>
+    <string name="branchy_error_no_data">This stage has no training data.</string>
+    <string name="branchy_error_native">The trainer exited with code %1$d.</string>
+    <string name="branchy_stage_pretrain">Pretraining</string>
+    <string name="branchy_stage_sft">Chat and tools fine-tuning</string>
+    <string name="branchy_recipe_30m_title">Mini assistant 30M</string>
+    <string name="branchy_recipe_30m_desc">A tiny branchy model (about 30M parameters) for chat and tool calls. Pretrains on about 255M tokens of general text, code and stories, then fine-tunes on about 45M tokens of chat, tool use, code and Spanish.</string>
+    <string name="branchy_recipe_120m_title">Mini assistant 120M</string>
+    <string name="branchy_recipe_120m_desc">A small branchy model (about 120M parameters) for chat and tool calls. Pretrains on about 1B tokens of general text, code and stories, then fine-tunes on about 180M tokens of chat, tool use, code and Spanish. Needs several days on a phone.</string>
 </resources>

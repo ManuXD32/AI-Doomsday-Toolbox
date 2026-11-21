@@ -13,7 +13,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.ModelTraining
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Button
@@ -44,7 +46,8 @@ import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 
 /**
  * Entry point of distributed inference. Two clear cards (Main device / Helper device) for text models,
- * a link to the media (images and video) variant, and one info card with the network notes.
+ * a link to the media (images and video) variant, the Branchy training cluster entries (trainer and helper),
+ * and one info card with the network notes.
  */
 @Composable
 fun DistributedScreen(navController: NavController) {
@@ -103,6 +106,26 @@ fun DistributedScreen(navController: NavController) {
                 subtitle = stringResource(R.string.dist_ui_hub_media_desc),
                 icon = Icons.Default.PhotoLibrary,
                 onClick = { navController.navigate(Screen.SdDistributedHub.route) }
+            )
+
+            AppSectionTitle(title = stringResource(R.string.branchy_main_hub_section))
+            AppHubRow(
+                title = stringResource(R.string.branchy_main_hub_main_title),
+                subtitle = stringResource(R.string.branchy_main_hub_main_desc),
+                icon = Icons.Default.ModelTraining,
+                onClick = { navController.navigate(Screen.BranchyTrainer.route) }
+            )
+            AppHubRow(
+                title = stringResource(R.string.branchy_infer_hub_title),
+                subtitle = stringResource(R.string.branchy_infer_hub_desc),
+                icon = Icons.Default.Link,
+                onClick = { navController.navigate(Screen.BranchyInference.route) }
+            )
+            AppHubRow(
+                title = stringResource(R.string.branchy_main_hub_helper_title),
+                subtitle = stringResource(R.string.branchy_main_hub_helper_desc),
+                icon = Icons.Default.Lan,
+                onClick = { navController.navigate(Screen.BranchyHelper.route) }
             )
 
             Spacer(modifier = Modifier.height(4.dp))

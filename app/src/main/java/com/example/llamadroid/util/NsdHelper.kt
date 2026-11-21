@@ -3,6 +3,7 @@ package com.example.llamadroid.util
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.net.wifi.WifiManager
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -28,6 +29,42 @@ class NsdHelper(
         /** Pure: whether a failed resolve is worth retrying (not for hard failures like FAILURE_MAX_LIMIT-free cases past the cap). */
         fun shouldRetryResolve(errorCode: Int, attempt: Int): Boolean =
             attempt < MAX_RESOLVE_ATTEMPTS && errorCode != NsdManager.FAILURE_MAX_LIMIT
+
+        /** Service names this process currently advertises (any NsdHelper instance), so discovery can drop itself. */
+        private val ownServiceNames: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+        /** Pure: a discovered service is this device when its name is one we advertise or it resolved to one of our IPs. */
+        fun isOwnService(serviceName: String?, ip: String?, ownNames: Set<String>, ownIps: Set<String>): Boolean =
+            (serviceName != null && serviceName in ownNames) || (ip != null && ip in ownIps)
+    }
+
+    private val appContext = context.applicationContext
+    private var multicastLock: WifiManager.MulticastLock? = null
+
+    private fun acquireMulticastLock() {
+        if (multicastLock?.isHeld == true) return
+        runCatching {
+            val wifi = appContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
+            multicastLock = wifi.createMulticastLock("adt-nsd-$serviceNamePrefix").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        }.onFailure { DebugLog.log("[$TAG] Multicast lock failed: ${it.message}") }
+    }
+
+    private fun releaseMulticastLock() {
+        runCatching { multicastLock?.takeIf { it.isHeld }?.release() }
+        multicastLock = null
+    }
+
+    @Suppress("DEPRECATION")
+    private fun resolvedIp(info: NsdServiceInfo): String? =
+        if (android.os.Build.VERSION.SDK_INT >= 34) info.hostAddresses.firstOrNull()?.hostAddress
+        else info.host?.hostAddress
+
+    private fun isOwn(info: NsdServiceInfo): Boolean {
+        val ownIps = runCatching { DeviceAddresses.current(appContext).map { it.ip }.toSet() }.getOrDefault(emptySet())
+        return isOwnService(info.serviceName, resolvedIp(info), ownServiceNames, ownIps)
     }
 
     private val nsdManager = context.getSystemService(Context.NSD_SERVICE) as NsdManager
@@ -51,6 +88,7 @@ class NsdHelper(
         if (registrationListener != null) {
             unregisterService()
         }
+        acquireMulticastLock()
 
         val serviceInfo = NsdServiceInfo().apply {
             // Service name must be unique. NSD will append a number if it conflicts.
@@ -65,16 +103,19 @@ class NsdHelper(
         registrationListener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(NsdServiceInfo: NsdServiceInfo) {
                 serviceName = NsdServiceInfo.serviceName
+                ownServiceNames.add(NsdServiceInfo.serviceName)
                 DebugLog.log("[$TAG] Service registered: $serviceName")
             }
 
             override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
                 DebugLog.log("[$TAG] Registration failed: Error code $errorCode")
                 registrationListener = null
+                releaseMulticastLock()
             }
 
             override fun onServiceUnregistered(arg0: NsdServiceInfo) {
                 DebugLog.log("[$TAG] Service unregistered")
+                serviceName?.let { ownServiceNames.remove(it) }
                 serviceName = null
             }
 
@@ -102,6 +143,7 @@ class NsdHelper(
             }
             registrationListener = null
         }
+        releaseMulticastLock()
     }
 
     /**
@@ -149,6 +191,13 @@ class NsdHelper(
 
                         override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
                             DebugLog.log("[$TAG] Resolved: ${serviceInfo.serviceName} at ${serviceInfo.host}:${serviceInfo.port}")
+                            if (isOwn(serviceInfo)) {
+                                DebugLog.log("[$TAG] Resolved own device, skipping")
+                                resolveAttempts.remove(nextService.serviceName)
+                                isResolving = false
+                                processQueue()
+                                return
+                            }
                             
                             // Update list safely
                             val current = _discoveredServices.value.toMutableList()
@@ -174,7 +223,7 @@ class NsdHelper(
                 // Relaxed check: serviceType might differ slightly (e.g. leading dot)
                 if (service.serviceType.contains(serviceType.trim('.').substringBefore('.').removePrefix("_")) &&
                     service.serviceType.contains("_tcp")) {
-                    if (service.serviceName == serviceName) {
+                    if (service.serviceName == serviceName || service.serviceName in ownServiceNames) {
                         DebugLog.log("[$TAG] Found self, skipping")
                     } else {
                         // Always attempt resolution - onServiceResolved handles deduplication

@@ -365,7 +365,9 @@ internal fun rememberMasterScreenState(navController: NavController): MasterScre
                 saved.port, 
                 saved.deviceName, 
                 saved.ramMB,
-                saved.assignedProportion
+                saved.assignedProportion,
+                saved.altIp,
+                saved.preferredInterface
             )
         }
     }

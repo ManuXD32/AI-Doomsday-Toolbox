@@ -98,6 +98,7 @@ import com.example.llamadroid.ui.components.AppStateKind
 import com.example.llamadroid.ui.components.AppStatePanel
 import com.example.llamadroid.ui.components.AppTaskActionFooter
 import com.example.llamadroid.ui.components.DraftFloatTextField
+import com.example.llamadroid.ui.components.NetInterfacePrefChips
 import com.example.llamadroid.ui.components.DraftIntTextField
 import com.example.llamadroid.ui.components.ResponsiveActionGroup
 import com.example.llamadroid.ui.distributed.common.DistributedHelperListItem
@@ -163,8 +164,14 @@ internal fun MasterHelpersSection(s: MasterScreenState) {
                                 FilledTonalIconButton(
                                     onClick = {
                                         coroutineScope.launch {
+                                            // VPN address first, but fall back to the Wi-Fi one when it is unreachable.
+                                            val endpointIp = kotlinx.coroutines.withContext(
+                                                kotlinx.coroutines.Dispatchers.IO
+                                            ) { DistributedService.reachableEndpointIpFor(service) }
                                             val newWorker = SavedWorker(
-                                                ip = ip,
+                                                ip = endpointIp,
+                                                altIp = DistributedService.endpointCandidatesFor(service)
+                                                    .firstOrNull { it != endpointIp },
                                                 port = service.port,
                                                 deviceName = hostName,
                                                 // Advertised over NSD, else 4096; the user can edit it.
@@ -234,6 +241,24 @@ internal fun MasterHelpersSection(s: MasterScreenState) {
                                     resources.getString(R.string.dist_r3_probe_ok, ms)
                                 }
                                 val notReachableLabel = stringResource(R.string.dist_r3_probe_fail)
+                                if (!saved.altIp.isNullOrBlank()) {
+                                    NetInterfacePrefChips(
+                                        pref = saved.preferredInterface,
+                                        activeHost = saved.ip,
+                                        onChange = { pref ->
+                                            coroutineScope.launch {
+                                                db.savedWorkerDao().setPreferredInterface(saved.id, pref)
+                                                withContext(Dispatchers.IO) {
+                                                    DistributedService.applyInterfacePreferences(
+                                                        mapOf("${saved.ip}:${saved.port}" to pref)
+                                                    ) { oldIp, port, newIp, newAlt ->
+                                                        db.savedWorkerDao().switchAddress(oldIp, port, newIp, newAlt)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    )
+                                }
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
