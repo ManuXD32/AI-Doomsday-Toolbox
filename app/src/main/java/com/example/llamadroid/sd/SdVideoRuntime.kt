@@ -606,7 +606,7 @@ object SdVideoFamilyProfiles {
                     SdVideoWorkflow.IMAGE_TO_VIDEO
                 ),
                 workflowRequiredComponentGroups = emptyMap(),
-                defaultValues = SdVideoDefaults(33, 24, 1280, 720, 20, 5.0f)
+                defaultValues = SdVideoDefaults(33, 24, 832, 480, 20, 6.0f, 3.0f)
             )
         }
 

@@ -23,6 +23,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -37,12 +38,16 @@ import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.db.SdDistributedMasterSettingsEntity
+import com.example.llamadroid.sd.SdComponentCandidate
+import com.example.llamadroid.sd.SdComponentFit
 import com.example.llamadroid.sd.SdComponentRole
+import com.example.llamadroid.sd.SdImg2ImgBlock
+import com.example.llamadroid.sd.SdLoraSpec
+import com.example.llamadroid.sd.sdMainEmbeddedRoles
 import com.example.llamadroid.sd.SdLoraApplyMode
 import com.example.llamadroid.sd.SdVideoComponentRole
 import com.example.llamadroid.sd.isSdImageMainModel
-import com.example.llamadroid.sd.isSdVideoMainModel
-import com.example.llamadroid.sd.matchesSdVideoFamily
+import com.example.llamadroid.sd.sdVideoComponentCandidates
 import com.example.llamadroid.sd.toJsonArray
 import com.example.llamadroid.service.SdBinaryCapabilities
 import com.example.llamadroid.service.VideoRuntimeOptions
@@ -55,6 +60,8 @@ import com.example.llamadroid.ui.ai.VideoScalarDefaults
 import com.example.llamadroid.ui.ai.videoScalarDefaultsFor
 import com.example.llamadroid.ui.components.AppAdvancedSection
 import com.example.llamadroid.ui.components.AppSectionCard
+import com.example.llamadroid.ui.components.ComponentCandidatePicker
+import com.example.llamadroid.ui.components.rememberSdComponentImporter
 import com.example.llamadroid.ui.components.VideoModelPicker
 import com.example.llamadroid.ui.components.VideoRuntimeOptionsEditor
 import kotlinx.coroutines.CancellationException
@@ -89,7 +96,13 @@ internal fun LazyListScope.sdMasterModelStepItems(
         }
         SdMasterMode.IMAGES -> {
             item(key = "model_image_workflow") {
-                SdMasterImageWorkflowCard(state.settings.imageWorkflowMode, vm::update)
+                SdMasterImageWorkflowCard(
+                    state.settings.imageWorkflowMode,
+                    remember(state.settings.imageModelPath, state.settings.imageLlmVisionPath, env.installedModels) {
+                        sdMasterImageImg2ImgBlock(state.settings, env.installedModels)
+                    },
+                    vm::update
+                )
             }
             if (state.settings.imageWorkflowMode == MODE_UPSCALE) {
                 item(key = "model_image_upscaler") {
@@ -145,27 +158,12 @@ private fun SdMasterVideoModelCard(
     }
 }
 
-/** Installed files grouped by the video component role the editor offers them for. */
-internal fun videoEditorComponentModels(installed: List<ModelEntity>): Map<SdVideoComponentRole, List<ModelEntity>> {
-    fun of(vararg types: ModelType) = installed.filter { it.type in types }
-    val mains = of(ModelType.SD_DIFFUSION, ModelType.SD_CHECKPOINT).filter { it.isSdVideoMainModel() }
-    return mapOf(
-        SdVideoComponentRole.DIFFUSION_MODEL to mains,
-        SdVideoComponentRole.FULL_MODEL to mains,
-        SdVideoComponentRole.HIGH_NOISE_DIFFUSION_MODEL to mains,
-        SdVideoComponentRole.VAE to of(ModelType.SD_VAE),
-        SdVideoComponentRole.TAE to of(ModelType.SD_TAE),
-        SdVideoComponentRole.T5XXL to of(ModelType.SD_T5XXL),
-        SdVideoComponentRole.LLM to of(ModelType.LLM),
-        SdVideoComponentRole.LLM_VISION to of(ModelType.VISION_PROJECTOR, ModelType.MMPROJ),
-        SdVideoComponentRole.CONTROL_NET to of(ModelType.SD_CONTROLNET),
-        SdVideoComponentRole.AUDIO_VAE to of(ModelType.SD_AUDIO_VAE),
-        SdVideoComponentRole.EMBEDDINGS_CONNECTORS to of(ModelType.SD_EMBEDDINGS_CONNECTORS),
-        SdVideoComponentRole.MOTION_MODULE to of(ModelType.SD_MOTION_MODULE),
-        SdVideoComponentRole.HIRES_UPSCALER to of(ModelType.SD_UPSCALER),
-        SdVideoComponentRole.CLIP_VISION to of(ModelType.SD_CLIP_VISION)
-    )
-}
+/** Installed files per video component role: family matches first, every other file kept as unverified. */
+internal fun videoEditorComponentModels(
+    main: ModelEntity?,
+    installed: List<ModelEntity>
+): Map<SdVideoComponentRole, List<SdComponentCandidate>> =
+    SdVideoComponentRole.entries.associateWith { sdVideoComponentCandidates(main, installed, it) }
 
 private class SdBinaryProbeState(
     val capabilities: SdBinaryCapabilities?,
@@ -217,10 +215,13 @@ private fun SdMasterVideoOptionsCard(
 ) {
     val probe = rememberSdBinaryProbe()
     val installed = env.installedModels
-    val componentModels = remember(installed) { videoEditorComponentModels(installed) }
-    val loraModels = remember(installed, options.videoFamily, options.videoVariant) {
-        val all = installed.filter { it.type == ModelType.SD_LORA }
-        options.videoFamily?.let { family -> all.filter { it.matchesSdVideoFamily(family, options.videoVariant) } } ?: all
+    val mainModel = remember(installed, options.videoComponents) {
+        val path = options.videoComponents.diffusionModelPath ?: options.videoComponents.fullModelPath
+        installed.firstOrNull { it.path == path }
+    }
+    val componentModels = remember(installed, mainModel) { videoEditorComponentModels(mainModel, installed) }
+    val loraModels = remember(componentModels) {
+        componentModels[SdVideoComponentRole.LORA].orEmpty().map { it.model }
     }
     AppSectionCard {
         Text(
@@ -248,7 +249,7 @@ private fun SdMasterVideoOptionsCard(
             binaryProbeUnavailable = probe.unavailable,
             onRetryBinaryProbe = probe.retry,
             onOpenBinarySettings = env.onOpenBinarySettings,
-            uncondDiffusionModels = componentModels[SdVideoComponentRole.DIFFUSION_MODEL].orEmpty(),
+            uncondDiffusionModels = componentModels[SdVideoComponentRole.DIFFUSION_MODEL].orEmpty().map { it.model },
             ipAdapterModels = installed.filter { it.type == ModelType.SD_IP_ADAPTER }
         )
     }
@@ -257,7 +258,11 @@ private fun SdMasterVideoOptionsCard(
 // ---- Images ----
 
 @Composable
-internal fun SdMasterImageWorkflowCard(workflow: String, onUpdate: SdMasterSettingsUpdate) {
+internal fun SdMasterImageWorkflowCard(
+    workflow: String,
+    img2imgBlock: SdImg2ImgBlock?,
+    onUpdate: SdMasterSettingsUpdate
+) {
     val choices = listOf(
         MODE_TXT2IMG to R.string.sd_r8_w07_workflow_generate,
         MODE_IMG2IMG to R.string.sd_r8_w07_workflow_img2img,
@@ -279,9 +284,20 @@ internal fun SdMasterImageWorkflowCard(workflow: String, onUpdate: SdMasterSetti
                 FilterChip(
                     selected = workflow.uppercase() == mode,
                     onClick = { if (workflow != mode) onUpdate { it.copy(imageWorkflowMode = mode) } },
+                    enabled = !(mode == MODE_IMG2IMG && img2imgBlock == SdImg2ImgBlock.NOT_SUPPORTED),
                     label = { Text(stringResource(label), maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 )
             }
+        }
+        img2imgBlock?.let { block ->
+            Text(
+                text = stringResource(
+                    if (block == SdImg2ImgBlock.NOT_SUPPORTED) R.string.media_picker_img2img_not_supported
+                    else R.string.media_picker_img2img_needs_projector
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
         }
     }
 }
@@ -335,6 +351,15 @@ internal fun SdMasterImageModelCard(
     onUpdate: SdMasterSettingsUpdate,
     cards: List<SdMasterImagePresetCard> = remember(installed) { sdMasterImagePresetCards(installed) }
 ) {
+    // Cards that share one main file (SD 1.5 low-end / LCM) are told apart by the last tapped card.
+    var appliedBundleId by rememberSaveable { mutableStateOf<String?>(null) }
+    val importMain = rememberSdComponentImporter { saved ->
+        onUpdate { it.withImageMainModel(saved.path, null, installed + saved) }
+    }
+    val selectedIndex = remember(cards, settings.imageModelPath, appliedBundleId) {
+        val sameMain = cards.indices.filter { cards[it].mainPath != null && cards[it].mainPath == settings.imageModelPath }
+        sameMain.firstOrNull { cards[it].bundleId != null && cards[it].bundleId == appliedBundleId } ?: sameMain.firstOrNull()
+    }
     AppSectionCard {
         Text(
             text = stringResource(R.string.sd_r8_w07_image_title),
@@ -351,20 +376,27 @@ internal fun SdMasterImageModelCard(
             )
             SdMasterGetModelsButton { onOpenModelManager(null) }
         }
-        cards.forEach { card ->
+        cards.forEachIndexed { index, card ->
             SdMasterPresetTile(
                 title = card.titleRes?.let { stringResource(it) } ?: card.title,
-                selected = card.mainPath != null && card.mainPath == settings.imageModelPath,
+                selected = index == selectedIndex,
                 installed = card.installed,
                 missingFiles = if (card.mainPath != null) card.missingFiles else 0,
                 onClick = {
                     if (!card.installed || card.mainPath == null) {
                         onOpenModelManager(card.bundleId)
-                    } else if (applyImagePreset(settings, card, installed) !== settings) {
+                    } else if (index != selectedIndex) {
+                        appliedBundleId = card.bundleId
                         onUpdate { applyImagePreset(it, card, installed) }
                     }
                 }
             )
+        }
+        OutlinedButton(
+            onClick = { importMain(ModelType.SD_DIFFUSION, null, null) },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+        ) {
+            Text(stringResource(R.string.media_picker_add_main_file), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         if (settings.imageModelPath.isNotBlank()) {
             SdMasterImageSummary(settings, installed, onGetModels = { onOpenModelManager(null) })
@@ -425,8 +457,24 @@ private fun SdMasterImageSummary(
 ) {
     val missing = remember(settings.imageModelPath, settings.imageVaePath, settings.imageTaePath,
         settings.imageClipLPath, settings.imageClipGPath, settings.imageT5xxlPath, settings.imageLlmPath,
-        settings.imageLlmVisionPath, installed) { sdMasterImageMissingRoles(settings, installed) }
+        settings.imageLlmVisionPath, settings.imageWorkflowMode, installed) { sdMasterImageMissingRoles(settings, installed) }
+    val embedded = remember(settings.imageModelPath, installed) {
+        sdMainEmbeddedRoles(installed.firstOrNull { it.path == settings.imageModelPath })
+    }
+    val context = LocalContext.current
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            text = stringResource(
+                R.string.media_picker_main_contains,
+                embedded.takeIf { it.isNotEmpty() }
+                    ?.joinToString { sdDistributedComponentRoleLabel(context, it) }
+                    ?: stringResource(R.string.media_picker_main_contains_nothing)
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
         summaryRoles.mapNotNull { role ->
             settings.imageComponentPath(role).takeIf { it.isNotBlank() }?.let { role to it }
         }.forEach { (role, path) ->
@@ -468,16 +516,34 @@ private fun SdMasterImageFilesSection(
         installed.filter { it.isSdImageMainModel() }
     }
     val choices = remember(settings, installed) { sdMasterImageComponentChoices(settings, installed) }
+    var importRole by remember { mutableStateOf<SdComponentRole?>(null) }
+    val importFile = rememberSdComponentImporter { saved ->
+        val role = importRole
+        importRole = null
+        onUpdate { current ->
+            when (role) {
+                SdComponentRole.MAIN_MODEL -> current.withImageMainModel(saved.path, null, installed + saved)
+                SdComponentRole.LORA -> current.withImageLoras(current.imageLoras() + SdLoraSpec(path = saved.path))
+                null -> current
+                else -> current.withImageComponentPath(role, saved.path)
+            }
+        }
+    }
     AppAdvancedSection(title = stringResource(R.string.sd_r8_w07_files_title)) {
-        ModelPicker(
+        ComponentCandidatePicker(
             label = stringResource(R.string.sd_r8_w07_image_title),
-            models = mains,
+            candidates = mains.map { SdComponentCandidate(it, SdComponentFit.MATCH) },
             selectedPath = settings.imageModelPath,
             onSelectedPath = { path ->
-                onUpdate { current ->
-                    resolveSdMasterImageSelection(path, installed)?.let(current::withImageSelection)
-                        ?: current.copy(imageModelPath = path)
+                if (path.isNotBlank() && path != settings.imageModelPath) {
+                    onUpdate { current -> current.withImageMainModel(path, null, installed) }
                 }
+            },
+            required = true,
+            includedInMain = false,
+            onAddFile = {
+                importRole = SdComponentRole.MAIN_MODEL
+                importFile(ModelType.SD_DIFFUSION, null, null)
             }
         )
         ImageComponentPickerSection(
@@ -495,7 +561,15 @@ private fun SdMasterImageFilesSection(
             },
             loraStack = settings.imageLoras(),
             onLoraStackChange = { stack -> onUpdate { it.withImageLoras(stack) } },
-            onLoraApplyModeChange = { mode -> onUpdate { it.copy(imageLoraApplyMode = mode) } }
+            onLoraApplyModeChange = { mode -> onUpdate { it.copy(imageLoraApplyMode = mode) } },
+            onAddFile = { role ->
+                importRole = role
+                importFile(
+                    sdImportTypeFor(role),
+                    choices.mainFamily,
+                    choices.mainVariant
+                )
+            }
         )
     }
 }

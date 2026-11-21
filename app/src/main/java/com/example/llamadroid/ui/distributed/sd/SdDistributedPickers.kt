@@ -40,11 +40,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.ModelEntity
+import com.example.llamadroid.sd.SdComponentCandidate
 import com.example.llamadroid.sd.SdComponentRole
 import com.example.llamadroid.sd.SdLoraApplyMode
 import com.example.llamadroid.sd.SdLoraSpec
 import com.example.llamadroid.service.SamplingMethod
 import com.example.llamadroid.service.SdCacheMode
+import com.example.llamadroid.ui.components.ComponentCandidatePicker
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -95,95 +97,104 @@ internal fun ImageComponentPickerSection(
     onLoraEnabledChange: (Boolean) -> Unit,
     loraStack: List<SdLoraSpec>,
     onLoraStackChange: (List<SdLoraSpec>) -> Unit,
-    onLoraApplyModeChange: (String) -> Unit
+    onLoraApplyModeChange: (String) -> Unit,
+    onAddFile: (SdComponentRole) -> Unit
 ) {
-    val spec = components.spec ?: return
-    if (components.roles.isNotEmpty()) {
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    val img2img = mode == "IMG2IMG"
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+            text = stringResource(R.string.imagegen_components_title),
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Text(
+            text = stringResource(R.string.imagegen_components_desc, components.familyLabel.ifBlank { "-" }),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (components.spec == null) {
             Text(
-                text = stringResource(R.string.imagegen_components_title),
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.primary
-            )
-            Text(
-                text = stringResource(R.string.imagegen_components_desc, components.familyLabel.ifBlank { "-" }),
+                text = stringResource(R.string.media_picker_unknown_family),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.error
             )
-            components.roles.forEach { role ->
-                ComponentModelPicker(
-                    label = sdDistributedComponentRoleLabel(role),
-                    models = components.compatibleModels[role].orEmpty(),
-                    selectedPath = components.selectedPaths[role].orEmpty(),
-                    onSelectedPath = { onComponentPathChange(role, it) },
-                    required = role in spec.requiredRoles,
-                    emptyMessage = stringResource(sdDistributedEmptyComponentMessageRes(role))
-                )
-            }
+        }
+        components.roles.forEach { role ->
+            val embedded = role in components.embeddedRoles
+            val required = role in components.requiredRoles && !embedded
+            ComponentCandidatePicker(
+                label = "${sdDistributedComponentRoleLabel(role)} (${
+                    stringResource(
+                        if (required) R.string.media_picker_role_required else R.string.media_picker_role_optional
+                    )
+                })",
+                candidates = components.candidates[role].orEmpty(),
+                selectedPath = components.selectedPaths[role].orEmpty(),
+                onSelectedPath = { onComponentPathChange(role, it) },
+                required = required,
+                includedInMain = embedded,
+                onAddFile = { onAddFile(role) }
+            )
         }
     }
 
-    val controlNetModels = components.compatibleModels[SdComponentRole.CONTROLNET].orEmpty()
-    val loraModels = components.compatibleModels[SdComponentRole.LORA].orEmpty()
-    if ((mode == "IMG2IMG" && controlNetModels.isNotEmpty()) || loraModels.isNotEmpty()) {
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(
-                text = stringResource(R.string.imagegen_adapters_title),
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.primary
+    // Always visible: adapters are optional and any installed file can be picked.
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+            text = stringResource(R.string.imagegen_adapters_title),
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Text(
+            text = stringResource(R.string.imagegen_adapters_desc),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (img2img) {
+            OptionalComponentPicker(
+                enabled = components.controlNetEnabled,
+                onEnabledChange = onControlNetEnabledChange,
+                label = sdDistributedComponentRoleLabel(SdComponentRole.CONTROLNET),
+                candidates = components.candidates[SdComponentRole.CONTROLNET].orEmpty(),
+                selectedPath = components.selectedPaths[SdComponentRole.CONTROLNET].orEmpty(),
+                onSelectedPath = { onComponentPathChange(SdComponentRole.CONTROLNET, it) },
+                onAddFile = { onAddFile(SdComponentRole.CONTROLNET) }
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Checkbox(
+                checked = components.loraEnabled,
+                onCheckedChange = onLoraEnabledChange
             )
             Text(
-                text = stringResource(R.string.imagegen_adapters_desc),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                text = sdDistributedComponentRoleLabel(SdComponentRole.LORA),
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
-            if (mode == "IMG2IMG" && controlNetModels.isNotEmpty()) {
-                OptionalComponentPicker(
-                    enabled = components.controlNetEnabled,
-                    onEnabledChange = onControlNetEnabledChange,
-                    label = sdDistributedComponentRoleLabel(SdComponentRole.CONTROLNET),
-                    models = controlNetModels,
-                    selectedPath = components.selectedPaths[SdComponentRole.CONTROLNET].orEmpty(),
-                    onSelectedPath = { onComponentPathChange(SdComponentRole.CONTROLNET, it) },
-                    emptyMessage = stringResource(R.string.imagegen_no_controlnet)
+        }
+        if (components.loraEnabled) {
+            DistributedLoraStackEditor(
+                label = stringResource(R.string.imagegen_lora_stack_label),
+                candidates = components.candidates[SdComponentRole.LORA].orEmpty(),
+                stack = loraStack,
+                onStackChange = onLoraStackChange,
+                onAddFile = { onAddFile(SdComponentRole.LORA) }
+            )
+            if (components.spec?.supportsLoraApplyMode == true) {
+                SimpleStringPicker(
+                    label = stringResource(R.string.imagegen_lora_apply_mode_label),
+                    selected = components.loraApplyMode,
+                    options = listOf("") + SdLoraApplyMode.entries.map { it.cliName },
+                    offLabel = stringResource(R.string.imagegen_lora_apply_mode_default),
+                    onSelected = onLoraApplyModeChange
                 )
-            }
-            if (loraModels.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Checkbox(
-                        checked = components.loraEnabled,
-                        onCheckedChange = onLoraEnabledChange
-                    )
-                    Text(
-                        text = sdDistributedComponentRoleLabel(SdComponentRole.LORA),
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                if (components.loraEnabled) {
-                    DistributedLoraStackEditor(
-                        label = stringResource(R.string.imagegen_lora_stack_label),
-                        models = loraModels,
-                        stack = loraStack,
-                        onStackChange = onLoraStackChange
-                    )
-                }
-                if (components.loraEnabled && spec.supportsLoraApplyMode) {
-                    SimpleStringPicker(
-                        label = stringResource(R.string.imagegen_lora_apply_mode_label),
-                        selected = components.loraApplyMode,
-                        options = listOf("") + SdLoraApplyMode.entries.map { it.cliName },
-                        offLabel = stringResource(R.string.imagegen_lora_apply_mode_default),
-                        onSelected = onLoraApplyModeChange
-                    )
-                }
             }
         }
     }
@@ -192,9 +203,10 @@ internal fun ImageComponentPickerSection(
 @Composable
 internal fun DistributedLoraStackEditor(
     label: String,
-    models: List<ModelEntity>,
+    candidates: List<SdComponentCandidate>,
     stack: List<SdLoraSpec>,
-    onStackChange: (List<SdLoraSpec>) -> Unit
+    onStackChange: (List<SdLoraSpec>) -> Unit,
+    onAddFile: (() -> Unit)? = null
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
@@ -232,15 +244,18 @@ internal fun DistributedLoraStackEditor(
                             )
                         }
                     }
-                    ModelPicker(
+                    ComponentCandidatePicker(
                         label = stringResource(R.string.imagegen_lora_item, index + 1),
-                        models = models,
+                        candidates = candidates,
                         selectedPath = item.path,
                         onSelectedPath = { path ->
                             onStackChange(stack.mapIndexed { itemIndex, current ->
                                 if (itemIndex == index) current.copy(path = path) else current
                             })
-                        }
+                        },
+                        required = true,
+                        includedInMain = false,
+                        onAddFile = onAddFile
                     )
                     OutlinedTextField(
                         value = item.strength.toString(),
@@ -263,10 +278,10 @@ internal fun DistributedLoraStackEditor(
                 }
             }
         }
-        val nextModel = models.firstOrNull { candidate -> stack.none { it.path == candidate.path } }
+        val nextModel = candidates.firstOrNull { candidate -> stack.none { it.path == candidate.model.path } }
         OutlinedButton(
             onClick = {
-                nextModel?.let { onStackChange(stack + SdLoraSpec(path = it.path)) }
+                nextModel?.let { onStackChange(stack + SdLoraSpec(path = it.model.path)) }
             },
             enabled = nextModel != null,
             modifier = Modifier.fillMaxWidth()
@@ -279,6 +294,11 @@ internal fun DistributedLoraStackEditor(
                 overflow = TextOverflow.Ellipsis
             )
         }
+        if (onAddFile != null && stack.isEmpty()) {
+            OutlinedButton(onClick = onAddFile, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.media_picker_add_lora), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
     }
 }
 
@@ -287,10 +307,10 @@ internal fun OptionalComponentPicker(
     enabled: Boolean,
     onEnabledChange: (Boolean) -> Unit,
     label: String,
-    models: List<ModelEntity>,
+    candidates: List<SdComponentCandidate>,
     selectedPath: String,
     onSelectedPath: (String) -> Unit,
-    emptyMessage: String
+    onAddFile: (() -> Unit)? = null
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
@@ -315,69 +335,15 @@ internal fun OptionalComponentPicker(
             )
         }
         if (enabled) {
-            ComponentModelPicker(
+            ComponentCandidatePicker(
                 label = label,
-                models = models,
+                candidates = candidates,
                 selectedPath = selectedPath,
                 onSelectedPath = onSelectedPath,
                 required = true,
-                emptyMessage = emptyMessage
+                includedInMain = false,
+                onAddFile = onAddFile
             )
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun ComponentModelPicker(
-    label: String,
-    models: List<ModelEntity>,
-    selectedPath: String,
-    onSelectedPath: (String) -> Unit,
-    required: Boolean,
-    emptyMessage: String
-) {
-    if (models.isEmpty()) {
-        Text(
-            text = emptyMessage,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error
-        )
-        return
-    }
-    var expanded by remember { mutableStateOf(false) }
-    val noneLabel = stringResource(R.string.imagegen_none_builtin)
-    val selectedName = models.firstOrNull { it.path == selectedPath }?.filename
-        ?: if (required) stringResource(R.string.sd_dist_select_model) else noneLabel
-    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
-        OutlinedTextField(
-            value = selectedName,
-            onValueChange = {},
-            readOnly = true,
-            modifier = Modifier.fillMaxWidth().menuAnchor(),
-            label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            singleLine = true
-        )
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            if (!required) {
-                DropdownMenuItem(
-                    text = { Text(noneLabel) },
-                    onClick = {
-                        onSelectedPath("")
-                        expanded = false
-                    }
-                )
-            }
-            models.forEach { model ->
-                DropdownMenuItem(
-                    text = { Text(model.filename, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    onClick = {
-                        onSelectedPath(model.path)
-                        expanded = false
-                    }
-                )
-            }
         }
     }
 }

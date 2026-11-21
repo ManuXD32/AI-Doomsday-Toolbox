@@ -468,6 +468,10 @@ fun buildSdCommandArgs(
         requireFlag("--scheduler")
         args.addAll(listOf("--scheduler", it.cliName))
     }
+    sanitizeSdSigmas(config.sigmas)?.let {
+        requireFlag("--sigmas")
+        args.addAll(listOf("--sigmas", it))
+    }
     requireFlag("-s")
     args.addAll(listOf("-s", config.seed.toString()))
 
@@ -836,4 +840,21 @@ fun normalizeSdMaxVramCpuGiB(value: String): String? {
     val amount = trimmed.toFloatOrNull() ?: return null
     if (amount <= 0f) return null
     return trimmed
+}
+
+private val SD_SIGMAS_PRESET = Regex("[a-z0-9.\\-]+")
+private val SD_SIGMAS_FLOAT = Regex("-?[0-9]+(\\.[0-9]+)?")
+
+/**
+ * Returns the normalized `--sigmas` argument, or null when blank or invalid. Accepts a
+ * comma-separated float list (spaces ignored) or a named preset such as `qwen-image-2.1-turbo`.
+ */
+internal fun sanitizeSdSigmas(raw: String): String? {
+    val value = raw.trim().replace(" ", "")
+    if (value.isEmpty()) return null
+    if (value.contains(',') || value.matches(SD_SIGMAS_FLOAT)) {
+        val parts = value.split(',')
+        return value.takeIf { parts.all { it.matches(SD_SIGMAS_FLOAT) } }
+    }
+    return value.takeIf { it.matches(SD_SIGMAS_PRESET) }
 }

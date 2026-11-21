@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.res.Resources
 import com.example.llamadroid.R
 import com.example.llamadroid.sd.SdComponentRole
+import com.example.llamadroid.sd.SdImg2ImgBlock
 import com.example.llamadroid.sd.SdLoraSpec
 import com.example.llamadroid.sd.SdVideoComponentRole
 import com.example.llamadroid.sd.SdVideoInputRole
@@ -28,6 +29,11 @@ internal sealed interface SdDistributedLaunchIssue {
     /** [labelRes] is the string resource of the offending numeric field label. */
     data class InvalidNumber(val labelRes: Int) : SdDistributedLaunchIssue
     data class MissingImageComponents(val roles: List<SdComponentRole>) : SdDistributedLaunchIssue
+    /** The selected model has no img2img capability. */
+    data object Img2ImgNotSupported : SdDistributedLaunchIssue
+
+    /** The selected model needs a vision projector for img2img and none is picked. */
+    data object Img2ImgNeedsProjector : SdDistributedLaunchIssue
     data object VideoUnsupportedWorkflow : SdDistributedLaunchIssue
     data class MissingVideoComponents(val roles: List<SdVideoComponentRole>) : SdDistributedLaunchIssue
     data class MissingVideoInputs(val roles: List<SdVideoInputRole>) : SdDistributedLaunchIssue
@@ -48,7 +54,8 @@ internal fun sdDistributedImageLaunchIssue(
     controlNetEnabled: Boolean,
     controlNetPath: String,
     loraEnabled: Boolean,
-    loraPath: String
+    loraPath: String,
+    img2imgBlock: SdImg2ImgBlock? = null
 ): SdDistributedLaunchIssue? {
     val generates = mode != SDMode.UPSCALE
     return when {
@@ -56,6 +63,10 @@ internal fun sdDistributedImageLaunchIssue(
         generates && prompt.isBlank() -> SdDistributedLaunchIssue.PromptRequired
         generates && width == null -> SdDistributedLaunchIssue.InvalidNumber(R.string.imagegen_width_label)
         generates && height == null -> SdDistributedLaunchIssue.InvalidNumber(R.string.imagegen_height_label)
+        mode == SDMode.IMG2IMG && img2imgBlock == SdImg2ImgBlock.NOT_SUPPORTED ->
+            SdDistributedLaunchIssue.Img2ImgNotSupported
+        mode == SDMode.IMG2IMG && img2imgBlock == SdImg2ImgBlock.NEEDS_VISION_PROJECTOR ->
+            SdDistributedLaunchIssue.Img2ImgNeedsProjector
         generates && missingRequiredRoles.isNotEmpty() ->
             SdDistributedLaunchIssue.MissingImageComponents(missingRequiredRoles)
         mode == SDMode.IMG2IMG && inputPath.isBlank() -> SdDistributedLaunchIssue.InputImageRequired
@@ -126,6 +137,8 @@ internal fun sdDistributedLaunchIssueMessage(
         R.string.imagegen_error_missing_required_components,
         issue.roles.joinToString(", ") { sdDistributedComponentRoleLabel(context, it) }
     )
+    SdDistributedLaunchIssue.Img2ImgNotSupported -> resources.getString(R.string.sd_dist_error_img2img_not_supported)
+    SdDistributedLaunchIssue.Img2ImgNeedsProjector -> resources.getString(R.string.sd_dist_error_img2img_needs_projector)
     SdDistributedLaunchIssue.VideoUnsupportedWorkflow ->
         resources.getString(R.string.video_controls_profile_unsupported_workflow)
     is SdDistributedLaunchIssue.MissingVideoComponents -> resources.getString(

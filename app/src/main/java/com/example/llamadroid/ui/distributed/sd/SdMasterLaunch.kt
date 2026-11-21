@@ -3,6 +3,7 @@ package com.example.llamadroid.ui.distributed.sd
 import com.example.llamadroid.data.db.SdDistributedMasterSettingsEntity
 import com.example.llamadroid.data.db.SdDistributedWorkerEntity
 import com.example.llamadroid.sd.SdComponentRole
+import com.example.llamadroid.sd.SdImg2ImgBlock
 import com.example.llamadroid.sd.SdLoraApplyMode
 import com.example.llamadroid.sd.SdVideoWorkflow
 import com.example.llamadroid.service.SDConfig
@@ -107,7 +108,8 @@ internal fun buildSdImageConfig(
     runtimeConfig: SdDistributedRuntimeConfig,
     outputPath: String,
     modelFamily: String?,
-    modelVariant: String?
+    modelVariant: String?,
+    sigmas: String = ""
 ): SDConfig {
     val mode = settings.imageWorkflowMode.toSdMasterImageMode()
     val sampler = SamplingMethod.entries.firstOrNull {
@@ -161,6 +163,7 @@ internal fun buildSdImageConfig(
         scmMask = if (cacheMode == SdCacheMode.CACHE_DIT) settings.scmMask else "",
         scmPolicy = if (cacheMode == SdCacheMode.CACHE_DIT) scmPolicy else null,
         flowShift = settings.imageFlowShift.toFloatOrNull(),
+        sigmas = sigmas,
         diffusionFa = settings.diffusionFa,
         mmap = settings.mmap,
         // Keep local parameter residency out of distributed commands.
@@ -213,7 +216,8 @@ internal fun sdMasterImageModulePaths(settings: SdDistributedMasterSettingsEntit
 /** First blocking issue for an image run, or null. [missingRoles] come from the selected family spec. */
 internal fun sdMasterImageLaunchIssue(
     settings: SdDistributedMasterSettingsEntity,
-    missingRoles: List<SdComponentRole>
+    missingRoles: List<SdComponentRole>,
+    img2imgBlock: SdImg2ImgBlock? = null
 ): SdDistributedLaunchIssue? = sdDistributedImageLaunchIssue(
     mode = settings.imageWorkflowMode.toSdMasterImageMode(),
     modelPath = settings.imageModelPath,
@@ -226,7 +230,8 @@ internal fun sdMasterImageLaunchIssue(
     controlNetEnabled = settings.imageControlNetEnabled,
     controlNetPath = settings.imageControlNetPath,
     loraEnabled = settings.imageLoraEnabled,
-    loraPath = settings.imageLoraPath
+    loraPath = settings.imageLoraPath,
+    img2imgBlock = img2imgBlock
 )
 
 /** The video options merged with the legacy scalar columns (card state wins only where the editor is empty). */

@@ -91,6 +91,8 @@ data class SDConfig(
     val adetailerResizeInput: Boolean = false,
     // Family-specific runtime flags
     val flowShift: Float? = null,
+    /** `--sigmas`: comma-separated floats or a named preset ([a-z0-9.-]+); blank = not emitted. */
+    val sigmas: String = "",
     val diffusionFa: Boolean = false,
     val diffusionConvDirect: Boolean = false,
     val mmap: Boolean = false,

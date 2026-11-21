@@ -9153,4 +9153,31 @@
     <string name="branchy_recipe_30m_desc">Un modelo branchy diminuto (unos 30M de parámetros) para chat y llamadas a herramientas. Preentrena con unos 255M de tokens de texto general, código y cuentos, y luego se ajusta con unos 45M de tokens de chat, herramientas, código y español.</string>
     <string name="branchy_recipe_120m_title">Mini asistente 120M</string>
     <string name="branchy_recipe_120m_desc">Un modelo branchy pequeño (unos 120M de parámetros) para chat y llamadas a herramientas. Preentrena con cerca de 1B de tokens de texto general, código y cuentos, y luego se ajusta con unos 180M de tokens de chat, herramientas, código y español. Necesita varios días en un teléfono.</string>
+
+    <!-- 1.00026 bundles -->
+    <string name="sd_bundle_qwen_image_21_turbo_title">Qwen Image 2.1 Turbo · Q4 rápido</string>
+    <string name="sd_bundle_qwen_image_21_turbo_desc" tools:ignore="Typos,TypographyDashes">Modelo de difusión destilado Qwen Image 2.1 Turbo Q4: 8 pasos con CFG 1 y el calendario de sigmas qwen-image-2.1-turbo, sin prompt negativo. Reutiliza el codificador de texto Qwen3-VL 8B Q4, el proyector de visión F16 y el VAE BF16 del paquete Qwen Image 2.1 si ya están instalados, así que solo se descargan unos 4,2 GB. Los recursos de Qwen Image usan la licencia Qwen Research (no comercial); los componentes Qwen3-VL usan Apache-2.0.</string>
+    <string name="sd_bundle_sd15_lcm_title">SD 1.5 · Rápido (LCM)</string>
+    <string name="sd_bundle_sd15_lcm_desc">Stable Diffusion 1.5 Q4 más el LCM-LoRA para SD 1.5. Genera en unos 4 pasos con CFG 1 y el muestreador LCM aplicando el LoRA con peso 1. Comparte el checkpoint SD 1.5 con el paquete Low-End. Usa las licencias CreativeML Open RAIL-M y OpenRAIL++.</string>
+    <!-- 1.00026 media pickers -->
+    <string name="media_picker_included_in_main">Incluido en el archivo principal, no hace falta (puedes sustituirlo)</string>
+    <string name="media_picker_included_in_main_short">Incluido en el archivo principal</string>
+    <string name="media_picker_other_files">Otros archivos instalados (no comprobados para este modelo)</string>
+    <string name="media_picker_unverified_selected">No comprobado para este modelo; puede ser incompatible.</string>
+    <string name="media_picker_no_files">No hay archivos instalados de este tipo</string>
+    <string name="media_picker_add_file">Añadir archivo…</string>
+    <string name="media_picker_add_main_file">Añadir archivo de modelo principal…</string>
+    <string name="media_picker_add_lora">Añadir archivo LoRA…</string>
+    <string name="media_picker_import_started">Importando archivo…</string>
+    <string name="media_picker_import_done">Importado %1$s</string>
+    <string name="media_picker_import_failed">Error al importar: %1$s</string>
+    <string name="media_picker_main_contains">Este archivo contiene: %1$s</string>
+    <string name="media_picker_main_contains_nothing">No se detectaron componentes incluidos</string>
+    <string name="media_picker_role_required">Obligatorio</string>
+    <string name="media_picker_role_optional">Opcional</string>
+    <string name="media_picker_unknown_family">Familia del modelo desconocida: todos los componentes son opcionales y no se comprueba la compatibilidad de ningún archivo.</string>
+    <string name="media_picker_img2img_not_supported">Este modelo no admite imagen a imagen.</string>
+    <string name="media_picker_img2img_needs_projector">Imagen a imagen con este modelo necesita un proyector de visión; elige uno en Archivos del modelo.</string>
+    <string name="sd_dist_error_img2img_not_supported">El modelo seleccionado no admite imagen a imagen. Cambia a Generar o elige otro modelo.</string>
+    <string name="sd_dist_error_img2img_needs_projector">Imagen a imagen con este modelo necesita un proyector de visión. Elígelo en el paso Modelo.</string>
 </resources>
